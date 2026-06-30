@@ -399,7 +399,7 @@ describe('ChatProvider', () => {
     });
   });
 
-  test('deleting the active agora topic does not fall back to a normal conversation', async () => {
+  test('deleting the active group chat falls back to the next unified conversation', async () => {
     sessionSummaries = [
       {
         id: 'agora-1',
@@ -446,10 +446,10 @@ describe('ChatProvider', () => {
       expect(screen.getByTestId('session-count').textContent).toBe('1');
     });
 
-    expect(screen.getByTestId('active-session').textContent).toBe('none');
+    expect(screen.getByTestId('active-session').textContent).toBe('conv-1');
   });
 
-  test('batch deleting active agora topics leaves no active selection when only conversations remain', async () => {
+  test('batch deleting active group chats falls back to the remaining unified conversation', async () => {
     sessionSummaries = [
       {
         id: 'agora-1',
@@ -509,7 +509,7 @@ describe('ChatProvider', () => {
       expect(screen.getByTestId('session-count').textContent).toBe('1');
     });
 
-    expect(screen.getByTestId('active-session').textContent).toBe('none');
+    expect(screen.getByTestId('active-session').textContent).toBe('conv-1');
   });
 
   test('keeps agent replies attached to the original session after switching active sessions', async () => {

@@ -20,20 +20,22 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { agoraApi, workspaceApi, type AgoraGuestConfig, type AgoraGuestPreset, type NotebookScope } from '@/lib/core/api';
+import { agentApi, agoraApi, configApi, workflowApi, workspaceApi, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
 import ChatSidebar, { readStoredSessionDirectoryOrder, type SessionDirectoryView } from '@/components/chat/ChatSidebar';
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
-import ChatMessage from '@/components/chat/ChatMessage';
+import ChatMessage, { ThinkingBot } from '@/components/chat/ChatMessage';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
 import HomeCommandSidebar from '@/components/chat/HomeCommandSidebar';
+import ConversationRightRail from '@/components/chat/ConversationRightRail';
 import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 import CliRunDialog, { type CliRunDialogRequest } from '@/components/chat/CliRunDialog';
 import UserMenu from '@/components/UserMenu';
@@ -49,6 +51,9 @@ import {
   type HomeSidebarHint,
   type HomeSidebarMode,
   type HomeSidebarTab,
+  type SessionWorkbenchState,
+  type CollaborationChatroomParticipant,
+  type CollaborationChatroomMode,
 } from '@/lib/core/home-sidebar-state';
 import { dispatchHomeAction } from '@/lib/sidebar-plugins/intent-handlers';
 import SpriteAvatar from '@/components/SpriteAvatar';
@@ -56,9 +61,31 @@ import { Badge } from '@/components/ui/badge';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
+import { createPlainConversationRoomState, extractAgentMentions, useCollaborationRoom } from '@/lib/collaboration/room-core';
 import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
+import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
 import { cn } from '@/lib/core/utils';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
+import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import {
+  WORKFLOW_CLARIFICATION_FACTS_KIND,
+  WORKFLOW_CLARIFICATION_GAPS_KIND,
+  WORKFLOW_CLARIFICATION_QUESTION_KIND,
+  WORKFLOW_CLARIFICATION_SUMMARY_KIND,
+  WORKFLOW_STATE_OUTLINE_KIND,
+  WORKFLOW_STATE_STEPS_KIND,
+  applyWorkflowCreationItem,
+  assembleClarificationForm,
+  assembleWorkflowConfigFromItems,
+  createEmptyWorkflowCreationState,
+  describeWorkflowCreationItem,
+  extractWorkflowCreationItemResult,
+  type WorkflowCreationItemKind,
+  type WorkflowCreationItemResult,
+  type WorkflowCreationState,
+  type WorkflowCreationItemValidationContext,
+} from '@/lib/ai/workflow-creation-items';
+import type { ClarificationFormResult, ClarificationQuestionItem } from '@/lib/ai/result-normalizers';
 import pkgJson from '../../../package.json';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
@@ -73,6 +100,12 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
 const SIDEBAR_STORAGE_KEY = 'chat-sidebar-width';
 const HOME_SIDEBAR_WIDTH_STORAGE_KEY = 'home-command-sidebar-width';
 const SESSION_DIRECTORY_VIEW_STORAGE_KEY = 'aceharness:chat:session-directory-view';
+
+const COLLABORATION_MODE_OPTIONS: Array<{ value: CollaborationChatroomMode; label: string; title: string }> = [
+  { value: 'mention-driven', label: '点名', title: '点名模式：只有被 @ 的 Agent 响应' },
+  { value: 'broadcast', label: '广播', title: '广播模式：群内 Agent 同轮响应' },
+  { value: 'facilitated', label: '主持', title: '主持人模式：由主持人组织发言顺序' },
+];
 
 type HomepageSlashCommand = {
   id: string;
@@ -95,18 +128,1244 @@ const AgoraShell = dynamic(() => import('@/components/collaboration/AgoraShell')
   ssr: false,
   loading: () => (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-      正在进入议场...
+      正在进入群聊...
     </div>
   ),
 });
 const DEFAULT_WIDTH = 264;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
+const DEFAULT_ASSISTANT_MENTION_NAME = '默认助手';
+const genLocalMessageId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const normalizePathForCompare = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase();
+const clampSidebarWidth = (value: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
+const sidebarPixelsToPercent = (width: number, containerWidth: number) => {
+  if (!containerWidth) return 22;
+  return Math.min(38, Math.max(14, (clampSidebarWidth(width) / containerWidth) * 100));
+};
 const DEFAULT_HOME_SIDEBAR_SIZE = 26;
 const MIN_HOME_SIDEBAR_SIZE = 20;
 const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
+export function isChatAiBusy(input: {
+  loading?: boolean;
+  streamingMessageId?: string | null;
+  messages?: Array<{ workflowThinking?: boolean }>;
+  sessionWorkbenchState?: Pick<SessionWorkbenchState, 'lightweightWorkflowDraft'> | null;
+}): boolean {
+  return Boolean(
+    input.loading
+    || input.streamingMessageId
+    || input.messages?.some((message) => message?.workflowThinking)
+    || input.sessionWorkbenchState?.lightweightWorkflowDraft?.busy
+  );
+}
+type LightweightWorkflowAnswers = {
+  initialRequirements?: string;
+  goal?: string;
+  scope?: 'current-repo' | 'specific-directory' | 'decide-later';
+  acceptance?: string[];
+  agents?: string;
+  constraints?: string;
+  clarificationAnswerContext?: string;
+  executionDirectory?: string;
+  workspaceMode?: 'in-place' | 'isolated-copy';
+  autoStart?: 'yes' | 'no';
+};
+
+type WorkflowCreationItemStep = {
+  kind: WorkflowCreationItemKind;
+  name: string;
+  title: string;
+  guidance: string;
+};
+
+type LightweightWorkflowDraft = {
+  name: string;
+  filename: string;
+  requirements: string;
+  description: string;
+  acceptance: string[];
+  agents: string;
+  configDraft?: any;
+  stepPlan?: Array<{
+    state: string;
+    steps: Array<{ name: string; agent: string; task: string }>;
+  }>;
+};
+
+const WORKFLOW_DRAFT_ACTION_PREFIX = '__WORKFLOW_DRAFT__:';
+const WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE = 'workflow-lightweight-planning';
+const MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS = 2;
+const SPEC_LANGUAGE_RULE = '语言一致性规则：先判断用户原始需求、补充说明和澄清回答的主语言；所有 summary、clarification、requirements.md、design.md、tasks.md 必须统一使用该主语言。';
+
+function normalizeBackendSessionId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function decodeWorkflowDraftAction(prompt: string): { action: string; values: Record<string, unknown> } | null {
+  if (!prompt.startsWith(WORKFLOW_DRAFT_ACTION_PREFIX)) return null;
+  const rest = prompt.slice(WORKFLOW_DRAFT_ACTION_PREFIX.length);
+  const separator = rest.indexOf(':');
+  const action = separator >= 0 ? rest.slice(0, separator) : rest;
+  const encoded = separator >= 0 ? rest.slice(separator + 1) : '';
+  try {
+    const values = encoded ? JSON.parse(decodeURIComponent(encoded)) : {};
+    return { action, values: values && typeof values === 'object' ? values : {} };
+  } catch {
+    return { action, values: {} };
+  }
+}
+
+function sanitizeWorkflowSlug(value: string): string {
+  const ascii = value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 42);
+  return ascii || `workflow-${Date.now().toString(36)}`;
+}
+
+function stringifyWorkflowAnswer(value: unknown): string {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean).join('、');
+  return String(value || '').trim();
+}
+
+function normalizeWorkflowAnswers(input: Record<string, unknown>): LightweightWorkflowAnswers {
+  const acceptance = Array.isArray(input.acceptance)
+    ? input.acceptance.map(String).filter(Boolean)
+    : stringifyWorkflowAnswer(input.acceptance) ? [stringifyWorkflowAnswer(input.acceptance)] : [];
+  return {
+    initialRequirements: stringifyWorkflowAnswer(input.initialRequirements),
+    goal: stringifyWorkflowAnswer(input.goal),
+    scope: ['current-repo', 'specific-directory', 'decide-later'].includes(String(input.scope))
+      ? String(input.scope) as LightweightWorkflowAnswers['scope']
+      : undefined,
+    acceptance,
+    agents: stringifyWorkflowAnswer(input.agents),
+    constraints: stringifyWorkflowAnswer(input.constraints),
+    clarificationAnswerContext: stringifyWorkflowAnswer(input.clarificationAnswerContext),
+    executionDirectory: stringifyWorkflowAnswer(input.executionDirectory),
+    workspaceMode: String(input.workspaceMode) === 'isolated-copy' ? 'isolated-copy' : String(input.workspaceMode) === 'in-place' ? 'in-place' : undefined,
+    autoStart: String(input.autoStart) === 'no' ? 'no' : String(input.autoStart) === 'yes' ? 'yes' : undefined,
+  };
+}
+
+export function mergeWorkflowAnswers(current: unknown, next: Record<string, unknown>): LightweightWorkflowAnswers {
+  const base = normalizeWorkflowAnswers((current && typeof current === 'object' ? current as Record<string, unknown> : {}));
+  const patch = normalizeWorkflowAnswers(next);
+  const merged: LightweightWorkflowAnswers = { ...base };
+  for (const [key, value] of Object.entries(patch) as Array<[keyof LightweightWorkflowAnswers, any]>) {
+    if (Array.isArray(value)) {
+      if (value.length > 0 || Object.prototype.hasOwnProperty.call(next, key)) {
+        (merged as any)[key] = value;
+      }
+      continue;
+    }
+    if (value !== undefined && value !== '') {
+      (merged as any)[key] = value;
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, key) && value === '') {
+      (merged as any)[key] = value;
+    }
+  }
+  return merged;
+}
+
+function buildLightweightWorkflowDraft(answers: LightweightWorkflowAnswers): LightweightWorkflowDraft {
+  const primaryGoal = answers.goal || answers.initialRequirements || '自动化任务';
+  const name = primaryGoal.length > 26 ? `工作流：${primaryGoal.slice(0, 26)}` : `工作流：${primaryGoal}`;
+  const acceptance = answers.acceptance?.length ? answers.acceptance : ['文件变更摘要', '人工确认'];
+  const requirements = [
+    `目标：${primaryGoal}`,
+    answers.constraints ? `约束：${answers.constraints}` : '',
+    acceptance.length ? `验收：${acceptance.join('、')}` : '',
+    answers.agents ? `Agent 偏好：${answers.agents}` : '',
+  ].filter(Boolean).join('\n');
+  return {
+    name,
+    filename: `${sanitizeWorkflowSlug(primaryGoal)}-${Date.now().toString(36)}.yaml`,
+    requirements,
+    description: requirements,
+    acceptance,
+    agents: answers.agents || '默认开发/评审 Agent',
+  };
+}
+
+function createWorkflowDiscoveryCard(initialRequirements: string, workingDirectory: string) {
+  return {
+    header: {
+      icon: 'account_tree',
+      title: '工作流需求确认',
+      subtitle: '填写目标、交付物与代码仓范围后，系统将生成补充问题并起草工作流。',
+      gradient: 'from-sky-500/25 to-emerald-500/25',
+    },
+    blocks: [
+      { type: 'steps', current: 1, total: 4 },
+      {
+        type: 'form',
+        id: 'workflow-discovery',
+        submitLabel: '开始分析并生成补充问题',
+        submitPrompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}discovery_submit:{{payload}}`,
+        fields: [
+          {
+            id: 'initialRequirements',
+            label: '工作流目标',
+            inputType: 'textarea',
+            required: true,
+            defaultValue: initialRequirements,
+            placeholder: '例如：分析某个模块的风险、修复一个问题、生成测试与评审流程...',
+          },
+          {
+            id: 'goal',
+            label: '最终交付物',
+            inputType: 'text',
+            required: false,
+            placeholder: '例如：补丁、分析报告、测试结果、迁移计划',
+          },
+          {
+            id: 'constraints',
+            label: '约束或范围',
+            inputType: 'textarea',
+            required: false,
+            placeholder: '例如：只改某个目录、不能改 API、需要兼容 Windows/Linux',
+          },
+          {
+            id: 'scope',
+            label: '代码仓探索范围',
+            inputType: 'single',
+            required: true,
+            defaultValue: 'current-repo',
+            options: [
+              { value: 'current-repo', label: '当前工作目录', description: workingDirectory || '使用当前聊天工作目录' },
+              { value: 'specific-directory', label: '指定目录', description: '后续在补充问答中说明具体路径' },
+              { value: 'decide-later', label: '稍后决定', description: '先按通用流程创建' },
+            ],
+            helperText: '该范围会影响后续补充问题和草案编排。',
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function buildWorkflowCreationItemExample(kind: WorkflowCreationItemKind, name: string): Record<string, any> {
+  if (kind === WORKFLOW_CLARIFICATION_SUMMARY_KIND) {
+    return { kind, data: { summary: '用 1-2 句话概括当前目标、对象和成功结果。' } };
+  }
+  if (kind === WORKFLOW_CLARIFICATION_FACTS_KIND) {
+    return { kind, data: { facts: ['已确认事实 1，最好带来源。', '已确认事实 2。'] } };
+  }
+  if (kind === WORKFLOW_CLARIFICATION_GAPS_KIND) {
+    return { kind, data: { gaps: ['blocking: 会影响方案的缺口。', 'optional: 可后续补充的偏好。'] } };
+  }
+  return {
+    kind,
+    data: {
+      id: name,
+      label: '问题标签',
+      question: '具体问题，并说明这个答案会影响什么决策。',
+      selectionMode: 'single',
+      options: [
+        { id: 'recommended', label: '推荐选项', description: '说明默认方案和影响。', recommended: true },
+        { id: 'alternative', label: '备选方案', description: '说明取舍。' },
+      ],
+      placeholder: '跳过时系统采用的保守假设。',
+      required: true,
+    },
+  };
+}
+
+function truncateForPrompt(input: string | undefined, limit = 5000) {
+  const text = (input || '').trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n\n...[已截断，原文过长]`;
+}
+
+function summarizeWorkflowCreationStateForPrompt(state: WorkflowCreationState): string {
+  return truncateForPrompt(JSON.stringify({ clarification: state.clarification }, null, 2), 5000);
+}
+
+export function buildWorkflowConversationContext(messages: Array<{ role?: string; content?: string; rawContent?: string }> | undefined) {
+  const relevant = (messages || [])
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .map((message) => {
+      const text = String(message.rawContent || message.content || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!text) return '';
+      return `${message.role === 'user' ? '用户' : '系统'}：${text}`;
+    })
+    .filter(Boolean)
+    .slice(-12);
+  return truncateForPrompt(relevant.join('\n'), 4000);
+}
+
+function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, baseContext: string): string {
+  return [
+    '你正在 ACEHarness 的分步工作流创建向导中工作。',
+    `当前小点名称：${step.name}`,
+    `当前小点类型：${step.kind}`,
+    '请完成当前小点，并在回复末尾输出机器可读结果。',
+    '机器可读结果必须放在 <result>...</result> 内，且 <result> 内只放一个裸 JSON 对象，不使用 Markdown 代码块。',
+    `JSON 顶层固定为 {"kind":"${step.kind}","data":{...}}。`,
+    '可以在 <result> 外用 1-3 句简短说明你的判断。',
+    '输出 </result> 后不要追加任何文字。',
+    SPEC_LANGUAGE_RULE,
+    '',
+    '当前小点说明：',
+    step.guidance,
+    '',
+    '格式示例：',
+    '<result>',
+    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name), null, 2),
+    '</result>',
+    '',
+    '创建上下文：',
+    baseContext,
+  ].join('\n\n');
+}
+
+function buildWorkflowCreationItemUserMessage(step: WorkflowCreationItemStep, state: WorkflowCreationState): string {
+  return [
+    `请生成小点：${step.title}`,
+    `小点名称：${step.name}`,
+    `小点类型：${step.kind}`,
+    '',
+    step.guidance,
+    '',
+    '系统已确认的小点：',
+    '```json',
+    summarizeWorkflowCreationStateForPrompt(state),
+    '```',
+  ].join('\n\n');
+}
+
+function buildWorkflowCreationItemRepairMessage(
+  step: WorkflowCreationItemStep,
+  previousOutput: string,
+  reason: string,
+): string {
+  return [
+    `当前小点「${step.title}」没有通过系统解析或校验。`,
+    '错误定位：',
+    reason,
+    '',
+    `请补发一个顶层 kind 精确为 "${step.kind}" 的 <result> JSON 块，只补发当前小点。`,
+    '',
+    '当前小点说明：',
+    step.guidance,
+    '',
+    '格式示例：',
+    '<result>',
+    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name), null, 2),
+    '</result>',
+    '',
+    '上一轮输出：',
+    '```text',
+    previousOutput.slice(0, 6000),
+    '```',
+  ].join('\n\n');
+}
+
+function resolveWorkflowCreationItemAttempt(input: {
+  finalContent: string;
+  step: WorkflowCreationItemStep;
+  attempt: number;
+  maxAttempts: number;
+  validationContext?: WorkflowCreationItemValidationContext;
+}): { status: 'accepted'; result: WorkflowCreationItemResult } | { status: 'retry'; reason: string; repairPrompt: string; nextAttempt: number } | { status: 'failed'; reason: string } {
+  const extracted = extractWorkflowCreationItemResult(input.finalContent, input.step.kind, input.validationContext);
+  if (extracted.ok) return { status: 'accepted', result: extracted.result };
+  if (input.attempt < input.maxAttempts) {
+    return {
+      status: 'retry',
+      reason: extracted.error,
+      repairPrompt: buildWorkflowCreationItemRepairMessage(input.step, input.finalContent, extracted.error),
+      nextAttempt: input.attempt + 1,
+    };
+  }
+  return { status: 'failed', reason: extracted.error };
+}
+
+function createWorkflowClarificationLoadingCard(
+  initialRequirements: string,
+  progress?: {
+    activeTitle?: string;
+    clarification?: ClarificationFormResult | null;
+    completedTitles?: string[];
+  },
+) {
+  const clarification = progress?.clarification;
+  const completedTitles = progress?.completedTitles || [];
+  return {
+    header: {
+      icon: 'account_tree',
+      title: '工作流创建',
+      subtitle: '先在当前对话补全关键信息，生成草案后再决定是否运行。',
+      gradient: 'from-emerald-500/25 to-sky-500/25',
+    },
+    blocks: [
+      { type: 'steps', current: 1, total: 4 },
+      {
+        type: 'status',
+        state: progress?.activeTitle
+          ? `正在生成：${progress.activeTitle}`
+          : '正在按 AI 引导逻辑生成补充问答',
+        color: 'blue',
+        animated: true,
+      },
+      { type: 'text', content: initialRequirements ? `初始需求：${initialRequirements}` : '我会先理解目标、识别已知事实和关键缺口，再生成 3-5 个会影响工作流编排的问题。' },
+      completedTitles.length ? { type: 'badges', items: completedTitles.map((text) => ({ text, color: 'green' })) } : { type: 'divider' },
+      clarification?.summary ? { type: 'text', content: clarification.summary } : { type: 'divider' },
+      clarification?.knownFacts?.length ? { type: 'list', items: clarification.knownFacts.slice(0, 5).map((text) => ({ icon: 'check_circle', color: 'green', text })) } : { type: 'divider' },
+      clarification?.missingFields?.length ? { type: 'badges', items: clarification.missingFields.slice(0, 6).map((text) => ({ text, color: text.startsWith('blocking') ? 'orange' : 'gray' })) } : { type: 'divider' },
+      clarification?.questions?.length ? {
+        type: 'list',
+        items: clarification.questions.map((question, index) => ({
+          icon: 'help',
+          color: 'text-sky-500',
+          text: `${index + 1}. ${question.label}：${question.question}`,
+        })),
+      } : { type: 'divider' },
+    ],
+  };
+}
+
+function createWorkflowClarificationCard(
+  clarification: ClarificationFormResult,
+  options?: { pending?: boolean; pendingText?: string },
+) {
+  const fields = clarification.questions.flatMap((question) => {
+    const baseField = {
+      id: `q:${question.id}`,
+      label: question.label,
+      inputType: question.selectionMode === 'multiple' ? 'multiple' as const : 'single' as const,
+      required: question.required !== false,
+      defaultValue: question.options.filter((option) => option.recommended).map((option) => option.id).slice(0, question.selectionMode === 'multiple' ? undefined : 1),
+      helperText: question.question,
+      options: question.options.map((option) => ({
+        value: option.id,
+        label: option.label,
+        description: option.description,
+      })),
+    };
+    return [
+      baseField,
+      {
+        id: `note:${question.id}`,
+        label: `${question.label}：补充说明`,
+        inputType: 'text' as const,
+        required: false,
+        placeholder: question.placeholder || '可选：补充你的具体偏好或约束',
+      },
+    ];
+  });
+
+  return {
+    header: {
+      icon: 'account_tree',
+      title: '补充问答',
+      subtitle: clarification.summary || '这些问题由 AI 根据目标、已知事实和待补缺口动态生成。',
+      gradient: 'from-emerald-500/25 to-sky-500/25',
+    },
+    blocks: [
+      { type: 'steps', current: 1, total: 4 },
+      clarification.knownFacts.length ? { type: 'list', items: clarification.knownFacts.slice(0, 5).map((text) => ({ icon: 'check_circle', color: 'green', text })) } : { type: 'text', content: '暂无已确认事实。' },
+      clarification.missingFields.length ? { type: 'badges', items: clarification.missingFields.slice(0, 6).map((text) => ({ text, color: text.startsWith('blocking') ? 'orange' : 'gray' })) } : { type: 'divider' },
+      {
+        type: 'form',
+        id: 'workflow-clarification',
+        submitLabel: '生成草案',
+        submitPrompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}clarify:{{payload}}`,
+        fields,
+        pending: options?.pending,
+        pendingText: options?.pendingText,
+      },
+    ],
+  };
+}
+
+function buildClarificationAnswerContext(
+  questions: ClarificationQuestionItem[],
+  values: Record<string, unknown>,
+): string {
+  return questions
+    .map((question) => {
+      const selectedValue = values[`q:${question.id}`];
+      const optionIds = Array.isArray(selectedValue)
+        ? selectedValue.map(String)
+        : stringifyWorkflowAnswer(selectedValue) ? [stringifyWorkflowAnswer(selectedValue)] : [];
+      const note = stringifyWorkflowAnswer(values[`note:${question.id}`]);
+      const selectedOptions = question.options.filter((option) => optionIds.includes(option.id));
+      if (!selectedOptions.length && !note) return '';
+      const parts = [
+        selectedOptions.length ? `选择：${selectedOptions.map((option) => option.label).join('、')}` : '',
+        note ? `补充：${note}` : '',
+      ].filter(Boolean);
+      return `- ${question.label}：${parts.join('；')}`;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function formatLightweightClarificationProgressMessage(input: {
+  step: WorkflowCreationItemStep;
+  clarification: ClarificationFormResult;
+}): string {
+  const { step, clarification } = input;
+  if (step.kind === WORKFLOW_CLARIFICATION_SUMMARY_KIND) {
+    return [
+      `### ${step.title}`,
+      '',
+      clarification.summary || '已完成当前理解摘要。',
+    ].join('\n');
+  }
+  if (step.kind === WORKFLOW_CLARIFICATION_FACTS_KIND) {
+    return [
+      `### ${step.title}`,
+      '',
+      clarification.knownFacts.length
+        ? clarification.knownFacts.map((item) => `- ${item}`).join('\n')
+        : '暂未识别到明确事实。',
+    ].join('\n');
+  }
+  if (step.kind === WORKFLOW_CLARIFICATION_GAPS_KIND) {
+    return [
+      `### ${step.title}`,
+      '',
+      clarification.missingFields.length
+        ? clarification.missingFields.map((item) => `- ${item}`).join('\n')
+        : '暂未识别到阻塞缺口。',
+    ].join('\n');
+  }
+  const latestQuestion = clarification.questions[clarification.questions.length - 1];
+  if (latestQuestion) {
+    return [
+      `### ${step.title}`,
+      '',
+      latestQuestion.question,
+      '',
+      ...latestQuestion.options.map((option) => `- ${option.recommended ? '推荐：' : ''}${option.label}${option.description ? `：${option.description}` : ''}`),
+    ].join('\n');
+  }
+  return `### ${step.title}\n\n已生成。`;
+}
+
+function createWorkflowDraftCard(draft: LightweightWorkflowDraft) {
+  return {
+    header: {
+      icon: 'edit_note',
+      title: '工作流草案',
+      subtitle: draft.name,
+      gradient: 'from-cyan-500/25 to-emerald-500/25',
+    },
+    blocks: [
+      { type: 'steps', current: 2, total: 4 },
+      {
+        type: 'info',
+        rows: [
+          { label: '配置文件', value: draft.filename, icon: 'description' },
+          { label: '验收', value: draft.acceptance.join('、'), icon: 'fact_check' },
+          { label: '分工', value: draft.agents, icon: 'groups' },
+        ],
+      },
+      { type: 'text', content: draft.requirements },
+      {
+        type: 'actions',
+        items: [
+          { label: '继续设置执行目录', prompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}draft_confirm:` },
+        ],
+      },
+    ],
+  };
+}
+
+type LightweightWorkflowDraftProgress = {
+  activeTitle?: string;
+  completedTitles: string[];
+  state: WorkflowCreationState;
+  retryNotice?: {
+    title: string;
+    attempt: number;
+    maxAttempts: number;
+    reason: string;
+  } | null;
+};
+
+function formatWorkflowValidationIssues(validation: any): string {
+  const issues = Array.isArray(validation?.issues) ? validation.issues : Array.isArray(validation?.details) ? validation.details : [];
+  if (!issues.length) {
+    return validation?.message || validation?.error || '工作流草案结构未通过校验。';
+  }
+  return issues
+    .map((issue: any) => {
+      const path = Array.isArray(issue?.path) ? issue.path.join('.') : String(issue?.path || '').trim();
+      const message = String(issue?.message || issue?.error || issue || '').trim();
+      return [path, message].filter(Boolean).join(': ');
+    })
+    .filter(Boolean)
+    .slice(0, 10)
+    .join('\n');
+}
+
+function createWorkflowDraftProgressCard(progress: LightweightWorkflowDraftProgress) {
+  const outline = progress.state.workflow.outline || [];
+  const stepPlan = Object.entries(progress.state.workflow.stateSteps || {})
+    .map(([stateName, value]: [string, any]) => ({
+      stateName,
+      steps: Array.isArray(value) ? value : Array.isArray(value?.steps) ? value.steps : [],
+    }))
+    .filter((item) => item.steps.length > 0);
+  const retryNotice = progress.retryNotice;
+  return {
+    header: {
+      icon: 'schema',
+      title: '生成工作流草案',
+      subtitle: '正在把补充问答转换为可执行状态机、执行步骤和 Agent 分工。',
+      gradient: 'from-cyan-500/25 to-emerald-500/25',
+    },
+    blocks: [
+      { type: 'steps', current: 2, total: 4 },
+      {
+        type: 'status',
+        state: retryNotice
+          ? `正在自动修正：${retryNotice.title}`
+          : progress.activeTitle ? `正在生成：${progress.activeTitle}` : '正在装配工作流草案',
+        color: retryNotice ? 'orange' : 'blue',
+        animated: true,
+        rows: retryNotice ? [
+          { label: '尝试', value: `第 ${retryNotice.attempt}/${retryNotice.maxAttempts} 次` },
+          { label: '原因', value: retryNotice.reason },
+        ] : undefined,
+      },
+      progress.completedTitles.length ? {
+        type: 'badges',
+        items: progress.completedTitles.map((text) => ({ text, color: 'green' })),
+      } : { type: 'text', content: '将依次生成状态轮廓、各状态执行步骤与 Agent 分配。' },
+      outline.length ? {
+        type: 'list',
+        items: outline.map((state: any, index: number) => ({
+          icon: state?.isFinal ? 'flag' : index === 0 ? 'play_circle' : 'radio_button_checked',
+          color: state?.isFinal ? 'text-emerald-500' : 'text-sky-500',
+          text: `${state?.name || `状态 ${index + 1}`}${state?.description ? `：${state.description}` : ''}`,
+        })),
+      } : { type: 'divider' },
+      stepPlan.length ? {
+        type: 'table',
+        columns: [
+          { key: 'state', label: '状态', width: '32%' },
+          { key: 'steps', label: '执行步骤', width: '68%' },
+        ],
+        rows: stepPlan.map((item) => ({
+          id: item.stateName,
+          state: item.stateName,
+          steps: item.steps.map((step: any) => `${step?.name || '步骤'} · ${step?.agent || 'agent'}`).join(' / '),
+          detailTitle: item.stateName,
+          detailBlocks: [{
+            type: 'list',
+            items: item.steps.map((step: any) => ({
+              icon: 'task_alt',
+              color: 'text-emerald-500',
+              text: `${step?.name || '步骤'}（${step?.agent || 'agent'}）：${step?.task || step?.description || ''}`,
+            })),
+          }],
+        })),
+        maxHeight: 240,
+      } : { type: 'divider' },
+    ],
+  };
+}
+
+function createWorkflowExecutionOptionsCard(defaultDirectory: string) {
+  return {
+    header: {
+      icon: 'play_circle',
+      title: '执行设置',
+      subtitle: '确认目录和运行方式后才会创建配置；启动后右侧才显示运行状态。',
+      gradient: 'from-sky-500/25 to-lime-500/25',
+    },
+    blocks: [
+      { type: 'steps', current: 3, total: 4 },
+      {
+        type: 'form',
+        id: 'workflow-execution-options',
+        submitLabel: '创建配置',
+        submitPrompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}execution_options:{{payload}}`,
+        fields: [
+          {
+            id: 'executionDirectory',
+            label: '执行目录',
+            inputType: 'text',
+            required: true,
+            defaultValue: defaultDirectory,
+            placeholder: defaultDirectory || '输入工作目录绝对路径',
+          },
+          {
+            id: 'workspaceMode',
+            label: '运行方式',
+            inputType: 'single',
+            required: true,
+            defaultValue: 'in-place',
+            options: [
+              { value: 'in-place', label: '直接当前目录运行' },
+              { value: 'isolated-copy', label: '隔离副本运行' },
+            ],
+          },
+          {
+            id: 'autoStart',
+            label: '创建后是否立即启动',
+            inputType: 'single',
+            required: true,
+            defaultValue: 'yes',
+            options: [
+              { value: 'yes', label: '创建并启动' },
+              { value: 'no', label: '只创建配置' },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function createWorkflowCreationIssueCard(errorMessage: string) {
+  return {
+    header: {
+      icon: 'build',
+      title: '工作流草案需要调整',
+      subtitle: '系统没有直接保存当前草案。我会根据当前需求继续修正结构，你也可以补充具体要求后重新生成。',
+      gradient: 'from-amber-500/25 to-orange-500/25',
+    },
+    blocks: [
+      {
+        type: 'status',
+        state: '等待修正',
+        color: 'orange',
+      },
+      {
+        type: 'text',
+        content: '建议补充状态数量、关键步骤、需要使用的 Agent 或验收标准；系统会继续按当前对话上下文生成可保存的工作流。',
+      },
+      {
+        type: 'collapse',
+        title: '技术详情',
+        icon: 'terminal',
+        defaultOpen: false,
+        blocks: [{ type: 'code', lang: 'text', code: errorMessage || '未知错误' }],
+      },
+    ],
+  };
+}
+
+function createWorkflowCreatedCard(input: { filename: string; autoStart: boolean }) {
+  return {
+    header: {
+      icon: input.autoStart ? 'rocket_launch' : 'check_circle',
+      title: input.autoStart ? '配置已创建，准备启动' : '配置已创建',
+      subtitle: input.filename,
+      gradient: 'from-lime-500/25 to-cyan-500/25',
+    },
+    blocks: [
+      { type: 'steps', current: input.autoStart ? 4 : 3, total: 4 },
+      { type: 'text', content: input.autoStart ? '正在启动工作流。启动成功后右侧会打开运行状态面板。' : '尚未启动，右侧运行面板保持关闭。' },
+      {
+        type: 'actions',
+        items: input.autoStart
+          ? []
+          : [{ label: '现在启动', prompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}start:${encodeURIComponent(JSON.stringify({ filename: input.filename }))}` }],
+      },
+    ],
+  };
+}
+
+function createWorkflowStartedCard(input: { filename: string; runId?: string }) {
+  return {
+    header: {
+      icon: 'account_tree',
+      title: '工作流运行中',
+      subtitle: input.runId ? `Run ${input.runId}` : input.filename,
+      gradient: 'from-lime-500/25 to-sky-500/25',
+      badges: [{ text: '运行中', color: 'green' }],
+    },
+    blocks: [
+      { type: 'steps', current: 4, total: 4 },
+      {
+        type: 'status',
+        state: '右侧运行监控已打开',
+        color: 'green',
+        animated: true,
+        rows: [
+          { label: '配置', value: input.filename },
+          { label: 'Run', value: input.runId || '等待运行 ID' },
+          { label: '下一步', value: '请在右侧查看状态图、事件、待回答问题和实时输出。' },
+        ],
+      },
+    ],
+  };
+}
+
+async function runLightweightWorkflowCreationItem(input: {
+  step: WorkflowCreationItemStep;
+  message: string;
+  systemPrompt: string;
+  frontendSessionId: string;
+  backendSessionId?: string;
+  workingDirectory?: string;
+  engine?: string;
+  model?: string;
+  maxAttempts?: number;
+  validationContext?: WorkflowCreationItemValidationContext;
+  onRetry?: (notice: { title: string; attempt: number; maxAttempts: number; reason: string }) => Promise<void> | void;
+}): Promise<{ result: WorkflowCreationItemResult; finalContent: string; backendSessionId?: string }> {
+  let activeBackendSessionId = input.backendSessionId;
+  const maxAttempts = input.maxAttempts ?? MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS;
+
+  const runAttempt = async (message: string, attempt: number): Promise<{ result: WorkflowCreationItemResult; finalContent: string; backendSessionId?: string }> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+    const startRes = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        message,
+        model: input.model,
+        engine: input.engine,
+        sessionId: activeBackendSessionId || undefined,
+        frontendSessionId: input.frontendSessionId,
+        streamScope: WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE,
+        mode: 'dashboard',
+        workingDirectory: input.workingDirectory || undefined,
+        extraSystemPrompt: input.systemPrompt,
+      }),
+    });
+    const startData = await startRes.json().catch(() => null);
+    if (!startRes.ok || !startData?.chatId) {
+      throw new Error(startData?.error || startData?.message || `启动「${input.step.title}」生成失败`);
+    }
+
+    return new Promise((resolve, reject) => {
+      const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
+      let accumulated = '';
+
+      es.addEventListener('delta', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          accumulated += data.content || '';
+        } catch (error) {
+          es.close();
+          reject(error);
+        }
+      });
+
+      es.addEventListener('done', async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          es.close();
+          const finalContent = data.result || accumulated;
+          if (Object.prototype.hasOwnProperty.call(data, 'sessionId')) {
+            activeBackendSessionId = normalizeBackendSessionId(data.sessionId);
+          }
+          const decision = resolveWorkflowCreationItemAttempt({
+            finalContent,
+            step: input.step,
+            attempt,
+            maxAttempts,
+            validationContext: input.validationContext,
+          });
+          if (decision.status === 'retry') {
+            await input.onRetry?.({
+              title: input.step.title,
+              attempt: decision.nextAttempt,
+              maxAttempts,
+              reason: decision.reason,
+            });
+            const repaired = await runAttempt(decision.repairPrompt, decision.nextAttempt);
+            resolve(repaired);
+            return;
+          }
+          if (decision.status === 'failed') {
+            reject(new Error(`${input.step.title} 未返回合法结果：${decision.reason}`));
+            return;
+          }
+          resolve({
+            result: decision.result,
+            finalContent,
+            backendSessionId: activeBackendSessionId,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      es.addEventListener('error', () => {
+        es.close();
+        reject(new Error(`「${input.step.title}」生成流中断`));
+      });
+    });
+  };
+
+  return runAttempt(input.message, 0);
+}
+
+async function generateLightweightWorkflowClarification(input: {
+  requirements: string;
+  workflowName: string;
+  filename: string;
+  workingDirectory: string;
+  workspaceMode: 'in-place' | 'isolated-copy';
+  frontendSessionId: string;
+  engine?: string;
+  model?: string;
+  onProgress?: (progress: {
+    activeStep?: WorkflowCreationItemStep;
+    completedSteps: WorkflowCreationItemStep[];
+    state: WorkflowCreationState;
+    clarification: ClarificationFormResult;
+  }) => Promise<void> | void;
+}): Promise<{ clarification: ClarificationFormResult; backendSessionId?: string; creationContextSummary: string }> {
+  let creationState = createEmptyWorkflowCreationState();
+  let backendSessionId: string | undefined;
+  const completedSteps: WorkflowCreationItemStep[] = [];
+  const baseContext = [
+    `工作流名称：${input.workflowName}`,
+    `目标文件：configs/${input.filename}`,
+    `工作目录：${input.workingDirectory}`,
+    `工作区模式：${input.workspaceMode}`,
+    `需求描述：${input.requirements}`,
+    '创建模式：首页对话内工作流，默认跳过完整 Spec，但必须先做补充问答和草案确认。',
+  ].filter(Boolean).join('\n\n');
+  const steps: WorkflowCreationItemStep[] = [
+    {
+      kind: WORKFLOW_CLARIFICATION_SUMMARY_KIND,
+      name: 'current_understanding',
+      title: '当前理解摘要',
+      guidance: '用用户主语言概括当前目标、业务对象、预期结果和最关键的不确定性。',
+    },
+    {
+      kind: WORKFLOW_CLARIFICATION_FACTS_KIND,
+      name: 'confirmed_facts',
+      title: '已确认事实',
+      guidance: '列出 3-6 条已经从表单、需求、补充说明或模板中确认的信息；不要把推测写成事实。',
+    },
+    {
+      kind: WORKFLOW_CLARIFICATION_GAPS_KIND,
+      name: 'decision_gaps',
+      title: '待补信息',
+      guidance: '列出会影响方案、范围、兼容、验收或任务拆分的缺口；用 blocking/optional 前缀标出优先级。',
+    },
+    {
+      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
+      name: 'target_outcome',
+      title: '澄清问题：目标结果',
+      guidance: '生成一个关于目标用户、成功结果或交付形态的问题。id 固定为 target_outcome，提供 2-4 个选项和默认推荐项。',
+    },
+    {
+      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
+      name: 'scope_boundaries',
+      title: '澄清问题：范围边界',
+      guidance: '生成一个关于本次必须覆盖与明确排除范围的问题。id 固定为 scope_boundaries，selectionMode 优先 multiple。',
+    },
+    {
+      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
+      name: 'failure_compatibility',
+      title: '澄清问题：异常兼容',
+      guidance: '生成一个关于失败路径、兼容策略、旧数据或外部依赖异常时系统行为的问题。id 固定为 failure_compatibility。',
+    },
+    {
+      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
+      name: 'validation_evidence',
+      title: '澄清问题：验证证据',
+      guidance: '生成一个关于自动检查、人工验收或制品审阅证据的问题。id 固定为 validation_evidence，required 可以为 false。',
+    },
+  ];
+
+  for (const step of steps) {
+    await input.onProgress?.({
+      activeStep: step,
+      completedSteps,
+      state: creationState,
+      clarification: assembleClarificationForm(creationState),
+    });
+    const output = await runLightweightWorkflowCreationItem({
+      step,
+      frontendSessionId: input.frontendSessionId,
+      backendSessionId,
+      systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
+      message: buildWorkflowCreationItemUserMessage(step, creationState),
+      workingDirectory: input.workingDirectory,
+      engine: input.engine,
+      model: input.model,
+    });
+    backendSessionId = output.backendSessionId;
+    creationState = applyWorkflowCreationItem(creationState, output.result);
+    completedSteps.push(step);
+    await input.onProgress?.({
+      activeStep: steps[completedSteps.length],
+      completedSteps,
+      state: creationState,
+      clarification: assembleClarificationForm(creationState),
+    });
+  }
+
+  const clarification = assembleClarificationForm(creationState);
+  if (!clarification.questions.length) {
+    throw new Error('AI 已返回澄清小点，但没有可展示的问题');
+  }
+  const creationContextSummary = [
+    clarification.summary ? `理解摘要：${clarification.summary}` : '',
+    clarification.knownFacts?.length ? `已确认事实：\n${clarification.knownFacts.map((item) => `- ${item}`).join('\n')}` : '',
+    clarification.missingFields?.length ? `待补信息：\n${clarification.missingFields.map((item) => `- ${item}`).join('\n')}` : '',
+    clarification.questions?.length ? `澄清问题：\n${clarification.questions.map((item) => `- ${item.label || item.id}: ${item.question}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n\n');
+  return { clarification, backendSessionId, creationContextSummary };
+}
+
+function extractWorkflowStepPlan(configDraft: any): NonNullable<LightweightWorkflowDraft['stepPlan']> {
+  const states = Array.isArray(configDraft?.workflow?.states) ? configDraft.workflow.states : [];
+  return states.map((state: any) => ({
+    state: String(state?.name || '未命名状态'),
+    steps: (Array.isArray(state?.steps) ? state.steps : []).map((step: any) => ({
+      name: String(step?.name || '未命名步骤'),
+      agent: String(step?.agent || 'developer'),
+      task: String(step?.task || ''),
+    })),
+  })).filter((item: { steps: Array<{ name: string; agent: string; task: string }> }) => item.steps.length > 0);
+}
+
+function formatWorkflowStepPlan(stepPlan: NonNullable<LightweightWorkflowDraft['stepPlan']>): string {
+  if (!stepPlan.length) return '暂无执行步骤。';
+  return stepPlan.map((stateDoc, stateIndex) => [
+    `${stateIndex + 1}. ${stateDoc.state}`,
+    ...stateDoc.steps.map((step, stepIndex) => `   ${stateIndex + 1}.${stepIndex + 1} ${step.name}（${step.agent}）：${step.task}`),
+  ].join('\n')).join('\n');
+}
+
+function summarizeWorkflowAgents(configDraft: any): string {
+  const agents = new Set<string>();
+  const states = Array.isArray(configDraft?.workflow?.states) ? configDraft.workflow.states : [];
+  states.forEach((state: any) => {
+    (Array.isArray(state?.steps) ? state.steps : []).forEach((step: any) => {
+      const agent = String(step?.agent || '').trim();
+      if (agent) agents.add(agent);
+    });
+  });
+  return Array.from(agents).join('、') || '默认开发/评审 Agent';
+}
+
+function collectWorkflowAgentNames(configDraft: any): string[] {
+  const agents = new Set<string>();
+  const states = Array.isArray(configDraft?.workflow?.states) ? configDraft.workflow.states : [];
+  states.forEach((state: any) => {
+    (Array.isArray(state?.steps) ? state.steps : []).forEach((step: any) => {
+      const agent = String(step?.agent || '').trim();
+      if (agent && !['default-supervisor', 'supervisor', 'commander'].includes(agent)) agents.add(agent);
+    });
+  });
+  return Array.from(agents);
+}
+
+function buildWorkflowAgoraRoom(input: {
+  previous?: SessionWorkbenchState;
+  configDraft: any;
+  workflowName: string;
+  workingDirectory: string;
+  availableAgents: Array<{ name: string; description?: string; systemPrompt?: string; engine?: string; model?: string }>;
+}): NonNullable<SessionWorkbenchState['collaborationRoom']> {
+  const topic = `${input.workflowName} · 工作流议场`;
+  const base = createPlainConversationRoomState({ topic, responseMode: 'facilitated' });
+  const currentRoom = input.previous?.collaborationRoom || base;
+  const currentChatroom = currentRoom.chatroom || base.chatroom!;
+  const existingRoster = currentChatroom.participantRoster || [];
+  const existingNames = new Set(existingRoster.map((participant) => participant.name));
+  const nextAgents = collectWorkflowAgentNames(input.configDraft).filter((name) => !existingNames.has(name));
+  const nextRoster: CollaborationChatroomParticipant[] = [
+    ...existingRoster,
+    ...nextAgents.map((name) => {
+      const agent = input.availableAgents.find((item) => item.name === name);
+      return {
+        id: `workflow-agent-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name,
+        sourceType: 'agent' as const,
+        sourceAgent: name,
+        runtimeAgentName: name,
+        systemPrompt: typeof agent?.systemPrompt === 'string' ? agent.systemPrompt : undefined,
+        useDefaultModel: !agent?.model,
+        engine: typeof agent?.engine === 'string' ? agent.engine : '',
+        model: typeof agent?.model === 'string' ? agent.model : '',
+        createdAt: Date.now(),
+      };
+    }),
+  ];
+  const participantNames = nextRoster.map((participant) => participant.name);
+  return {
+    ...currentRoom,
+    topic,
+    selectedAgents: participantNames,
+    mode: 'group-chat',
+    chatroom: {
+      ...base.chatroom!,
+      ...currentChatroom,
+      status: 'running',
+      topic,
+      participants: participantNames,
+      participantRoster: nextRoster,
+      settings: {
+        ...base.chatroom!.settings,
+        ...(currentChatroom.settings || {}),
+        responseMode: 'facilitated',
+        workspacePath: input.workingDirectory,
+      },
+    },
+  };
+}
+
+async function generateLightweightWorkflowDraft(input: {
+  answers: LightweightWorkflowAnswers;
+  frontendSessionId: string;
+  backendSessionId?: string;
+  creationContextSummary?: string;
+  conversationContext?: string;
+  workingDirectory: string;
+  workspaceMode: 'in-place' | 'isolated-copy';
+  engine?: string;
+  model?: string;
+  availableAgents?: string[];
+  onProgress?: (progress: LightweightWorkflowDraftProgress) => Promise<void> | void;
+}): Promise<LightweightWorkflowDraft> {
+  const fallbackDraft = buildLightweightWorkflowDraft(input.answers);
+  let backendSessionId: string | undefined = normalizeBackendSessionId(input.backendSessionId);
+  const requirements = fallbackDraft.requirements;
+  const availableStepAgents = (input.availableAgents || [])
+    .map((name) => String(name || '').trim())
+    .filter((name) => name && !['default-supervisor', 'supervisor', 'commander'].includes(name));
+  const recommendedAgents = availableStepAgents.length ? availableStepAgents : ['developer', 'architect', 'tester'];
+  const buildBaseContext = (repairContext?: string) => [
+    `工作流名称：${fallbackDraft.name}`,
+    `目标文件：configs/${fallbackDraft.filename}`,
+    `工作目录：${input.workingDirectory}`,
+    `工作区模式：${input.workspaceMode}`,
+    `需求描述：${requirements}`,
+    input.creationContextSummary ? `创建期上下文（来自刷新前已生成内容，必须继承）：\n${input.creationContextSummary}` : '',
+    input.conversationContext ? `当前对话中已确认的用户输入和系统卡片摘要，必须继承目标与约束：\n${input.conversationContext}` : '',
+    `可用普通执行 Agent：${recommendedAgents.join('、')}`,
+    '创建模式：首页对话内工作流；必须生成真正可执行的状态机工作流草案、执行步骤设计，并为每个步骤分配普通执行 Agent。',
+    '所有 state.steps[].agent 必须从“可用普通执行 Agent”中选择；不要编造 reviewer、developer 等不存在的 Agent 名称，除非它们明确出现在可用列表里。',
+    '禁止退化为单阶段单步骤占位流程。根据目标拆成 2-5 个状态；每个非终态 1-4 个步骤；最后有汇总状态。',
+    repairContext ? `上一版草案校验未通过，请只围绕下面问题修正结构，不要改变用户目标：\n${repairContext}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  let repairContext = '';
+  const maxDraftAttempts = 3;
+  for (let draftAttempt = 1; draftAttempt <= maxDraftAttempts; draftAttempt += 1) {
+    let creationState = createEmptyWorkflowCreationState();
+    const completedTitles: string[] = draftAttempt > 1 ? ['已根据校验结果进入自动修正'] : [];
+    const baseContext = buildBaseContext(repairContext);
+    const outlineStep: WorkflowCreationItemStep = {
+      kind: WORKFLOW_STATE_OUTLINE_KIND,
+      name: 'workflow_outline',
+      title: draftAttempt > 1 ? '修正工作流状态轮廓' : '工作流状态轮廓',
+      guidance: '基于用户目标生成 2-5 个状态。必须包含初始状态和最终汇总状态；状态要体现真实执行阶段、评审/验证和收尾。',
+    };
+    await input.onProgress?.({
+      activeTitle: outlineStep.title,
+      completedTitles,
+      state: creationState,
+      retryNotice: draftAttempt > 1 ? {
+        title: '工作流草案校验',
+        attempt: draftAttempt,
+        maxAttempts: maxDraftAttempts,
+        reason: repairContext,
+      } : null,
+    });
+    const outlineOutput = await runLightweightWorkflowCreationItem({
+      step: outlineStep,
+      frontendSessionId: input.frontendSessionId,
+      backendSessionId,
+      systemPrompt: buildWorkflowCreationItemSystemPrompt(outlineStep, baseContext),
+      message: buildWorkflowCreationItemUserMessage(outlineStep, creationState),
+      workingDirectory: input.workingDirectory,
+      engine: input.engine,
+      model: input.model,
+      onRetry: (retryNotice) => input.onProgress?.({
+        activeTitle: outlineStep.title,
+        completedTitles,
+        state: creationState,
+        retryNotice,
+      }),
+    });
+    backendSessionId = outlineOutput.backendSessionId;
+    creationState = applyWorkflowCreationItem(creationState, outlineOutput.result);
+    completedTitles.push(outlineStep.title);
+    await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
+
+    for (const state of (creationState.workflow.outline || []).filter((item: any) => !item.isFinal)) {
+      const stateName = String(state?.name || '').trim();
+      if (!stateName) continue;
+      const step: WorkflowCreationItemStep = {
+        kind: WORKFLOW_STATE_STEPS_KIND,
+        name: `steps_${sanitizeWorkflowSlug(stateName)}`,
+        title: `状态步骤：${stateName}`,
+        guidance: `只为状态 "${stateName}" 生成 1-4 个可执行步骤。每步必须有 name、agent、task；agent 使用普通执行 Agent，不要用 supervisor。`,
+      };
+      await input.onProgress?.({ activeTitle: step.title, completedTitles, state: creationState });
+      const output = await runLightweightWorkflowCreationItem({
+        step,
+        frontendSessionId: input.frontendSessionId,
+        backendSessionId,
+        systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
+        message: [buildWorkflowCreationItemUserMessage(step, creationState), '', `当前必须补全的 stateName：${stateName}`].join('\n'),
+        workingDirectory: input.workingDirectory,
+        engine: input.engine,
+        model: input.model,
+        validationContext: {
+          expectedStateName: stateName,
+          availableStepAgents: recommendedAgents,
+          supervisorAgents: ['default-supervisor', 'supervisor', 'commander'],
+        },
+        onRetry: (retryNotice) => input.onProgress?.({ activeTitle: step.title, completedTitles, state: creationState, retryNotice }),
+      });
+      backendSessionId = output.backendSessionId;
+      creationState = applyWorkflowCreationItem(creationState, output.result);
+      completedTitles.push(step.title);
+      await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
+    }
+
+    const configDraft = assembleWorkflowConfigFromItems(creationState, {
+      workflowName: fallbackDraft.name,
+      description: fallbackDraft.description,
+      requirements,
+      workingDirectory: input.workingDirectory,
+      workspaceMode: input.workspaceMode,
+      recommendedAgents,
+      recommendedSupervisorAgent: 'default-supervisor',
+      includeSpecTaskBindings: false,
+    });
+    const validation = await configApi.validateConfig({ config: configDraft }).then((data) => data.validation).catch((error) => ({
+      ok: false,
+      issues: [{ path: ['workflow'], message: error?.message || '配置校验失败' }],
+    }));
+    if (validation?.ok) {
+      const normalizedDraft = validation.normalized || configDraft;
+      const stepPlan = extractWorkflowStepPlan(normalizedDraft);
+      return {
+        ...fallbackDraft,
+        agents: summarizeWorkflowAgents(normalizedDraft),
+        configDraft: normalizedDraft,
+        stepPlan,
+      };
+    }
+    repairContext = formatWorkflowValidationIssues(validation);
+    if (draftAttempt >= maxDraftAttempts) {
+      throw new Error(repairContext || '工作流草案未通过校验');
+    }
+  };
+  throw new Error('工作流草案未通过校验');
+}
 
 function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
   switch (team) {
@@ -138,6 +1397,16 @@ function getAgentBindingBadgeClass(team?: AgentBindingTeam) {
   }
 }
 
+function getChatAgentInitials(name: string) {
+  return name
+    .split(/[\s-_]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0] || '')
+    .join('')
+    .toUpperCase() || name.slice(0, 2).toUpperCase();
+}
+
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
@@ -149,24 +1418,14 @@ function useIsMobile() {
   return isMobile;
 }
 
-function isSessionDirectoryView(value: unknown): value is SessionDirectoryView {
-  return value === 'conversation' || value === 'agora' || value === 'workflow';
-}
-
 function readStoredSessionDirectoryView(): SessionDirectoryView | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const stored = window.sessionStorage.getItem(SESSION_DIRECTORY_VIEW_STORAGE_KEY);
-    return isSessionDirectoryView(stored) ? stored : null;
-  } catch {
-    return null;
-  }
+  return 'conversation';
 }
 
 function writeStoredSessionDirectoryView(view: SessionDirectoryView): void {
   if (typeof window === 'undefined') return;
   try {
-    window.sessionStorage.setItem(SESSION_DIRECTORY_VIEW_STORAGE_KEY, view);
+    window.sessionStorage.setItem(SESSION_DIRECTORY_VIEW_STORAGE_KEY, 'conversation');
   } catch {}
 }
 
@@ -534,8 +1793,14 @@ export function ChatPageContent({
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [engineSlashCommands, setEngineSlashCommands] = useState<HomepageSlashCommand[]>([]);
   const [slashCommandRefreshNonce, setSlashCommandRefreshNonce] = useState(0);
+  const [availableMentionAgents, setAvailableMentionAgents] = useState<Array<{ name: string; description?: string; systemPrompt?: string; engine?: string; model?: string; avatar?: any; team?: string; roleType?: string }>>([]);
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [agentPickerAdding, setAgentPickerAdding] = useState(false);
+  const [agentPickerQuery, setAgentPickerQuery] = useState('');
+  const [agentPickerRuntime, setAgentPickerRuntime] = useState({ engine: '', model: '' });
   const slashItemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const collaborationMessageHandlerRef = useRef<((text: string) => void) | null>(null);
+  const activeAgentStopsRef = useRef<Array<() => Promise<void> | void>>([]);
   const [notebookExporting, setNotebookExporting] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ type: 'conversation' } | { type: 'assistant'; messageId: string } | null>(null);
@@ -544,7 +1809,6 @@ export function ChatPageContent({
   const [exportDirectory, setExportDirectory] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
-  const [isResizing, setIsResizing] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editContent, setEditContent] = useState('');
@@ -561,6 +1825,13 @@ export function ChatPageContent({
   const [chatWorkspaceActiveTab, setChatWorkspaceActiveTab] = useState('chat');
   const [chatWorkspaceDialogOpen, setChatWorkspaceDialogOpen] = useState(false);
   const [chatWorkspaceDraft, setChatWorkspaceDraft] = useState('');
+  const [chatWorkspaceCleanupConfirm, setChatWorkspaceCleanupConfirm] = useState<{
+    sessionId: string;
+    workspacePath: string;
+    nextPath: string;
+  } | null>(null);
+  const [deletePreviousChatWorkspace, setDeletePreviousChatWorkspace] = useState(true);
+  const [chatWorkspaceSaving, setChatWorkspaceSaving] = useState(false);
   const [wechatBindDialogOpen, setWeChatBindDialogOpen] = useState(false);
   const [sessionDirectoryView, setSessionDirectoryView] = useState<SessionDirectoryView>(() => (
     readStoredSessionDirectoryView() || readStoredSessionDirectoryOrder()[0] || 'conversation'
@@ -587,35 +1858,6 @@ export function ChatPageContent({
     if (!Number.isFinite(saved)) return DEFAULT_HOME_SIDEBAR_SIZE;
     return Math.min(MAX_HOME_SIDEBAR_SIZE, Math.max(MIN_HOME_SIDEBAR_SIZE, saved));
   });
-  const [agoraGuestData, setAgoraGuestData] = useState<{
-    guests: AgoraGuestConfig[];
-    presets: AgoraGuestPreset[];
-    loading: boolean;
-    loaded: boolean;
-  }>({
-    guests: [],
-    presets: [],
-    loading: false,
-    loaded: false,
-  });
-  const handleAgoraGuestDataChange = useCallback((data: { guests: AgoraGuestConfig[]; presets: AgoraGuestPreset[]; loading: boolean }) => {
-    setAgoraGuestData((prev) => {
-      if (
-        prev.loaded
-        && prev.guests === data.guests
-        && prev.presets === data.presets
-        && prev.loading === data.loading
-      ) {
-        return prev;
-      }
-      return {
-        guests: data.guests,
-        presets: data.presets,
-        loading: data.loading,
-        loaded: true,
-      };
-    });
-  }, []);
   const starterHandledRef = useRef(false);
   const homeEntryResetHandledRef = useRef(false);
   const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
@@ -643,17 +1885,30 @@ export function ChatPageContent({
   const activeChatWorkspacePath = String(activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
   const fallbackWorkingDirectory = String(workingDirectory || '').trim();
   const effectiveWorkingDirectory = activeChatWorkspacePath || fallbackWorkingDirectory;
-  const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding);
+  const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding || activeSession?.sessionWorkbenchState?.embeddedWorkflow?.configFile);
+  const hasWorkflowRuntimeRightRailContext = Boolean(
+    (activeSession?.workflowBinding?.configFile && activeSession?.workflowBinding?.runId)
+    || (activeSession?.sessionWorkbenchState?.embeddedWorkflow?.configFile && activeSession?.sessionWorkbenchState?.embeddedWorkflow?.runId)
+  );
   const hasCreationSidebarContext = Boolean(activeSession?.creationSession);
   const hasCollaborationSidebarContext = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom);
   const isWerewolfLabMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled);
   const isBuiltInAgoraMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
+  const renderDedicatedAgoraShell = false;
+  const collaborationRoomCore = useCollaborationRoom({
+    sessionWorkbenchState: activeSession?.sessionWorkbenchState,
+    setSessionWorkbenchState,
+    fallbackTopic: activeSession?.title,
+  });
+  const hasCollaborationParticipants = collaborationRoomCore.participants.length > 0;
+  const isMultiAgentConversation = collaborationRoomCore.participants.length > 0;
+  const activeAgentBinding = activeSession?.agentBinding;
   const hasExistingAgoraTopics = useMemo(
-    () => sessions.some((session) => getSessionDirectoryKind(session) === 'agora'),
+    () => sessions.some((session) => Boolean(session.sessionWorkbenchState?.collaborationRoom)),
     [sessions]
   );
-  const showAgoraZenCover = sessionDirectoryView === 'agora' && !activeSession && !loading;
-  const hasCommanderSidebarContext = hasWorkflowSidebarContext || hasCollaborationSidebarContext;
+  const showAgoraZenCover = false;
+  const hasCommanderSidebarContext = hasWorkflowSidebarContext;
   const hasHintSidebarContext = Boolean(
     latestSidebarHint?.intent
     || latestSidebarHint?.workflowDraft
@@ -709,7 +1964,6 @@ export function ChatPageContent({
   }, [derivedHomeSidebarMode, derivedHomeSidebarTab, sessionScopedSidebarTabs]);
   const hasHomeSidebarContext = hasWorkflowSidebarContext
     || hasCreationSidebarContext
-    || hasCollaborationSidebarContext
     || hasHintSidebarContext;
   const availableHomeSidebarTabsKey = availableHomeSidebarTabs.join('|');
 
@@ -731,6 +1985,21 @@ export function ChatPageContent({
     if (typeof window !== 'undefined') {
       setOrigin(window.location.origin);
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    agentApi.listAgents()
+      .then((data) => {
+        if (cancelled) return;
+        setAvailableMentionAgents(Array.isArray(data?.agents) ? data.agents : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableMentionAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -797,29 +2066,6 @@ export function ChatPageContent({
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
-  // Resize drag handler
-  useEffect(() => {
-    if (!isResizing) return;
-    const onMove = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      const x = e.clientX - containerRef.current.getBoundingClientRect().left;
-      const clamped = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, x));
-      setSidebarWidth(clamped);
-      localStorage.setItem(SIDEBAR_STORAGE_KEY, clamped.toString());
-    };
-    const onUp = () => setIsResizing(false);
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    return () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isResizing]);
-
   // Detect user scroll to lock/unlock auto-scroll
   const hasMessages = (activeSession?.messages?.length ?? 0) > 0;
   useEffect(() => {
@@ -834,6 +2080,16 @@ export function ChatPageContent({
     if (nextMode === 'hidden' && hasHomeSidebarContext && availableHomeSidebarTabs.length > 0) {
       nextMode = 'peek';
     } else if (!hasHomeSidebarContext && hasMessages) {
+      nextMode = 'hidden';
+    }
+    if (
+      hasCollaborationSidebarContext
+      && !hasCollaborationParticipants
+      && !hasWorkflowSidebarContext
+      && !hasCreationSidebarContext
+      && !hasHintSidebarContext
+      && activeSession?.sessionWorkbenchState?.rightRail?.collapsed
+    ) {
       nextMode = 'hidden';
     }
 
@@ -855,10 +2111,16 @@ export function ChatPageContent({
     derivedHomeSidebarMode,
     derivedHomeSidebarTab,
     hasHomeSidebarContext,
+    hasCollaborationParticipants,
+    hasCollaborationSidebarContext,
+    hasCreationSidebarContext,
+    hasHintSidebarContext,
     hasMessages,
+    hasWorkflowSidebarContext,
     isMobile,
     latestSidebarHint?.activeTab,
     latestSidebarHint?.mode,
+    activeSession?.sessionWorkbenchState?.rightRail?.collapsed,
   ]);
 
   useEffect(() => {
@@ -867,43 +2129,8 @@ export function ChatPageContent({
       return;
     }
 
-    const nextSessionDirectoryView = getSessionDirectoryKind({
-      workflowBinding: activeSession.workflowBinding,
-      creationSession: activeSession.creationSession,
-      sessionWorkbenchState: {
-        ...(activeSession.sessionWorkbenchState || {}),
-        homeSidebar: latestSidebarHint || activeSession.sessionWorkbenchState?.homeSidebar || null,
-      },
-    });
-    if (nextSessionDirectoryView === 'conversation') {
-      lastSessionDirectoryAutoSwitchRef.current = '';
-      return;
-    }
-
-    const nextSignature = JSON.stringify({
-      sessionId: activeSession.id,
-      sessionDirectoryView: nextSessionDirectoryView,
-      workflowBinding: activeSession.workflowBinding
-        ? {
-          configFile: activeSession.workflowBinding.configFile,
-          runId: activeSession.workflowBinding.runId,
-        }
-        : null,
-      creationSessionId: activeSession.creationSession?.creationSessionId || null,
-      hasCollaborationRoom: Boolean(activeSession.sessionWorkbenchState?.collaborationRoom),
-      workflowSidebarHint: isWorkflowSidebarHint(latestSidebarHint)
-        ? {
-          intent: latestSidebarHint?.intent || null,
-          activeTab: latestSidebarHint?.activeTab || null,
-          stage: latestSidebarHint?.stage || null,
-          workflowName: latestSidebarHint?.workflowDraft?.name || null,
-        }
-        : null,
-    });
-    if (lastSessionDirectoryAutoSwitchRef.current === nextSignature) return;
-    lastSessionDirectoryAutoSwitchRef.current = nextSignature;
-
-    setSessionDirectoryView((prev) => (prev === nextSessionDirectoryView ? prev : nextSessionDirectoryView));
+    lastSessionDirectoryAutoSwitchRef.current = '';
+    setSessionDirectoryView((prev) => (prev === 'conversation' ? prev : 'conversation'));
   }, [
     activeSession?.creationSession?.creationSessionId,
     activeSession?.id,
@@ -935,7 +2162,7 @@ export function ChatPageContent({
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       setTimeout(() => { isProgrammaticScrollRef.current = false; }, 500);
     }
-  }, [activeSession?.messages, loading]);
+  }, [activeSession?.messages, loading, streamingMessageId]);
 
   useEffect(() => {
     if (!editDialogOpen || !editEditorRef.current || !editingMessageId) return;
@@ -972,7 +2199,7 @@ export function ChatPageContent({
     }
     const targetSession = sessions.find((session) => session.id === targetSessionId);
     if (targetSession) {
-      setSessionDirectoryView(getSessionDirectoryKind(targetSession));
+      setSessionDirectoryView('conversation');
     }
     setActiveSessionId(targetSessionId);
 
@@ -1029,7 +2256,7 @@ export function ChatPageContent({
     if (existingSessionId) {
       const targetSession = sessions.find((session) => session.id === existingSessionId);
       if (targetSession) {
-        setSessionDirectoryView(getSessionDirectoryKind(targetSession));
+        setSessionDirectoryView('conversation');
       }
       setActiveSessionId(existingSessionId);
     } else {
@@ -1064,6 +2291,14 @@ export function ChatPageContent({
       subtext: '刷新当前会话的 session 上下文容量',
       icon: 'compress',
       aliases: ['compact', 'context'],
+    },
+    {
+      id: 'workflow',
+      command: '/workflow',
+      title: '创建工作流',
+      subtext: '在当前对话里启动 AI 引导的工作流创建',
+      icon: 'account_tree',
+      aliases: ['workflow', '工作流', 'plan'],
     },
     ...engineSlashCommands,
   ]), [engineSlashCommands]);
@@ -1321,7 +2556,7 @@ export function ChatPageContent({
     if (patch.tab) setHomeSidebarTab((prev) => (prev === patch.tab ? prev : patch.tab!));
     if (patch.mode) setHomeSidebarMode((prev) => (prev === patch.mode ? prev : patch.mode!));
     if (shouldSwitchSessionDirectoryToWorkflow) {
-      setSessionDirectoryView('workflow');
+      setSessionDirectoryView('conversation');
     }
 
     if (!activeSessionId && !activeSession) {
@@ -1386,8 +2621,22 @@ export function ChatPageContent({
     } catch {}
   }, [homeSidebarMode]);
 
+  const handlePrimarySidebarLayout = useCallback((layout: Record<string, number> | number[]) => {
+    if (!sidebarOpen || isMobile || !containerRef.current) return;
+    const nextSize = Array.isArray(layout)
+      ? layout[0]
+      : layout['chat-primary-sidebar-panel'];
+    if (!Number.isFinite(nextSize)) return;
+    const containerWidth = containerRef.current.getBoundingClientRect().width;
+    const nextWidth = clampSidebarWidth((containerWidth * Number(nextSize)) / 100);
+    setSidebarWidth((prev) => Math.abs(prev - nextWidth) < 1 ? prev : nextWidth);
+    try {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(nextWidth)));
+    } catch {}
+  }, [isMobile, sidebarOpen]);
+
   useEffect(() => {
-    const shouldOpen = filteredSlashCommands.length > 0 && input.trim().startsWith('/') && !hasCollaborationSidebarContext;
+    const shouldOpen = filteredSlashCommands.length > 0 && input.trim().startsWith('/');
     setSlashMenuOpen(shouldOpen);
     if (!shouldOpen) setSlashActiveIndex(0);
   }, [filteredSlashCommands.length, hasCollaborationSidebarContext, input]);
@@ -1397,26 +2646,1189 @@ export function ChatPageContent({
   }, [slashQuery]);
 
   const mainInputMentionItems = useMemo(() => {
-    const room = activeSession?.sessionWorkbenchState?.collaborationRoom;
-    if (!room || !hasCollaborationSidebarContext) return [];
-    const names = new Set<string>();
-    if (isBuiltInAgoraMode) {
-      names.add('全员');
-      (room.chatroom?.participants || []).forEach((participant) => {
-        const name = String(participant || '').trim();
-        if (name) names.add(name);
+    const participantNames = new Set(collaborationRoomCore.participantNames);
+    const items: Array<{ id: string; label: string; description?: string }> = [];
+    const push = (name: string, description?: string) => {
+      const label = String(name || '').trim();
+      if (!label || items.some((item) => item.id === label)) return;
+      items.push({ id: label, label, description });
+    };
+    if (participantNames.size > 0) {
+      push('全员', '当前对话成员');
+    }
+    push(DEFAULT_ASSISTANT_MENTION_NAME, activeAgentBinding?.agentName ? '当前默认助手' : '默认助手');
+    collaborationRoomCore.participantNames.forEach((name) => push(name, '已在对话'));
+    if (activeAgentBinding?.agentName) push(activeAgentBinding.agentName, '当前默认 Agent');
+    availableMentionAgents.forEach((agent) => {
+      const name = String(agent.name || '').trim();
+      if (!name) return;
+      push(name, participantNames.has(name) ? '已在对话' : '可拉入对话');
+    });
+    return items;
+  }, [activeAgentBinding?.agentName, availableMentionAgents, collaborationRoomCore.participantNames]);
+
+  const filteredAgentPickerAgents = useMemo(() => {
+    const query = agentPickerQuery.trim().toLowerCase();
+    const existing = new Set(collaborationRoomCore.participantNames);
+    return availableMentionAgents
+      .filter((agent) => {
+        const name = String(agent.name || '').trim();
+        if (!name || existing.has(name)) return false;
+        if (!query) return true;
+        return [
+          name,
+          agent.description,
+          (agent as any).team,
+          (agent as any).roleType,
+        ].filter(Boolean).join(' ').toLowerCase().includes(query);
+      })
+      .slice(0, 24);
+  }, [agentPickerQuery, availableMentionAgents, collaborationRoomCore.participantNames]);
+  const agentPickerCanAdd = isModelSelectionReady;
+
+  const addAgentToConversation = useCallback((agent: { name: string; description?: string; systemPrompt?: string; engine?: string; model?: string; avatar?: any; team?: string; roleType?: string }) => {
+    if (!isModelSelectionReady) {
+      toast('warning', '模型配置加载中，请稍候再添加 Agent');
+      return;
+    }
+    const name = String(agent.name || '').trim();
+    if (!name) return;
+    const topic = activeSession?.title || '对话';
+    const nextParticipant: CollaborationChatroomParticipant = {
+      id: `agent-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      sourceType: 'agent' as const,
+      sourceAgent: name,
+      runtimeAgentName: name,
+      systemPrompt: typeof agent.systemPrompt === 'string' ? agent.systemPrompt : undefined,
+      personaPrompt: undefined,
+      useDefaultModel: !agentPickerRuntime.model,
+      engine: agentPickerRuntime.engine,
+      model: agentPickerRuntime.model,
+      createdAt: Date.now(),
+    };
+
+    const applyParticipant = (prev?: SessionWorkbenchState): SessionWorkbenchState => {
+      const base = createPlainConversationRoomState({ topic, responseMode: collaborationRoomCore.responseMode });
+      const currentRoom = prev?.collaborationRoom || base;
+      const currentChatroom = currentRoom.chatroom || base.chatroom!;
+      const roster = currentChatroom.participantRoster || [];
+      if (roster.some((participant: CollaborationChatroomParticipant) => participant.name === name || participant.sourceAgent === name || participant.runtimeAgentName === name)) {
+        return prev || {};
+      }
+      const nextRoster = [...roster, nextParticipant];
+      return {
+        ...(prev || {}),
+        conversationMode: 'agent-chat' as const,
+        collaborationRoom: {
+          ...currentRoom,
+          topic,
+          selectedAgents: nextRoster.map((participant) => participant.name),
+          chatroom: {
+            ...base.chatroom!,
+            ...currentChatroom,
+            status: 'running' as const,
+            topic,
+            participants: nextRoster.map((participant) => participant.name),
+            participantRoster: nextRoster,
+            settings: {
+              ...base.chatroom!.settings,
+              ...(currentChatroom.settings || {}),
+              responseMode: collaborationRoomCore.responseMode,
+            },
+          },
+        },
+      };
+    };
+
+    if (!activeSessionId && !activeSession) {
+      const sessionId = createSession({
+        title: topic,
+        sessionWorkbenchState: applyParticipant(undefined),
       });
-      (room.selectedAgents || []).forEach((name) => {
-        if (name) names.add(name);
+      setActiveSessionId(sessionId);
+    } else {
+      setSessionWorkbenchState((prev) => applyParticipant(prev));
+    }
+    setAgentPickerOpen(false);
+    setAgentPickerAdding(false);
+    setAgentPickerQuery('');
+    setAgentPickerRuntime({ engine: '', model: '' });
+    editorRef.current?.focus();
+  }, [
+    activeSession,
+    activeSessionId,
+    agentPickerRuntime.engine,
+    agentPickerRuntime.model,
+    collaborationRoomCore.responseMode,
+    createSession,
+    isModelSelectionReady,
+    setActiveSessionId,
+    setSessionWorkbenchState,
+    toast,
+  ]);
+
+  const removeAgentFromConversation = useCallback((agentName: string) => {
+    const name = agentName.trim();
+    if (!name) return;
+    setSessionWorkbenchState((prev) => {
+      if (!prev?.collaborationRoom?.chatroom) return prev || {};
+      const chatroom = prev.collaborationRoom.chatroom;
+      const nextRoster = (chatroom.participantRoster || []).filter((participant) => participant.name !== name);
+      return {
+        ...prev,
+        conversationMode: nextRoster.length > 0 ? 'agent-chat' : 'plain',
+        collaborationRoom: {
+          ...prev.collaborationRoom,
+          selectedAgents: nextRoster.map((participant) => participant.name),
+          chatroom: {
+            ...chatroom,
+            participants: nextRoster.map((participant) => participant.name),
+            participantRoster: nextRoster,
+          },
+        },
+      };
+    });
+  }, [setSessionWorkbenchState]);
+
+  const handleSetCollaborationResponseMode = useCallback((mode: CollaborationChatroomMode) => {
+    collaborationRoomCore.setResponseMode(mode);
+  }, [collaborationRoomCore]);
+
+  const stopActiveAiAction = useCallback(() => {
+    stopStreaming();
+    const stops = activeAgentStopsRef.current.splice(0);
+    stops.forEach((stop) => {
+      try {
+        void stop();
+      } catch {}
+    });
+    setStreamingMessageId(null);
+    if (activeSessionId) {
+      unmarkSessionStreaming(activeSessionId);
+      activeSession?.messages
+        .filter((message: any) => message?.workflowThinking)
+        .forEach((message) => {
+          void updateSessionMessage(activeSessionId, message.id, { workflowThinking: false } as any);
+        });
+      setSessionWorkbenchState((prev) => prev?.lightweightWorkflowDraft
+        ? { ...prev, lightweightWorkflowDraft: { ...prev.lightweightWorkflowDraft, busy: false } }
+        : (prev || {}));
+    }
+  }, [activeSession?.messages, activeSessionId, setSessionWorkbenchState, stopStreaming, setStreamingMessageId, unmarkSessionStreaming, updateSessionMessage]);
+
+  const beginLightweightWorkflowClarification = useCallback(async (
+    requirements: string,
+    options?: { appendInitialUserMessage?: boolean },
+  ) => {
+    const normalizedRequirements = requirements.trim();
+    const now = Date.now();
+    const loadingMessageId = genLocalMessageId();
+    const clarificationFormMessageId = genLocalMessageId();
+    let clarificationFormMessageCreated = false;
+    let lastThinkingMessageId = loadingMessageId;
+    const title = normalizedRequirements
+      ? `工作流：${normalizedRequirements.slice(0, 32)}`
+      : '工作流';
+    const draft = buildLightweightWorkflowDraft({ initialRequirements: normalizedRequirements });
+    const nextState = {
+      conversationMode: 'workflow-drafting' as const,
+      lightweightWorkflowDraft: {
+        stage: 'clarification' as const,
+        busy: true,
+        clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
+        draft,
+      },
+      homeSidebar: null,
+      rightRail: null,
+    };
+
+    let targetSessionId = activeSessionId || activeSession?.id;
+    if (!activeSessionId && !activeSession) {
+      targetSessionId = createSession({
+        title,
+        sessionWorkbenchState: nextState,
+        messages: [
+          ...(normalizedRequirements ? [{
+            role: 'user' as const,
+            content: `/workflow ${normalizedRequirements}`,
+            timestamp: now,
+          }] : []),
+          {
+            id: loadingMessageId,
+            role: 'assistant' as const,
+            content: '我先按 AI 引导逻辑生成补充问答。接下来会把理解摘要、已知事实、待补缺口和问题逐段发在当前对话里。',
+            cards: [createWorkflowClarificationLoadingCard(normalizedRequirements)],
+            workflowThinking: true,
+            timestamp: now + 1,
+          },
+        ],
       });
-    } else if (homeSidebarTab === 'commander' || homeSidebarTab === 'workflow') {
-      names.add('全员');
-      (room.selectedAgents || []).forEach((name) => {
-        if (name) names.add(name);
+      setActiveSessionId(targetSessionId);
+    } else {
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        ...nextState,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || {}),
+          ...nextState.lightweightWorkflowDraft,
+        },
+      }));
+      if (activeSessionId && normalizedRequirements && options?.appendInitialUserMessage !== false) {
+        await appendSessionMessage(activeSessionId, {
+          role: 'user',
+          content: `/workflow ${normalizedRequirements}`,
+          timestamp: now,
+        });
+      }
+      if (activeSessionId) {
+        await appendSessionMessage(activeSessionId, {
+          id: loadingMessageId,
+          role: 'assistant',
+          content: '我先按 AI 引导逻辑生成补充问答。接下来会把理解摘要、已知事实、待补缺口和问题逐段发在当前对话里。',
+          cards: [createWorkflowClarificationLoadingCard(normalizedRequirements)],
+          workflowThinking: true,
+          timestamp: now + 1,
+        });
+      }
+    }
+
+    setInput('');
+    editorRef.current?.clear();
+    setSlashMenuOpen(false);
+    setSessionDirectoryView('conversation');
+    setHomeSidebarMode('hidden');
+    toast('success', '开始分析需求并生成补充问题');
+
+    if (!targetSessionId) return;
+    try {
+      const clarificationResult = await generateLightweightWorkflowClarification({
+        requirements: normalizedRequirements || '用户希望创建一个工作流，但尚未补充具体目标。',
+        workflowName: draft.name,
+        filename: draft.filename,
+        workingDirectory: effectiveWorkingDirectory,
+        workspaceMode: 'in-place',
+        frontendSessionId: targetSessionId,
+        engine: effectiveEngine || engine,
+        model,
+        onProgress: async (progress) => {
+          await updateSessionMessage(targetSessionId!, loadingMessageId, {
+            content: '我先按 AI 引导逻辑生成补充问答。接下来会把理解摘要、已知事实、待补缺口和问题逐段发在当前对话里。',
+            cards: [createWorkflowClarificationLoadingCard(normalizedRequirements, {
+              activeTitle: progress.activeStep?.title,
+              completedTitles: progress.completedSteps.map((step) => step.title),
+              clarification: progress.clarification,
+            })],
+          });
+
+          const completedStep = progress.completedSteps[progress.completedSteps.length - 1];
+          if (!completedStep) return;
+          const hasQuestions = progress.clarification.questions.length > 0;
+          if (!hasQuestions || completedStep.kind !== WORKFLOW_CLARIFICATION_QUESTION_KIND) {
+            await updateSessionMessage(targetSessionId!, lastThinkingMessageId, { workflowThinking: false });
+            const progressMessageId = genLocalMessageId();
+            lastThinkingMessageId = progressMessageId;
+            await appendSessionMessage(targetSessionId!, {
+              id: progressMessageId,
+              role: 'assistant',
+              content: formatLightweightClarificationProgressMessage({
+                step: completedStep,
+                clarification: progress.clarification,
+              }),
+              workflowThinking: true,
+              timestamp: Date.now(),
+            });
+            return;
+          }
+
+          const pendingText = progress.activeStep
+            ? `正在生成：${progress.activeStep.title}`
+            : '正在收尾补充问答...';
+          if (!clarificationFormMessageCreated) {
+            clarificationFormMessageCreated = true;
+            await updateSessionMessage(targetSessionId!, lastThinkingMessageId, { workflowThinking: false });
+            lastThinkingMessageId = clarificationFormMessageId;
+            await appendSessionMessage(targetSessionId!, {
+              id: clarificationFormMessageId,
+              role: 'assistant',
+              content: '澄清问题开始生成了。已完成的问题会实时出现在下面，生成期间先不要提交。',
+              cards: [createWorkflowClarificationCard(progress.clarification, {
+                pending: true,
+                pendingText,
+              })],
+              workflowThinking: true,
+              timestamp: Date.now(),
+            });
+            return;
+          }
+
+          await updateSessionMessage(targetSessionId!, clarificationFormMessageId, {
+            content: '澄清问题正在继续生成。已完成的问题会实时出现在下面，生成期间先不要提交。',
+            cards: [createWorkflowClarificationCard(progress.clarification, {
+              pending: true,
+              pendingText,
+            })],
+            workflowThinking: true,
+          });
+        },
+      });
+      const clarification = clarificationResult.clarification;
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        conversationMode: 'workflow-drafting',
+        homeSidebar: null,
+        rightRail: null,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || {}),
+          stage: 'clarification',
+          busy: false,
+          backendSessionId: clarificationResult.backendSessionId,
+          creationContextSummary: clarificationResult.creationContextSummary,
+          clarificationForm: clarification,
+          clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
+          draft,
+        },
+      }));
+      await updateSessionMessage(targetSessionId, loadingMessageId, {
+        content: '前置信息整理完成，澄清问题已生成。',
+        cards: [],
+        workflowThinking: false,
+      });
+      if (clarificationFormMessageCreated) {
+        await updateSessionMessage(targetSessionId, clarificationFormMessageId, {
+          content: '补充问答已生成。先回答这些会影响编排的问题，再生成工作流草案。',
+          cards: [createWorkflowClarificationCard(clarification)],
+          workflowThinking: false,
+        });
+      } else {
+        await appendSessionMessage(targetSessionId, {
+          id: clarificationFormMessageId,
+          role: 'assistant',
+          content: '补充问答已生成。先回答这些会影响编排的问题，再生成工作流草案。',
+          cards: [createWorkflowClarificationCard(clarification)],
+          timestamp: Date.now(),
+        });
+      }
+    } catch (error: any) {
+      await appendSessionMessage(targetSessionId, {
+        role: 'assistant',
+        content: `生成补充问答失败：${error?.message || '未知错误'}\n\n请补充更明确的目标后重新输入 /workflow。`,
+        cards: [],
+        timestamp: Date.now(),
+      });
+      setSessionWorkbenchState((prev) => prev?.lightweightWorkflowDraft
+        ? { ...prev, lightweightWorkflowDraft: { ...prev.lightweightWorkflowDraft, busy: false } }
+        : (prev || {}));
+      await updateSessionMessage(targetSessionId, lastThinkingMessageId, { workflowThinking: false });
+    }
+  }, [
+    activeSession,
+    activeSessionId,
+    appendSessionMessage,
+    createSession,
+    effectiveEngine,
+    effectiveWorkingDirectory,
+    engine,
+    model,
+    setActiveSessionId,
+    setSessionWorkbenchState,
+    toast,
+    updateSessionMessage,
+  ]);
+
+  const startLightweightWorkflowDraft = useCallback(async (requirements: string) => {
+    const normalizedRequirements = requirements.trim();
+    const now = Date.now();
+    const title = normalizedRequirements
+      ? `工作流：${normalizedRequirements.slice(0, 32)}`
+      : '工作流';
+    const nextState = {
+      conversationMode: 'workflow-drafting' as const,
+      lightweightWorkflowDraft: {
+        stage: 'discovery' as const,
+        clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
+      },
+      homeSidebar: null,
+      rightRail: null,
+    };
+    const introMessage = {
+      role: 'assistant' as const,
+      content: [
+        '请补充工作流目标与范围。',
+        '',
+        '提交后将结合当前代码仓语境生成补充问题，并据此起草工作流。',
+      ].join('\n'),
+      cards: [createWorkflowDiscoveryCard(normalizedRequirements, effectiveWorkingDirectory)],
+      timestamp: now + 1,
+    };
+
+    let targetSessionId = activeSessionId || activeSession?.id;
+    if (!targetSessionId && !activeSession) {
+      targetSessionId = createSession({
+        title,
+        sessionWorkbenchState: nextState,
+        messages: [
+          ...(normalizedRequirements ? [{
+            role: 'user' as const,
+            content: `/workflow ${normalizedRequirements}`,
+            timestamp: now,
+          }] : []),
+          introMessage,
+        ],
+      });
+      setActiveSessionId(targetSessionId);
+    } else {
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        ...nextState,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || {}),
+          ...nextState.lightweightWorkflowDraft,
+        },
+      }));
+      if (targetSessionId && normalizedRequirements) {
+        await appendSessionMessage(targetSessionId, {
+          role: 'user',
+          content: `/workflow ${normalizedRequirements}`,
+          timestamp: now,
+        });
+      }
+      if (targetSessionId) {
+        await appendSessionMessage(targetSessionId, introMessage);
+      }
+    }
+
+    setInput('');
+    editorRef.current?.clear();
+    setSlashMenuOpen(false);
+    setSessionDirectoryView('conversation');
+    setHomeSidebarMode('hidden');
+    toast('success', '已启动工作流需求探索');
+  }, [
+    activeSession,
+    activeSessionId,
+    appendSessionMessage,
+    createSession,
+    effectiveWorkingDirectory,
+    setActiveSessionId,
+    setSessionWorkbenchState,
+    toast,
+  ]);
+
+  const handleLightweightWorkflowDraftAction = useCallback(async (prompt: string) => {
+    const parsed = decodeWorkflowDraftAction(prompt);
+    if (!parsed) return false;
+    const sessionId = activeSessionId || activeSession?.id;
+    if (!sessionId) return true;
+    const now = Date.now();
+    const currentDraftState = activeSession?.sessionWorkbenchState?.lightweightWorkflowDraft;
+    const currentAnswers = currentDraftState?.clarificationAnswers;
+
+    if (parsed.action === 'discovery_submit') {
+      const answers = mergeWorkflowAnswers(currentAnswers, parsed.values);
+      const initialRequirements = [
+        answers.initialRequirements,
+        answers.goal ? `交付物：${answers.goal}` : '',
+        answers.constraints ? `约束/范围：${answers.constraints}` : '',
+        answers.scope ? `代码仓探索范围：${answers.scope}` : '',
+      ].filter(Boolean).join('\n');
+      await appendSessionMessage(sessionId, {
+        role: 'user',
+        content: `工作流需求：\n${initialRequirements || '请帮我创建一个工作流'}`,
+        timestamp: now,
+      });
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        conversationMode: 'workflow-drafting',
+        homeSidebar: null,
+        rightRail: null,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || {}),
+          stage: 'clarification',
+          clarificationAnswers: answers,
+        },
+      }));
+      await beginLightweightWorkflowClarification(
+        initialRequirements || answers.initialRequirements || answers.goal || '',
+        { appendInitialUserMessage: false },
+      );
+      return true;
+    }
+
+    if (parsed.action === 'clarify') {
+      const clarificationForm = currentDraftState?.clarificationForm as ClarificationFormResult | undefined;
+      const answerContext = clarificationForm
+        ? buildClarificationAnswerContext(clarificationForm.questions || [], parsed.values)
+        : '';
+      const previousAnswers = mergeWorkflowAnswers(currentAnswers, {});
+      const answers = {
+        ...previousAnswers,
+        clarificationAnswers: parsed.values,
+        clarificationAnswerContext: answerContext,
+        goal: previousAnswers.initialRequirements || answerContext || '自动化任务',
+        constraints: answerContext,
+      };
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        conversationMode: 'workflow-drafting',
+        homeSidebar: null,
+        rightRail: null,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || {}),
+          stage: 'generating',
+          busy: true,
+          backendSessionId: currentDraftState?.backendSessionId,
+          creationContextSummary: currentDraftState?.creationContextSummary,
+          clarificationForm: currentDraftState?.clarificationForm,
+          draft: currentDraftState?.draft,
+          clarificationAnswers: answers,
+        },
+      }));
+      await appendSessionMessage(sessionId, {
+        role: 'user',
+        content: answerContext ? `已提交补充问答：\n${answerContext}` : '已提交补充问答',
+        timestamp: now,
+      });
+      const progressMessageId = `workflow-draft-progress-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await appendSessionMessage(sessionId, {
+        id: progressMessageId,
+        role: 'assistant',
+        content: '正在生成工作流草案。',
+        cards: [createWorkflowDraftProgressCard({
+          completedTitles: [],
+          state: createEmptyWorkflowCreationState(),
+        })],
+        timestamp: now + 1,
+        workflowThinking: true,
+      });
+      let draft: LightweightWorkflowDraft;
+      try {
+        draft = await generateLightweightWorkflowDraft({
+          answers,
+          frontendSessionId: sessionId,
+          backendSessionId: currentDraftState?.backendSessionId,
+          creationContextSummary: [
+            currentDraftState?.creationContextSummary,
+            answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
+          ].filter(Boolean).join('\n\n'),
+          conversationContext: buildWorkflowConversationContext(activeSession?.messages),
+          workingDirectory: effectiveWorkingDirectory,
+          workspaceMode: 'in-place',
+          engine: effectiveEngine || engine,
+          model,
+          availableAgents: availableMentionAgents.map((agent) => agent.name),
+          onProgress: async (progress) => {
+            if (!progressMessageId) return;
+            await updateSessionMessage(sessionId, progressMessageId, {
+              content: progress.activeTitle ? `正在生成：${progress.activeTitle}` : '正在生成工作流草案。',
+              cards: [createWorkflowDraftProgressCard(progress)],
+              workflowThinking: true,
+            });
+          },
+        });
+      } catch (error: any) {
+        await updateSessionMessage(sessionId, progressMessageId, {
+          content: '工作流草案还需要继续修正。我已经保留当前上下文，请补充你的偏好后继续生成。',
+          cards: [createWorkflowCreationIssueCard(error?.message || '工作流草案未通过校验')],
+          workflowThinking: false,
+        });
+        setSessionWorkbenchState((prev) => ({
+          ...(prev || {}),
+          conversationMode: 'workflow-drafting',
+          homeSidebar: null,
+          rightRail: null,
+          lightweightWorkflowDraft: {
+            ...(prev?.lightweightWorkflowDraft || {}),
+            stage: 'clarification',
+            busy: false,
+            backendSessionId: currentDraftState?.backendSessionId,
+            creationContextSummary: currentDraftState?.creationContextSummary,
+            clarificationForm: currentDraftState?.clarificationForm,
+            clarificationAnswers: answers,
+          },
+        }));
+        return true;
+      }
+      if (progressMessageId) {
+        await updateSessionMessage(sessionId, progressMessageId, {
+          content: '工作流草案已生成，下面是状态结构、执行步骤和 Agent 分配。',
+          workflowThinking: false,
+        });
+      }
+      await appendSessionMessage(sessionId, {
+        role: 'assistant',
+        content: [
+          '我已生成真正的工作流草案。确认后再设置执行目录和是否立即运行。',
+          '',
+          '执行步骤：',
+          formatWorkflowStepPlan(draft.stepPlan || []),
+        ].join('\n'),
+        cards: [createWorkflowDraftCard(draft)],
+        timestamp: Date.now(),
+      });
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        conversationMode: 'workflow-drafting',
+        homeSidebar: null,
+        rightRail: null,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || {}),
+          stage: 'draft',
+          busy: false,
+          backendSessionId: currentDraftState?.backendSessionId,
+          creationContextSummary: [
+            currentDraftState?.creationContextSummary,
+            answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
+          ].filter(Boolean).join('\n\n'),
+          clarificationForm: currentDraftState?.clarificationForm,
+          clarificationAnswers: answers,
+          draft,
+        },
+      }));
+      return true;
+    }
+
+    if (parsed.action === 'draft_confirm') {
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        conversationMode: 'workflow-drafting',
+        homeSidebar: null,
+        rightRail: null,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || { stage: 'draft' }),
+          stage: 'confirming',
+          busy: false,
+        },
+      }));
+      await appendSessionMessage(sessionId, {
+        role: 'assistant',
+        content: '确认一下执行设置。只有选择启动后，我才会打开右侧工作流运行状态。',
+        cards: [createWorkflowExecutionOptionsCard(effectiveWorkingDirectory)],
+        timestamp: now,
+      });
+      return true;
+    }
+
+    if (parsed.action === 'execution_options') {
+      const previousAnswers = mergeWorkflowAnswers(currentAnswers, {});
+      const options = mergeWorkflowAnswers(previousAnswers, parsed.values);
+      const draft = (currentDraftState?.draft && typeof currentDraftState.draft === 'object'
+        ? currentDraftState.draft
+        : buildLightweightWorkflowDraft(options)) as LightweightWorkflowDraft;
+      const workingDir = options.executionDirectory || effectiveWorkingDirectory;
+      const workspaceMode = options.workspaceMode || 'in-place';
+      const autoStart = options.autoStart !== 'no';
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        conversationMode: 'workflow-drafting',
+        homeSidebar: null,
+        rightRail: null,
+        lightweightWorkflowDraft: {
+          ...(prev?.lightweightWorkflowDraft || {}),
+          stage: 'generating',
+          busy: true,
+          clarificationAnswers: options,
+          draft,
+        },
+      }));
+      await appendSessionMessage(sessionId, {
+        role: 'user',
+        content: `执行目录：${workingDir}\n运行方式：${workspaceMode === 'in-place' ? '直接当前目录运行' : '隔离副本运行'}\n创建后：${autoStart ? '立即启动' : '暂不启动'}`,
+        timestamp: now,
+      });
+      try {
+        const created = await configApi.createConfig({
+          filename: draft.filename,
+          workflowName: draft.name,
+          workingDirectory: workingDir,
+          workspaceMode,
+          description: draft.description,
+          requirements: draft.requirements,
+          mode: 'state-machine',
+          skipSpecCoding: true,
+          frontendSessionId: sessionId,
+          configDraft: draft.configDraft,
+        });
+        const filename = created.filename || draft.filename;
+        await appendSessionMessage(sessionId, {
+          role: 'assistant',
+          content: [
+            autoStart ? '配置创建完成，开始启动工作流。' : '配置创建完成，尚未启动。',
+            '',
+            '已升级为工作流议场，并按步骤分配 Agent：',
+            draft.agents,
+          ].join('\n'),
+          cards: [createWorkflowCreatedCard({ filename, autoStart })],
+          timestamp: now + 1,
+        });
+        setSessionWorkbenchState((prev) => ({
+          ...(prev || {}),
+          conversationMode: autoStart ? 'workflow-running' : 'workflow-drafting',
+          homeSidebar: null,
+          rightRail: autoStart ? { activePluginId: 'workflow-monitor', collapsed: false, pinned: true, updatedAt: Date.now() } : null,
+          embeddedWorkflow: {
+            ...(prev?.embeddedWorkflow || {}),
+            configFile: filename,
+            activePanel: 'status',
+          },
+          collaborationRoom: draft.configDraft ? buildWorkflowAgoraRoom({
+            previous: prev,
+            configDraft: draft.configDraft,
+            workflowName: draft.name,
+            workingDirectory: workingDir,
+            availableAgents: availableMentionAgents,
+          }) : prev?.collaborationRoom,
+          chatWorkspace: {
+            ...(prev?.chatWorkspace || {}),
+            workingDirectory: workingDir,
+            sourceWorkspace: workingDir,
+            updatedAt: Date.now(),
+          },
+          lightweightWorkflowDraft: {
+            ...(prev?.lightweightWorkflowDraft || {}),
+            stage: autoStart ? 'starting' : 'confirming',
+            busy: autoStart,
+            clarificationAnswers: options,
+            draft: { ...draft, filename },
+          },
+        }));
+        if (!autoStart) return true;
+        const startResult = await workflowApi.start(filename, sessionId, { skipPreflight: true });
+        const runId = startResult.runId || '';
+        setSessionWorkbenchState((prev) => ({
+          ...(prev || {}),
+          conversationMode: 'workflow-running',
+          homeSidebar: null,
+          rightRail: { activePluginId: 'workflow-monitor', collapsed: false, pinned: true, updatedAt: Date.now() },
+          embeddedWorkflow: {
+            ...(prev?.embeddedWorkflow || {}),
+            configFile: filename,
+            runId: runId || prev?.embeddedWorkflow?.runId,
+            activePanel: 'status',
+          },
+          collaborationRoom: draft.configDraft ? buildWorkflowAgoraRoom({
+            previous: prev,
+            configDraft: draft.configDraft,
+            workflowName: draft.name,
+            workingDirectory: workingDir,
+            availableAgents: availableMentionAgents,
+          }) : prev?.collaborationRoom,
+          lightweightWorkflowDraft: null,
+        }));
+        setHomeSidebarTab('workflow');
+        setHomeSidebarMode('active');
+        await appendSessionMessage(sessionId, {
+          role: 'assistant',
+          content: runId ? `工作流已启动：${runId}` : '工作流已启动。',
+          cards: [createWorkflowStartedCard({ filename, runId })],
+          timestamp: Date.now(),
+        });
+      } catch (error: any) {
+        setSessionWorkbenchState((prev) => ({
+          ...(prev || {}),
+          conversationMode: 'workflow-drafting',
+          homeSidebar: null,
+          rightRail: null,
+          lightweightWorkflowDraft: {
+            ...(prev?.lightweightWorkflowDraft || {}),
+            stage: 'confirming',
+            busy: false,
+          },
+        }));
+        await appendSessionMessage(sessionId, {
+          role: 'assistant',
+          content: '当前工作流草案还不能直接保存，需要继续调整结构。',
+          cards: [createWorkflowCreationIssueCard(error?.message || '未知错误')],
+          timestamp: Date.now(),
+        });
+      }
+      return true;
+    }
+
+    if (parsed.action === 'start') {
+      const filename = stringifyWorkflowAnswer(parsed.values.filename);
+      if (!filename) {
+        toast('warning', '缺少工作流配置文件');
+        return true;
+      }
+      try {
+        const startResult = await workflowApi.start(filename, sessionId, { skipPreflight: true });
+        const runId = startResult.runId || '';
+        setSessionWorkbenchState((prev) => ({
+          ...(prev || {}),
+          conversationMode: 'workflow-running',
+          homeSidebar: null,
+          rightRail: { activePluginId: 'workflow-monitor', collapsed: false, pinned: true, updatedAt: Date.now() },
+          embeddedWorkflow: {
+            ...(prev?.embeddedWorkflow || {}),
+            configFile: filename,
+            runId: runId || prev?.embeddedWorkflow?.runId,
+            activePanel: 'status',
+          },
+          lightweightWorkflowDraft: null,
+        }));
+        setHomeSidebarTab('workflow');
+        setHomeSidebarMode('active');
+        await appendSessionMessage(sessionId, {
+          role: 'assistant',
+          content: runId ? `工作流已启动：${runId}` : '工作流已启动。',
+          cards: [createWorkflowStartedCard({ filename, runId })],
+          timestamp: Date.now(),
+        });
+      } catch (error: any) {
+        await appendSessionMessage(sessionId, {
+          role: 'assistant',
+          content: `启动失败：${error?.message || '未知错误'}`,
+          timestamp: Date.now(),
+        });
+      }
+      return true;
+    }
+
+    return true;
+  }, [
+    activeSession,
+    activeSessionId,
+    appendSessionMessage,
+    availableMentionAgents,
+    effectiveEngine,
+    effectiveWorkingDirectory,
+    engine,
+    beginLightweightWorkflowClarification,
+    model,
+    setHomeSidebarMode,
+    setSessionWorkbenchState,
+    toast,
+    updateSessionMessage,
+  ]);
+
+  const sendUnifiedAgentChatMessage = useCallback(async (message: string) => {
+    const knownAgentNames = availableMentionAgents.map((agent) => String(agent.name || '').trim()).filter(Boolean);
+    const existingParticipants = collaborationRoomCore.participants;
+    const existingNames = existingParticipants.map((participant) => participant.name).filter(Boolean);
+    const mentionableNames = Array.from(new Set([DEFAULT_ASSISTANT_MENTION_NAME, ...knownAgentNames, ...existingNames]));
+    const hasAllMention = message.includes('@全员');
+    const directMentionText = message.replace(/@全员/g, '');
+    const rawDirectMentions = extractAgentMentions(directMentionText, mentionableNames);
+    const mentionsDefaultAssistant = hasAllMention || rawDirectMentions.includes(DEFAULT_ASSISTANT_MENTION_NAME);
+    const mentionedAgents = Array.from(new Set([
+      ...(hasAllMention ? existingNames : []),
+      ...rawDirectMentions.filter((name) => name !== DEFAULT_ASSISTANT_MENTION_NAME),
+    ]));
+    const responseMode = collaborationRoomCore.responseMode;
+
+    if (!existingParticipants.length && !mentionedAgents.length && !mentionsDefaultAssistant) return false;
+
+    const missingMentionedAgents = mentionedAgents.filter((name) => !existingNames.includes(name));
+    const participants = [
+      ...existingParticipants,
+      ...missingMentionedAgents.map((name) => {
+        const agent = availableMentionAgents.find((item) => item.name === name);
+        return {
+          id: `agent-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          name,
+          sourceType: 'agent' as const,
+          sourceAgent: name,
+          runtimeAgentName: name,
+          systemPrompt: typeof agent?.systemPrompt === 'string' ? agent.systemPrompt : undefined,
+          personaPrompt: undefined,
+          useDefaultModel: !agent?.model,
+          engine: typeof agent?.engine === 'string' ? agent.engine : '',
+          model: typeof agent?.model === 'string' ? agent.model : '',
+          createdAt: Date.now(),
+        };
+      }),
+    ];
+    const participantNames = participants.map((participant) => participant.name).filter(Boolean);
+
+    if (missingMentionedAgents.length && (activeSessionId || activeSession)) {
+      const topic = activeSession?.title || '群聊';
+      setSessionWorkbenchState((prev) => {
+        const base = createPlainConversationRoomState({ topic, responseMode });
+        const current = prev?.collaborationRoom
+          ? {
+            ...prev.collaborationRoom,
+            chatroom: {
+              ...base.chatroom!,
+              ...(prev.collaborationRoom.chatroom || {}),
+            },
+          }
+          : base;
+        return {
+          ...(prev || {}),
+          conversationMode: participants.length > 0 ? 'agent-chat' : 'plain',
+          collaborationRoom: {
+            ...current,
+            selectedAgents: participantNames,
+            chatroom: {
+              ...base.chatroom!,
+              ...(current.chatroom || {}),
+              status: 'running',
+              topic,
+              participants: participantNames,
+              participantRoster: participants,
+              settings: {
+                ...base.chatroom!.settings,
+                ...(current.chatroom?.settings || {}),
+                responseMode,
+              },
+            },
+          },
+        };
       });
     }
-    return Array.from(names);
-  }, [activeSession?.sessionWorkbenchState?.collaborationRoom, hasCollaborationSidebarContext, homeSidebarTab, isBuiltInAgoraMode]);
+
+    const targetNames = responseMode === 'broadcast' && participants.length > 1
+      ? participantNames
+      : mentionedAgents.length
+        ? mentionedAgents
+        : participants.length === 1
+          ? [participants[0].name]
+          : responseMode === 'facilitated'
+            ? participantNames.slice(0, 1)
+            : [];
+
+    const shouldSendDefaultAssistant = mentionsDefaultAssistant;
+
+    if (!targetNames.length && !shouldSendDefaultAssistant) return false;
+
+    if (shouldSendDefaultAssistant && !targetNames.length) {
+      await sendMessage(message);
+      return true;
+    }
+
+    const now = Date.now();
+    let targetSessionId = activeSessionId;
+    if (!targetSessionId && !activeSession) {
+      const roomState = createPlainConversationRoomState({ topic: '群聊', responseMode });
+      targetSessionId = createSession({
+        title: '对话',
+        sessionWorkbenchState: {
+          conversationMode: participants.length > 0 ? 'agent-chat' : 'plain',
+          collaborationRoom: {
+            ...roomState,
+            selectedAgents: participantNames,
+            chatroom: {
+              ...roomState.chatroom!,
+              participants: participantNames,
+              participantRoster: participants,
+            },
+          },
+        },
+        messages: shouldSendDefaultAssistant ? [] : [{
+          role: 'user',
+          content: message,
+          timestamp: now,
+        }],
+      });
+      setActiveSessionId(targetSessionId);
+    } else if (targetSessionId && !shouldSendDefaultAssistant) {
+      await appendSessionMessage(targetSessionId, {
+        role: 'user',
+        content: message,
+        timestamp: now,
+      });
+    }
+
+    const sessionIdForAgents = targetSessionId || activeSessionId || undefined;
+    if (shouldSendDefaultAssistant) {
+      await sendMessage(message, { targetSessionId: sessionIdForAgents });
+    }
+    const runAgentStream = async (agentName: string) => {
+      const participant = participants.find((item) => item.name === agentName);
+      const runtimeName = participant?.runtimeAgentName || participant?.sourceAgent || agentName;
+      const assistantMessageId = genLocalMessageId();
+      await appendSessionMessage(sessionIdForAgents!, {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        rawContent: '',
+        engine: participant?.engine || undefined,
+        model: participant?.model || undefined,
+        timestamp: Date.now(),
+        cards: [{
+          type: 'collaboration_speech',
+          speakerName: agentName,
+          speakerType: 'agent',
+          actionLabel: 'Agent',
+          avatar: (availableMentionAgents.find((item) => item.name === agentName) as any)?.avatar,
+          team: (availableMentionAgents.find((item) => item.name === agentName) as any)?.team,
+          roleType: (availableMentionAgents.find((item) => item.name === agentName) as any)?.roleType,
+        }],
+      });
+      markSessionStreaming(sessionIdForAgents);
+      setStreamingMessageId(assistantMessageId);
+      try {
+        const stream = await agentApi.streamChat(runtimeName, {
+          message,
+          mode: 'standalone-chat',
+          frontendSessionId: sessionIdForAgents || null,
+          workingDirectory: effectiveWorkingDirectory || undefined,
+          workflowContext: {
+            frontendSessionId: sessionIdForAgents || null,
+            collaborationTopic: activeSession?.title || '对话',
+            collaborationSpeaker: agentName,
+            collaborationMode: responseMode,
+            collaborationParticipants: participantNames,
+            mentionedAgents,
+            mentionsDefaultAssistant,
+            routingInstruction: '先组织语言判断本轮是否需要你回应；如果消息里 @ 了其他 Agent，请在回复中自然承接并可继续点名。',
+          },
+          temporaryRoleConfig: participant?.systemPrompt || participant?.personaPrompt ? {
+            systemPrompt: [participant.systemPrompt, participant.personaPrompt].filter(Boolean).join('\n'),
+            engine: participant.engine || undefined,
+            model: participant.model || undefined,
+          } : undefined,
+        } as any);
+        let stoppedByUser = false;
+        let resolveStoppedStream: (() => void) | null = null;
+        const stopAgentStream = async () => {
+          stoppedByUser = true;
+          try {
+            await agentApi.stopChatStream(runtimeName, { streamId: stream.streamId });
+          } catch {}
+          await updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
+            content: '已停止',
+            rawContent: undefined,
+          });
+          try { stream.events.close(); } catch {}
+          resolveStoppedStream?.();
+        };
+        activeAgentStopsRef.current.push(stopAgentStream);
+
+        await new Promise<void>((resolve) => {
+          resolveStoppedStream = resolve;
+          let accumulated = '';
+          let accumulatedRawStream = '';
+          let settled = false;
+          const close = () => {
+            try { stream.events.close(); } catch {}
+          };
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            activeAgentStopsRef.current = activeAgentStopsRef.current.filter((stop) => stop !== stopAgentStream);
+            resolveStoppedStream = null;
+            close();
+            resolve();
+          };
+          const applyPartial = (content: string) => {
+            accumulated = appendStreamChunk(accumulated, content);
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const { text: parsedText } = parseActions(accumulated);
+            const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
+            void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
+              content: cleanText,
+              rawContent: accumulatedRawStream,
+            });
+          };
+
+          stream.events.addEventListener('thinking', ((event: MessageEvent) => {
+            const data = JSON.parse(event.data || '{}');
+            const content = String(data?.content || '');
+            if (content) applyPartial(content);
+          }) as EventListener);
+
+          stream.events.addEventListener('delta', ((event: MessageEvent) => {
+            const data = JSON.parse(event.data || '{}');
+            const content = String(data?.content || '');
+            if (content) applyPartial(content);
+          }) as EventListener);
+
+          stream.events.addEventListener('done', ((event: MessageEvent) => {
+            const data = JSON.parse(event.data || '{}');
+            const resultText = String(data?.rawOutput || data?.output || data?.error || '');
+            const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, resultText);
+            const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
+            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
+              role: data?.isError ? 'error' as const : 'assistant' as const,
+              content: cleanText || data?.output || data?.error || accumulated || '',
+              rawContent: fullRawContent !== cleanText ? fullRawContent : undefined,
+              cards: cards.length > 0 ? cards : [{
+                type: 'collaboration_speech',
+                speakerName: agentName,
+                speakerType: 'agent',
+                actionLabel: 'Agent',
+                avatar: (availableMentionAgents.find((item) => item.name === agentName) as any)?.avatar,
+                team: (availableMentionAgents.find((item) => item.name === agentName) as any)?.team,
+                roleType: (availableMentionAgents.find((item) => item.name === agentName) as any)?.roleType,
+              }],
+              engine: data?.engine || participant?.engine || undefined,
+              model: data?.model || participant?.model || undefined,
+            });
+            if (latestSidebarHint) {
+              setSessionWorkbenchState((prev) => ({
+                ...(prev || {}),
+                homeSidebar: latestSidebarHint,
+              }));
+            }
+            finish();
+          }) as EventListener);
+
+          stream.events.addEventListener('failed', ((event: MessageEvent) => {
+            const data = JSON.parse(event.data || '{}');
+            const messageText = String(data?.message || 'Agent 发言失败');
+            void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
+              role: 'error',
+              content: accumulated || messageText,
+              rawContent: accumulatedRawStream || accumulated || messageText,
+            });
+            finish();
+          }) as EventListener);
+
+          stream.events.addEventListener('engine_error', ((event: MessageEvent) => {
+            const data = JSON.parse(event.data || '{}');
+            const messageText = String(data?.message || 'Agent 发言失败');
+            void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
+              role: 'error',
+              content: accumulated || messageText,
+              rawContent: accumulatedRawStream || accumulated || messageText,
+            });
+            finish();
+          }) as EventListener);
+
+          stream.events.onerror = () => {
+            if (stoppedByUser) {
+              finish();
+              return;
+            }
+            void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
+              role: 'error',
+              content: accumulated || 'Agent 发言连接中断',
+              rawContent: accumulatedRawStream || accumulated || 'Agent 发言连接中断',
+            });
+            finish();
+          };
+        });
+      } catch (error: any) {
+        await updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
+          role: 'error',
+          content: error?.message || `${agentName} 回复失败`,
+        });
+      } finally {
+        unmarkSessionStreaming(sessionIdForAgents);
+        setStreamingMessageId(null);
+      }
+    };
+
+    for (const agentName of targetNames) {
+      await runAgentStream(agentName);
+    }
+    return true;
+  }, [
+    activeSession,
+    activeSessionId,
+    appendSessionMessage,
+    availableMentionAgents,
+    collaborationRoomCore.participants,
+    collaborationRoomCore.responseMode,
+    createSession,
+    effectiveWorkingDirectory,
+    sendMessage,
+    setActiveSessionId,
+    setSessionWorkbenchState,
+  ]);
 
   const submitMessage = useCallback(async (text: string) => {
     const normalized = text.trim();
@@ -1440,6 +3852,11 @@ export function ChatPageContent({
       }
       return;
     }
+    if (normalized === '/workflow' || normalized.startsWith('/workflow ')) {
+      const requirements = normalized.replace(/^\/workflow\b/i, '').trim();
+      await startLightweightWorkflowDraft(requirements);
+      return;
+    }
     if (!isModelSelectionReady) {
       toast('warning', '模型配置加载中，请稍候再发送');
       return;
@@ -1453,7 +3870,11 @@ export function ChatPageContent({
     setInput('');
     editorRef.current?.clear();
 
-    // Route to collaboration room if active
+    if (await sendUnifiedAgentChatMessage(normalized)) {
+      editorRef.current?.focus();
+      return;
+    }
+    // Route to legacy collaboration handler only when one is explicitly mounted.
     if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
       collaborationMessageHandlerRef.current(normalized);
       editorRef.current?.focus();
@@ -1470,18 +3891,25 @@ export function ChatPageContent({
     }
     await sendMessage(normalized);
     editorRef.current?.focus();
-  }, [activeSession, activeSessionId, compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, loading, sendMessage, stopStreaming, toast, unlockAutoScroll]);
+  }, [activeSession, activeSessionId, compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, sendMessage, sendUnifiedAgentChatMessage, startLightweightWorkflowDraft, stopStreaming, toast, unlockAutoScroll]);
 
   const applySlashCommand = useCallback(async (commandId: string) => {
     if (commandId === 'compact') {
+      setSlashMenuOpen(false);
       await submitMessage('/compact');
+      return;
+    }
+    if (commandId === 'workflow') {
+      setSlashMenuOpen(false);
+      await startLightweightWorkflowDraft('');
       return;
     }
     const command = homepageSlashCommands.find((item) => item.id === commandId);
     if (command?.prompt) {
+      setSlashMenuOpen(false);
       await submitMessage(command.prompt);
     }
-  }, [homepageSlashCommands, submitMessage]);
+  }, [homepageSlashCommands, startLightweightWorkflowDraft, submitMessage]);
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
@@ -1514,6 +3942,12 @@ export function ChatPageContent({
         event.preventDefault();
         const index = Math.max(0, Math.min(slashActiveIndex, filteredSlashCommands.length - 1));
         void applySlashCommand(filteredSlashCommands[index].id);
+      } else if (event.key === 'Enter') {
+        if (event.isComposing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const index = Math.max(0, Math.min(slashActiveIndex, filteredSlashCommands.length - 1));
+        void applySlashCommand(filteredSlashCommands[index].id);
       } else if (event.key === 'Escape') {
         event.preventDefault();
         setSlashMenuOpen(false);
@@ -1530,12 +3964,12 @@ export function ChatPageContent({
       title: '新议题',
       sessionWorkbenchState: createAgoraWorkbenchState('新议题'),
     });
-    setSessionDirectoryView('agora');
+    setSessionDirectoryView('conversation');
   }, [createSession]);
 
   const handleCreateAgoraGuest = useCallback(() => {
     setSidebarOpen(true);
-    setSessionDirectoryView('agora');
+    setSessionDirectoryView('conversation');
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent('agora:create-guest'));
     }, 0);
@@ -1575,6 +4009,11 @@ export function ChatPageContent({
   }, [loading, router, stopStreaming, toast, unlockAutoScroll]);
 
   const handleQuickAction = useCallback((prompt: string) => {
+    if (prompt.startsWith(WORKFLOW_DRAFT_ACTION_PREFIX)) {
+      void handleLightweightWorkflowDraftAction(prompt);
+      return;
+    }
+
     if (prompt.startsWith('__HOME_ACTION__:workflow_open:')) {
       const workflowOpenConfig = decodeWorkflowActionFilename(prompt, '__HOME_ACTION__:workflow_open:');
       handleWorkflowOpenAction(workflowOpenConfig);
@@ -1660,6 +4099,7 @@ export function ChatPageContent({
     toast,
     unlockAutoScroll,
     effectiveWorkingDirectory,
+    handleLightweightWorkflowDraftAction,
   ]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
@@ -1705,7 +4145,7 @@ export function ChatPageContent({
     if (existingSessionId) {
       const targetSession = sessions.find((session) => session.id === existingSessionId);
       if (targetSession) {
-        setSessionDirectoryView(getSessionDirectoryKind(targetSession));
+        setSessionDirectoryView('conversation');
       }
       setActiveSessionId(existingSessionId);
     } else {
@@ -1733,6 +4173,12 @@ export function ChatPageContent({
 
   const messages = activeSession?.messages || [];
   const isCurrentSessionLoading = Boolean(activeSessionId && sessionLoadingId === activeSessionId);
+  const activeAiBusy = isChatAiBusy({
+    loading,
+    streamingMessageId,
+    messages: messages as any[],
+    sessionWorkbenchState: activeSession?.sessionWorkbenchState,
+  });
 
   useEffect(() => {
     setHistoryExpanded(false);
@@ -1930,7 +4376,6 @@ export function ChatPageContent({
     scroller.scrollTop = Math.max(0, pending.prevScrollTop + delta);
   }, [historyExpanded, hiddenMessageCount]);
 
-  const activeAgentBinding = activeSession?.agentBinding;
   const activeWeChatBinding = activeSession?.sessionWorkbenchState?.wechatBinding;
   const sessionChatWorkspace = activeSession?.sessionWorkbenchState?.chatWorkspace;
   const pinnedChatWorkspacePath = activeChatWorkspacePath;
@@ -2021,9 +4466,9 @@ export function ChatPageContent({
     setChatWorkspaceActiveTab('chat');
   }, [chatWorkspaceActiveTab, chatWorkspaceShellEnabled, resolvedChatWorkspacePath]);
 
-  const handleSaveChatWorkspacePath = useCallback(async () => {
+  const performSaveChatWorkspacePath = useCallback(async (nextPath: string, cleanup?: { sessionId: string; workspacePath: string; shouldDelete: boolean }) => {
     if (!activeSessionId) return;
-    const nextPath = chatWorkspaceDraft.trim();
+    setChatWorkspaceSaving(true);
     try {
       const result = await agoraApi.ensureWorkspace({
         sessionId: activeSessionId,
@@ -2047,11 +4492,43 @@ export function ChatPageContent({
       }));
       setWorkingDirectory(result.workspacePath);
       setChatWorkspaceDialogOpen(false);
+      setChatWorkspaceCleanupConfirm(null);
       toast('success', '已切换对话工作区');
+      if (cleanup?.shouldDelete) {
+        try {
+          await agoraApi.deleteWorkspace({
+            sessionId: cleanup.sessionId,
+            workspacePath: cleanup.workspacePath,
+          });
+          toast('success', '已删除旧的系统工作目录');
+        } catch (error: any) {
+          toast('error', error?.message || '旧工作目录删除失败，请手动检查');
+        }
+      }
     } catch (error: any) {
       toast('error', error?.message || '切换对话工作区失败');
+    } finally {
+      setChatWorkspaceSaving(false);
     }
-  }, [activeSessionId, chatWorkspaceDraft, chatWorkspaceTitle, defaultChatWorkspacePath, mcpSettings, setSessionWorkbenchState, setWorkingDirectory, skillSettings, toast]);
+  }, [activeSessionId, chatWorkspaceTitle, defaultChatWorkspacePath, mcpSettings, setSessionWorkbenchState, setWorkingDirectory, skillSettings, toast]);
+
+  const handleSaveChatWorkspacePath = useCallback(async () => {
+    if (!activeSessionId) return;
+    const nextPath = chatWorkspaceDraft.trim();
+    const currentWorkspace = activeSession?.sessionWorkbenchState?.chatWorkspace;
+    const previousPath = String(currentWorkspace?.workingDirectory || '').trim();
+    const isChangingPath = normalizePathForCompare(previousPath) !== normalizePathForCompare(nextPath);
+    if (currentWorkspace?.autoCreated && previousPath && isChangingPath) {
+      setDeletePreviousChatWorkspace(true);
+      setChatWorkspaceCleanupConfirm({
+        sessionId: activeSessionId,
+        workspacePath: previousPath,
+        nextPath,
+      });
+      return;
+    }
+    await performSaveChatWorkspacePath(nextPath);
+  }, [activeSession?.sessionWorkbenchState?.chatWorkspace, activeSessionId, chatWorkspaceDraft, performSaveChatWorkspacePath]);
 
   const resetChatWorkspacePath = useCallback(() => {
     setSessionWorkbenchState((prev) => ({
@@ -2178,34 +4655,44 @@ export function ChatPageContent({
         <div className="fixed inset-0 bg-black/40 z-30" onClick={() => setSidebarOpen(false)} />
       )}
 
-      {/* Sidebar */}
-      {!hideSidebar && sidebarOpen && (
+      {/* Mobile sidebar */}
+      {!hideSidebar && isMobile && sidebarOpen && (
         <div
-          className={
-            isMobile
-              ? 'fixed inset-y-0 left-0 z-40 bg-background'
-              : 'relative shrink-0'
-          }
-          style={{ width: isMobile ? `${Math.min(sidebarWidth, 320)}px` : `${sidebarWidth}px` }}
+          className="fixed inset-y-0 left-0 z-40 bg-background"
+          style={{ width: `${Math.min(sidebarWidth, 320)}px` }}
         >
           <ChatSidebar
             sessionView={sessionDirectoryView}
             onSessionViewChange={setSessionDirectoryView}
-            onAgoraGuestDataChange={handleAgoraGuestDataChange}
           />
-          {/* Resize handle (desktop only) */}
-          {!isMobile && (
-            <div
-              className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:w-1.5 transition-all ${
-                isResizing ? 'bg-primary w-1.5' : 'bg-border hover:bg-primary/60'
-              }`}
-              onMouseDown={e => { e.preventDefault(); setIsResizing(true); }}
-            />
-          )}
         </div>
       )}
 
-      <div className={cn('flex-1 flex flex-col min-w-0', isWerewolfLabMode && 'werewolf-wood-main')}>
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-w-0 flex-1"
+        onLayoutChanged={handlePrimarySidebarLayout}
+      >
+        {!hideSidebar && !isMobile && sidebarOpen ? (
+          <>
+            <ResizablePanel
+              id="chat-primary-sidebar-panel"
+              defaultSize={sidebarPixelsToPercent(sidebarWidth, containerRef.current?.getBoundingClientRect().width || 1200)}
+              minSize={sidebarPixelsToPercent(MIN_WIDTH, containerRef.current?.getBoundingClientRect().width || 1200)}
+              maxSize={sidebarPixelsToPercent(MAX_WIDTH, containerRef.current?.getBoundingClientRect().width || 1200)}
+              className="min-w-0"
+            >
+              <ChatSidebar
+                sessionView={sessionDirectoryView}
+                onSessionViewChange={setSessionDirectoryView}
+              />
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+          </>
+        ) : null}
+
+        <ResizablePanel id="chat-primary-main-panel" defaultSize={100} minSize={35} className="min-w-0">
+      <div className={cn('flex h-full min-w-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
         {!isDashboardShell ? (
           <div
             className={cn(
@@ -2287,7 +4774,7 @@ export function ChatPageContent({
         ) : null}
 
         <div className="flex-1 min-h-0" data-tour-step-id="home-chat-main">
-          {isBuiltInAgoraMode ? (
+          {renderDedicatedAgoraShell ? (
             <div className="flex h-full min-h-0 flex-col">
               <div className="min-h-0 flex-1">
                 <AgoraShell
@@ -2299,8 +4786,7 @@ export function ChatPageContent({
                   workingDirectory={effectiveWorkingDirectory}
                   onInsertIntoMainInput={handleInsertIntoMainInput}
                   onRegisterMainInputHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
-                  initialSavedGuests={agoraGuestData.loaded ? agoraGuestData.guests : undefined}
-                  initialGuestPresets={agoraGuestData.loaded ? agoraGuestData.presets : undefined}
+                  defaultMemberPanelCollapsed={!hasCollaborationParticipants}
                   currentUser={currentUser}
                 />
               </div>
@@ -2313,7 +4799,7 @@ export function ChatPageContent({
                       onEnter={handleEditorEnter}
                       onChange={(markdown) => setInput(markdown)}
                       preferMarkdownPaste
-                      placeholder="输入议场消息"
+                      placeholder="和群里的 Agent 继续聊"
                       minHeight={116}
                       maxHeight={220}
                       className="[&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-6 [&_.ProseMirror]:text-foreground [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
@@ -2329,8 +4815,20 @@ export function ChatPageContent({
                       footerClassName="justify-end gap-4 border-border/60 px-6 pb-3 pt-3"
                       footerAfterCountContent={(
                         <div className="ml-5 flex items-center gap-3">
-                          <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown() || !isModelSelectionReady}>
-                            <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>subdirectory_arrow_left</span>
+                          <Button
+                            className={cn(
+                              'h-11 w-11 rounded-2xl px-0 shadow-sm transition-colors duration-150',
+                              activeAiBusy
+                                ? 'border border-destructive/20 bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                                : 'bg-[#1f6fff] hover:bg-[#1a61de]'
+                            )}
+                            onClick={activeAiBusy ? stopActiveAiAction : handleSend}
+                            disabled={!activeAiBusy && (!getInputMarkdown() || !isModelSelectionReady)}
+                            title={activeAiBusy ? '停止生成' : '发送'}
+                          >
+                            <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>
+                              {activeAiBusy ? 'stop' : 'subdirectory_arrow_left'}
+                            </span>
                           </Button>
                         </div>
                       )}
@@ -2402,6 +4900,7 @@ export function ChatPageContent({
               ) : null}
 
               <TabsContent value="chat" className="mt-0 min-h-0 flex-1">
+          {(!chatWorkspaceShellEnabled || chatWorkspaceActiveTab === 'chat') ? (
           <ResizablePanelGroup
             orientation="horizontal"
             className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}
@@ -2498,6 +4997,13 @@ export function ChatPageContent({
                       }
                       recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={scrollContainerRef} itemGap={0} />}
                     />
+                    {activeAiBusy ? (
+                      <div className="flex justify-start pb-4 pl-10">
+                        <div className="home-chat-surface rounded-2xl border border-border/60 bg-background/90 px-3 py-2 shadow-sm">
+                          <ThinkingBot />
+                        </div>
+                      </div>
+                    ) : null}
                     <div ref={messagesEndRef} />
                   </div>
                   {showScrollBtn && (
@@ -2509,6 +5015,219 @@ export function ChatPageContent({
                       新消息
                     </button>
                   )}
+                  <div
+                    className={cn(
+                      'absolute right-4 top-4 z-20 hidden min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/94 shadow-2xl backdrop-blur transition-[width,height] duration-200 xl:flex',
+                      agentPickerOpen ? 'bottom-4 w-[22rem] flex-col' : 'h-48 w-12 items-stretch'
+                    )}
+                  >
+                    {agentPickerOpen ? (
+                      <>
+                        <div className="shrink-0 border-b border-border/60 bg-muted/25 px-3 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold">{agentPickerAdding ? '添加 Agent' : 'Agent'}</div>
+                              <div className="truncate text-xs text-muted-foreground">
+                                {agentPickerAdding ? '选择运行模型并加入当前对话' : `默认助手 + ${collaborationRoomCore.participants.length} 个 Agent`}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {agentPickerAdding ? (
+                                <Button type="button" size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={() => setAgentPickerAdding(false)} title="返回成员">
+                                  <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                                </Button>
+                              ) : null}
+                              <Button type="button" size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={() => {
+                                setAgentPickerOpen(false);
+                                setAgentPickerAdding(false);
+                              }} title="收起 Agent 面板">
+                                <span className="material-symbols-outlined text-[18px]">right_panel_close</span>
+                              </Button>
+                            </div>
+                          </div>
+                          {agentPickerAdding ? (
+                            <div className="mt-3 space-y-2">
+                              <EngineModelSelect
+                                engine={agentPickerRuntime.engine}
+                                model={agentPickerRuntime.model}
+                                onEngineChange={(nextEngine) => setAgentPickerRuntime((prev) => ({ ...prev, engine: nextEngine }))}
+                                onModelChange={(nextModel) => setAgentPickerRuntime((prev) => ({ ...prev, model: nextModel }))}
+                                className="h-9"
+                              />
+                              {!agentPickerCanAdd ? (
+                                <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                                  模型配置加载完成后才能添加 Agent。
+                                </div>
+                              ) : null}
+                              <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-background px-3 py-2">
+                                <span className="material-symbols-outlined text-[17px] text-muted-foreground">search</span>
+                                <input
+                                  value={agentPickerQuery}
+                                  onChange={(event) => setAgentPickerQuery(event.target.value)}
+                                  placeholder="搜索 Agent"
+                                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                                />
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="home-chat-scroll min-h-0 flex-1 overflow-y-auto p-2">
+                          {agentPickerAdding ? (
+                            <div className="space-y-1">
+                              {filteredAgentPickerAgents.length ? filteredAgentPickerAgents.map((agent) => {
+                                const name = String(agent.name || '').trim();
+                                return (
+                                  <button
+                                    key={name}
+                                    type="button"
+                                    disabled={!agentPickerCanAdd}
+                                    className={cn(
+                                      'group flex w-full items-center gap-2 rounded-xl p-2 text-left transition-colors hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent',
+                                    )}
+                                    onClick={() => addAgentToConversation(agent)}
+                                  >
+                                    <SpriteAvatar
+                                      avatar={resolveAgentAvatarSrc(undefined, name)}
+                                      seed={name}
+                                      category="agent-default"
+                                      alt={name}
+                                      fallback={getChatAgentInitials(name)}
+                                      className="h-8 w-8 shrink-0"
+                                      fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="truncate text-xs font-medium">{name}</div>
+                                      <div className="truncate text-[11px] text-muted-foreground">{agent.description || 'Agent'}</div>
+                                    </div>
+                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                                      <span className={cn('material-symbols-outlined text-[17px]', !agentPickerCanAdd && 'animate-spin')}>{agentPickerCanAdd ? 'add' : 'progress_activity'}</span>
+                                    </span>
+                                  </button>
+                                );
+                              }) : (
+                                <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
+                                  没有可加入的 Agent
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="rounded-xl border border-primary/15 bg-primary/5 p-2.5">
+                                <div className="flex items-center gap-2">
+                                  <RobotLogo size={28} />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-xs font-semibold">默认助手</div>
+                                    <div className="truncate text-[11px] text-muted-foreground">单人议场默认 Agent，普通对话能力完整保留</div>
+                                  </div>
+                                  <Badge variant="secondary" className="rounded-full text-[10px]">默认</Badge>
+                                </div>
+                              </div>
+                              {collaborationRoomCore.participants.length ? collaborationRoomCore.participants.map((participant) => (
+                                <div key={participant.id || participant.name} className="group flex items-center gap-2 rounded-xl bg-muted/35 p-2">
+                                  <SpriteAvatar
+                                    avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
+                                    seed={participant.runtimeAgentName || participant.name}
+                                    category="agent-default"
+                                    alt={participant.name}
+                                    fallback={getChatAgentInitials(participant.name)}
+                                    className="h-8 w-8 shrink-0"
+                                    fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-xs font-medium">{participant.name}</div>
+                                    <div className="truncate text-[11px] text-muted-foreground">
+                                      {participant.model ? [participant.engine, participant.model].filter(Boolean).join(' / ') : '跟随默认模型'}
+                                    </div>
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-7 w-7 rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                                    title="移除 Agent"
+                                    aria-label={`移除 ${participant.name}`}
+                                    onClick={() => removeAgentFromConversation(participant.name)}
+                                  >
+                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                  </Button>
+                                </div>
+                              )) : (
+                                <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
+                                  还没有额外 Agent
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {!agentPickerAdding ? (
+                          <div className="shrink-0 border-t border-border/60 bg-background/95 p-2.5">
+                            <button
+                              type="button"
+                              disabled={!agentPickerCanAdd}
+                              className="group flex h-14 w-full items-center justify-between gap-3 overflow-hidden rounded-2xl border border-border bg-card px-3 text-left shadow-sm transition-colors hover:bg-muted/20 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-card"
+                              onClick={() => setAgentPickerAdding(true)}
+                              title="添加成员"
+                              aria-label="添加成员"
+                            >
+                              <div className="flex min-w-0 items-center gap-2.5">
+                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)] transition-transform group-hover:scale-105">
+                                  <span className={cn('material-symbols-outlined text-[18px]', !agentPickerCanAdd && 'animate-spin')}>
+                                    {agentPickerCanAdd ? 'group_add' : 'progress_activity'}
+                                  </span>
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium leading-none text-foreground">添加成员</div>
+                                  <div className="mt-1 truncate text-xs leading-none text-muted-foreground">
+                                    {agentPickerCanAdd ? `${filteredAgentPickerAgents.length} 个可加入 Agent` : '模型配置加载中...'}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="ml-2 flex shrink-0 -space-x-2.5">
+                                {filteredAgentPickerAgents.slice(0, 3).map((agent) => {
+                                  const name = String(agent.name || '').trim();
+                                  return (
+                                    <div key={`agent-picker-preview-${name}`} className="h-8 w-8 overflow-hidden rounded-full bg-muted shadow-sm ring-1 ring-background">
+                                      <SpriteAvatar
+                                        avatar={resolveAgentAvatarSrc(undefined, name)}
+                                        seed={name}
+                                        category="agent-default"
+                                        alt={name}
+                                        fallback={getChatAgentInitials(name)}
+                                        className="h-full w-full"
+                                        fallbackClassName="text-[10px] font-semibold text-muted-foreground"
+                                      />
+                                    </div>
+                                  );
+                                })}
+                                {filteredAgentPickerAgents.length > 3 ? (
+                                  <div className="relative z-0 flex h-8 w-8 items-center justify-center rounded-full bg-muted shadow-sm ring-1 ring-background">
+                                    <span className="text-xs font-normal leading-none text-muted-foreground">
+                                      +{filteredAgentPickerAgents.length - 3}
+                                    </span>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </button>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground"
+                        onClick={() => setAgentPickerOpen(true)}
+                        title="展开 Agent 面板"
+                      >
+                        <span className="material-symbols-outlined text-[22px]">group_add</span>
+                        <Badge variant="secondary" className="h-6 min-w-6 justify-center rounded-full px-1 text-[10px]">
+                          {collaborationRoomCore.participants.length + 1}
+                        </Badge>
+                        <span className="text-[11px] font-medium tracking-[0.18em]" style={{ writingMode: 'vertical-rl' }}>
+                          Agent
+                        </span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {!showAgoraZenCover ? (
@@ -2539,8 +5258,8 @@ export function ChatPageContent({
                                       }}
                                       value={`${item.command} ${item.title}`}
                                       className={cn(
-                                        'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2',
-                                        index === slashActiveIndex && 'bg-accent text-accent-foreground'
+                                        'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 data-[selected=true]:bg-transparent data-[selected=true]:text-popover-foreground',
+                                        index === slashActiveIndex && 'bg-accent text-accent-foreground data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground'
                                       )}
                                       onMouseEnter={() => setSlashActiveIndex(index)}
                                       onSelect={() => { void applySlashCommand(item.id); }}
@@ -2579,6 +5298,26 @@ export function ChatPageContent({
                           footerClassName="gap-4 border-border/60 px-6 pb-3 pt-3"
                           footerContent={(
                             <>
+                              {isMultiAgentConversation ? (
+                                <div className="flex items-center gap-1 rounded-full border border-border/60 bg-background/70 p-0.5">
+                                  {COLLABORATION_MODE_OPTIONS.map((option) => (
+                                    <button
+                                      key={option.value}
+                                      type="button"
+                                      className={cn(
+                                        'h-7 rounded-full px-2 text-[11px] transition-colors',
+                                        collaborationRoomCore.responseMode === option.value
+                                          ? 'bg-primary text-primary-foreground'
+                                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                      )}
+                                      title={option.title}
+                                      onClick={() => handleSetCollaborationResponseMode(option.value)}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
                               <button
                                 onClick={() => handleDebugToggle(!debugMode)}
                                 className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${debugMode ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
@@ -2595,13 +5334,20 @@ export function ChatPageContent({
                           )}
                           footerAfterCountContent={(
                             <div className="ml-5 flex items-center gap-3">
-                              {loading && (
-                                <Button className="h-10 w-10 rounded-2xl border border-destructive/20 px-0 shadow-sm transition-colors duration-150" variant="destructive" onClick={stopStreaming} title="停止生成">
-                                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>stop</span>
-                                </Button>
-                              )}
-                              <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown() || !isModelSelectionReady}>
-                                <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>subdirectory_arrow_left</span>
+                              <Button
+                                className={cn(
+                                  'h-11 w-11 rounded-2xl px-0 shadow-sm transition-colors duration-150',
+                                  activeAiBusy
+                                    ? 'border border-destructive/20 bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                                    : 'bg-[#1f6fff] hover:bg-[#1a61de]'
+                                )}
+                                onClick={activeAiBusy ? stopActiveAiAction : handleSend}
+                                disabled={!activeAiBusy && (!getInputMarkdown() || !isModelSelectionReady)}
+                                title={activeAiBusy ? '停止生成' : '发送'}
+                              >
+                                <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>
+                                  {activeAiBusy ? 'stop' : 'subdirectory_arrow_left'}
+                                </span>
                               </Button>
                             </div>
                           )}
@@ -2628,29 +5374,36 @@ export function ChatPageContent({
                   maxSize={`${MAX_HOME_SIDEBAR_SIZE}%`}
                   className="hidden lg:block"
                 >
-                  <HomeCommandSidebar
-                    engine={effectiveEngine || engine}
-                    model={model}
-                    onQuickPrompt={handleQuickAction}
-                    activeSessionId={activeSessionId}
-                    activeSession={activeSession}
-                    sessionWorkbenchState={activeSession?.sessionWorkbenchState}
+                  <ConversationRightRail
+                    session={activeSession}
                     setSessionWorkbenchState={setSessionWorkbenchState}
-                    appendSessionMessage={appendSessionMessage}
-                    updateSessionMessage={updateSessionMessage}
-                    setStreamingMessageId={setStreamingMessageId}
-                    markSessionStreaming={markSessionStreaming}
-                    unmarkSessionStreaming={unmarkSessionStreaming}
-                    onRegisterCollaborationHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
-                    sidebarHint={latestSidebarHint}
-                    activeTab={homeSidebarTab}
-                    onTabChange={handleHomeSidebarTabChange}
-                    availableTabs={availableHomeSidebarTabs}
                     onCollapse={closeHomeSidebar}
-                    onExpand={() => openHomeSidebar(homeSidebarTab)}
-                    expanded={homeSidebarMode === 'active'}
-                    ensureSessionId={createSession}
-                    werewolfMode={isWerewolfLabMode}
+                    legacyPanel={hasWorkflowRuntimeRightRailContext ? null : (
+                      <HomeCommandSidebar
+                        engine={effectiveEngine || engine}
+                        model={model}
+                        onQuickPrompt={handleQuickAction}
+                        activeSessionId={activeSessionId}
+                        activeSession={activeSession}
+                        sessionWorkbenchState={activeSession?.sessionWorkbenchState}
+                        setSessionWorkbenchState={setSessionWorkbenchState}
+                        appendSessionMessage={appendSessionMessage}
+                        updateSessionMessage={updateSessionMessage}
+                        setStreamingMessageId={setStreamingMessageId}
+                        markSessionStreaming={markSessionStreaming}
+                        unmarkSessionStreaming={unmarkSessionStreaming}
+                        onRegisterCollaborationHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
+                        sidebarHint={latestSidebarHint}
+                        activeTab={homeSidebarTab}
+                        onTabChange={handleHomeSidebarTabChange}
+                        availableTabs={availableHomeSidebarTabs}
+                        onCollapse={closeHomeSidebar}
+                        onExpand={() => openHomeSidebar(homeSidebarTab)}
+                        expanded={homeSidebarMode === 'active'}
+                        ensureSessionId={createSession}
+                        werewolfMode={isWerewolfLabMode}
+                      />
+                    )}
                   />
                 </ResizablePanel>
               </>
@@ -2663,20 +5416,15 @@ export function ChatPageContent({
                     isWerewolfLabMode && 'border-stone-600/70 bg-stone-950/35 text-stone-300 hover:text-stone-100'
                   )}
                   onClick={() => openHomeSidebar(homeSidebarTab)}
-                  title="展开首页动态侧边栏"
+                  title="展开右侧插件边栏"
                 >
                   <span className="material-symbols-outlined text-3xl">right_panel_open</span>
-                  <span className="[writing-mode:vertical-rl] tracking-[0.2em]">
-                    {homeSidebarTab === 'commander'
-                      ? '指挥官'
-                      : homeSidebarTab === 'workflow'
-                        ? '工作流'
-                        : 'Agent'}
-                  </span>
+                  <span className="[writing-mode:vertical-rl] tracking-[0.2em]">插件</span>
                 </button>
               </div>
             ) : null}
           </ResizablePanelGroup>
+          ) : null}
               </TabsContent>
 
               <TabsContent value="workspace" className="mt-0 min-h-0 flex-1 bg-background">
@@ -2727,11 +5475,77 @@ export function ChatPageContent({
               </div>
             </div>
             <DialogFooter className="gap-2 sm:gap-0">
-              <Button variant="outline" onClick={resetChatWorkspacePath}>
+              <Button variant="outline" onClick={resetChatWorkspacePath} disabled={chatWorkspaceSaving}>
                 恢复默认
               </Button>
-              <Button variant="outline" onClick={() => setChatWorkspaceDialogOpen(false)}>取消</Button>
-              <Button onClick={handleSaveChatWorkspacePath}>保存</Button>
+              <Button variant="outline" onClick={() => setChatWorkspaceDialogOpen(false)} disabled={chatWorkspaceSaving}>取消</Button>
+              <Button onClick={handleSaveChatWorkspacePath} disabled={chatWorkspaceSaving}>
+                {chatWorkspaceSaving ? '保存中...' : '保存'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={Boolean(chatWorkspaceCleanupConfirm)}
+          onOpenChange={(open) => {
+            if (chatWorkspaceSaving) return;
+            if (!open) setChatWorkspaceCleanupConfirm(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-[520px]">
+            <DialogHeader>
+              <DialogTitle>切换对话工作区</DialogTitle>
+              <DialogDescription>
+                当前对话原来使用的是系统自动创建的工作目录。切换到新目录后，可以选择是否删除旧目录。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <label className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                <Checkbox
+                  checked={deletePreviousChatWorkspace}
+                  onCheckedChange={(checked) => setDeletePreviousChatWorkspace(checked === true)}
+                  disabled={chatWorkspaceSaving}
+                  className="mt-0.5"
+                />
+                <span className="min-w-0 flex-1 text-sm">
+                  <span className="block font-medium text-foreground">同时删除旧的系统工作目录</span>
+                  <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">
+                    {chatWorkspaceCleanupConfirm?.workspacePath}
+                  </span>
+                </span>
+              </label>
+              <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                新目录：<span className="break-all font-mono">{chatWorkspaceCleanupConfirm?.nextPath || '默认工作目录'}</span>
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                只会删除 ACEHarness 自动创建并绑定到该会话的工作目录；用户手动选择的目录不会出现这个选项。
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setChatWorkspaceCleanupConfirm(null)}
+                disabled={chatWorkspaceSaving}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                onClick={() => {
+                  const pending = chatWorkspaceCleanupConfirm;
+                  if (!pending) return;
+                  void performSaveChatWorkspacePath(pending.nextPath, {
+                    sessionId: pending.sessionId,
+                    workspacePath: pending.workspacePath,
+                    shouldDelete: deletePreviousChatWorkspace,
+                  });
+                }}
+                disabled={chatWorkspaceSaving}
+              >
+                {chatWorkspaceSaving ? '保存中...' : '确认切换'}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -2869,6 +5683,8 @@ export function ChatPageContent({
           }}
         />
       </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       <WeChatSessionBindDialog
         open={wechatBindDialogOpen}

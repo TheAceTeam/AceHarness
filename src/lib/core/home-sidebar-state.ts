@@ -379,7 +379,29 @@ export interface HomeSidebarHint {
 }
 
 export interface SessionWorkbenchState {
+  conversationMode?: 'plain' | 'agent-chat' | 'workflow-drafting' | 'workflow-running' | 'workflow-completed';
   homeSidebar?: HomeSidebarHint | null;
+  rightRail?: {
+    collapsed?: boolean;
+    activePluginId?: string;
+    pinned?: boolean;
+    updatedAt?: number;
+  } | null;
+  embeddedWorkflow?: {
+    runId?: string;
+    configFile?: string;
+    collapsed?: boolean;
+    activePanel?: 'status' | 'questions' | 'events' | 'changes';
+  } | null;
+  lightweightWorkflowDraft?: {
+    stage: 'discovery' | 'clarification' | 'draft' | 'confirming' | 'generating' | 'starting';
+    busy?: boolean;
+    backendSessionId?: string;
+    creationContextSummary?: string;
+    clarificationForm?: unknown;
+    clarificationAnswers?: Record<string, unknown>;
+    draft?: unknown;
+  } | null;
   latestPreflight?: SessionPreflightSnapshot | null;
   chatWorkspace?: {
     workingDirectory: string;

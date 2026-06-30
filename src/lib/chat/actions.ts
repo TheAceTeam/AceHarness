@@ -833,8 +833,10 @@ export function normalizeAssistantDisplay(raw: string, streaming: boolean): {
   const content = String(raw || '');
   const hasMachineResult = getResultBodySections(content).length > 0;
   if (!hasMachineResult) {
+    const aceParsed = extractAceProcessBlocks(content);
+    const visibleText = aceParsed.blocks.length > 0 ? aceParsed.cleanText.trim() : content;
     return {
-      visibleText: streaming ? stripIncompleteStreamingFence(content) : content,
+      visibleText: streaming ? stripIncompleteStreamingFence(visibleText) : visibleText,
       hasMachineResult: false,
       hasSidebarHint: false,
     };

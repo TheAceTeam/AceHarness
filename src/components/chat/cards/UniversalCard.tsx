@@ -18,6 +18,17 @@ type TableRowDef = {
 };
 type TableColumnInput = TableColumnDef | string;
 type TableRowInput = TableRowDef | unknown[] | Record<string, unknown>;
+type FormFieldOption = { value: string; label: string; description?: string };
+type FormFieldDef = {
+  id: string;
+  label: string;
+  inputType: 'single' | 'multiple' | 'text' | 'textarea';
+  options?: FormFieldOption[];
+  placeholder?: string;
+  required?: boolean;
+  defaultValue?: string | string[];
+  helperText?: string;
+};
 
 export interface CardSchema {
   header?: {
@@ -60,8 +71,9 @@ type Block =
       emptyText?: string;
     }
   | { type: 'list'; items: { icon?: string; color?: string; text: string }[] }
-  | { type: 'status'; state: string; color?: string; animated?: boolean; rows?: { label: string; value: string }[] }
+  | { type: 'status'; state: string; color?: string; animated?: boolean; runner?: 'deer'; rows?: { label: string; value: string }[] }
   | { type: 'actions'; items: ActionDef[] }
+  | { type: 'form'; id?: string; fields: FormFieldDef[]; submitLabel?: string; submitPrompt: string; secondaryActions?: ActionDef[]; pending?: boolean; pendingText?: string }
   | { type: 'divider' };
 
 // --- Color helpers ---
@@ -244,8 +256,9 @@ function BlockRenderer({ block, onAction }: { block: Block; onAction?: (prompt: 
     case 'collapse': return <CollapseBlock title={block.title} icon={block.icon} subtitle={block.subtitle} blocks={block.blocks} defaultOpen={block.defaultOpen} onAction={onAction} />;
     case 'table': return <TableBlock columns={block.columns} rows={block.rows} maxHeight={block.maxHeight} emptyText={block.emptyText} onAction={onAction} />;
     case 'list': return <ListBlock items={block.items} />;
-    case 'status': return <StatusBlock state={block.state} color={block.color} animated={block.animated} rows={block.rows} />;
+    case 'status': return <StatusBlock state={block.state} color={block.color} animated={block.animated} runner={block.runner} rows={block.rows} />;
     case 'actions': return <CardActions actions={block.items} onAction={onAction} />;
+    case 'form': return <FormBlock block={block} onAction={onAction} />;
     case 'divider': return <div className="border-t border-dashed border-border/50" />;
     default: return null;
   }
@@ -695,14 +708,18 @@ function ListBlock({ items }: { items?: { icon?: string; color?: string; text: s
   );
 }
 
-function StatusBlock({ state, color, animated, rows }: {
-  state: string; color?: string; animated?: boolean; rows?: { label: string; value: string }[];
+function StatusBlock({ state, color, animated, runner, rows }: {
+  state: string; color?: string; animated?: boolean; runner?: 'deer'; rows?: { label: string; value: string }[];
 }) {
   const dotColor = STATUS_COLORS[color || 'gray'] || 'bg-gray-500';
   return (
     <div data-testid="universal-card-status" className="space-y-3">
       <div className="flex items-center gap-2">
-        <span className={`w-2.5 h-2.5 rounded-full ${dotColor} ${animated ? 'animate-pulse' : ''}`} />
+        {runner === 'deer' && animated ? (
+          <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
+        ) : (
+          <span className={`w-2.5 h-2.5 rounded-full ${dotColor} ${animated ? 'animate-pulse' : ''}`} />
+        )}
         <span className="text-sm font-medium">{state}</span>
       </div>
       {rows && rows.length > 0 && (
@@ -733,6 +750,171 @@ function CardActions({ actions, onAction }: { actions: ActionDef[]; onAction?: (
           {a.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+function normalizeDefaultFormValue(field: FormFieldDef): string | string[] {
+  if (field.inputType === 'multiple') {
+    return Array.isArray(field.defaultValue) ? field.defaultValue.map(String) : [];
+  }
+  if (Array.isArray(field.defaultValue)) return String(field.defaultValue[0] || '');
+  return typeof field.defaultValue === 'string' ? field.defaultValue : '';
+}
+
+function buildFormInitialValues(fields: FormFieldDef[]): Record<string, string | string[]> {
+  return fields.reduce<Record<string, string | string[]>>((acc, field) => {
+    acc[field.id] = normalizeDefaultFormValue(field);
+    return acc;
+  }, {});
+}
+
+function composeFormPrompt(template: string, values: Record<string, string | string[]>): string {
+  const payload = encodeURIComponent(JSON.stringify(values));
+  if (template.includes('{{payload}}')) return template.replace(/\{\{payload\}\}/g, payload);
+  return `${template}${payload}`;
+}
+
+function FormBlock({
+  block,
+  onAction,
+}: {
+  block: Extract<Block, { type: 'form' }>;
+  onAction?: (prompt: string) => void;
+}) {
+  const fields = Array.isArray(block.fields) ? block.fields : [];
+  const [values, setValues] = useState<Record<string, string | string[]>>(() => buildFormInitialValues(fields));
+  const [submitted, setSubmitted] = useState(false);
+
+  if (!fields.length) return null;
+
+  const setFieldValue = (field: FormFieldDef, nextValue: string | string[]) => {
+    setValues((current) => ({ ...current, [field.id]: nextValue }));
+  };
+
+  const handleMultipleToggle = (field: FormFieldDef, optionValue: string) => {
+    const current = Array.isArray(values[field.id]) ? values[field.id] as string[] : [];
+    const next = current.includes(optionValue)
+      ? current.filter((value) => value !== optionValue)
+      : [...current, optionValue];
+    setFieldValue(field, next);
+  };
+
+  const canSubmit = !block.pending && fields.every((field) => {
+    if (!field.required) return true;
+    const value = values[field.id];
+    if (Array.isArray(value)) return value.length > 0;
+    return String(value || '').trim().length > 0;
+  });
+
+  const handleSubmit = () => {
+    if (!canSubmit || submitted) return;
+    setSubmitted(true);
+    onAction?.(composeFormPrompt(block.submitPrompt, values));
+  };
+
+  return (
+    <div data-testid="universal-card-form" className="space-y-4">
+      {fields.map((field) => {
+        const value = values[field.id];
+        return (
+          <div key={field.id} className="space-y-2 rounded-lg border border-border/60 bg-muted/10 px-3 py-3">
+            <div className="text-sm font-medium leading-6 text-foreground">
+              {field.label}
+              {field.required ? <span className="ml-1 text-destructive">*</span> : null}
+            </div>
+            {field.inputType === 'text' ? (
+              <input
+                value={typeof value === 'string' ? value : ''}
+                onChange={(event) => setFieldValue(field, event.target.value)}
+                placeholder={field.placeholder}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+              />
+            ) : null}
+            {field.inputType === 'textarea' ? (
+              <textarea
+                value={typeof value === 'string' ? value : ''}
+                onChange={(event) => setFieldValue(field, event.target.value)}
+                placeholder={field.placeholder}
+                className="min-h-[84px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-6 outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+              />
+            ) : null}
+            {field.inputType === 'single' ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(field.options || []).map((option) => (
+                  <label
+                    key={option.value}
+                    className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                      value === option.value
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border/70 bg-background/70 hover:border-primary/60'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name={`${block.id || 'form'}-${field.id}`}
+                      checked={value === option.value}
+                      onChange={() => setFieldValue(field, option.value)}
+                      className="mt-1"
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-medium leading-5">{option.label}</span>
+                      {option.description ? <span className="block text-xs leading-5 text-muted-foreground">{option.description}</span> : null}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
+            {field.inputType === 'multiple' ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(field.options || []).map((option) => {
+                  const selected = Array.isArray(value) && value.includes(option.value);
+                  return (
+                    <label
+                      key={option.value}
+                      className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                        selected
+                          ? 'border-primary bg-primary/10 text-foreground'
+                          : 'border-border/70 bg-background/70 hover:border-primary/60'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => handleMultipleToggle(field, option.value)}
+                        className="mt-1"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-medium leading-5">{option.label}</span>
+                        {option.description ? <span className="block text-xs leading-5 text-muted-foreground">{option.description}</span> : null}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+            {field.helperText ? <div className="text-xs leading-5 text-muted-foreground">{field.helperText}</div> : null}
+          </div>
+        );
+      })}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!canSubmit || submitted}
+          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="material-symbols-outlined text-sm">{submitted ? 'check' : 'send'}</span>
+          {submitted ? '已提交' : (block.submitLabel || '提交')}
+        </button>
+        {block.secondaryActions?.length && !block.pending ? <CardActions actions={block.secondaryActions} onAction={onAction} /> : null}
+      </div>
+      {block.pending ? (
+        <div className="flex items-center gap-2 rounded-lg border border-dashed border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+          <span className="material-symbols-outlined animate-spin text-base text-primary">progress_activity</span>
+          <span>{block.pendingText || '仍在生成更多问题...'}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

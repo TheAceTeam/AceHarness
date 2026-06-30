@@ -547,6 +547,20 @@ describe('normalizeAssistantDisplay', () => {
     });
   });
 
+  test('removes complete ace-process blocks from plain assistant display text', () => {
+    const raw = [
+      '前置说明。',
+      '<ace-process>{"kind":"tool-result","toolName":"ls","title":"📂 列出目录","output":"file-a\\nfile-b","exitCode":0}</ace-process>',
+      '后续说明。',
+    ].join('\n');
+
+    expect(normalizeAssistantDisplay(raw, false)).toEqual({
+      visibleText: '前置说明。\n\n后续说明。',
+      hasMachineResult: false,
+      hasSidebarHint: false,
+    });
+  });
+
   test('treats a result tag inside an unclosed streaming code fence as plain text', () => {
     const raw = [
       '先说明。',

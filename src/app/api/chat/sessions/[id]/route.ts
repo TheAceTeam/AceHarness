@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadChatSession, saveChatSession, deleteChatSession } from '@/lib/chat/persistence';
 import { requireAuth } from '@/lib/auth/middleware';
+import { normalizeSessionWorkbenchConversationMode } from '@/lib/chat/conversation-mode';
+import { isProtectedRunningWorkflowSession } from '@/lib/chat/delete-protection';
 
 function isOwner(session: any, userId: string): boolean {
   // Backward compatibility: legacy sessions without createdBy are treated as shared.
@@ -34,13 +36,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const { id } = await params;
     const existing = await loadChatSession(id);
     if (!existing) {
+      const deleted = await deleteChatSession(id);
+      if (deleted) return NextResponse.json({ ok: true });
       return NextResponse.json({ error: '会话不存在' }, { status: 404 });
     }
     if (!isOwner(existing, user.id)) {
       return NextResponse.json({ error: '无权修改该会话' }, { status: 403 });
     }
     const body = await req.json();
-    const session = { ...body, id, createdBy: existing.createdBy, updatedAt: Date.now() };
+    const session = normalizeSessionWorkbenchConversationMode({ ...body, id, createdBy: existing.createdBy, updatedAt: Date.now() });
     await saveChatSession(session);
     return NextResponse.json({ ok: true });
   } catch (error: any) {
@@ -59,6 +63,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
     if (!isOwner(existing, user.id)) {
       return NextResponse.json({ error: '无权删除该会话' }, { status: 403 });
+    }
+    if (await isProtectedRunningWorkflowSession(existing)) {
+      return NextResponse.json({ error: '工作流运行中的对话不能删除' }, { status: 409 });
     }
     const deleted = await deleteChatSession(id);
     if (!deleted) {

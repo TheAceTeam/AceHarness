@@ -23,6 +23,7 @@ export interface WorkflowCreationBindingLike {
 export interface ChatSessionSummaryLike {
   id: string;
   title: string;
+  conversationMode?: SessionWorkbenchState['conversationMode'];
   updatedAt: number;
   messageCount: number;
   lastMessage?: string;
@@ -104,10 +105,8 @@ export function isWorkflowDirectorySession(
 }
 
 export function getSessionDirectoryKind(
-  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession' | 'sessionWorkbenchState'>
-): 'workflow' | 'agora' | 'conversation' {
-  if (isWorkflowDirectorySession(session)) return 'workflow';
-  if (session.sessionWorkbenchState?.collaborationRoom) return 'agora';
+  _session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession' | 'sessionWorkbenchState'>
+): 'conversation' {
   return 'conversation';
 }
 

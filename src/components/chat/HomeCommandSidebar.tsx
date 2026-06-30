@@ -47,8 +47,10 @@ import {
   mergeAgentDraft,
   type AgentDraftState,
 } from '@/lib/agent/draft';
+import { extractAgentMentions, extractNextRoundMentions } from '@/lib/collaboration/room-core';
 import NewConfigModal from '@/components/NewConfigModal';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { SingleCombobox } from '@/components/ui/combobox';
 import { EngineSelect } from '@/components/EngineSelect';
@@ -230,35 +232,6 @@ function ensureCollaborationChatroom(room: CollaborationRoomState): Collaboratio
 function areStringSetsEqual(set: Set<string>, values: string[]): boolean {
   if (set.size !== values.length) return false;
   return values.every((value) => set.has(value));
-}
-
-function extractAgentMentions(input: string, availableAgents: string[]): string[] {
-  if (!input.trim()) return [];
-  const mentions: string[] = [];
-  const pushMention = (agent: string) => {
-    if (!mentions.includes(agent)) mentions.push(agent);
-  };
-  const escapedAgents = availableAgents
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length)
-    .map((agent) => agent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const mentionPattern = escapedAgents.length
-    ? new RegExp(`@全员|@(${escapedAgents.join('|')})`, 'gu')
-    : /@全员/gu;
-  for (const match of input.matchAll(mentionPattern)) {
-    const token = match[0];
-    if (token === '@全员') {
-      availableAgents.forEach(pushMention);
-    } else {
-      const agentName = token.slice(1);
-      if (availableAgents.includes(agentName)) pushMention(agentName);
-    }
-  }
-  return mentions;
-}
-
-function extractNextRoundMentions(input: string, availableAgents: string[], speaker?: string): string[] {
-  return extractAgentMentions(input, availableAgents).filter((agent) => agent !== speaker);
 }
 
 function formatWerewolfPersonaRoster(state?: CollaborationWerewolfState | null): string {
@@ -1216,6 +1189,7 @@ export default function HomeCommandSidebar({
   werewolfMode = false,
 }: HomeCommandSidebarProps) {
   const router = useRouter();
+  const dockWorkspace = useDashboardDockWorkspace();
   const { toast } = useToast();
   const { confirm, dialogProps: confirmDialogProps } = useConfirmDialog();
   const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
@@ -1268,6 +1242,22 @@ export default function HomeCommandSidebar({
   const [selectedSeatId, setSelectedSeatId] = useState('');
   const [werewolfHistoryEntries, setWerewolfHistoryEntries] = useState<WerewolfHistoryEntry[]>([]);
   const [recentlyEliminatedSeatIds, setRecentlyEliminatedSeatIds] = useState<string[]>([]);
+
+  const openWorkflowDesign = useCallback((filename: string) => {
+    const target = filename.trim();
+    if (!target) return;
+    if (dockWorkspace) {
+      dockWorkspace.openTab({
+        id: `workbench:${target}:design:`,
+        title: target,
+        kind: 'workbench',
+        config: target,
+        mode: 'design',
+      });
+      return;
+    }
+    router.push(`/workbench/${encodeURIComponent(target)}?mode=design`);
+  }, [dockWorkspace, router]);
   const [phaseTransitionBanner, setPhaseTransitionBanner] = useState<{ key: string; label: string } | null>(null);
   const collaborationPendingMessageIdRef = useRef<string | null>(null);
   const collaborationStreamingMessageIdRef = useRef<string | null>(null);
@@ -4896,7 +4886,7 @@ export default function HomeCommandSidebar({
               getCreationSessionStatusLabel={getCreationSessionStatusLabel}
               onOpenModal={() => setWorkflowModalOpen(true)}
               onOpenWorkflowsPage={() => router.push('/workflows')}
-              onOpenDesignPage={(filename) => router.push("/workbench/" + encodeURIComponent(filename) + "?mode=design")}
+              onOpenDesignPage={openWorkflowDesign}
             />
           )}
 
@@ -4974,7 +4964,7 @@ export default function HomeCommandSidebar({
           setWorkflowModalOpen(false);
           setSelectedWorkflow(filename);
           onTabChange('commander');
-          router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
+          openWorkflowDesign(filename);
         }}
         initialMode="ai-guided"
         initialWorkflowName={workflowDraft.name}

@@ -33,6 +33,7 @@ import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-c
 export const dynamic = 'force-dynamic';
 export const maxDuration = 1200;
 const COMPLETED_STREAM_RETENTION_MS = 2 * 60 * 1000;
+const LIVE_SESSION_SAVE_INTERVAL_MS = 5000;
 
 function numberOrUndefined(value: unknown): number | undefined {
   const numeric = Number(value);
@@ -151,6 +152,24 @@ function buildInitialLiveSessionSnapshot(input: {
   };
 }
 
+function createLiveSessionSaver() {
+  let lastSavedAt = 0;
+  let pending = false;
+
+  return (session: PersistedChatSession | undefined, options: { force?: boolean } = {}) => {
+    if (!session) return;
+    const now = Date.now();
+    if (!options.force && (pending || now - lastSavedAt < LIVE_SESSION_SAVE_INTERVAL_MS)) return;
+    pending = true;
+    lastSavedAt = now;
+    void saveChatSession(session)
+      .catch(() => {})
+      .finally(() => {
+        pending = false;
+      });
+  };
+}
+
 // Track active chat streams
 const activeChats = new Map<string, {
   promise: Promise<any>;
@@ -192,7 +211,7 @@ export async function POST(request: NextRequest) {
     const useModel = model || '';
 
     const isResume = !!sessionId;
-    const { systemPrompt, runtimeSkillNames, enabledMcpServers } = await buildChatRequestContext({
+    const { systemPrompt, runtimeSkillNames, enabledMcpServers, runtimeDatabaseEnv } = await buildChatRequestContext({
       mode,
       sessionId,
       frontendSessionId,
@@ -263,9 +282,10 @@ export async function POST(request: NextRequest) {
     // Non-Claude engines: stream through Engine wrapper events
     if (engine) {
       registerEngineStream(chatId, streamRecoveryKey, configuredEngine, useModel);
+      const saveLiveSessionSnapshot = createLiveSessionSaver();
       if (baseLiveSession) {
         setEngineStreamLiveSession(chatId, baseLiveSession);
-        void saveChatSession(baseLiveSession).catch(() => {});
+        saveLiveSessionSnapshot(baseLiveSession, { force: true });
       }
 
       // Register in processManager so recovery endpoint can find it
@@ -280,7 +300,7 @@ export async function POST(request: NextRequest) {
           appendEngineStreamContent(chatId, evt.content);
           processManager.appendStreamContent(chatId, evt.content);
           if (baseLiveSession && liveAssistantMessageId) {
-            updateEngineStreamLiveSession(chatId, (session) => {
+            const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
               if (!session) return session;
               const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
               if (!currentAssistant) return session;
@@ -301,13 +321,14 @@ export async function POST(request: NextRequest) {
                 })),
               };
             });
+            saveLiveSessionSnapshot(nextLiveSession);
           }
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
         } else if (evt?.type === 'session' && evt.content) {
           setEngineStreamSessionId(chatId, evt.content);
           if (proc) proc.sessionId = evt.content;
           if (baseLiveSession) {
-            updateEngineStreamLiveSession(chatId, (session) => {
+            const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
               if (!session) return session;
               return {
                 ...session,
@@ -315,11 +336,12 @@ export async function POST(request: NextRequest) {
                 updatedAt: Date.now(),
               };
             });
+            saveLiveSessionSnapshot(nextLiveSession, { force: true });
           }
           engineStreamEvents.emit(chatId, { type: 'session', sessionId: evt.content });
         } else if (evt?.type === 'thought' && evt.content) {
           if (baseLiveSession && liveAssistantMessageId) {
-            updateEngineStreamLiveSession(chatId, (session) => {
+            const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
               if (!session) return session;
               const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
               if (!currentAssistant) return session;
@@ -335,6 +357,7 @@ export async function POST(request: NextRequest) {
                 })),
               };
             });
+            saveLiveSessionSnapshot(nextLiveSession);
           }
           engineStreamEvents.emit(chatId, { type: 'thinking', content: evt.content });
         } else if (evt?.type === 'error' && evt.content) {
@@ -357,6 +380,7 @@ export async function POST(request: NextRequest) {
         mcpServers: enabledMcpServers,
         userId: auth.id,
         rawPrompt: engineCommand.rawPrompt,
+        env: runtimeDatabaseEnv,
       }, {
         onContextReset: () => {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
@@ -463,7 +487,7 @@ export async function POST(request: NextRequest) {
             };
           });
           if (finalSession) {
-            void saveChatSession(finalSession).catch(() => {});
+            saveLiveSessionSnapshot(finalSession, { force: true });
           }
         }
         return responsePayload;
@@ -493,7 +517,7 @@ export async function POST(request: NextRequest) {
             };
           });
           if (failedSession) {
-            void saveChatSession(failedSession).catch(() => {});
+            saveLiveSessionSnapshot(failedSession, { force: true });
           }
         }
         throw error;
