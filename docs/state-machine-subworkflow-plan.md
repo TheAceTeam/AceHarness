@@ -117,9 +117,7 @@
   - `cascade`：停止 parent 时停止 child。
   - `detach`：停止 parent 时 child 可继续运行。
 - `runtime.workspaceConflictPolicy`：
-  - `shared`：并发 child 共享父工作区。
-  - `isolated-copy`：并发 child 各自复制工作区。
-  - `isolated-branch`：并发 child 使用 git worktree/branch。
+  - `shared`：并发 child 共享父工作区。当前版本只支持该模式；不再预留 `isolated-copy` / `isolated-branch`。
 - `runtime.onUnjoinedBranches`：
   - `stop`：`any/quorum` 达成后停止未 join 分支。
   - `detach`：未 join 分支继续运行但脱离父路径。
@@ -632,29 +630,18 @@ steps:
 
 并发 child workflows 共享 workspace 可能冲突。例如前端和后端改不同目录通常可行，但两个 child 同时改同一文件会有风险。
 
-策略：
+当前版本只支持 `shared`：
 
-- `shared`：
-  - 所有 child 直接改 parent runtime workspace。
-  - 最快，最贴近当前执行模型。
-  - 风险是文件冲突和不可预测覆盖。
-- `isolated-copy`：
-  - 每个 child branch 复制一份 workspace。
-  - 完成后需要 merge。
-  - 成本高，但隔离强。
-- `isolated-branch`：
-  - 基于 git worktree/branch。
-  - 完成后走 merge/review。
-  - 更适合长期方案。
-
-第一版可以实现 `shared`，但 schema 和 UI 预留 `isolated-copy`、`isolated-branch`，避免之后重构配置结构。
+- 所有 child 直接改 parent runtime workspace。
+- 最快，最贴近当前执行模型。
+- 风险是文件冲突和不可预测覆盖。
+- 配置中如果写入 `isolated-copy` 或 `isolated-branch`，schema 校验应直接拒绝。
 
 UI 行为：
 
 - 当并发组里有多个 subworkflow 且使用 `shared` 时显示风险提示。
 - 如果 git diff 可用，检测 overlapping changed paths。
 - 如果 child branches 修改同一文件，join 后显示冲突警告。
-- `isolated-copy/isolated-branch` 模式必须有明确 merge 策略，否则不能自动 pass。
 
 ### 5.5 并发中的人工确认和控制
 
@@ -1262,6 +1249,19 @@ README 增加：
 - 运行中超过则停止 child step，并按 result mapping。
 - UI 给出明确错误。
 
+当前第一版已落地的默认硬限制：
+
+- 单 parent active child runs：8。
+- 单用户 active child runs：16。
+- 单 root run child runs：64。
+- 单 parallel group subworkflow branches：8。
+- dependency graph size：32 个配置。
+- snapshot bytes：2 MiB。
+- child event count：500。
+- child output summary bytes：16 KiB。
+- child wall-clock duration：通过 `runtime.timeoutMinutes` 配置。
+- timeout 策略：默认 `stop`；可配置 `timeoutStrategy: ask-human`，停止 child 后由人工决定 parent 是否以 `conditional_pass` 放行。
+
 ### 10.2 审计和安全
 
 记录：
@@ -1272,6 +1272,18 @@ README 增加：
 - 谁 rerun child branch。
 - 使用哪个 snapshot manifest。
 - 使用哪个 result mapping。
+
+当前第一版已落地轻量审计：
+
+- parent run state 记录 `subworkflowAuditEvents`。
+- 每个 run 目录记录独立 `audit.jsonl`，并提供 `/api/workflow/audit-log` 查询。
+- 审计动作包括 `start`、`status`、`waiting-human`、`human-answer`、`force-complete-child`、`rerun-supersede`、`result-mapping`。
+- 审计事件记录 actor、requestId、IP、User-Agent、parent/root run、child run、child config、state、step、before/after 状态摘要和 result mapping 摘要。
+- 子工作流 run ref 记录 `eventCount`，超过上限会中断子工作流步骤。
+- 修改运行状态的 API 采用 owner/admin 权限矩阵：run owner 和 admin 可操作；无 owner 的历史 run 继续兼容；其他用户返回 403。
+- `event-log`、`git-diff`、`run-history` 读取路径也加入 child/root owner 权限边界。
+- 工作流重命名保存时可通过 `renameFrom` / `previousFilename` 自动更新可访问 parent references。
+- 运行页支持嵌入式 child execution modal；仍保留打开完整 child workbench 的入口。
 
 路径安全：
 
@@ -1288,6 +1300,12 @@ README 增加：
 - snapshot 缺失或损坏时，run 标记 crashed。
 - crashed error 要包含恢复建议。
 
+当前第一版已落地：
+
+- `restoreRunStateForContinuation` 会在恢复前校验 run state 记录的 snapshot manifest hash。
+- snapshot 缺失、manifest 损坏、config hash 不一致或 manifest hash 不匹配时，会把 run state 写回 `crashed`。
+- `statusReason` 包含恢复建议：重新启动工作流，或从有效 run snapshot 恢复后再继续。
+
 ### 10.4 发布策略
 
 建议分批落地：
@@ -1298,7 +1316,7 @@ README 增加：
 4. 串行 subworkflow UI。
 5. 并发 subworkflow。
 6. Git/SpecCoding/导入导出完善。
-7. hardening 和高级 workspace conflict policy。
+7. hardening 和 shared workspace 风险提示。
 
 每批都应保证：
 

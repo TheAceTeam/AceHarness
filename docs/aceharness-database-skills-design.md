@@ -28,7 +28,7 @@ ACEHarness 当前已经有两类本地数据库能力：
 - 运行时会把 Skills 同步到 workspace 的 `.agents/skills` 或引擎对应目录，并在 prompt 中提示 Agent 阅读 `SKILL.md`。
 - Skill 本身目前没有统一的 ACEHarness 后端能力调用通道。
 
-因此本设计不把数据库能力简单写成纯提示词，而是定义“官方能力 Skill + 运行时服务 + CLI 调用面”的组合。
+因此本设计不把数据库能力简单写成纯提示词，而是定义“官方能力 Skill + 运行时服务 + Python API 脚本调用面”的组合。
 
 ## 2. 设计目标
 
@@ -49,7 +49,7 @@ ACEHarness 当前已经有两类本地数据库能力：
 2. 不把 opencode 的 `opencode.db` 暴露给 Skill 直接读写。
 3. 不允许 Skill 直接访问 LanceDB 文件路径。
 4. 不在第一阶段支持 RAG 写入、导入、删除或重建索引。
-5. 不要求所有引擎都原生支持 MCP。CLI 是基础调用面，MCP 可以作为增强。
+5. 不要求所有引擎都原生支持 MCP，也不要求用户本机安装 `aceharness` CLI。Python 脚本调用 runtime API 是基础调用面，MCP 可以作为增强。
 6. 不允许用户在 workflow 配置里写任意 SQLite 绝对路径。
 
 ## 4. 总体架构
@@ -69,10 +69,11 @@ ACEHarness 当前已经有两类本地数据库能力：
    - API 使用运行时 token、runId、sessionId、workspaceRoot 和 skillName 做授权。
    - 服务内部调用 `src/lib/rag/store.ts` 或受控 SQLite adapter。
 
-4. CLI / MCP 调用层
-   - CLI：`aceharness rag ...`、`aceharness sqlite ...`。
+4. Python API 脚本 / MCP 调用层
+   - Python 脚本：`skills/aceharness-rag/scripts/*.py`、`skills/aceharness-sqlite/scripts/*.py`。
+   - 脚本通过 HTTP 调用 ACEHarness runtime API，不直接访问数据库文件。
    - MCP：可选地暴露 `aceharness_rag_search`、`aceharness_sqlite_query` 等 tools。
-   - Skill 优先指导 Agent 使用 CLI，因为 CLI 对所有命令型引擎都更稳定。
+   - Skill 优先指导 Agent 使用 Python 脚本，因为 Python 标准库可覆盖主流命令型引擎和 Windows/macOS/Linux 环境，且不需要额外 CLI 安装。
 
 数据流如下：
 
@@ -83,7 +84,7 @@ Workflow config
   -> 运行时生成 capability grant
   -> prompt 注入可用数据库说明
   -> Agent 阅读 aceharness-rag / aceharness-sqlite
-  -> Agent 调用 CLI 或 MCP
+  -> Agent 调用 Skill 内 Python 脚本或 MCP
   -> runtime service 校验 token + grant + workspace 路径
   -> RAG / SQLite adapter 执行
   -> 返回结构化 JSON
@@ -118,12 +119,18 @@ capabilities:
 
 当任务需要查找项目知识、历史资料、导入文档、外部 RAG bundle 内容时，使用本 Skill。
 
-# 可用命令
+# 可用脚本
 
-使用 CLI：
+使用 Skill 内置 Python 脚本：
 
 ```bash
-aceharness rag search --kb <knowledgeBaseId> --query "<query>" --top-k 8 --json
+python .agents/skills/aceharness-rag/scripts/rag_search.py --kb <knowledgeBaseId> --query "<query>" --top-k 8
+```
+
+列出当前授权知识库：
+
+```bash
+python .agents/skills/aceharness-rag/scripts/rag_list.py
 ```
 
 # 返回字段
@@ -175,16 +182,15 @@ capabilities:
 
 当 Skill 需要维护结构化状态、缓存、索引、任务记录、跨步骤数据表时，使用本 Skill。
 
-# 可用命令
+# 可用脚本
 
 ```bash
-aceharness sqlite list --json
-aceharness sqlite create --db <name>
-aceharness sqlite migrate --db <name> --file <migration.sql>
-aceharness sqlite query --db <name> --sql "SELECT * FROM items WHERE id = ?" --params "[\"id-1\"]" --json
-aceharness sqlite exec --db <name> --sql "INSERT INTO items(id, value) VALUES(?, ?)" --params "[\"id-1\", \"value\"]" --json
-aceharness sqlite transaction --db <name> --file <commands.json> --json
-aceharness sqlite delete-db --db <name>
+python .agents/skills/aceharness-sqlite/scripts/sqlite_list.py
+python .agents/skills/aceharness-sqlite/scripts/sqlite_create.py --db <name>
+python .agents/skills/aceharness-sqlite/scripts/sqlite_query.py --db <name> --sql "SELECT * FROM items WHERE id = ?" --params "[\"id-1\"]"
+python .agents/skills/aceharness-sqlite/scripts/sqlite_exec.py --db <name> --sql "INSERT INTO items(id, value) VALUES(?, ?)" --params "[\"id-1\", \"value\"]"
+python .agents/skills/aceharness-sqlite/scripts/sqlite_transaction.py --db <name> --file <commands.json>
+python .agents/skills/aceharness-sqlite/scripts/sqlite_delete_db.py --db <name>
 ```
 
 # 约束
@@ -308,10 +314,10 @@ requires:
 3. 如果依赖的是 `aceharness-rag`，但 workflow 未开启 `capabilitySkills.rag.enabled`：
    - 不授予 RAG runtime grant。
    - prompt 中提示该依赖未授权。
-   - CLI 调用会返回权限错误。
+   - Python 脚本调用 runtime API 会返回权限错误。
 4. 如果依赖的是 `aceharness-sqlite`，但 workflow 未开启 `capabilitySkills.sqlite.enabled`：
    - 不授予 SQLite runtime grant。
-   - prompt 和 CLI 行为同上。
+   - prompt 和 Python 脚本行为同上。
 5. 依赖展开需要防循环。
 
 这样可以让其他 Skill 通过引用官方 Skill 使用能力，但最终权限仍由 workflow 配置控制。
@@ -323,7 +329,7 @@ requires:
 ```text
 # ACEHarness 数据库能力
 
-当前运行启用了以下官方数据库 Skills。需要使用时，请阅读对应 SKILL.md，并优先通过 aceharness CLI 调用。
+当前运行启用了以下官方数据库 Skills。需要使用时，请阅读对应 SKILL.md，并优先通过 Skill 内置 Python 脚本调用 ACEHarness runtime API。
 
 ## aceharness-rag
 
@@ -357,7 +363,7 @@ Skill 文件：<runtime-skills-dir>/aceharness-sqlite/SKILL.md
 以下 Skill 依赖数据库能力，但当前 workflow 未开启对应 capabilitySkills：
 - project-fact-cache 需要 aceharness-sqlite
 
-不要调用未授权能力；相关 CLI 命令会失败。
+不要调用未授权能力；相关 Python 脚本会返回 runtime 权限错误。
 ```
 
 ## 9. Runtime Service 设计
@@ -395,7 +401,7 @@ interface RuntimeDatabaseGrant {
 }
 ```
 
-CLI 或 MCP 调用时携带：
+Python 脚本或 MCP 调用时携带：
 
 - runtime token
 - runId 或 chatSessionId
@@ -633,15 +639,52 @@ SQLite runtime API 支持数据库文件生命周期和 CRUD。
 4. 参数必须通过 `params` 绑定，不鼓励 Agent 拼接用户输入。
 5. 返回结果要有 row limit，默认 200，最大 1000。
 
-## 10. CLI 设计
+## 10. Python API 脚本设计
 
-CLI 是 Skills 默认推荐的调用方式。
+Python API 脚本是 Skills 默认推荐的调用方式。
 
-### 10.1 RAG CLI
+这些脚本随官方 Skill 一起安装到 runtime skills 目录，并通过 Python 标准库 `urllib.request` 调用 ACEHarness runtime API。脚本不直接读取 LanceDB、SQLite 文件或 ACEHarness 内部数据目录。
+
+推荐原因：
+
+1. 不依赖用户全局安装 `aceharness` CLI。
+2. Windows/macOS/Linux 都能使用同一套调用方式。
+3. Agent 看到的是普通文件脚本，符合现有 Skill 使用心智。
+4. 权限、路径隔离和审计仍全部在 runtime API 中完成。
+
+### 10.1 脚本运行环境
+
+脚本运行时从环境变量读取 runtime 上下文：
+
+- `ACEHARNESS_RUNTIME_URL`：ACEHarness 服务地址，例如 `http://127.0.0.1:3001`。
+- `ACEHARNESS_RUNTIME_TOKEN`：本次 run/session 的 runtime grant token。
+- `ACEHARNESS_RUN_ID`：工作流 run id，可为空。
+- `ACEHARNESS_CHAT_SESSION_ID`：聊天 session id，可为空。
+- `ACEHARNESS_SKILL_NAME`：当前 Skill 名称，官方脚本默认分别为 `aceharness-rag` / `aceharness-sqlite`。
+- `ACEHARNESS_WORKSPACE_ROOT`：当前 workspace 根目录，仅用于展示和错误提示，脚本不得绕过 API 直接访问数据库。
+
+脚本统一使用：
+
+```text
+Authorization: Bearer <ACEHARNESS_RUNTIME_TOKEN>
+Content-Type: application/json
+X-ACEHarness-Run-Id: <ACEHARNESS_RUN_ID>
+X-ACEHarness-Chat-Session-Id: <ACEHARNESS_CHAT_SESSION_ID>
+X-ACEHarness-Skill-Name: <ACEHARNESS_SKILL_NAME>
+```
+
+脚本 stdout 输出 runtime API 返回的 JSON，stderr 只输出人类可读错误摘要。脚本退出码：
+
+- `0`：成功。
+- `2`：本地参数错误或缺少必要环境变量。
+- `3`：runtime API 返回 4xx 权限/参数错误。
+- `4`：runtime API 返回 5xx 或网络错误。
+
+### 10.2 RAG Python 脚本
 
 ```bash
-aceharness rag list --json
-aceharness rag search --kb default --query "状态机 judge 设计" --top-k 8 --json
+python .agents/skills/aceharness-rag/scripts/rag_list.py
+python .agents/skills/aceharness-rag/scripts/rag_search.py --kb default --query "状态机 judge 设计" --top-k 8
 ```
 
 输出示例：
@@ -659,26 +702,46 @@ aceharness rag search --kb default --query "状态机 judge 设计" --top-k 8 --
 }
 ```
 
-### 10.2 SQLite CLI
+### 10.3 SQLite Python 脚本
 
 ```bash
-aceharness sqlite list --json
-aceharness sqlite create --db workflow-cache --json
-aceharness sqlite query --db workflow-cache --sql "SELECT * FROM items LIMIT ?" --params "[10]" --json
-aceharness sqlite exec --db workflow-cache --sql "INSERT INTO items(id, value) VALUES(?, ?)" --params "[\"a\", \"b\"]" --json
-aceharness sqlite transaction --db workflow-cache --file .aceharness/sqlite/init.json --json
-aceharness sqlite delete-db --db workflow-cache --json
+python .agents/skills/aceharness-sqlite/scripts/sqlite_list.py
+python .agents/skills/aceharness-sqlite/scripts/sqlite_create.py --db workflow-cache
+python .agents/skills/aceharness-sqlite/scripts/sqlite_query.py --db workflow-cache --sql "SELECT * FROM items LIMIT ?" --params "[10]"
+python .agents/skills/aceharness-sqlite/scripts/sqlite_exec.py --db workflow-cache --sql "INSERT INTO items(id, value) VALUES(?, ?)" --params "[\"a\", \"b\"]"
+python .agents/skills/aceharness-sqlite/scripts/sqlite_transaction.py --db workflow-cache --file .aceharness/sqlite/init.json
+python .agents/skills/aceharness-sqlite/scripts/sqlite_delete_db.py --db workflow-cache
 ```
 
-CLI 运行时从环境变量读取：
+`sqlite_transaction.py` 的文件格式：
 
-- `ACEHARNESS_RUNTIME_URL`
-- `ACEHARNESS_RUNTIME_TOKEN`
-- `ACEHARNESS_RUN_ID`
-- `ACEHARNESS_CHAT_SESSION_ID`
-- `ACEHARNESS_SKILL_NAME`
+```json
+{
+  "statements": [
+    {
+      "sql": "CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, value TEXT NOT NULL)",
+      "params": []
+    },
+    {
+      "sql": "INSERT OR REPLACE INTO items(id, value) VALUES(?, ?)",
+      "params": ["item-1", "value"]
+    }
+  ]
+}
+```
 
-这些变量由 ACEHarness 在 workflow/chat 执行环境中注入，不写入仓库。
+### 10.4 脚本与 API 的映射
+
+| 脚本 | Runtime API |
+| --- | --- |
+| `rag_list.py` | `GET /api/runtime/rag/knowledge-bases` |
+| `rag_search.py` | `POST /api/runtime/rag/search` |
+| `sqlite_list.py` | `GET /api/runtime/sqlite/databases` |
+| `sqlite_create.py` | `POST /api/runtime/sqlite/databases` |
+| `sqlite_delete_db.py` | `DELETE /api/runtime/sqlite/databases/{name}` |
+| `sqlite_query.py` | `POST /api/runtime/sqlite/query` |
+| `sqlite_exec.py` | `POST /api/runtime/sqlite/exec` |
+| `sqlite_transaction.py` | `POST /api/runtime/sqlite/transaction` |
 
 ## 11. MCP Tool 设计
 
@@ -695,7 +758,7 @@ MCP 是增强能力，不作为首期唯一调用面。
 - `aceharness_sqlite_exec`
 - `aceharness_sqlite_transaction`
 
-MCP tool 和 CLI 调用同一套 runtime service，权限模型完全一致。
+MCP tool 和 Python 脚本调用同一套 runtime service，权限模型完全一致。
 
 ## 12. SQLite 文件路径策略
 
@@ -972,8 +1035,8 @@ Skill 依赖：
 
 - 阶段式 workflow 开启 RAG，Agent prompt 包含 `aceharness-rag` 和可用 KB。
 - 状态机 workflow 开启 SQLite，Agent prompt 包含可用数据库。
-- CLI 使用 runtime token 成功调用 RAG。
-- CLI 使用 runtime token 成功创建 SQLite、建表、插入、查询、删除。
+- Python 脚本使用 runtime token 成功调用 RAG。
+- Python 脚本使用 runtime token 成功创建 SQLite、建表、插入、查询、删除。
 - workspace 切换后 SQLite 路径随 workspace 改变。
 - isolated-copy workflow 中 SQLite 默认写入隔离 workspace，而不是原始项目目录。
 
@@ -1000,25 +1063,31 @@ Skill 依赖：
 
 - 工作流配置开启 RAG/SQLite 后，Agent prompt 中可见对应 Skill 和能力说明。
 
-### 阶段 2：RAG Runtime Service 与 CLI
+### 阶段 2：RAG Runtime Service 与 Python 脚本
 
 - 新增 runtime grant。
 - 新增 `/api/runtime/rag/knowledge-bases`。
 - 新增 `/api/runtime/rag/search`。
-- 新增 `aceharness rag list/search` CLI。
+- 新增 `skills/aceharness-rag/scripts/rag_list.py`。
+- 新增 `skills/aceharness-rag/scripts/rag_search.py`。
 - 写审计日志。
 
 验收：
 
-- Agent 能通过 CLI 查询 `default` RAG。
+- Agent 能通过 Python 脚本查询 `default` RAG。
 - 未授权 KB 查询失败。
 
-### 阶段 3：SQLite Runtime Service 与 CLI
+### 阶段 3：SQLite Runtime Service 与 Python 脚本
 
 - 新增 SQLite adapter。
 - 新增数据库路径解析和安全校验。
 - 新增 create/delete/query/exec/transaction API。
-- 新增 `aceharness sqlite ...` CLI。
+- 新增 `skills/aceharness-sqlite/scripts/sqlite_list.py`。
+- 新增 `skills/aceharness-sqlite/scripts/sqlite_create.py`。
+- 新增 `skills/aceharness-sqlite/scripts/sqlite_delete_db.py`。
+- 新增 `skills/aceharness-sqlite/scripts/sqlite_query.py`。
+- 新增 `skills/aceharness-sqlite/scripts/sqlite_exec.py`。
+- 新增 `skills/aceharness-sqlite/scripts/sqlite_transaction.py`。
 - 写审计日志。
 
 验收：
@@ -1114,8 +1183,8 @@ sqlite:
 
 1. 系统自动启用 `aceharness-rag` / `aceharness-sqlite`。
 2. Agent prompt 明确看到可用数据库和限制。
-3. Agent 或其他 Skill 按 `SKILL.md` 调用 CLI。
-4. CLI 调用 ACEHarness runtime service。
+3. Agent 或其他 Skill 按 `SKILL.md` 调用 Skill 内 Python 脚本。
+4. Python 脚本调用 ACEHarness runtime service。
 5. runtime service 做权限校验、路径隔离和审计。
 6. RAG 查询走现有 LanceDB store。
 7. SQLite CRUD 只作用于 workspace 内声明过的数据库文件。
