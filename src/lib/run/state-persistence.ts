@@ -54,6 +54,48 @@ export interface PersistedProcessInfo {
   startTime: string;
 }
 
+export interface PersistedSubworkflowRunRef {
+  parentStepId: string;
+  parentStepName: string;
+  parentStateName?: string;
+  configFile: string;
+  snapshotFile?: string;
+  runId: string;
+  attempt: number;
+  status: 'pending' | 'starting' | 'running' | 'waiting-human' | 'completed' | 'failed' | 'stopped' | 'crashed' | 'cancelled' | 'detached' | 'abandoned' | 'superseded';
+  startedAt?: string;
+  endedAt?: string;
+  summary?: string;
+  verdict?: 'pass' | 'conditional_pass' | 'fail';
+  error?: string;
+  eventCount?: number;
+}
+
+export interface PersistedSubworkflowAuditEvent {
+  id: string;
+  timestamp: string;
+  action:
+    | 'start'
+    | 'status'
+    | 'waiting-human'
+    | 'human-answer'
+    | 'force-transition'
+    | 'force-complete-child'
+    | 'rerun-supersede'
+    | 'result-mapping';
+  actorId?: string;
+  actorName?: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  childRunId?: string;
+  parentConfigFile?: string;
+  childConfigFile?: string;
+  stateName?: string;
+  stepName?: string;
+  resultMapping?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
 export interface PersistedActiveConcurrencyGroup {
   id: string;
   stateName: string;
@@ -77,6 +119,12 @@ export interface PersistedStepLog {
   tokenUsage?: PersistedTokenUsage;
   sessionId?: string | null;
   engineName?: string;
+  stepType?: 'agent' | 'subworkflow';
+  childRunId?: string;
+  childConfigFile?: string;
+  childStatus?: string;
+  childSummary?: string;
+  childVerdict?: 'pass' | 'conditional_pass' | 'fail';
   gitStepDiffId?: string;
   gitBeforeSnapshotId?: string;
   gitAfterSnapshotId?: string;
@@ -190,6 +238,17 @@ export interface HumanQuestion {
   id: string;
   runId: string;
   configFile: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  workflowPath?: Array<{
+    runId: string;
+    configFile?: string;
+    workflowName?: string;
+    stateName?: string | null;
+    stepName?: string | null;
+  }>;
+  sourceRunId?: string;
+  sourceConfigFile?: string;
   status: 'unanswered' | 'answered' | 'dismissed';
   kind: 'approval' | 'clarification' | 'choice' | 'confirmation' | 'freeform';
   title: string;
@@ -264,6 +323,24 @@ export interface WorkflowSpecRevisionVoteRecord {
 export interface PersistedRunState {
   runId: string;
   configFile: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  parentConfigFile?: string;
+  parentStateName?: string;
+  parentStepId?: string;
+  parentStepName?: string;
+  nestingPath?: Array<{
+    runId: string;
+    configFile: string;
+    stepName?: string;
+    stateName?: string;
+  }>;
+  childRunIds?: string[];
+  subworkflowRuns?: PersistedSubworkflowRunRef[];
+  activeSubworkflowRunId?: string | null;
+  subworkflowAuditEvents?: PersistedSubworkflowAuditEvent[];
+  workflowSnapshotRoot?: string;
+  workflowSnapshotManifestHash?: string;
   /** Authenticated user who owns/started this run. */
   runOwnerId?: string;
   runOwnerName?: string;

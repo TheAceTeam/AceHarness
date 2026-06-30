@@ -21,6 +21,7 @@ import {
 import { countWorkflowSteps } from '@/lib/workflow/step-counter';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { writeFile } from 'fs/promises';
+import { createWorkflowConfigSnapshot } from '@/lib/workflow/subworkflow-config';
 
 export { countWorkflowSteps } from '@/lib/workflow/step-counter';
 
@@ -363,6 +364,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    if (config?.workflow?.mode === 'state-machine') {
+      try {
+        await createWorkflowConfigSnapshot({
+          rootConfigFile: configFile,
+          runId,
+        });
+      } catch (error: any) {
+        return NextResponse.json(
+          {
+            error: '子工作流依赖校验失败',
+            message: error?.message || '无法创建工作流配置快照',
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const manager = await workflowRegistry.getManager(configFile);
 
     // Check if this specific config is already running
@@ -381,7 +400,7 @@ export async function POST(request: NextRequest) {
     (manager as any)._frontendSessionId = workflowChatSessionId;
     (manager as any)._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
     (manager as any)._initialContexts = initialContexts;
-    const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    (manager as any)._rootRunId = runId;
     Promise.resolve((manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId))
       .catch((err: any) => {
         logWorkflowStartFailure(configFile, err);

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth/middleware';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
+import { loadRunState } from '@/lib/run/state-persistence';
+import { canAccessRunState } from '@/lib/workflow/run-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +13,11 @@ export async function GET(request: NextRequest) {
   const runId = request.nextUrl.searchParams.get('runId') || '';
   if (!runId) {
     return NextResponse.json({ error: '缺少 runId 参数' }, { status: 400 });
+  }
+
+  const runState = await loadRunState(runId);
+  if (runState && !canAccessRunState(auth, runState)) {
+    return NextResponse.json({ error: '无权访问该工作流事件日志' }, { status: 403 });
   }
 
   const afterSeq = Number(request.nextUrl.searchParams.get('afterSeq') || 0);

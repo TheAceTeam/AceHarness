@@ -3,12 +3,10 @@
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FolderOpen, GitBranch, MessageSquareText, PanelRightClose, PanelRightOpen, Settings2 } from 'lucide-react';
-import { agentApi, agoraApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
+import { agentApi, agoraApi } from '@/lib/core/api';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { EngineModelSelect } from '@/components/EngineModelSelect';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import {
   Dialog,
@@ -18,10 +16,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import StackedList, { type StackedListMember } from '@/components/ui/stacked-list';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { useChat } from '@/contexts/ChatContext';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
@@ -92,9 +88,8 @@ interface AgoraShellProps {
   showComposerControls?: boolean;
   lockWorkspace?: boolean;
   fixedGuestPanel?: boolean;
+  defaultMemberPanelCollapsed?: boolean;
   inlineContentSpeakerName?: string;
-  initialSavedGuests?: AgoraGuestConfig[];
-  initialGuestPresets?: AgoraGuestPreset[];
   currentUser?: {
     username?: string;
     email?: string;
@@ -111,13 +106,20 @@ const MODE_LABELS: Record<CollaborationChatroomMode, string> = {
   facilitated: '群聊',
 };
 
-type GuestDraft = {
-  displayName: string;
-  sourceType: 'preset' | 'custom';
-  presetId: string;
-  personaPrompt: string;
-  engine: string;
-  model: string;
+const MODE_OPTIONS: Array<{ value: CollaborationChatroomMode; label: string; title: string }> = [
+  { value: 'mention-driven', label: '点名', title: '点名模式：只有被 @ 的 Agent 响应' },
+  { value: 'broadcast', label: '广播', title: '广播模式：群内 Agent 同轮响应' },
+  { value: 'facilitated', label: '主持', title: '主持人模式：由主持人组织发言顺序' },
+];
+
+type RoomAgentListItem = {
+  name: string;
+  description?: string;
+  systemPrompt?: string;
+  team?: string;
+  roleType?: string;
+  engine?: string;
+  model?: string;
 };
 
 function getInitials(name: string) {
@@ -138,41 +140,7 @@ function getCollaborationActionLabel(message: CollaborationRoomMessage) {
   if (message.chatroom?.kind === 'topic-change') return '议题';
   if (message.chatroom?.kind === 'setup') return '开场';
   if (message.speakerType === 'system') return '系统';
-  return '嘉宾';
-}
-
-function isGuestAvailable(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 'status'>) {
-  return guest.status !== 'unavailable';
-}
-
-function getGuestRuntimeLabel(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 'engine' | 'model'>) {
-  const resolvedGuest = guest as AgoraGuestConfig;
-  const engine = String(resolvedGuest.resolvedEngine || guest.engine || '').trim();
-  const model = String(resolvedGuest.resolvedModel || guest.model || '').trim();
-  if (!engine && !model) return '跟随默认模型';
-  return [engine || '默认引擎', model || '默认模型'].join(' / ');
-}
-
-function mapGuestRuntimeOverride(guest: Pick<AgoraGuestConfig, 'runtimeStrategy' | 'engine' | 'model'>) {
-  const engine = String(guest.engine || '').trim();
-  const model = String(guest.model || '').trim();
-  const followsSystem = guest.runtimeStrategy !== 'explicit';
-  if (followsSystem && !model) {
-    return {
-      useDefaultModel: true,
-      engine: '',
-      model: '',
-    };
-  }
-  return {
-    useDefaultModel: false,
-    engine: followsSystem ? '' : engine,
-    model,
-  };
-}
-
-function formatUnavailableGuests(guests: Array<Pick<AgoraGuestConfig | AgoraGuestPreset, 'displayName' | 'statusReason'>>) {
-  return guests.map((guest) => `${guest.displayName}：${guest.statusReason || '模型或引擎未配置'}`).join('；');
+  return 'Agent';
 }
 
 const ROLE_OPENING_LINE_TEMPLATES: Record<OpeningRole, string[]> = {
@@ -333,33 +301,17 @@ export function AgoraShell({
   showComposerControls = true,
   lockWorkspace = false,
   fixedGuestPanel = false,
+  defaultMemberPanelCollapsed = false,
   inlineContentSpeakerName,
-  initialSavedGuests,
-  initialGuestPresets,
   currentUser,
 }: AgoraShellProps) {
   const { toast } = useToast();
   const { skillSettings, mcpSettings } = useChat();
   const [activeTab, setActiveTab] = useState('chat');
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
-  const [guestCreateOpen, setGuestCreateOpen] = useState(false);
-  const [guestPanelCollapsed, setGuestPanelCollapsed] = useState(false);
+  const [guestPanelCollapsed, setGuestPanelCollapsed] = useState(defaultMemberPanelCollapsed);
   const [workspaceDraft, setWorkspaceDraft] = useState('');
-  const [availableAgents, setAvailableAgents] = useState<Array<{ name: string; description?: string }>>([]);
-  const [savedGuests, setSavedGuests] = useState<AgoraGuestConfig[]>(() => initialSavedGuests || []);
-  const [guestPresets, setGuestPresets] = useState<AgoraGuestPreset[]>(() => initialGuestPresets || []);
-  const [selectedSavedGuestIds, setSelectedSavedGuestIds] = useState<string[]>([]);
-  const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
-  const [guestBatchSaving, setGuestBatchSaving] = useState(false);
-  const [presetRuntimeDraft, setPresetRuntimeDraft] = useState({ engine: '', model: '' });
-  const [guestDraft, setGuestDraft] = useState<GuestDraft>({
-    displayName: '',
-    sourceType: 'custom',
-    presetId: 'engineer',
-    personaPrompt: '',
-    engine: '',
-    model: '',
-  });
+  const [availableAgents, setAvailableAgents] = useState<RoomAgentListItem[]>([]);
   const [openingSequenceTick, setOpeningSequenceTick] = useState(0);
   const openingInFlightRef = useRef<Set<string>>(new Set());
   const openingMessagesRef = useRef<CollaborationRoomMessage[]>([]);
@@ -393,42 +345,10 @@ export function AgoraShell({
       .filter(Boolean)
       .sort()
   ), [skillSettings]);
-  const availableSavedGuests = useMemo(
-    () => savedGuests.filter((guest) => !guestRoster.some((item) => item.guestConfigId === guest.id || item.name === guest.displayName)),
-    [guestRoster, savedGuests]
-  );
-  const availableGuestPresets = useMemo(
-    () => guestPresets.filter((preset) => !guestRoster.some((item) => item.presetId === preset.id || item.name === preset.displayName)),
-    [guestPresets, guestRoster]
-  );
-  const availableSavedGuestIds = useMemo(
-    () => availableSavedGuests.filter(isGuestAvailable).map((guest) => guest.id),
-    [availableSavedGuests]
-  );
-  const selectedAvailableSavedGuestCount = availableSavedGuestIds.filter((id) => selectedSavedGuestIds.includes(id)).length;
-  const savedGuestSelectionState: boolean | 'indeterminate' = availableSavedGuestIds.length === 0
-    ? false
-    : selectedAvailableSavedGuestCount === availableSavedGuestIds.length
-      ? true
-      : selectedAvailableSavedGuestCount > 0
-        ? 'indeterminate'
-        : false;
-  const availablePresetIds = useMemo(
-    () => availableGuestPresets.filter(isGuestAvailable).map((preset) => preset.id),
-    [availableGuestPresets]
-  );
-  const selectedAvailablePresetCount = availablePresetIds.filter((id) => selectedPresetIds.includes(id)).length;
-  const presetSelectionState: boolean | 'indeterminate' = availablePresetIds.length === 0
-    ? false
-    : selectedAvailablePresetCount === availablePresetIds.length
-      ? true
-      : selectedAvailablePresetCount > 0
-        ? 'indeterminate'
-        : false;
   const pinnedWorkspacePath = String(chatroom.settings.workspacePath || '').trim();
   const defaultWorkspacePath = String(workingDirectory || '').trim();
   const resolvedWorkspacePath = pinnedWorkspacePath || (lockWorkspace ? defaultWorkspacePath : '');
-  const roomTitle = chatroom.topic?.trim() || sessionTitle?.trim() || '新议题';
+  const roomTitle = chatroom.topic?.trim() || sessionTitle?.trim() || '群聊';
   const displayRoom = useMemo(() => (
     chatroom.status === 'setup'
       ? {
@@ -486,43 +406,28 @@ export function AgoraShell({
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      agentApi.listAgents().catch(() => ({ agents: [] })),
-      agoraApi.listGuests().catch(() => ({ guests: [], presets: [] })),
-    ])
-      .then(([agentData, guestData]) => {
+    agentApi.listAgents()
+      .then((agentData) => {
         if (cancelled) return;
         setAvailableAgents(Array.isArray(agentData?.agents) ? agentData.agents : []);
-        setSavedGuests(Array.isArray(guestData?.guests) ? guestData.guests : []);
-        setGuestPresets(Array.isArray(guestData?.presets) ? guestData.presets : []);
       })
       .catch((error: any) => {
         if (cancelled) return;
-        toast('warning', error?.message || '加载议场数据失败');
+        toast('warning', error?.message || '加载 Agent 列表失败');
       });
     return () => {
       cancelled = true;
     };
   }, [toast]);
 
-  useEffect(() => {
-    if (initialSavedGuests) {
-      setSavedGuests(initialSavedGuests);
-    }
-  }, [initialSavedGuests]);
-
-  useEffect(() => {
-    if (initialGuestPresets) {
-      setGuestPresets(initialGuestPresets);
-    }
-  }, [initialGuestPresets]);
-
   const updateRoom = useCallback((updater: (roomState: CollaborationRoomState) => CollaborationRoomState) => {
     setSessionWorkbenchState((prev) => {
       const base = ensureChatroomRoomState(prev?.collaborationRoom);
       const nextRoom = updater(base);
+      const previousMode = prev?.conversationMode;
       return {
         ...(prev || {}),
+        conversationMode: previousMode && previousMode.startsWith('workflow-') ? previousMode : 'agent-chat',
         collaborationRoom: {
           ...nextRoom,
           messages: (nextRoom.messages || []).slice(-80),
@@ -575,7 +480,7 @@ export function AgoraShell({
         });
       })
       .catch((error: any) => {
-        if (!cancelled) toast('warning', error?.message || '准备议场工作区失败');
+        if (!cancelled) toast('warning', error?.message || '准备群聊工作区失败');
       });
     return () => {
       cancelled = true;
@@ -590,7 +495,7 @@ export function AgoraShell({
     const skills = Array.from(new Set([...existingSkills, ...enabledSkillNames])).sort();
     const skillPrompt = skills.length
       ? [
-          `当前议场启用了这些 Skills：${skills.join(', ')}。`,
+          `当前群聊启用了这些 Skills：${skills.join(', ')}。`,
           '如需使用 skill，请优先查看工作区 .agents/skills/{skill-name}/SKILL.md，并按其中流程执行。',
         ].join('\n')
       : '';
@@ -644,7 +549,7 @@ export function AgoraShell({
       };
     });
     setWorkspaceDialogOpen(false);
-    toast('success', nextPath ? '已绑定议场工作区' : '已改为跟随当前工作目录');
+    toast('success', nextPath ? '已绑定群聊工作区' : '已改为跟随当前工作目录');
   }, [toast, updateRoom, workspaceDraft]);
 
   const resetWorkspacePath = useCallback(() => {
@@ -666,44 +571,45 @@ export function AgoraShell({
     toast('success', '已改为跟随当前工作目录');
   }, [toast, updateRoom]);
 
-  const addGuestsToRoom = useCallback((guestsToAdd: AgoraGuestConfig[], options?: { silent?: boolean }) => {
-    const unavailable = guestsToAdd.filter((guest) => !isGuestAvailable(guest));
-    if (unavailable.length) {
-      toast('warning', `以下嘉宾不可用：${formatUnavailableGuests(unavailable)}`);
-      return;
-    }
-    const uniqueGuests = guestsToAdd
-      .filter(isGuestAvailable)
-      .filter((guest, index, list) => (
-        list.findIndex((item) => item.id === guest.id) === index
-      ));
-    if (!uniqueGuests.length) return;
+  const setResponseMode = useCallback((mode: CollaborationChatroomMode) => {
+    updateRoom((current) => {
+      const base = ensureChatroomRoomState(current);
+      return {
+        ...base,
+        chatroom: base.chatroom ? {
+          ...base.chatroom,
+          settings: {
+            ...base.chatroom.settings,
+            responseMode: mode,
+          },
+        } : base.chatroom,
+      };
+    });
+  }, [updateRoom]);
+
+  const addAgentToRoom = useCallback((agent: any) => {
+    const name = String(agent?.name || '').trim();
+    if (!name) return;
     updateRoom((current) => {
       const base = ensureChatroomRoomState(current);
       const currentChatroom = base.chatroom!;
       const roster = currentChatroom.participantRoster || [];
-      const nextParticipants = uniqueGuests
-        .filter((guest) => !roster.some((participant) => participant.guestConfigId === guest.id || participant.name === guest.displayName))
-        .map((guest): CollaborationChatroomParticipant => {
-          const runtime = mapGuestRuntimeOverride(guest);
-          return {
-            id: `participant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            name: guest.displayName,
-            sourceType: guest.sourceType,
-            sourceAgent: guest.sourceAgent,
-            presetId: guest.presetId,
-            guestConfigId: guest.id,
-            runtimeAgentName: guest.runtimeAgentName,
-            personaPrompt: guest.personaPrompt,
-            systemPrompt: guest.systemPrompt,
-            useDefaultModel: runtime.useDefaultModel,
-            engine: runtime.engine,
-            model: runtime.model,
-            createdAt: Date.now(),
-          };
-        });
-      if (!nextParticipants.length) return base;
-      const nextRoster = [...roster, ...nextParticipants];
+      if (roster.some((participant) => participant.name === name || participant.sourceAgent === name || participant.runtimeAgentName === name)) {
+        return base;
+      }
+      const nextParticipant: CollaborationChatroomParticipant = {
+        id: `agent-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name,
+        sourceType: 'agent',
+        sourceAgent: name,
+        runtimeAgentName: name,
+        systemPrompt: typeof agent?.systemPrompt === 'string' ? agent.systemPrompt : undefined,
+        useDefaultModel: !agent?.model,
+        engine: typeof agent?.engine === 'string' ? agent.engine : '',
+        model: typeof agent?.model === 'string' ? agent.model : '',
+        createdAt: Date.now(),
+      };
+      const nextRoster = [...roster, nextParticipant];
       return {
         ...base,
         selectedAgents: nextRoster.map((participant) => participant.name),
@@ -715,33 +621,8 @@ export function AgoraShell({
         },
       };
     });
-    if (!options?.silent) {
-      toast('success', uniqueGuests.length === 1 ? `已加入 ${uniqueGuests[0].displayName}` : `已加入 ${uniqueGuests.length} 位嘉宾`);
-    }
+    toast('success', `已拉入 Agent：${name}`);
   }, [toast, updateRoom]);
-
-  const addGuestToRoom = useCallback((guest: AgoraGuestConfig) => {
-    addGuestsToRoom([guest]);
-  }, [addGuestsToRoom]);
-
-  const resetGuestCreateState = useCallback(() => {
-    setSelectedSavedGuestIds([]);
-    setSelectedPresetIds([]);
-    setPresetRuntimeDraft({ engine: '', model: '' });
-    setGuestDraft({
-      displayName: '',
-      sourceType: 'custom',
-      presetId: guestPresets[0]?.id || 'engineer',
-      personaPrompt: '',
-      engine: '',
-      model: '',
-    });
-  }, [guestPresets]);
-
-  const openGuestCreateDialog = useCallback(() => {
-    resetGuestCreateState();
-    setGuestCreateOpen(true);
-  }, [resetGuestCreateState]);
 
   const removeGuest = useCallback((guestName: string) => {
     updateRoom((current) => {
@@ -760,133 +641,6 @@ export function AgoraShell({
       };
     });
   }, [updateRoom]);
-
-  const createAndInviteGuest = useCallback(async () => {
-    const displayName = guestDraft.displayName.trim() || '嘉宾';
-    if (!guestDraft.personaPrompt.trim()) {
-      toast('warning', '请填写嘉宾提示词');
-      return;
-    }
-    try {
-      const result = await agoraApi.saveGuest({
-        displayName,
-        sourceType: 'custom',
-        personaPrompt: guestDraft.personaPrompt,
-        engine: guestDraft.engine,
-        model: guestDraft.model,
-      });
-      if (!isGuestAvailable(result.guest)) {
-        toast('warning', `以下嘉宾不可用：${formatUnavailableGuests([result.guest])}`);
-        return;
-      }
-      setSavedGuests((prev) => {
-        const without = prev.filter((item) => item.id !== result.guest.id);
-        return [...without, result.guest].sort((a, b) => a.createdAt - b.createdAt);
-      });
-      window.dispatchEvent(new CustomEvent('agora:guests-updated'));
-      if (isGuestAvailable(result.guest)) addGuestToRoom(result.guest);
-      resetGuestCreateState();
-      setGuestCreateOpen(false);
-    } catch (error: any) {
-      toast('error', error?.message || '创建嘉宾失败');
-    }
-  }, [addGuestToRoom, guestDraft, resetGuestCreateState, toast]);
-
-  const inviteSelectedSavedGuests = useCallback(() => {
-    const selectedAll = availableSavedGuests.filter((guest) => selectedSavedGuestIds.includes(guest.id));
-    const unavailable = selectedAll.filter((guest) => !isGuestAvailable(guest));
-    if (unavailable.length) {
-      toast('warning', `以下嘉宾不可用：${formatUnavailableGuests(unavailable)}`);
-      return;
-    }
-    const selected = selectedAll.filter(isGuestAvailable);
-    if (!selected.length) {
-      toast('warning', '请选择要加入的嘉宾');
-      return;
-    }
-    addGuestsToRoom(selected);
-    resetGuestCreateState();
-    setGuestCreateOpen(false);
-  }, [addGuestsToRoom, availableSavedGuests, resetGuestCreateState, selectedSavedGuestIds, toast]);
-
-  const createAndInviteSelectedPresets = useCallback(async () => {
-    const selectedAll = availableGuestPresets.filter((preset) => selectedPresetIds.includes(preset.id));
-    const unavailable = selectedAll.filter((preset) => !isGuestAvailable(preset));
-    if (unavailable.length) {
-      toast('warning', `以下嘉宾不可用：${formatUnavailableGuests(unavailable)}`);
-      return;
-    }
-    const selected = selectedAll.filter(isGuestAvailable);
-    if (!selected.length) {
-      toast('warning', '请选择要创建的预设嘉宾');
-      return;
-    }
-    setGuestBatchSaving(true);
-    try {
-      const created = await Promise.all(selected.map(async (preset) => {
-        const existing = savedGuests.find((guest) => guest.presetId === preset.id && guest.displayName === preset.displayName);
-        if (existing) return existing;
-        const result = await agoraApi.saveGuest({
-          displayName: preset.displayName,
-          sourceType: 'preset',
-          presetId: preset.id,
-          sourceAgent: preset.templateAgent,
-          engine: presetRuntimeDraft.engine,
-          model: presetRuntimeDraft.model,
-        });
-        return result.guest;
-      }));
-      setSavedGuests((prev) => {
-        const nextById = new Map(prev.map((guest) => [guest.id, guest]));
-        created.forEach((guest) => nextById.set(guest.id, guest));
-        return Array.from(nextById.values()).sort((a, b) => a.createdAt - b.createdAt);
-      });
-      window.dispatchEvent(new CustomEvent('agora:guests-updated'));
-      const unavailableCreated = created.filter((guest) => !isGuestAvailable(guest));
-      if (unavailableCreated.length) {
-        toast('warning', `以下嘉宾不可用：${formatUnavailableGuests(unavailableCreated)}`);
-        return;
-      }
-      addGuestsToRoom(created, { silent: true });
-      resetGuestCreateState();
-      setGuestCreateOpen(false);
-      toast('success', `已加入 ${created.length} 位嘉宾`);
-    } catch (error: any) {
-      toast('error', error?.message || '批量加入嘉宾失败');
-    } finally {
-      setGuestBatchSaving(false);
-    }
-  }, [addGuestsToRoom, availableGuestPresets, presetRuntimeDraft.engine, presetRuntimeDraft.model, resetGuestCreateState, savedGuests, selectedPresetIds, toast]);
-
-  const handleGuestDialogOpenChange = useCallback((open: boolean) => {
-    setGuestCreateOpen(open);
-    if (open) return;
-    resetGuestCreateState();
-  }, [resetGuestCreateState]);
-
-  const toggleSavedGuestSelected = useCallback((guestId: string, checked: boolean) => {
-    setSelectedSavedGuestIds((prev) => (
-      checked
-        ? Array.from(new Set([...prev, guestId]))
-        : prev.filter((id) => id !== guestId)
-    ));
-  }, []);
-
-  const toggleAllSavedGuests = useCallback((checked: boolean) => {
-    setSelectedSavedGuestIds(checked ? availableSavedGuestIds : []);
-  }, [availableSavedGuestIds]);
-
-  const togglePresetSelected = useCallback((presetId: string, checked: boolean) => {
-    setSelectedPresetIds((prev) => (
-      checked
-        ? Array.from(new Set([...prev, presetId]))
-        : prev.filter((id) => id !== presetId)
-    ));
-  }, []);
-
-  const toggleAllPresets = useCallback((checked: boolean) => {
-    setSelectedPresetIds(checked ? availablePresetIds : []);
-  }, [availablePresetIds]);
 
   const callAgent = useCallback(async (
     agentName: string,
@@ -1032,7 +786,7 @@ export function AgoraShell({
           String(data?.rawOutput || data?.output || data?.error || ''),
         );
         if (data?.isError) {
-          finishReject(Object.assign(new Error(data?.error || finalContent || '嘉宾发言失败'), {
+          finishReject(Object.assign(new Error(data?.error || finalContent || 'Agent 发言失败'), {
             partialContent: finalContent,
             rawContent: finalRawContent,
             engine: data?.engine,
@@ -1051,7 +805,7 @@ export function AgoraShell({
 
       stream.events.addEventListener('failed', ((event: MessageEvent) => {
         const data = JSON.parse(event.data || '{}');
-        const errorText = data?.message || '嘉宾发言失败';
+        const errorText = data?.message || 'Agent 发言失败';
         finishReject(Object.assign(new Error(errorText), {
           partialContent: partialContent || errorText,
           rawContent: partialContent || errorText,
@@ -1060,7 +814,7 @@ export function AgoraShell({
 
       stream.events.onerror = () => {
         if (stoppedByUser || settled) return;
-        const errorText = '嘉宾发言连接中断';
+        const errorText = 'Agent 发言连接中断';
         finishReject(Object.assign(new Error(errorText), {
           partialContent: partialContent || errorText,
           rawContent: partialContent || errorText,
@@ -1267,7 +1021,7 @@ export function AgoraShell({
       ? '自定义'
       : participant.sourceType === 'agent'
         ? (participant.sourceAgent || 'Agent')
-        : (participant.presetId || '预设');
+        : 'Agent';
     const roleType: StackedListMember['roleType'] = participant.sourceType === 'custom'
       ? 'creator'
       : participant.sourceType === 'agent'
@@ -1294,43 +1048,51 @@ export function AgoraShell({
         />
       ),
       action: allowGuestManagement ? {
-        label: '移除嘉宾',
+        label: '移除 Agent',
         type: 'remove',
         onClick: () => removeGuest(participant.name),
       } : undefined,
     };
   }), [allowGuestManagement, guestRoster, removeGuest]);
 
-  const directoryGuestMembers = useMemo<StackedListMember[]>(() => availableSavedGuests.map((guest) => {
-    const available = isGuestAvailable(guest);
+  const directoryGuestMembers = useMemo<StackedListMember[]>(() => availableAgents
+    .filter((agent) => {
+      const name = String(agent?.name || '').trim();
+      return name && !guestRoster.some((participant) => (
+        participant.name === name
+        || participant.sourceAgent === name
+        || participant.runtimeAgentName === name
+      ));
+    })
+    .map((agent) => {
+    const name = String(agent?.name || '').trim();
+    const description = String(agent?.description || agent?.systemPrompt || '').trim();
     return {
-      id: guest.id,
-      name: guest.displayName,
-      status: available ? getGuestRuntimeLabel(guest) : (guest.statusReason || '模型或引擎未配置'),
+      id: name,
+      name,
+      status: description || '可加入当前群聊',
       online: false,
-      statusTone: available ? 'default' : 'danger',
-      role: guest.sourceType === 'custom' ? '自定义' : (guest.presetId || '预设'),
-      roleType: guest.sourceType === 'custom' ? 'creator' : 'designer',
-      disabled: !available,
+      statusTone: 'default' as const,
+      role: String(agent?.team || agent?.roleType || 'Agent'),
+      roleType: 'data' as const,
       avatarNode: (
         <SpriteAvatar
-          avatar={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName || guest.displayName)}
-          seed={guest.runtimeAgentName || guest.displayName}
+          avatar={resolveAgentAvatarSrc(undefined, name)}
+          seed={name}
           category="agent-default"
-          alt={guest.displayName}
-          fallback={getInitials(guest.displayName)}
+          alt={name}
+          fallback={getInitials(name)}
           className="h-9 w-9 shadow-sm ring-2 ring-background"
           fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
         />
       ),
       action: {
-        label: available ? '加入嘉宾' : '嘉宾不可用',
+        label: '拉入群聊',
         type: 'add',
-        disabled: !available,
-        onClick: () => addGuestToRoom(guest),
+        onClick: () => addAgentToRoom(agent),
       },
     };
-  }), [addGuestToRoom, availableSavedGuests]);
+  }), [addAgentToRoom, availableAgents, guestRoster]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -1339,13 +1101,33 @@ export function AgoraShell({
           <span className="text-xl font-semibold leading-none text-muted-foreground">#</span>
           <h2 className="min-w-0 truncate text-base font-semibold text-foreground">{roomTitle}</h2>
           <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline-flex">
-            {guests.length} 嘉宾
+            {guests.length} Agent
           </span>
           <span className="hidden truncate text-xs text-muted-foreground lg:block">
             {MODE_LABELS[displayChatroom.settings.responseMode]}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          {guestRoster.length > 0 ? (
+          <div className="hidden items-center gap-1 rounded-full border border-border/60 bg-background/70 p-0.5 md:flex">
+            {MODE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={cn(
+                  'h-7 rounded-full px-2 text-[11px] transition-colors',
+                  displayChatroom.settings.responseMode === option.value
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+                title={option.title}
+                onClick={() => setResponseMode(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          ) : null}
           <div className="hidden -space-x-2 sm:flex">
             {guestRoster.slice(0, 5).map((participant) => (
               <SpriteAvatar
@@ -1449,7 +1231,7 @@ export function AgoraShell({
                 guestPanelCollapsed ? 'w-12' : 'w-[21rem]'
               )}>
               <div className={cn('flex shrink-0 items-center border-b px-2 py-2', guestPanelCollapsed ? 'justify-center' : 'justify-between')}>
-                {guestPanelCollapsed ? null : <div className="px-1 text-xs font-semibold text-muted-foreground">嘉宾</div>}
+                {guestPanelCollapsed ? null : <div className="px-1 text-xs font-semibold text-muted-foreground">Agent</div>}
                 <div className={cn('flex items-center gap-1', guestPanelCollapsed && 'flex-col')}>
                   {guestPanelCollapsed ? (
                     <Button
@@ -1458,8 +1240,8 @@ export function AgoraShell({
                       variant="ghost"
                       className="h-8 w-8 rounded-md"
                       onClick={() => setGuestPanelCollapsed(false)}
-                      title={`展开嘉宾（${guestRoster.length}）`}
-                      aria-label="展开嘉宾"
+                      title={`展开 Agent（${guestRoster.length}）`}
+                      aria-label="展开 Agent"
                     >
                       <PanelRightOpen className="h-4 w-4" />
                     </Button>
@@ -1471,8 +1253,8 @@ export function AgoraShell({
                         variant="ghost"
                         className="h-7 w-7 rounded-md"
                         onClick={() => setGuestPanelCollapsed(true)}
-                        title="收起嘉宾"
-                        aria-label="收起嘉宾"
+                        title="收起 Agent"
+                        aria-label="收起 Agent"
                       >
                         <PanelRightClose className="h-4 w-4" />
                       </Button>
@@ -1485,13 +1267,13 @@ export function AgoraShell({
                   type="button"
                   className="flex w-full flex-col items-center gap-2 px-2 py-3 text-muted-foreground hover:bg-muted/55 hover:text-foreground"
                   onClick={() => setGuestPanelCollapsed(false)}
-                  title={`展开嘉宾（${guestRoster.length}）`}
+                  title={`展开 Agent（${guestRoster.length}）`}
                 >
                   <Badge variant="secondary" className="h-6 min-w-6 justify-center rounded-full px-1 text-[10px]">
                     {guestRoster.length}
                   </Badge>
                   <span className="text-[11px] font-medium tracking-[0.18em]" style={{ writingMode: 'vertical-rl' }}>
-                    嘉宾
+                    Agent
                   </span>
                 </button>
               ) : (
@@ -1501,12 +1283,11 @@ export function AgoraShell({
                     directoryMembers={allowGuestManagement ? directoryGuestMembers : []}
                     title="当前成员"
                     directoryTitle="添加成员"
-                    directorySubtitle={`${directoryGuestMembers.length} 位可加入嘉宾`}
+                    directorySubtitle={`${directoryGuestMembers.length} 个可加入 Agent`}
                     searchPlaceholder="搜索当前成员..."
-                    directorySearchPlaceholder="搜索可加入嘉宾..."
-                    emptyActiveLabel="暂无嘉宾"
-                    emptyDirectoryLabel="暂无可加入嘉宾"
-                    onAddClick={allowGuestManagement ? openGuestCreateDialog : undefined}
+                    directorySearchPlaceholder="搜索可加入 Agent..."
+                    emptyActiveLabel="暂无 Agent"
+                    emptyDirectoryLabel="暂无可加入 Agent"
                     className="h-full border-0"
                   />
                 </div>
@@ -1528,8 +1309,8 @@ export function AgoraShell({
       <Dialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>设置议场工作区</DialogTitle>
-            <DialogDescription>这里的路径会同时驱动工作区与变更页签，也会作为嘉宾默认上下文目录。</DialogDescription>
+            <DialogTitle>设置群聊工作区</DialogTitle>
+            <DialogDescription>这里的路径会同时驱动工作区与变更页签，也会作为 Agent 默认上下文目录。</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <WorkspaceDirectoryPicker
@@ -1561,190 +1342,6 @@ export function AgoraShell({
       </Dialog>
       )}
 
-      {allowGuestManagement ? (
-      <Dialog open={guestCreateOpen} onOpenChange={handleGuestDialogOpenChange}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>加入嘉宾</DialogTitle>
-          </DialogHeader>
-          <div className="grid max-h-[68vh] gap-4 overflow-y-auto pr-1 lg:grid-cols-[1fr_1fr]">
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold">常驻嘉宾</h3>
-                  <p className="mt-1 text-xs text-muted-foreground">可多选加入当前议题。</p>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs"
-                  disabled={!selectedSavedGuestIds.length}
-                  onClick={inviteSelectedSavedGuests}
-                >
-                  加入已选
-                </Button>
-              </div>
-              <div className="rounded-lg border">
-                {availableSavedGuests.length ? (
-                  <>
-                    <label className="flex cursor-pointer items-center gap-3 border-b bg-muted/20 px-3 py-2 text-xs text-muted-foreground hover:bg-muted/35">
-                      <Checkbox
-                        checked={savedGuestSelectionState}
-                        disabled={availableSavedGuestIds.length === 0}
-                        onCheckedChange={(checked) => toggleAllSavedGuests(checked === true)}
-                        className="mt-0.5"
-                      />
-                      <span className="font-medium text-foreground">全选可用嘉宾</span>
-                      <span className="ml-auto">
-                        {selectedAvailableSavedGuestCount}/{availableSavedGuestIds.length}
-                      </span>
-                    </label>
-                    {availableSavedGuests.map((guest) => {
-                      const available = isGuestAvailable(guest);
-                      return (
-                        <label
-                          key={guest.id}
-                          className={`flex gap-3 border-b px-3 py-3 last:border-b-0 ${available ? 'cursor-pointer hover:bg-muted/40' : 'cursor-not-allowed bg-muted/20 opacity-70'}`}
-                        >
-                          <Checkbox
-                            checked={selectedSavedGuestIds.includes(guest.id)}
-                            disabled={!available}
-                            onCheckedChange={(checked) => toggleSavedGuestSelected(guest.id, checked === true)}
-                            className="mt-0.5"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="truncate text-sm font-medium">{guest.displayName}</span>
-                              <Badge variant="outline" className={`h-5 px-1.5 text-[10px] ${available ? 'text-emerald-600' : 'text-destructive'}`}>
-                                {available ? '可用' : '不可用'}
-                              </Badge>
-                            </div>
-                            <div className="mt-1 truncate text-xs text-muted-foreground">{getGuestRuntimeLabel(guest)}</div>
-                            {!available ? (
-                              <div className="mt-1 text-xs text-destructive">{guest.statusReason || '模型或引擎未配置'}</div>
-                            ) : null}
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </>
-                ) : (
-                  <div className="px-3 py-8 text-center text-xs text-muted-foreground">暂无可加入的常驻嘉宾</div>
-                )}
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold">预设嘉宾</h3>
-                <p className="mt-1 text-xs text-muted-foreground">选择模型后批量创建为常驻嘉宾并加入。</p>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs"
-                  disabled={!selectedPresetIds.length || guestBatchSaving}
-                  onClick={() => void createAndInviteSelectedPresets()}
-                >
-                  {guestBatchSaving ? '处理中...' : '创建并加入'}
-                </Button>
-              </div>
-              <div className="rounded-lg border bg-muted/20 p-2">
-                <EngineModelSelect
-                  engine={presetRuntimeDraft.engine}
-                  model={presetRuntimeDraft.model}
-                  onEngineChange={(engine) => setPresetRuntimeDraft((prev) => ({ ...prev, engine }))}
-                  onModelChange={(model) => setPresetRuntimeDraft((prev) => ({ ...prev, model }))}
-                  className="h-9"
-                />
-              </div>
-              <div className="rounded-lg border">
-                {availableGuestPresets.length ? (
-                  <>
-                    <label className="flex cursor-pointer items-center gap-3 border-b bg-muted/20 px-3 py-2 text-xs text-muted-foreground hover:bg-muted/35">
-                      <Checkbox
-                        checked={presetSelectionState}
-                        disabled={availablePresetIds.length === 0}
-                        onCheckedChange={(checked) => toggleAllPresets(checked === true)}
-                        className="mt-0.5"
-                      />
-                      <span className="font-medium text-foreground">全选可用预设</span>
-                      <span className="ml-auto">
-                        {selectedAvailablePresetCount}/{availablePresetIds.length}
-                      </span>
-                    </label>
-                    {availableGuestPresets.map((preset) => {
-                      const available = isGuestAvailable(preset);
-                      return (
-                        <label
-                          key={preset.id}
-                          className={`flex gap-3 border-b px-3 py-3 last:border-b-0 ${available ? 'cursor-pointer hover:bg-muted/40' : 'cursor-not-allowed bg-muted/20 opacity-70'}`}
-                        >
-                          <Checkbox
-                            checked={selectedPresetIds.includes(preset.id)}
-                            disabled={!available}
-                            onCheckedChange={(checked) => togglePresetSelected(preset.id, checked === true)}
-                            className="mt-0.5"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="truncate text-sm font-medium">{preset.displayName}</span>
-                              <Badge variant="outline" className={`h-5 px-1.5 text-[10px] ${available ? 'text-emerald-600' : 'text-destructive'}`}>
-                                {available ? '可用' : '不可用'}
-                              </Badge>
-                            </div>
-                            <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{preset.description}</div>
-                            {!available ? (
-                              <div className="mt-1 text-xs text-destructive">{preset.statusReason || '模型或引擎未配置'}</div>
-                            ) : null}
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </>
-                ) : (
-                  <div className="px-3 py-8 text-center text-xs text-muted-foreground">预设嘉宾均已在当前议题中</div>
-                )}
-              </div>
-            </section>
-
-            <section className="space-y-3 lg:col-span-2">
-              <div>
-                <h3 className="text-sm font-semibold">创建自定义嘉宾</h3>
-                <p className="mt-1 text-xs text-muted-foreground">自定义嘉宾会保存为常驻嘉宾，后续议题可继续加入。</p>
-              </div>
-              <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-2">
-                <Input
-                  value={guestDraft.displayName}
-                  onChange={(event) => setGuestDraft((prev) => ({ ...prev, displayName: event.target.value }))}
-                  placeholder="嘉宾名称"
-                />
-                <EngineModelSelect
-                  engine={guestDraft.engine}
-                  model={guestDraft.model}
-                  onEngineChange={(engine) => setGuestDraft((prev) => ({ ...prev, engine }))}
-                  onModelChange={(model) => setGuestDraft((prev) => ({ ...prev, model }))}
-                />
-                <Textarea
-                  value={guestDraft.personaPrompt}
-                  onChange={(event) => setGuestDraft((prev) => ({ ...prev, personaPrompt: event.target.value, sourceType: 'custom' }))}
-                  rows={4}
-                  className="md:col-span-2"
-                  placeholder="输入这个嘉宾的性格、立场和发言方式"
-                />
-              </div>
-            </section>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => handleGuestDialogOpenChange(false)}>取消</Button>
-            <Button onClick={() => void createAndInviteGuest()}>创建自定义并加入</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      ) : null}
     </div>
   );
 }

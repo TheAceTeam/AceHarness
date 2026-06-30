@@ -26,6 +26,8 @@ export interface EngineOptions {
   frontendSessionId?: string;
   /** Authenticated user id for user-scoped credentials/env vars. */
   userId?: string;
+  /** Extra process environment variables for this execution. */
+  env?: Record<string, string>;
   /** Enable high-detail wrapper/transport lifecycle logs for diagnostics only. */
   diagnosticLogging?: boolean;
   /** Send the prompt as user-visible raw input without wrapper-authored system/task wrapping. */

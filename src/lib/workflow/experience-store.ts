@@ -11,6 +11,41 @@ export interface AgentScoreCard {
   weaknesses: string[];
 }
 
+export interface WorkflowChildSpecDeltaSummary {
+  runId: string;
+  configFile: string;
+  parentStateName?: string;
+  parentStepName?: string;
+  status?: string;
+  workflowName?: string;
+  specStatus?: string;
+  specVersion?: number;
+  progressSummary?: string;
+  completedTaskCount: number;
+  totalTaskCount: number;
+  artifactKeys: string[];
+  latestRevision?: {
+    id: string;
+    version: number;
+    summary: string;
+    createdAt: string;
+    createdBy?: string;
+  } | null;
+  latestVote?: {
+    id: string;
+    status: string;
+    recommendedChoice?: string;
+    summary?: string;
+  } | null;
+  deltaMerge?: {
+    status: string;
+    requestedAt?: string;
+    appliedAt?: string;
+    aiSummary?: string;
+    error?: string;
+  } | null;
+}
+
 export interface WorkflowFinalReview {
   runId: string;
   configFile: string;
@@ -25,6 +60,7 @@ export interface WorkflowFinalReview {
   scoreCards: AgentScoreCard[];
   agentNames?: string[];
   keywords?: string[];
+  childSpecDeltas?: WorkflowChildSpecDeltaSummary[];
   generatedAt: string;
 }
 
@@ -69,6 +105,21 @@ export async function saveWorkflowFinalReview(review: WorkflowFinalReview): Prom
     '',
     '## Experience',
     ...review.experience.map((item) => `- ${item}`),
+    ...(review.childSpecDeltas?.length
+      ? [
+          '',
+          '## Child Spec Deltas',
+          ...review.childSpecDeltas.map((child) => [
+            `- ${child.configFile} (${child.runId})`,
+            `  - status: ${child.status || '-'}`,
+            `  - spec: ${child.specStatus || '-'} v${child.specVersion || '-'}`,
+            `  - tasks: ${child.completedTaskCount}/${child.totalTaskCount}`,
+            child.progressSummary ? `  - progress: ${child.progressSummary}` : '',
+            child.latestRevision?.summary ? `  - latest revision: ${child.latestRevision.summary}` : '',
+            child.deltaMerge?.status ? `  - delta merge: ${child.deltaMerge.status}` : '',
+          ].filter(Boolean).join('\n')),
+        ]
+      : []),
     '',
   ].join('\n');
   await writeFile(resolve(runDir, 'final-review.md'), markdown, 'utf-8');

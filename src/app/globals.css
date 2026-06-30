@@ -8,7 +8,9 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
 
 /* Dashboard Dockview tabs mirror the shadcn line tab style. */
 .ace-dashboard-dockview.dockview-theme-light,
-.ace-dashboard-dockview.dockview-theme-dark {
+.ace-dashboard-dockview.dockview-theme-dark,
+.ace-workflow-run-dock.dockview-theme-light,
+.ace-workflow-run-dock.dockview-theme-dark {
   --dv-tabs-and-actions-container-height: 36px;
   --dv-tabs-and-actions-container-background-color: hsl(var(--background));
   --dv-tabs-container-background-color: hsl(var(--background));
@@ -30,21 +32,38 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   --ace-dock-tab-width: 8.75rem;
 }
 
+.ace-workflow-run-dock.dockview-theme-light,
+.ace-workflow-run-dock.dockview-theme-dark {
+  --dv-tabs-and-actions-container-height: 32px;
+  --dv-separator-border: hsl(var(--border) / 0.72);
+  --ace-dock-tab-width: 7rem;
+}
+
 .ace-dashboard-dockview .dv-groupview,
+.ace-workflow-run-dock .dv-groupview,
 .ace-dashboard-dockview .dv-content-container,
+.ace-workflow-run-dock .dv-content-container,
 .ace-dashboard-dockview .dv-tabs-and-actions-container,
+.ace-workflow-run-dock .dv-tabs-and-actions-container,
 .ace-dashboard-dockview .dv-tabs-container,
+.ace-workflow-run-dock .dv-tabs-container,
 .ace-dashboard-dockview .dv-tabs-overflow-container,
+.ace-workflow-run-dock .dv-tabs-overflow-container,
 .ace-dashboard-dockview .dv-actions-container,
+.ace-workflow-run-dock .dv-actions-container,
 .ace-dashboard-dockview .dv-groupview-titlebar,
+.ace-workflow-run-dock .dv-groupview-titlebar,
 .ace-dashboard-dockview .dv-groupview-titlebar-container,
+.ace-workflow-run-dock .dv-groupview-titlebar-container,
 .ace-dashboard-dockview .dv-scrollable,
+.ace-workflow-run-dock .dv-scrollable,
 .ace-dashboard-dockview .dv-void-container {
   background: hsl(var(--background)) !important;
   background-color: hsl(var(--background)) !important;
 }
 
-.ace-dashboard-dockview .dv-groupview {
+.ace-dashboard-dockview .dv-groupview,
+.ace-workflow-run-dock .dv-groupview {
   display: flex !important;
   min-width: 0 !important;
   min-height: 0 !important;
@@ -52,13 +71,16 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
 }
 
 .ace-dashboard-dockview .dv-groupview-titlebar,
-.ace-dashboard-dockview .dv-groupview-titlebar-container {
+.ace-dashboard-dockview .dv-groupview-titlebar-container,
+.ace-workflow-run-dock .dv-groupview-titlebar,
+.ace-workflow-run-dock .dv-groupview-titlebar-container {
   flex: 0 0 36px !important;
   width: 100% !important;
   min-width: 0 !important;
 }
 
-.ace-dashboard-dockview .dv-content-container {
+.ace-dashboard-dockview .dv-content-container,
+.ace-workflow-run-dock .dv-content-container {
   flex: 1 1 auto !important;
   width: 100% !important;
   min-width: 0 !important;
@@ -74,8 +96,8 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
 }
 
 .ace-dashboard-chat-secondary-sidebar {
-  flex: 0 0 18rem;
-  max-width: 18rem;
+  width: 100%;
+  max-width: none;
 }
 
 .ace-dashboard-chat-panel-main {
@@ -96,7 +118,74 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   background-color: hsl(var(--background)) !important;
 }
 
-.ace-dashboard-dockview .dv-tabs-and-actions-container .dv-scrollable {
+.ace-workflow-run-dock .dv-tabs-and-actions-container {
+  height: 32px !important;
+  min-height: 32px !important;
+  border-bottom: 1px solid hsl(var(--border) / 0.72) !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+  padding: 0 8px !important;
+  background: hsl(var(--background)) !important;
+  background-color: hsl(var(--background)) !important;
+}
+
+.ace-workflow-run-dock .dv-sash {
+  background: hsl(var(--border) / 0.68) !important;
+  z-index: 5 !important;
+}
+
+.ace-workflow-run-dock .dv-sash:hover,
+.ace-workflow-run-dock .dv-sash.active {
+  background: hsl(var(--muted-foreground) / 0.55) !important;
+  z-index: 6 !important;
+}
+
+.ace-workflow-run-dock .dv-sash-container,
+.ace-workflow-run-dock .dv-gridview,
+.ace-workflow-run-dock .dv-branch-node {
+  z-index: auto !important;
+}
+
+.ace-dashboard-dockview .dv-sash,
+.ace-dashboard-dockview .dv-sash-container {
+  z-index: 6 !important;
+}
+
+.ace-dashboard-dockview .dv-sash-container,
+.ace-workflow-run-dock .dv-sash-container {
+  pointer-events: none !important;
+}
+
+.ace-dashboard-dockview .dv-sash,
+.ace-workflow-run-dock .dv-sash {
+  pointer-events: auto !important;
+}
+
+.ace-workflow-run-dock .dv-overlay,
+.ace-workflow-run-dock .dv-drop-target-anchor,
+.ace-workflow-run-dock .dv-drop-target-dropzone,
+.ace-workflow-run-dock .dv-drop-target-selection,
+.ace-dashboard-dockview .dv-overlay,
+.ace-dashboard-dockview .dv-drop-target-anchor,
+.ace-dashboard-dockview .dv-drop-target-dropzone,
+.ace-dashboard-dockview .dv-drop-target-selection {
+  z-index: 6 !important;
+  pointer-events: none !important;
+}
+
+.ace-workflow-run-dock .dv-overlay.active,
+.ace-workflow-run-dock .dv-drop-target-anchor.active,
+.ace-workflow-run-dock .dv-drop-target-dropzone.active,
+.ace-workflow-run-dock .dv-drop-target-selection.active,
+.ace-dashboard-dockview .dv-overlay.active,
+.ace-dashboard-dockview .dv-drop-target-anchor.active,
+.ace-dashboard-dockview .dv-drop-target-dropzone.active,
+.ace-dashboard-dockview .dv-drop-target-selection.active {
+  pointer-events: auto !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container .dv-scrollable,
+.ace-workflow-run-dock .dv-tabs-and-actions-container .dv-scrollable {
   height: 36px !important;
   min-height: 36px !important;
   align-items: center !important;
@@ -118,7 +207,8 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   flex-grow: 1 !important;
 }
 
-.ace-dashboard-dockview .dv-tabs-container {
+.ace-dashboard-dockview .dv-tabs-container,
+.ace-workflow-run-dock .dv-tabs-container {
   position: relative !important;
   height: 36px !important;
   min-height: 36px !important;
@@ -132,7 +222,8 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   padding: 0 !important;
 }
 
-.ace-dashboard-dockview .dv-tabs-container::before {
+.ace-dashboard-dockview .dv-tabs-container::before,
+.ace-workflow-run-dock .dv-tabs-container::before {
   content: '';
   position: absolute;
   inset-inline: 0;
@@ -141,7 +232,8 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   background: hsl(var(--border));
 }
 
-.ace-dashboard-dockview .dv-tab {
+.ace-dashboard-dockview .dv-tab,
+.ace-workflow-run-dock .dv-tab {
   position: relative !important;
   z-index: 1 !important;
   width: var(--ace-dock-tab-width) !important;
@@ -161,32 +253,44 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   transform: none !important;
 }
 
-.ace-dashboard-dockview .dv-tabs-container > .dv-tab {
+.ace-dashboard-dockview .dv-tabs-container > .dv-tab,
+.ace-workflow-run-dock .dv-tabs-container > .dv-tab {
   margin-left: 0 !important;
 }
 
-.ace-dashboard-dockview .dv-tabs-container > .dv-tab:first-child {
+.ace-dashboard-dockview .dv-tabs-container > .dv-tab:first-child,
+.ace-workflow-run-dock .dv-tabs-container > .dv-tab:first-child {
   margin-left: 0 !important;
 }
 
-.ace-dashboard-dockview .dv-tab + .dv-tab {
+.ace-dashboard-dockview .dv-tab + .dv-tab,
+.ace-workflow-run-dock .dv-tab + .dv-tab {
   margin-left: 0 !important;
 }
 
 .ace-dashboard-dockview .dv-tab:focus,
+.ace-workflow-run-dock .dv-tab:focus,
 .ace-dashboard-dockview .dv-tab:focus-visible,
+.ace-workflow-run-dock .dv-tab:focus-visible,
 .ace-dashboard-dockview .dv-tab:focus-within,
+.ace-workflow-run-dock .dv-tab:focus-within,
 .ace-dashboard-dockview .dv-active-tab,
+.ace-workflow-run-dock .dv-active-tab,
 .ace-dashboard-dockview .dv-tab.active-tab {
   outline: none !important;
   box-shadow: none !important;
 }
 
 .ace-dashboard-dockview .dv-tab::after,
+.ace-workflow-run-dock .dv-tab::after,
 .ace-dashboard-dockview .dv-tab:focus::after,
+.ace-workflow-run-dock .dv-tab:focus::after,
 .ace-dashboard-dockview .dv-tab:focus-visible::after,
+.ace-workflow-run-dock .dv-tab:focus-visible::after,
 .ace-dashboard-dockview .dv-tab:focus-within::after,
+.ace-workflow-run-dock .dv-tab:focus-within::after,
 .ace-dashboard-dockview .dv-active-tab::after,
+.ace-workflow-run-dock .dv-active-tab::after,
 .ace-dashboard-dockview .dv-tab.active-tab::after {
   display: none !important;
   outline: none !important;
@@ -222,6 +326,16 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
 
 .ace-dashboard-dockview .dv-tab:not(.dv-active-tab):not(.active-tab) .ace-dock-tab:hover {
   color: hsl(var(--foreground));
+}
+
+.ace-workflow-run-dock .dv-tab:not(.dv-active-tab):not(.active-tab) .ace-dock-tab:hover {
+  color: hsl(var(--foreground));
+}
+
+.ace-workflow-run-dock .ace-dock-tab,
+.ace-workflow-run-dock .ace-dock-tab__title {
+  height: 32px;
+  font-size: 0.75rem;
 }
 
 .dv-active-tab .ace-dock-tab,

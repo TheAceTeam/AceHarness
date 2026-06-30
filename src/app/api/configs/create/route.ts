@@ -12,6 +12,7 @@ import { updateChatSessionCreationBinding } from '@/lib/chat/persistence';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import { assertPersistedSpecRootReady } from '@/lib/spec/persistence';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
+import { validateSubworkflowDependenciesForConfig } from '@/lib/workflow/subworkflow-config';
 
 function createDefaultWorkflowGovernance() {
   return {
@@ -350,6 +351,16 @@ export async function POST(request: NextRequest) {
       );
     }
     defaultConfig = configValidation.normalized;
+    const dependencyIssues = await validateSubworkflowDependenciesForConfig(defaultConfig);
+    if (dependencyIssues.length > 0) {
+      return NextResponse.json(
+        {
+          error: '工作流草案验证失败',
+          details: dependencyIssues,
+        },
+        { status: 400 }
+      );
+    }
 
     // Determine the generated mode for the response message
     const generatedMode = defaultConfig?.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based';
@@ -370,6 +381,8 @@ export async function POST(request: NextRequest) {
         createdBy: auth.id,
         visibility: 'private',
         createdAt: Date.now(),
+        specCodingEnabled: false,
+        specCodingSkipped: true,
       }, 'workflow');
 
       return NextResponse.json({
@@ -459,6 +472,8 @@ export async function POST(request: NextRequest) {
       createdBy: auth.id,
       visibility: 'private',
       createdAt: Date.now(),
+      specCodingEnabled: true,
+      specCodingSkipped: false,
     }, 'workflow');
     creationSession = await updateCreationSession(creationSession.id, {
       bindingValidation: bindingCompilation.validation as any,

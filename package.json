@@ -14,6 +14,7 @@
     "lint:fix": "eslint . --cache --fix",
     "test": "vitest run",
     "test:components": "vitest run tests/components --environment jsdom",
+    "test:e2e": "playwright test",
     "wechat:relay": "node scripts/wechat-bridge-relay.mjs",
     "wechat:qr-test": "node scripts/wechat-qr-test-runner.mjs",
     "wechat:official": "node -r ts-node/register -r tsconfig-paths/register scripts/wechat-official.ts",
@@ -196,6 +197,7 @@
     "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.146"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

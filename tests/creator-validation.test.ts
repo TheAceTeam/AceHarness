@@ -235,6 +235,92 @@ describe('validateWorkflowDraft', () => {
     expect(result.ok).toBe(false);
     expect(result.issues.some((i) => i.message.includes('多条兜底转移'))).toBe(true);
   });
+
+  test('state-machine accepts subworkflow steps without agent and task', () => {
+    const config = validStateMachineConfig('{project_root}');
+    (config.workflow.states[0].steps as any[]) = [{
+      name: 'Run child workflow',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+    }];
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
+
+  test('legacy state-machine agent steps without type remain valid', () => {
+    const config = validStateMachineConfig('{project_root}');
+    delete (config.workflow.states[0].steps[0] as any).type;
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(true);
+    expect(result.normalized?.workflow.states[0].steps[0]).toMatchObject({
+      name: 'Step 1',
+      agent: 'developer',
+      task: 'Start',
+    });
+  });
+
+  test('state-machine rejects unknown step types with a field-level error', () => {
+    const config = validStateMachineConfig('{project_root}');
+    (config.workflow.states[0].steps[0] as any).type = 'nested-workflow';
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => (
+      issue.path.join('.') === 'workflow.states.0.steps.0.type'
+      && issue.severity === 'error'
+    ))).toBe(true);
+  });
+
+  test('phase-based workflows reject subworkflow steps', () => {
+    const config = validPhaseBasedConfig('{project_root}');
+    (config.workflow.phases[0].steps as any[]) = [{
+      name: 'Run child workflow',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+    }];
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.message.includes('仅支持状态机模式'))).toBe(true);
+  });
+
+  test('state-machine rejects unsafe subworkflow config references', () => {
+    const config = validStateMachineConfig('{project_root}');
+    (config.workflow.states[0].steps as any[]) = [{
+      name: 'Run child workflow',
+      type: 'subworkflow',
+      workflow: '../child.yaml',
+    }];
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.message.includes('不能越过 workflow 配置目录'))).toBe(true);
+  });
+
+  test('state-machine only accepts shared subworkflow workspace conflict policy', () => {
+    const config = validStateMachineConfig('{project_root}');
+    (config.workflow.states[0].steps as any[]) = [{
+      name: 'Run child workflow',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+      runtime: {
+        workspaceConflictPolicy: 'isolated-copy',
+      },
+    }];
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.path.join('.').includes('workspaceConflictPolicy'))).toBe(true);
+  });
 });
 
 describe('validateAgentDraft', () => {

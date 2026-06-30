@@ -28,6 +28,11 @@ export interface DocFile {
   documentKind?: 'conclusion' | 'detail';
   groupKey?: string;
   groupLabel?: string;
+  sourceRunId?: string;
+  sourceConfigFile?: string;
+  sourceLabel?: string;
+  parentRunId?: string | null;
+  rootRunId?: string | null;
   size: number;
   modifiedTime: string;
 }
@@ -127,7 +132,16 @@ export function getDocumentFolderGroup(file: Pick<DocFile, 'filename' | 'phaseNa
 }
 
 function getTreeLinkName(file: DocFile): string {
-  return file.groupLabel || file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
+  const base = file.groupLabel || file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
+  return file.sourceLabel && file.sourceLabel !== '父工作流' ? `${file.sourceLabel} / ${base}` : base;
+}
+
+function getDocKey(file: Pick<DocFile, 'filename' | 'sourceRunId'>): string {
+  return `${file.sourceRunId || 'root'}::${file.filename}`;
+}
+
+function isRootRunFile(file: DocFile, runId: string | null): boolean {
+  return !file.sourceRunId || file.sourceRunId === runId;
 }
 
 function getTreeGroupKey(file: DocFile): string {
@@ -256,6 +270,12 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const startWidth = useRef(0);
   const lastOpenLatestRequestRef = useRef(0);
 
+  const selectedRootFilenames = useMemo(() => {
+    return files
+      .filter((file) => isRootRunFile(file, runId) && selected.has(getDocKey(file)))
+      .map((file) => file.filename);
+  }, [files, runId, selected]);
+
   // Load persisted sidebar state
   useEffect(() => {
     try {
@@ -319,7 +339,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     if (!runId) return;
     setLoading(true);
     try {
-      const data = await runsApi.listDocuments(runId);
+      const data = await runsApi.listDocuments(runId, { includeChildren: true });
       setFiles(data.files || []);
       setDocumentDirectory(data.documentDirectory || null);
     } catch {
@@ -397,7 +417,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     setPreviewFile(file);
     setLoadingPreview(true);
     try {
-      const { content } = await runsApi.getDocumentContent(runId, file.filename);
+      const { content } = await runsApi.getDocumentContent(runId, file.filename, { sourceRunId: file.sourceRunId });
       setPreviewContent(content);
     } catch { setPreviewContent('(无法加载)'); }
     setLoadingPreview(false);
@@ -427,7 +447,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     if (!runId) return;
     setLoading(true);
     try {
-      const data = await runsApi.listDocuments(runId);
+      const data = await runsApi.listDocuments(runId, { includeChildren: true });
       const nextFiles = data.files || [];
       setFiles(nextFiles);
       const latestFile = nextFiles
@@ -456,10 +476,10 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     void openLatestTimestampedFile();
   }, [openLatestTimestampedFile, openLatestTimestampedRequest]);
 
-  const toggleSelect = (filename: string) => {
+  const toggleSelect = (docKey: string) => {
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(filename) ? next.delete(filename) : next.add(filename);
+      next.has(docKey) ? next.delete(docKey) : next.add(docKey);
       return next;
     });
   };
@@ -467,8 +487,9 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     const visibleFiles = docFilter === 'all'
       ? treeGroups.flatMap(group => group.summary ? [group.summary, ...group.details] : group.details)
       : processedFiles;
-    if (selected.size === visibleFiles.length) setSelected(new Set());
-    else setSelected(new Set(visibleFiles.map(f => f.filename)));
+    const editableFiles = visibleFiles.filter(f => isRootRunFile(f, runId));
+    if (selected.size === editableFiles.length) setSelected(new Set());
+    else setSelected(new Set(editableFiles.map(f => getDocKey(f))));
   };
 
   const handleRename = async (file: string) => {
@@ -486,15 +507,15 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       await runsApi.deleteDocuments(runId, filenames);
       setDeleteTarget(null);
       setSelected(prev => { const n = new Set(prev); filenames.forEach(f => n.delete(f)); return n; });
-      if (previewFile && filenames.includes(previewFile.filename)) { setPreviewFile(null); setPreviewContent(''); }
+      if (previewFile && filenames.includes(previewFile.filename) && isRootRunFile(previewFile, runId)) { setPreviewFile(null); setPreviewContent(''); }
       loadFiles();
     } catch { /* toast? */ }
   };
 
   const downloadFile = (file: DocFile) => {
     const blob = new Blob([previewContent || ''], { type: 'text/markdown;charset=utf-8' });
-    if (!previewContent || previewFile?.filename !== file.filename) {
-      runsApi.getDocumentContent(runId!, file.filename).then(({ content }) => {
+    if (!previewContent || !previewFile || getDocKey(previewFile) !== getDocKey(file)) {
+      runsApi.getDocumentContent(runId!, file.filename, { sourceRunId: file.sourceRunId }).then(({ content }) => {
         const b = new Blob([content], { type: 'text/markdown;charset=utf-8' });
         triggerDownload(b, file.filename);
       });
@@ -565,9 +586,9 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     if (!runId) return;
     setSavingNotebookFile(file.filename);
     try {
-      const content = (previewFile?.filename === file.filename && previewContent)
+      const content = (previewFile && getDocKey(previewFile) === getDocKey(file) && previewContent)
         ? previewContent
-        : (await runsApi.getDocumentContent(runId, file.filename)).content;
+        : (await runsApi.getDocumentContent(runId, file.filename, { sourceRunId: file.sourceRunId })).content;
       const base = sanitizeNotebookName(file.baseName.replace(/\.md$/i, '') || 'workflow-doc');
       const ts = new Date();
       const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}-${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}${String(ts.getSeconds()).padStart(2, '0')}`;
@@ -582,7 +603,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     } finally {
       setSavingNotebookFile((prev) => (prev === file.filename ? null : prev));
     }
-  }, [previewContent, previewFile?.filename, runId, toast]);
+  }, [previewContent, previewFile, runId, toast]);
 
   if (!runId) {
     return (
@@ -677,9 +698,9 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           工作区查看目录
         </Button>
       )}
-      {selected.size > 0 && (
-        <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => setDeleteTarget(Array.from(selected))}>
-          <span className="material-symbols-outlined text-sm mr-1">delete</span>删除 ({selected.size})
+      {selectedRootFilenames.length > 0 && (
+        <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => setDeleteTarget(selectedRootFilenames)}>
+          <span className="material-symbols-outlined text-sm mr-1">delete</span>删除 ({selectedRootFilenames.length})
         </Button>
       )}
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadFiles} disabled={loading}>
@@ -716,9 +737,11 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     compact: boolean,
     options?: { indent?: number; prefix?: ReactNode; muted?: boolean }
   ) => {
-    const isRenaming = renamingFile === file.filename;
-    const isSelected = selected.has(file.filename);
-    const isActive = previewFile?.filename === file.filename;
+    const docKey = getDocKey(file);
+    const editable = isRootRunFile(file, runId);
+    const isRenaming = renamingFile === docKey;
+    const isSelected = selected.has(docKey);
+    const isActive = previewFile && getDocKey(previewFile) === docKey;
     const rowStyle = options?.indent ? { paddingLeft: `${12 + options.indent}px` } : undefined;
 
     if (compact) {
@@ -743,7 +766,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         style={rowStyle}
         onClick={() => !isRenaming && selectFile(file)}
       >
-        <Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(file.filename)} onClick={e => e.stopPropagation()} className="h-3.5 w-3.5" />
+        <Checkbox checked={isSelected} disabled={!editable} onCheckedChange={() => toggleSelect(docKey)} onClick={e => e.stopPropagation()} className="h-3.5 w-3.5" />
         {options?.prefix}
         <span className={`material-symbols-outlined text-sm shrink-0 ${getDocumentIconClass(file)}`}>{getDocumentIcon(file)}</span>
         {isRenaming ? (
@@ -765,6 +788,11 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
             {roleLabel[file.role]}
           </Badge>
         )}
+        {file.sourceLabel && file.sourceLabel !== '父工作流' && (
+          <Badge variant="outline" className="text-[9px] h-4 px-1 shrink-0">
+            子流程
+          </Badge>
+        )}
         {hasTimestamp(file.filename) && (
           <Badge variant="outline" className="text-[9px] h-4 px-1 shrink-0 text-muted-foreground">
             {parseTimestamp(file.filename)}
@@ -777,7 +805,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
             <Button variant="ghost" size="sm" className="h-5 w-5 p-0 shrink-0"><span className="material-symbols-outlined text-sm">more_vert</span></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-36">
-            <DropdownMenuItem onClick={e => { e.stopPropagation(); setRenamingFile(file.filename); setRenameValue(file.baseName); }}>
+            <DropdownMenuItem disabled={!editable} onClick={e => { e.stopPropagation(); if (!editable) return; setRenamingFile(docKey); setRenameValue(file.baseName); }}>
               <span className="material-symbols-outlined text-sm mr-2">edit</span>重命名
             </DropdownMenuItem>
             <DropdownMenuItem onClick={e => { e.stopPropagation(); downloadFile(file); }}>
@@ -790,7 +818,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
               <span className="material-symbols-outlined text-sm mr-2">save</span>保存到 Notebook…
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive" onClick={e => { e.stopPropagation(); setDeleteTarget([file.filename]); }}>
+            <DropdownMenuItem disabled={!editable} className="text-destructive" onClick={e => { e.stopPropagation(); if (!editable) return; setDeleteTarget([file.filename]); }}>
               <span className="material-symbols-outlined text-sm mr-2">delete</span>删除
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -829,8 +857,12 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
             <Checkbox
               checked={
-                treeGroups.length > 0
-                && selected.size === treeGroups.flatMap(group => group.summary ? [group.summary, ...group.details] : group.details).length
+                (() => {
+                  const editableFiles = treeGroups
+                    .flatMap(group => group.summary ? [group.summary, ...group.details] : group.details)
+                    .filter(file => isRootRunFile(file, runId));
+                  return editableFiles.length > 0 && editableFiles.every(file => selected.has(getDocKey(file)));
+                })()
               }
               onCheckedChange={toggleSelectAll}
               className="h-3 w-3"
@@ -884,7 +916,14 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       )}
       {!loading && !compact && processedFiles.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
-          <Checkbox checked={selected.size === processedFiles.length && processedFiles.length > 0} onCheckedChange={toggleSelectAll} className="h-3 w-3" />
+          <Checkbox
+            checked={(() => {
+              const editableFiles = processedFiles.filter(file => isRootRunFile(file, runId));
+              return editableFiles.length > 0 && editableFiles.every(file => selected.has(getDocKey(file)));
+            })()}
+            onCheckedChange={toggleSelectAll}
+            className="h-3 w-3"
+          />
           <span className="flex-1 cursor-pointer" onClick={() => toggleSort('name')}>
             文件名 {sortField === 'name' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
           </span>

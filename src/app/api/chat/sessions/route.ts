@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listChatSessions, saveChatSession } from '@/lib/chat/persistence';
 import { requireAuth } from '@/lib/auth/middleware';
+import { normalizeSessionWorkbenchConversationMode } from '@/lib/chat/conversation-mode';
 
 export async function GET(request: NextRequest) {
   const user = await requireAuth(request);
@@ -36,9 +37,10 @@ export async function POST(request: NextRequest) {
           timestamp: typeof message?.timestamp === 'number' ? message.timestamp : now + index,
         })).filter((message: any) => message.content || message.cards?.length)
       : [];
-    const session = {
+    const session = normalizeSessionWorkbenchConversationMode({
       id: body.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       title: body.title || '新对话',
+      conversationMode: typeof body.conversationMode === 'string' ? body.conversationMode : undefined,
       model: body.model || 'claude-sonnet-4-6',
       engine: typeof body.engine === 'string' ? body.engine : undefined,
       workflowBinding: body.workflowBinding && typeof body.workflowBinding.configFile === 'string' && typeof body.workflowBinding.runId === 'string'
@@ -82,7 +84,7 @@ export async function POST(request: NextRequest) {
       messages,
       createdBy: user.id,
       visibility: (body.visibility as 'public' | 'private') || 'public',
-    };
+    });
     await saveChatSession(session);
     return NextResponse.json({ session });
   } catch (error: any) {

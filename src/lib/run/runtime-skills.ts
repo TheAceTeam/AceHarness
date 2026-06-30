@@ -10,7 +10,7 @@ let seedPromise: Promise<void> | null = null;
 let runtimeSkillsSeeded = false;
 
 /** Dependencies required by aceharness-* skills scripts */
-const SKILL_DEPS = ['yaml', 'zod'];
+const SKILL_DEPS: string[] = [];
 
 async function linkMissingBundledEntry(src: string, dst: string): Promise<void> {
   if (existsSync(dst)) return;

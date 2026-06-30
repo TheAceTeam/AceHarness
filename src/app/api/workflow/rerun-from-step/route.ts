@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState } from '@/lib/run/state-persistence';
+import { requireAuth } from '@/lib/auth/middleware';
+import { canAccessRunState } from '@/lib/workflow/run-access';
+import { appendWorkflowAuditEvent, getWorkflowAuditRequestMeta } from '@/lib/workflow/audit-log';
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const body = await request.json();
     const { runId, stepName } = body;
 
@@ -21,6 +26,9 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       );
     }
+    if (!canAccessRunState(auth, runState, 'operate')) {
+      return NextResponse.json({ error: '无权操作该工作流运行' }, { status: 403 });
+    }
 
     const manager = await workflowRegistry.getManager(runState.configFile);
 
@@ -32,7 +40,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    manager.rerunFromStep(runId, stepName).catch(() => {});
+    manager.rerunFromStep(runId, stepName, { id: auth.id, name: auth.username }).catch(() => {});
+    await appendWorkflowAuditEvent({
+      action: 'rerun-from-step',
+      runId,
+      rootRunId: runState.rootRunId || runId,
+      configFile: runState.configFile,
+      actorId: auth.id,
+      actorName: auth.username,
+      ...getWorkflowAuditRequestMeta(request),
+      before: { status: runState.status, currentState: runState.currentState },
+      after: { stepName },
+    });
 
     return NextResponse.json({
       success: true,

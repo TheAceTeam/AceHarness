@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { extractLastChatPreview } from '@/lib/chat/message-preview';
 import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
+import { normalizeSessionWorkbenchConversationMode, type HomeConversationMode } from '@/lib/chat/conversation-mode';
 
 const CHAT_DIR = getWorkspaceDataFile('chat-sessions');
 const globalForChatSessionEvents = globalThis as unknown as {
@@ -97,6 +98,7 @@ export interface AgentChatBinding {
 export interface PersistedChatSession {
   id: string;
   title: string;
+  conversationMode?: HomeConversationMode;
   model: string;
   engine?: string;
   backendSessionId?: string;
@@ -114,6 +116,7 @@ export interface PersistedChatSession {
 export interface ChatSessionSummary {
   id: string;
   title: string;
+  conversationMode?: HomeConversationMode;
   model: string;
   engine?: string;
   createdAt: number;
@@ -174,8 +177,9 @@ function truncateResults(messages: PersistedMessage[]): PersistedMessage[] {
 
 export async function saveChatSession(session: PersistedChatSession): Promise<void> {
   await ensureDir();
+  const normalized = normalizeSessionWorkbenchConversationMode(session);
   const data = {
-    ...session,
+    ...normalized,
     messages: truncateResults(session.messages),
   };
   await writeFile(sessionPath(session.id), JSON.stringify(data, null, 2), 'utf-8');
@@ -207,21 +211,23 @@ export async function listChatSessions(): Promise<ChatSessionSummary[]> {
     try {
       const content = await readFile(resolve(CHAT_DIR, file), 'utf-8');
       const session = JSON.parse(content) as PersistedChatSession;
+      const normalized = normalizeSessionWorkbenchConversationMode(session);
       summaries.push({
-        id: session.id,
-        title: session.title,
-        model: session.model,
-        engine: session.engine,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-        messageCount: session.messages?.length || 0,
-        lastMessage: extractLastChatPreview(session.messages || []),
-        creationSession: session.creationSession,
-        workflowBinding: session.workflowBinding,
-        agentBinding: session.agentBinding,
-        sessionWorkbenchState: session.sessionWorkbenchState,
-        createdBy: session.createdBy,
-        visibility: session.visibility,
+        id: normalized.id,
+        title: normalized.title,
+        conversationMode: normalized.conversationMode,
+        model: normalized.model,
+        engine: normalized.engine,
+        createdAt: normalized.createdAt,
+        updatedAt: normalized.updatedAt,
+        messageCount: normalized.messages?.length || 0,
+        lastMessage: extractLastChatPreview(normalized.messages || []),
+        creationSession: normalized.creationSession,
+        workflowBinding: normalized.workflowBinding,
+        agentBinding: normalized.agentBinding,
+        sessionWorkbenchState: normalized.sessionWorkbenchState || undefined,
+        createdBy: normalized.createdBy,
+        visibility: normalized.visibility,
       });
     } catch { /* skip corrupted */ }
   }

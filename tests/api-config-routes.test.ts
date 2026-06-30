@@ -11,12 +11,13 @@ interface AuthResult {
 }
 
 async function loadConfigRoutes() {
-  const [validate, create, recommendations] = await Promise.all([
+  const [validate, create, recommendations, references] = await Promise.all([
     import('@/app/api/configs/validate/route'),
     import('@/app/api/configs/create/route'),
     import('@/app/api/configs/recommendations/route'),
+    import('@/app/api/configs/references/route'),
   ]);
-  return { validate, create, recommendations };
+  return { validate, create, recommendations, references };
 }
 
 async function createAuthToken(role: 'admin' | 'user' = 'user'): Promise<AuthResult> {
@@ -117,6 +118,45 @@ describe('config API routes', () => {
     });
   });
 
+  test('config list treats states-only workflows as state-machine options', async () => {
+    await withIsolatedAceHome(async () => {
+      vi.resetModules();
+      const { token } = await createAuthToken();
+      const { getRuntimeConfigsDirPath } = await import('@/lib/run/runtime-configs');
+      const configsDir = await getRuntimeConfigsDirPath();
+      await mkdir(configsDir, { recursive: true });
+      await writeFile(path.join(configsDir, 'states-only-child.yaml'), stringify({
+        workflow: {
+          name: 'States Only Child',
+          states: [
+            {
+              name: 'Done',
+              isInitial: true,
+              isFinal: true,
+              steps: [{ name: 'Finish', agent: 'developer', task: 'Finish child workflow' }],
+              transitions: [],
+            },
+          ],
+        },
+        context: {
+          requirements: 'child workflow',
+        },
+      }), 'utf-8');
+      const route = await import('@/app/api/configs/route');
+
+      const response = await route.GET(makeRequest('/api/configs?mode=state-machine&pageSize=100', { token }));
+      const json = await responseJson<any>(response);
+
+      expect(response.status).toBe(200);
+      expect(json.configs).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          filename: 'states-only-child.yaml',
+          mode: 'state-machine',
+        }),
+      ]));
+    });
+  });
+
   test('config create route writes phase and state-machine workflows and rejects duplicates', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
@@ -183,6 +223,156 @@ describe('config API routes', () => {
           409
         );
       });
+    });
+  });
+
+  test('config references route reports parent workflows that embed a child workflow', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const { references } = await loadConfigRoutes();
+      const { getRuntimeConfigsDirPath } = await import('@/lib/run/runtime-configs');
+      const configsDir = await getRuntimeConfigsDirPath();
+      await mkdir(configsDir, { recursive: true });
+      await writeFile(path.join(configsDir, 'child.yaml'), stringify({
+        workflow: {
+          name: 'Child Workflow',
+          mode: 'state-machine',
+          supervisor: { enabled: true, agent: 'default-supervisor' },
+          states: [{
+            name: 'Done',
+            isInitial: true,
+            isFinal: true,
+            steps: [{ name: 'Finish', agent: 'developer', task: 'Finish' }],
+            transitions: [],
+          }],
+        },
+        context: { projectRoot: process.cwd(), workspaceMode: 'in-place' },
+      }));
+      await writeFile(path.join(configsDir, 'parent.yaml'), stringify({
+        workflow: {
+          name: 'Parent Workflow',
+          mode: 'state-machine',
+          states: [{
+            name: 'Build',
+            isInitial: true,
+            steps: [{
+              name: 'Run child',
+              type: 'subworkflow',
+              workflow: 'child.yaml',
+            }],
+            transitions: [],
+          }],
+        },
+        context: { projectRoot: process.cwd(), workspaceMode: 'in-place' },
+      }));
+
+      const response = await references.GET(makeRequest('/api/configs/references?configFile=child.yaml', { token }));
+
+      expect(response.status).toBe(200);
+      const json = await responseJson<any>(response);
+      expect(json.referenceCount).toBe(1);
+      expect(json.references[0]).toMatchObject({
+        filename: 'parent.yaml',
+        name: 'Parent Workflow',
+      });
+      expect(json.references[0].refs[0]).toMatchObject({
+        stateName: 'Build',
+        stepName: 'Run child',
+        configFile: 'child.yaml',
+      });
+    });
+  });
+
+  test('config delete refuses workflows that are still referenced unless forced', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const { getRuntimeConfigsDirPath } = await import('@/lib/run/runtime-configs');
+      const deleteRoute = await import('@/app/api/configs/[filename]/route');
+      const configsDir = await getRuntimeConfigsDirPath();
+      await mkdir(configsDir, { recursive: true });
+      await writeFile(path.join(configsDir, 'child.yaml'), stringify({
+        workflow: {
+          name: 'Child Workflow',
+          mode: 'state-machine',
+          states: [{ name: 'Done', isInitial: true, isFinal: true, steps: [] }],
+        },
+        context: { projectRoot: process.cwd(), workspaceMode: 'in-place' },
+      }));
+      await writeFile(path.join(configsDir, 'parent.yaml'), stringify({
+        workflow: {
+          name: 'Parent Workflow',
+          mode: 'state-machine',
+          states: [{
+            name: 'Build',
+            isInitial: true,
+            steps: [{ name: 'Run child', type: 'subworkflow', workflow: 'child.yaml' }],
+          }],
+        },
+        context: { projectRoot: process.cwd(), workspaceMode: 'in-place' },
+      }));
+
+      const response = await deleteRoute.DELETE(
+        makeRequest('/api/configs/child.yaml', { token }),
+        { params: Promise.resolve({ filename: 'child.yaml' }) }
+      );
+
+      expect(response.status).toBe(409);
+      const json = await responseJson<any>(response);
+      expect(json.code).toBe('WORKFLOW_REFERENCED');
+      expect(json.referenceCount).toBe(1);
+      expect(json.references[0].filename).toBe('parent.yaml');
+    });
+  });
+
+  test('updates parent subworkflow references when a workflow is renamed', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const { getRuntimeConfigsDirPath } = await import('@/lib/run/runtime-configs');
+      const route = await import('@/app/api/configs/[filename]/route');
+      const configsDir = await getRuntimeConfigsDirPath();
+      await mkdir(configsDir, { recursive: true });
+      const childConfig = {
+        workflow: {
+          name: 'Child Workflow',
+          mode: 'state-machine',
+          supervisor: { enabled: true, agent: 'default-supervisor' },
+          states: [{
+            name: 'Done',
+            isInitial: true,
+            isFinal: true,
+            steps: [{ name: 'Finish', agent: 'developer', task: 'Finish' }],
+            transitions: [],
+          }],
+        },
+        context: { projectRoot: process.cwd(), workspaceMode: 'in-place' },
+      };
+      await writeFile(path.join(configsDir, 'child-old.yaml'), stringify(childConfig));
+      await writeFile(path.join(configsDir, 'parent.yaml'), stringify({
+        workflow: {
+          name: 'Parent Workflow',
+          mode: 'state-machine',
+          states: [{
+            name: 'Build',
+            isInitial: true,
+            steps: [{ name: 'Run child', type: 'subworkflow', workflow: 'child-old.yaml' }],
+          }],
+        },
+        context: { projectRoot: process.cwd(), workspaceMode: 'in-place' },
+      }));
+
+      const response = await route.POST(
+        makeRequest('/api/configs/child-new.yaml', {
+          token,
+          json: { config: childConfig, renameFrom: 'child-old.yaml' },
+        }),
+        { params: Promise.resolve({ filename: 'child-new.yaml' }) }
+      );
+
+      expect(response.status).toBe(200);
+      const json = await responseJson<any>(response);
+      expect(json.referenceUpdate.updated).toEqual([{ filename: 'parent.yaml', count: 1 }]);
+      const parent = parse(await readFile(path.join(configsDir, 'parent.yaml'), 'utf-8'));
+      expect(parent.workflow.states[0].steps[0].workflow).toBe('child-new.yaml');
     });
   });
 

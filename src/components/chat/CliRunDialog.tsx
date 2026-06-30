@@ -25,6 +25,7 @@ import {
   TerminalHeader,
   TerminalTitle,
 } from '@/components/ai-elements/terminal';
+import Ansi from 'ansi-to-react';
 
 export type CliRunDialogRequest = {
   commandName: string;
@@ -64,12 +65,69 @@ function joinCommandLine(commandName: string, args: string[], inputValue?: strin
   return parts.join(' ');
 }
 
+function shellSplit(input: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (const char of input) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function extractCodespecSyncCommands(output: string): Array<{ commandLine: string; args: string[] }> {
+  const seen = new Set<string>();
+  const commands: Array<{ commandLine: string; args: string[] }> = [];
+  const pattern = /\bcodespec\s+sync\s+--zone\s+(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s\r\n;&|]+))/gi;
+
+  for (const match of output.matchAll(pattern)) {
+    const commandLine = match[0].trim();
+    const parts = shellSplit(commandLine);
+    if (parts[0] !== 'codespec' || parts[1] !== 'sync') continue;
+    const zoneIndex = parts.indexOf('--zone');
+    if (zoneIndex < 0 || !parts[zoneIndex + 1]) continue;
+    const key = parts.join('\u0000');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    commands.push({ commandLine, args: parts.slice(1) });
+  }
+
+  return commands;
+}
+
 export default function CliRunDialog({ open, request, onOpenChange }: CliRunDialogProps) {
   const { toast } = useToast();
   const [inputValue, setInputValue] = useState('');
   const [running, setRunning] = useState(false);
-  const [stdout, setStdout] = useState('');
-  const [stderr, setStderr] = useState('');
+  const [terminalOutput, setTerminalOutput] = useState('');
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -87,22 +145,38 @@ export default function CliRunDialog({ open, request, onOpenChange }: CliRunDial
   }, [request]);
 
   const combinedOutput = useMemo(() => {
-    return [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : '');
-  }, [stdout, stderr]);
+    return terminalOutput;
+  }, [terminalOutput]);
 
   const clearOutput = useCallback(() => {
-    setStdout('');
-    setStderr('');
+    setTerminalOutput('');
     setExitCode(null);
     setErrorMessage('');
   }, []);
 
-  const execute = useCallback(async () => {
+  const appendTerminalOutput = useCallback((text: string) => {
+    if (!text) return;
+    setTerminalOutput((prev) => {
+      const prefix = prev && !prev.endsWith('\n') ? '\n' : '';
+      return `${prev}${prefix}${text}`;
+    });
+  }, []);
+
+  const executableCommands = useMemo(() => {
+    if (request?.commandName !== 'codespec') return [];
+    return extractCodespecSyncCommands(terminalOutput);
+  }, [request?.commandName, terminalOutput]);
+
+  const execute = useCallback(async (overrideArgs?: string[]) => {
     if (!request) return;
 
     const runId = ++runSeqRef.current;
     const trimmedInput = inputValue.trim();
-    if (request.input) {
+    const effectiveArgs = overrideArgs || (request.input
+      ? [...request.args, trimmedInput]
+      : request.args);
+
+    if (request.input && !overrideArgs) {
       if (!trimmedInput) {
         toast('warning', `${request.input.label} 不能为空`);
         inputRef.current?.focus();
@@ -124,9 +198,12 @@ export default function CliRunDialog({ open, request, onOpenChange }: CliRunDial
 
     setRunning(true);
     setErrorMessage('');
-    setStdout('');
-    setStderr('');
     setExitCode(null);
+    const commandLine = joinCommandLine(
+      request.commandName,
+      effectiveArgs,
+    );
+    appendTerminalOutput(`${combinedOutput ? '\n' : ''}$ ${commandLine}\n`);
 
     try {
       const response = await fetch('/api/cli/run', {
@@ -138,9 +215,7 @@ export default function CliRunDialog({ open, request, onOpenChange }: CliRunDial
         body: JSON.stringify({
           workspace: request.workingDirectory,
           commandName: request.commandName,
-          args: request.input
-            ? [...request.args, trimmedInput]
-            : request.args,
+          args: effectiveArgs,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -151,12 +226,20 @@ export default function CliRunDialog({ open, request, onOpenChange }: CliRunDial
 
       if (runSeqRef.current !== runId) return;
 
-      setStdout(stdoutText);
-      setStderr(stderrText);
+      const nextChunks = [
+        stdoutText.trimEnd(),
+        stderrText.trimEnd(),
+        resultExitCode != null ? `[exit ${resultExitCode}]` : '',
+      ].filter(Boolean);
+      appendTerminalOutput(nextChunks.join(stdoutText && stderrText ? '\n' : ''));
       setExitCode(resultExitCode);
       setErrorMessage(success ? '' : (typeof data?.error === 'string' && data.error.trim()
         ? data.error
         : `${request.title} 执行失败`));
+      if (request.input && !overrideArgs && success) {
+        setInputValue('');
+        window.setTimeout(() => inputRef.current?.focus(), 0);
+      }
 
       if (success && request.refreshSlashCommandsOnSuccess && typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('ace:slash-commands-refresh', {
@@ -171,11 +254,12 @@ export default function CliRunDialog({ open, request, onOpenChange }: CliRunDial
       const message = error?.message || `${request.title} 执行失败`;
       setErrorMessage(message);
       setExitCode(null);
+      appendTerminalOutput(`${message}\n[request failed]`);
     } finally {
       if (runSeqRef.current !== runId) return;
       setRunning(false);
     }
-  }, [inputValue, request, toast]);
+  }, [appendTerminalOutput, combinedOutput, inputValue, request, toast]);
 
   useEffect(() => {
     if (!open || !request) {
@@ -312,7 +396,36 @@ export default function CliRunDialog({ open, request, onOpenChange }: CliRunDial
               <div className="px-4 py-3 text-sm text-zinc-500">等待执行结果</div>
             ) : null}
 
-            <TerminalContent className="max-h-[calc(100%-108px)] px-4 py-3 text-[12px] leading-5 text-zinc-100" />
+            <TerminalContent className="max-h-[calc(100%-108px)] px-4 py-3 text-[12px] leading-5 text-zinc-100">
+              {executableCommands.length > 0 ? (
+                <div className="mb-3 rounded-lg border border-sky-400/20 bg-sky-400/10 p-2 font-sans text-xs text-sky-100">
+                  <div className="mb-2 flex items-center gap-2 text-sky-200">
+                    <span className="material-symbols-outlined text-[15px]">bolt</span>
+                    <span>检测到可继续执行的 CodeSpec 命令</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {executableCommands.map((command) => (
+                      <button
+                        key={command.args.join('\u0000')}
+                        type="button"
+                        disabled={running}
+                        onClick={() => void execute(command.args)}
+                        className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-sky-300/25 bg-zinc-950/70 px-2 py-1 font-mono text-[11px] text-sky-100 transition-colors hover:border-sky-300/45 hover:bg-sky-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Play className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{command.commandLine}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <pre className="whitespace-pre-wrap break-words">
+                <Ansi>{combinedOutput}</Ansi>
+                {running && (
+                  <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-zinc-100" />
+                )}
+              </pre>
+            </TerminalContent>
           </Terminal>
         </div>
 

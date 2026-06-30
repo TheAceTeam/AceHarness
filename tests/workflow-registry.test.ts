@@ -85,6 +85,44 @@ describe('workflow registry', () => {
     expect(firstManager).toBe(secondManager);
   });
 
+  test('allows independent run-scoped managers for the same config file', async () => {
+    const { readFile } = await import('fs/promises');
+    (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');
+
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    const first = await workflowRegistry.getManagerForRun({
+      configFile: 'demo.yaml',
+      managerKey: 'child:parent-a:step-1',
+      isStateMachine: true,
+    });
+    const second = await workflowRegistry.getManagerForRun({
+      configFile: 'demo.yaml',
+      managerKey: 'child:parent-b:step-1',
+      isStateMachine: true,
+    });
+
+    expect(first).not.toBe(second);
+  });
+
+  test('indexes managers by run id after receiving manager events', async () => {
+    const { readFile } = await import('fs/promises');
+    (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');
+
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    const manager = await workflowRegistry.getManagerForRun({
+      configFile: 'demo.yaml',
+      managerKey: 'child:parent-a:step-2',
+      isStateMachine: true,
+    });
+
+    (manager as any).emitForTest('status', {
+      runId: 'run-child-1',
+      status: 'running',
+    });
+
+    await expect(workflowRegistry.getManagerByRunId('run-child-1')).resolves.toBe(manager);
+  });
+
   test('forwards state-machine parallel events with config identity', async () => {
     const { readFile } = await import('fs/promises');
     (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');

@@ -22,7 +22,13 @@ import EditNodeModal from '@/components/EditNodeModal';
 import WorkflowPreflightManagerDialog from '@/components/WorkflowPreflightManagerDialog';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
-import ResizablePanels from '@/components/ResizablePanels';
+import ResizablePanels, {
+  dispatchWorkflowRunHide,
+  WORKFLOW_RUN_VISIBILITY_EVENT,
+  dispatchWorkflowRunResetLayout,
+  dispatchWorkflowRunRestore,
+  type WorkflowRunWindowId,
+} from '@/components/ResizablePanels';
 import { Button } from '@/components/ui/button';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
@@ -42,6 +48,13 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { EngineSelect } from '@/components/EngineSelect';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
@@ -186,6 +199,18 @@ const MonacoEditor = dynamic(
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
 type RunWorkbenchTab = 'execution' | 'workspace' | 'changes';
+type RunLeftPanelTab = 'summary' | 'directory';
+type RunRightPanelTab = 'detail' | 'live';
+const WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX = 'aceharness:workflow-run:panel-tabs';
+const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'crashed']);
+
+function isTerminalWorkflowStatus(status: unknown): boolean {
+  return typeof status === 'string' && TERMINAL_WORKFLOW_STATUSES.has(status);
+}
+
+function isRuntimeWorkflowStatusActive(status: unknown): boolean {
+  return status === 'running' || status === 'preparing' || status === 'waiting';
+}
 
 function workflowStepKeyMatchesName(stepKey: string | null | undefined, stepName: string | null | undefined): boolean {
   const key = String(stepKey || '').trim();
@@ -242,6 +267,75 @@ function WorkbenchExecutionLoadingSkeleton() {
   );
 }
 
+function WorkbenchRunInfoLoadingSkeleton() {
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div className="flex shrink-0 gap-0.5 border-b bg-muted px-1 py-1">
+        <Skeleton className="h-7 w-16 rounded-md" />
+        <Skeleton className="h-7 w-16 rounded-md" />
+        <Skeleton className="h-7 w-14 rounded-md" />
+        <Skeleton className="h-7 w-14 rounded-md" />
+      </div>
+      <div className="min-h-0 flex-1 space-y-3 overflow-hidden p-4">
+        <div className="rounded-2xl border border-border/60 bg-background/75 p-4">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-5 w-5 rounded" />
+            <Skeleton className="h-4 w-24" />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Skeleton className="h-16 w-full rounded-xl" />
+            <Skeleton className="h-16 w-full rounded-xl" />
+          </div>
+          <Skeleton className="mt-2 h-14 w-full rounded-xl" />
+          <Skeleton className="mt-2 h-24 w-full rounded-xl" />
+        </div>
+        <div className="rounded-2xl border border-border/60 bg-background/75 p-4">
+          <Skeleton className="h-4 w-36" />
+          <Skeleton className="mt-3 h-3 w-full" />
+          <Skeleton className="mt-2 h-3 w-4/5" />
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <Skeleton className="h-14 w-full rounded-xl" />
+            <Skeleton className="h-14 w-full rounded-xl" />
+            <Skeleton className="h-14 w-full rounded-xl" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkbenchRunDetailLoadingSkeleton() {
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div className="border-b bg-muted">
+        <div className="flex gap-1 px-2 py-1">
+          <Skeleton className="h-7 flex-1 rounded-md" />
+          <Skeleton className="h-7 flex-1 rounded-md" />
+        </div>
+        <div className="flex h-9 items-center px-3">
+          <Skeleton className="h-4 w-28" />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-hidden p-4">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-10 w-10 rounded-full" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+        </div>
+        <Skeleton className="h-28 w-full rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
 function WorkbenchAgentDetailSkeleton() {
   return (
     <div className="h-full overflow-auto">
@@ -291,6 +385,32 @@ function getRunWorkbenchTabFromSearchParams(searchParams: { get: (key: string) =
   if (searchParams.get('changes') === '1') return 'changes';
   if (searchParams.get('workspace') === '1') return 'workspace';
   return 'execution';
+}
+
+function hasRunWorkbenchTabSearchParam(searchParams: { get: (key: string) => string | null }) {
+  return searchParams.get('changes') === '1' || searchParams.get('workspace') === '1';
+}
+
+function getWorkflowRunPanelTabsStorageKey(configFile: string) {
+  return `${WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX}:${configFile}`;
+}
+
+function readWorkflowRunPanelTabs(configFile: string): {
+  left?: RunLeftPanelTab;
+  right?: RunRightPanelTab;
+  center?: RunWorkbenchTab;
+} {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(getWorkflowRunPanelTabsStorageKey(configFile)) || '{}');
+    return {
+      left: parsed.left === 'directory' || parsed.left === 'summary' ? parsed.left : undefined,
+      right: parsed.right === 'live' || parsed.right === 'detail' ? parsed.right : undefined,
+      center: parsed.center === 'workspace' || parsed.center === 'changes' || parsed.center === 'execution' ? parsed.center : undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function toRelativeWorkspaceFilePath(workspacePath: string, filePath?: string | null): string | null {
@@ -1322,7 +1442,10 @@ export default function WorkbenchPage({
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
-  const [runWorkbenchTab, setRunWorkbenchTab] = useState<RunWorkbenchTab>(() => getRunWorkbenchTabFromSearchParams(effectiveSearchParams));
+  const [runWorkbenchTab, setRunWorkbenchTab] = useState<RunWorkbenchTab>(() => {
+    if (hasRunWorkbenchTabSearchParam(effectiveSearchParams)) return getRunWorkbenchTabFromSearchParams(effectiveSearchParams);
+    return readWorkflowRunPanelTabs(configFile).center || 'execution';
+  });
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState('');
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>(undefined);
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
@@ -1356,11 +1479,18 @@ export default function WorkbenchPage({
   const [liveStream, setLiveStream] = useState<string[]>([]);
   const [showLiveStream, setShowLiveStream] = useState(false);
   const [liveStreamFullscreen, setLiveStreamFullscreen] = useState(false);
-  const [rightPanelTab, setRightPanelTab] = useState<'detail' | 'live'>('detail');
+  const [rightPanelTab, setRightPanelTab] = useState<RunRightPanelTab>(() => readWorkflowRunPanelTabs(configFile).right || 'detail');
+  const [leftRunPanelTab, setLeftRunPanelTab] = useState<RunLeftPanelTab>(() => readWorkflowRunPanelTabs(configFile).left || 'directory');
+  const [workflowRunWindowVisibility, setWorkflowRunWindowVisibility] = useState<Partial<Record<WorkflowRunWindowId, boolean>>>({
+    left: true,
+    center: true,
+    right: true,
+  });
   const [isNewNode, setIsNewNode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
   const [availableMcpServers, setAvailableMcpServers] = useState<ManagedMcpServer[]>([]);
+  const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<{ id: string; name: string; description?: string; chunkCount?: number }[]>([]);
   const [starting, setStarting] = useState(false);
   const [rehearsalMode, setRehearsalMode] = useState(false);
   const [globalEngine, setGlobalEngine] = useState('');
@@ -1372,7 +1502,6 @@ export default function WorkbenchPage({
   const [showRuntimeAgentCreator, setShowRuntimeAgentCreator] = useState(false);
   const [runtimeAgentDraft, setRuntimeAgentDraft] = useState<AgentDraftState>(createInitialAgentDraft());
   const [showDesignRequirements, setShowDesignRequirements] = useState(true);
-  const [showRunRequirements, setShowRunRequirements] = useState(true);
   const [showAllSkills, setShowAllSkills] = useState(false);
   const [iterationFeedback, setIterationFeedback] = useState('');
   const [supervisorFlow, setSupervisorFlow] = useState<{
@@ -1422,6 +1551,150 @@ export default function WorkbenchPage({
     joinPolicy?: any;
     status: 'running' | 'completed' | 'failed';
   }>>([]);
+  const [subworkflowRuns, setSubworkflowRuns] = useState<any[]>([]);
+  const [subworkflowSummary, setSubworkflowSummary] = useState<any>(null);
+  const [activeSubworkflowRunId, setActiveSubworkflowRunId] = useState<string | null>(null);
+  const [selectedSubworkflowRun, setSelectedSubworkflowRun] = useState<any | null>(null);
+  const [subworkflowDrilldownStack, setSubworkflowDrilldownStack] = useState<any[]>([]);
+  const [subworkflowDrilldownLoading, setSubworkflowDrilldownLoading] = useState(false);
+  const [mainExecutionActiveTab, setMainExecutionActiveTab] = useState('overview');
+  const [subworkflowExecutionTabs, setSubworkflowExecutionTabs] = useState<Record<string, string>>({});
+  const subworkflowDrilldownCacheRef = useRef(new Map<string, any>());
+  const subworkflowDrilldownPreloadRef = useRef(new Set<string>());
+  const makeSubworkflowPreviewStatus = useCallback(() => ({
+    status: 'idle',
+    runId: null,
+    currentPhase: null,
+    currentStep: null,
+    activeSteps: [],
+    activeConcurrencyGroups: [],
+    completedSteps: [],
+    failedSteps: [],
+    stateHistory: [],
+    issueTracker: [],
+    transitionCount: 0,
+    subworkflowRuns: [],
+    subworkflowSummary: null,
+  }), []);
+  const getSubworkflowCacheKey = useCallback((configFile: string, runId?: string | null) => {
+    return `${String(configFile || '').trim()}::${String(runId || '')}`;
+  }, []);
+  const getSubworkflowConfigFileFromStep = useCallback((step: any): string => {
+    const candidates = [
+      step?.workflow,
+      step?.workflowConfig,
+      step?.configFile,
+      step?.subworkflow,
+      step?.subworkflow?.configFile,
+      step?.subworkflow?.workflow,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+      if (candidate && typeof candidate === 'object' && typeof candidate.configFile === 'string' && candidate.configFile.trim()) {
+        return candidate.configFile.trim();
+      }
+    }
+    return '';
+  }, []);
+  const openSubworkflowConfigPreview = useCallback(async (step: any) => {
+    const configFile = getSubworkflowConfigFileFromStep(step);
+    if (!configFile) {
+      toast('warning', '这个子工作流步骤没有配置 workflow 文件');
+      return;
+    }
+    const cacheKey = getSubworkflowCacheKey(configFile);
+    const cached = subworkflowDrilldownCacheRef.current.get(cacheKey);
+    if (cached) {
+      setSubworkflowDrilldownStack((prev) => [...prev, cached]);
+      return;
+    }
+    setSubworkflowDrilldownLoading(true);
+    try {
+      const configResponse = await configApi.getConfig(configFile);
+      const entry = {
+          child: {
+            configFile,
+            runId: '',
+            parentStateName: '',
+            parentStepName: step?.name || '',
+            status: 'draft',
+          },
+          configFile,
+          runId: '',
+          config: configResponse.config,
+          agents: configResponse.agents || [],
+          status: makeSubworkflowPreviewStatus(),
+          previewOnly: true,
+        };
+      subworkflowDrilldownCacheRef.current.set(cacheKey, entry);
+      setSubworkflowDrilldownStack((prev) => [...prev, entry]);
+    } catch (error: any) {
+      toast('error', error?.message || '打开子工作流配置失败');
+    } finally {
+      setSubworkflowDrilldownLoading(false);
+    }
+  }, [getSubworkflowCacheKey, getSubworkflowConfigFileFromStep, makeSubworkflowPreviewStatus, toast]);
+  const openSubworkflowRun = useCallback(async (child: any) => {
+    if (!child?.configFile || !child?.runId) return;
+    const cacheKey = getSubworkflowCacheKey(child.configFile, child.runId);
+    const cached = subworkflowDrilldownCacheRef.current.get(cacheKey);
+    if (cached) {
+      setSubworkflowDrilldownStack((prev) => {
+        const existingIndex = prev.findIndex((entry) => entry.runId === child.runId);
+        if (existingIndex >= 0) return [...prev.slice(0, existingIndex), cached];
+        return [...prev, cached];
+      });
+      setSelectedSubworkflowRun(null);
+      return;
+    }
+    const previewCached = subworkflowDrilldownCacheRef.current.get(getSubworkflowCacheKey(child.configFile));
+    if (previewCached) {
+      setSubworkflowDrilldownStack((prev) => [...prev, {
+        ...previewCached,
+        child,
+        runId: child.runId,
+        previewOnly: true,
+      }]);
+    } else {
+      setSubworkflowDrilldownLoading(true);
+    }
+    try {
+      const [configResponse, status] = await Promise.all([
+        configApi.getConfig(child.configFile),
+        workflowApi.getStatus(child.configFile, child.runId),
+      ]);
+      setSubworkflowDrilldownStack((prev) => {
+        const nextEntry = {
+          child,
+          configFile: child.configFile,
+          runId: child.runId,
+          config: configResponse.config,
+          agents: configResponse.agents || [],
+          status,
+        };
+        subworkflowDrilldownCacheRef.current.set(cacheKey, nextEntry);
+        const existingIndex = prev.findIndex((entry) => entry.runId === child.runId);
+        if (existingIndex >= 0) {
+          return [...prev.slice(0, existingIndex), nextEntry, ...prev.slice(existingIndex + 1)];
+        }
+        return [...prev, nextEntry];
+      });
+      setSelectedSubworkflowRun(null);
+    } catch (error: any) {
+      toast('error', error?.message || '打开子工作流运行视图失败');
+    } finally {
+      setSubworkflowDrilldownLoading(false);
+    }
+  }, [getSubworkflowCacheKey, toast]);
+  const openSubworkflowRunPage = useCallback((child: any) => {
+    if (!child?.configFile || !child?.runId) return;
+    const route = `/workbench/${encodeURIComponent(child.configFile)}?mode=history&runId=${encodeURIComponent(child.runId)}`;
+    if (typeof window !== 'undefined') {
+      window.open(route, '_blank', 'noopener,noreferrer');
+    } else {
+      router.push(route);
+    }
+  }, [router]);
   const [persistedStepLogs, setPersistedStepLogs] = useState<Array<{
     id: string;
     stepName: string;
@@ -1592,6 +1865,7 @@ export default function WorkbenchPage({
   const [inlineFeedbacks, setInlineFeedbacks] = useState<InlineFeedback[]>([]);
   const pendingLiveFeedbackRef = useRef<InlineFeedback[]>([]);
   const [liveStreamStepSelection, setLiveStreamStepSelection] = useState('');
+  const [liveStreamSourceSelection, setLiveStreamSourceSelection] = useState('');
   const lastLiveStreamSelectedStepNameRef = useRef<string | null>(null);
   const [liveStreamSource, setLiveStreamSource] = useState<{ stateName: string | null; stepName: string | null }>({
     stateName: null,
@@ -1739,7 +2013,12 @@ export default function WorkbenchPage({
   }, [dispatch, workflowFrontendSessionId]);
 
   type DesignTab = 'overview' | 'orchestration' | 'config';
-  const [designTab, setDesignTab] = useState<DesignTab>('overview');
+  const normalizeDesignTab = (value: string | null): DesignTab => (
+    value === 'overview' || value === 'orchestration' || value === 'config'
+      ? value
+      : 'overview'
+  );
+  const [designTab, setDesignTab] = useState<DesignTab>(() => normalizeDesignTab(effectiveSearchParams.get('designTab')));
   const [preflightManagerOpen, setPreflightManagerOpen] = useState(false);
   const [designOptimizationDialogOpen, setDesignOptimizationDialogOpen] = useState(false);
   const [designOptimizationTarget, setDesignOptimizationTarget] = useState<DesignOptimizationTarget | null>(null);
@@ -1771,11 +2050,26 @@ export default function WorkbenchPage({
     } catch {
       /* ignore */
     }
+    try {
+      const ragRes = await fetch('/api/rag/knowledge-bases', { headers: getAuthHeaders() });
+      const ragData = await ragRes.json();
+      setAvailableKnowledgeBases(Array.isArray(ragData.knowledgeBases)
+        ? ragData.knowledgeBases.map((kb: any) => ({ id: kb.id, name: kb.name || kb.id, description: kb.description || '', chunkCount: kb.chunkCount || 0 }))
+        : []);
+    } catch {
+      /* ignore */
+    }
   }, [dispatch]);
 
   const handleDesignTabChange = useCallback((tab: DesignTab) => {
     setDesignTab(tab);
-  }, []);
+    updateUrl({ designTab: tab });
+  }, [updateUrl]);
+
+  useEffect(() => {
+    const nextTab = normalizeDesignTab(effectiveSearchParams.get('designTab'));
+    setDesignTab((current) => current === nextTab ? current : nextTab);
+  }, [effectiveSearchParams, searchParamsString]);
   const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
   const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
@@ -1806,11 +2100,94 @@ export default function WorkbenchPage({
     viewMode, workflowConfig, editingConfig, agentConfigs,
     workflowStatus, runId, currentPhase, currentStep, agents, logs, completedSteps, failedSteps,
     showCheckpoint, checkpointMessage, checkpointIsIterative, activeTab, selectedAgent, selectedStep,
-    projectRoot, workspaceMode, requirements, timeoutMinutes, engine, skills, mcpServers, showProcessPanel,
+    projectRoot, workspaceMode, requirements, timeoutMinutes, engine, skills, mcpServers, ragKnowledgeBases, showProcessPanel,
     showEditNodeModal, editingNode, iterationStates, stepResults, stepIdMap,
     globalContext, phaseContexts,
   } = state;
+  const specCodingDisabled = workflowConfig?.context?.specCodingEnabled === false
+    || workflowConfig?.context?.skipSpecCoding === true;
   const latestRunIdRef = useRef<string | null>(runId || null);
+  useEffect(() => {
+    const workflow = workflowConfig?.workflow;
+    if (workflow?.mode !== 'state-machine') return;
+    const steps = (workflow.states || [])
+      .flatMap((stateNode: any) => (stateNode.steps || []).map((step: any) => ({
+        step,
+        stateName: stateNode.name,
+        configFile: getSubworkflowConfigFileFromStep(step),
+      })))
+      .filter((item: any) => item.step?.type === 'subworkflow' && item.configFile);
+    if (!steps.length) return;
+
+    let cancelled = false;
+    const runs = Array.isArray(subworkflowRuns) ? subworkflowRuns : [];
+    for (const item of steps) {
+      const matchingRuns = runs.filter((child: any) => {
+        const sameConfig = String(child?.configFile || '').trim().toLowerCase() === String(item.configFile || '').trim().toLowerCase();
+        const sameStep = !child?.parentStepName || child.parentStepName === item.step.name;
+        return sameConfig && sameStep;
+      });
+      const previewKey = getSubworkflowCacheKey(item.configFile);
+      if (!subworkflowDrilldownCacheRef.current.has(previewKey) && !subworkflowDrilldownPreloadRef.current.has(previewKey)) {
+        subworkflowDrilldownPreloadRef.current.add(previewKey);
+        configApi.getConfig(item.configFile)
+          .then((configResponse) => {
+            if (cancelled) return;
+            subworkflowDrilldownCacheRef.current.set(previewKey, {
+              child: {
+                configFile: item.configFile,
+                runId: '',
+                parentStateName: item.stateName || '',
+                parentStepName: item.step?.name || '',
+                status: 'draft',
+              },
+              configFile: item.configFile,
+              runId: '',
+              config: configResponse.config,
+              agents: configResponse.agents || [],
+              status: makeSubworkflowPreviewStatus(),
+              previewOnly: true,
+            });
+          })
+          .catch(() => {})
+          .finally(() => subworkflowDrilldownPreloadRef.current.delete(previewKey));
+      }
+
+      for (const child of matchingRuns) {
+        if (!child?.runId || !child?.configFile) continue;
+        const runKey = getSubworkflowCacheKey(child.configFile, child.runId);
+        if (subworkflowDrilldownCacheRef.current.has(runKey) || subworkflowDrilldownPreloadRef.current.has(runKey)) continue;
+        subworkflowDrilldownPreloadRef.current.add(runKey);
+        Promise.all([
+          configApi.getConfig(child.configFile),
+          workflowApi.getStatus(child.configFile, child.runId),
+        ])
+          .then(([configResponse, status]) => {
+            if (cancelled) return;
+            subworkflowDrilldownCacheRef.current.set(runKey, {
+              child,
+              configFile: child.configFile,
+              runId: child.runId,
+              config: configResponse.config,
+              agents: configResponse.agents || [],
+              status,
+            });
+          })
+          .catch(() => {})
+          .finally(() => subworkflowDrilldownPreloadRef.current.delete(runKey));
+      }
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getSubworkflowCacheKey,
+    getSubworkflowConfigFileFromStep,
+    makeSubworkflowPreviewStatus,
+    subworkflowRuns,
+    workflowConfig?.workflow,
+  ]);
 
   const handleAgentSkillsChange = useCallback(async (agentName: string, skills: string[]) => {
     const agent = agentConfigs.find((item: any) => item?.name === agentName);
@@ -1825,6 +2202,45 @@ export default function WorkbenchPage({
     dispatch({ type: 'SET_AGENTS_CONFIG', payload: nextAgents });
     toast('success', `已更新 ${agentName} 的 Agent Skills`);
   }, [agentConfigs, dispatch, toast]);
+
+  const handleAgentMcpServersChange = useCallback(async (agentName: string, servers: string[]) => {
+    const agent = agentConfigs.find((item: any) => item?.name === agentName);
+    if (!agent) {
+      toast('error', `找不到 Agent: ${agentName}`);
+      throw new Error(`找不到 Agent: ${agentName}`);
+    }
+    const nextServers = Array.from(new Set(servers.map((item) => String(item || '').trim()).filter(Boolean)));
+    const nextAgent = { ...agent, mcpServers: nextServers };
+    await agentApi.saveAgent(agentName, nextAgent);
+    const nextAgents = agentConfigs.map((item: any) => item?.name === agentName ? nextAgent : item);
+    dispatch({ type: 'SET_AGENTS_CONFIG', payload: nextAgents });
+    toast('success', `已更新 ${agentName} 的 MCP Servers`);
+  }, [agentConfigs, dispatch, toast]);
+
+  const handleAgentRagKnowledgeBasesChange = useCallback(async (agentName: string, knowledgeBases: string[]) => {
+    const agent = agentConfigs.find((item: any) => item?.name === agentName);
+    if (!agent) {
+      toast('error', `找不到 Agent: ${agentName}`);
+      throw new Error(`找不到 Agent: ${agentName}`);
+    }
+    const nextKnowledgeBases = Array.from(new Set(knowledgeBases.map((item) => String(item || '').trim()).filter(Boolean)));
+    const nextSkills = nextKnowledgeBases.length > 0
+      ? Array.from(new Set([...(Array.isArray(agent.skills) ? agent.skills : []), 'aceharness-rag']))
+      : (Array.isArray(agent.skills) ? agent.skills : []);
+    const nextAgent = { ...agent, ragKnowledgeBases: nextKnowledgeBases, skills: nextSkills };
+    await agentApi.saveAgent(agentName, nextAgent);
+    const nextAgents = agentConfigs.map((item: any) => item?.name === agentName ? nextAgent : item);
+    dispatch({ type: 'SET_AGENTS_CONFIG', payload: nextAgents });
+    toast('success', `已更新 ${agentName} 的 RAG 知识库`);
+  }, [agentConfigs, dispatch, toast]);
+
+  const handleWorkflowRagKnowledgeBasesChange = useCallback((knowledgeBases: string[]) => {
+    const nextKnowledgeBases = Array.from(new Set(knowledgeBases.map((item) => String(item || '').trim()).filter(Boolean)));
+    dispatch({ type: 'SET_RAG_KNOWLEDGE_BASES', payload: nextKnowledgeBases });
+    if (nextKnowledgeBases.length > 0 && !skills.includes('aceharness-rag')) {
+      dispatch({ type: 'SET_SKILLS', payload: [...skills, 'aceharness-rag'] });
+    }
+  }, [dispatch, skills]);
 
   useEffect(() => {
     latestRunIdRef.current = runId || null;
@@ -1863,10 +2279,12 @@ export default function WorkbenchPage({
     workflowAgentOverrides,
     skills,
     mcpServers,
+    ragKnowledgeBases,
   }), [
     engine,
     mcpServers,
     projectRoot,
+    ragKnowledgeBases,
     requirements,
     skills,
     timeoutMinutes,
@@ -1889,6 +2307,7 @@ export default function WorkbenchPage({
       workflowAgentOverrides: persistedExecutionPolicy.agentOverrides || {},
       skills: Array.isArray(workflowConfig.context?.skills) ? workflowConfig.context.skills.filter((item: unknown): item is string => typeof item === 'string') : [],
       mcpServers: Array.isArray(workflowConfig.context?.mcpServers) ? workflowConfig.context.mcpServers.filter((item: unknown): item is string => typeof item === 'string') : [],
+      ragKnowledgeBases: Array.isArray(workflowConfig.context?.capabilitySkills?.rag?.knowledgeBases) ? workflowConfig.context.capabilitySkills.rag.knowledgeBases.filter((item: unknown): item is string => typeof item === 'string') : [],
     };
   }, [workflowConfig]);
   const persistedDesignConfigComparable = useMemo(
@@ -2012,6 +2431,17 @@ export default function WorkbenchPage({
   }, [updateUrl]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(getWorkflowRunPanelTabsStorageKey(configFile), JSON.stringify({
+        left: leftRunPanelTab,
+        right: rightPanelTab,
+        center: runWorkbenchTab,
+      }));
+    } catch {}
+  }, [configFile, leftRunPanelTab, rightPanelTab, runWorkbenchTab]);
+
+  useEffect(() => {
     if (runWorkbenchTab === 'changes' && (!currentRunWorkspacePath || !effectiveGitBaselineEnabled)) {
       handleRunWorkbenchTabChange('execution');
     }
@@ -2096,13 +2526,15 @@ export default function WorkbenchPage({
   }, [currentRunWorkspacePath, openWorkspaceEditorAtPath]);
 
   const activeSpecCodingPhase = useMemo(() => {
+    if (specCodingDisabled) return null;
     if (!specCodingDetails?.phases?.length) return null;
     return specCodingDetails.phases.find((phase) => phase.id === specCodingSummary?.progress?.activePhaseId)
       || specCodingDetails.phases.find((phase) => phase.title === currentPhase)
       || null;
-  }, [currentPhase, specCodingDetails, specCodingSummary?.progress?.activePhaseId]);
+  }, [currentPhase, specCodingDetails, specCodingDisabled, specCodingSummary?.progress?.activePhaseId]);
 
   const effectiveSpecCodingTasks = useMemo(() => {
+    if (specCodingDisabled) return [];
     const tasks = (specCodingDetails?.tasks || []) as RuntimeSpecTask[];
     const workflow = workflowConfig?.workflow as any;
     if (!tasks.length || !workflow) return tasks;
@@ -2178,7 +2610,7 @@ export default function WorkbenchPage({
         ? { ...task, status: derivedStatus }
         : task;
     });
-  }, [activeSteps, completedSteps, currentStep, failedSteps, specCodingDetails?.tasks, workflowConfig]);
+  }, [activeSteps, completedSteps, currentStep, failedSteps, specCodingDetails?.tasks, specCodingDisabled, workflowConfig]);
 
   const specCodingTaskProgress = useMemo(() => {
     const tasks = flattenRuntimeSpecTasks((effectiveSpecCodingTasks || []) as RuntimeSpecTask[]);
@@ -2300,6 +2732,7 @@ export default function WorkbenchPage({
     title: string;
     content: string;
   }>>(() => {
+    if (specCodingDisabled) return [];
     const artifacts = specCodingDetails?.artifacts || {};
     return [
       {
@@ -2321,15 +2754,16 @@ export default function WorkbenchPage({
         content: structuredTasksMarkdown || artifacts.tasks || '',
       },
     ];
-  }, [specCodingDetails?.artifacts, structuredTasksMarkdown]);
+  }, [specCodingDetails?.artifacts, specCodingDisabled, structuredTasksMarkdown]);
 
   const currentSpecArtifacts = useMemo<SpecCodingArtifactDrafts>(
-    () => normalizeSpecArtifactDrafts(specCodingDetails?.artifacts, {
+    () => specCodingDisabled ? normalizeSpecArtifactDrafts(null) : normalizeSpecArtifactDrafts(specCodingDetails?.artifacts, {
       tasks: structuredTasksMarkdown || specCodingDetails?.artifacts?.tasks || '',
     }),
-    [specCodingDetails?.artifacts, structuredTasksMarkdown]
+    [specCodingDetails?.artifacts, specCodingDisabled, structuredTasksMarkdown]
   );
   const designOptimizationSpecTaskOptions = useMemo(() => (
+    specCodingDisabled ? [] :
     (specCodingDetails?.tasks || [])
       .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
       .map((task: any) => ({
@@ -2338,7 +2772,7 @@ export default function WorkbenchPage({
         phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
         ownerAgents: task.ownerAgents || [],
       }))
-  ), [specCodingDetails?.phases, specCodingDetails?.tasks]);
+  ), [specCodingDetails?.phases, specCodingDetails?.tasks, specCodingDisabled]);
   const effectiveSpecRevisionDraft = specRevisionCandidate
     ? specRevisionCandidate.artifacts[specRevisionTarget]
     : specRevisionDraft;
@@ -2347,6 +2781,12 @@ export default function WorkbenchPage({
     () => specCodingArtifactEntries.find((entry) => entry.key === specCodingArtifactTab) || specCodingArtifactEntries[0],
     [specCodingArtifactEntries, specCodingArtifactTab]
   );
+
+  useEffect(() => {
+    if (!specCodingDisabled) return;
+    setSpecCodingModalOpen(false);
+    setSpecCodingSaveDialogOpen(false);
+  }, [specCodingDisabled]);
   const specRevisionBaseArtifact = useMemo(
     () => specCodingArtifactEntries.find((entry) => entry.key === specRevisionTarget) || specCodingArtifactEntries[1] || specCodingArtifactEntries[0],
     [specCodingArtifactEntries, specRevisionTarget]
@@ -3361,7 +3801,7 @@ export default function WorkbenchPage({
       }
 
       const validationRes = await configApi.validateConfig({ config: candidateConfig });
-      const bindingResult = specCodingDetails
+      const bindingResult = !specCodingDisabled && specCodingDetails
         ? compileStepTaskBindings(candidateConfig as any, specCodingDetails as any, { requireFullCoverage: true })
         : null;
       const baseSnapshot = extractDesignOptimizationSnapshot(sourceConfig, target);
@@ -3866,8 +4306,22 @@ export default function WorkbenchPage({
         pushAgent(agent.name);
       }
     });
+    const workflow = workflowConfig?.workflow;
+    if (workflow?.mode === 'state-machine') {
+      for (const stateNode of workflow.states || []) {
+        for (const step of stateNode.steps || []) {
+          if (step?.type !== 'subworkflow') pushAgent(step?.agent);
+        }
+      }
+    } else {
+      for (const phaseNode of workflow?.phases || []) {
+        for (const step of phaseNode.steps || []) {
+          pushAgent(step?.agent);
+        }
+      }
+    }
     return result;
-  }, [agentConfigs, orderedWorkflowAgents, runtimeSupervisorAgent]);
+  }, [agentConfigs, orderedWorkflowAgents, runtimeSupervisorAgent, workflowConfig?.workflow]);
   const workflowAgoraInitialGuests = useMemo(() => (
     supervisorFormationAgents.map((agent) => ({
       name: agent.name,
@@ -4152,7 +4606,8 @@ export default function WorkbenchPage({
 
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: status.status });
       setRunStatusReason(status.statusReason || null);
-      const statusIsActive = status.status === 'running' || status.status === 'preparing';
+      const statusIsActive = isRuntimeWorkflowStatusActive(status.status);
+      const statusIsTerminal = isTerminalWorkflowStatus(status.status);
       if (status.status === 'failed' && status.statusReason) {
         addLog('system', 'error', `工作流启动失败: ${status.statusReason}`);
       }
@@ -4160,13 +4615,14 @@ export default function WorkbenchPage({
       setWorkflowFrontendSessionId((status as any).workflowFrontendSessionId || null);
       if (typeof status.currentPhase === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: status.currentPhase });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
-      if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
+      if (statusIsTerminal) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+      else if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       if (status.agents?.length) dispatch({ type: 'SET_AGENTS', payload: status.agents });
       if (status.completedSteps) dispatch({ type: 'SET_COMPLETED_STEPS', payload: status.completedSteps });
       dispatch({ type: 'SET_FAILED_STEPS', payload: status.failedSteps || [] });
-      setActiveSteps(Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []);
-      setActiveConcurrencyGroups(Array.isArray((status as any).activeConcurrencyGroups) ? (status as any).activeConcurrencyGroups : []);
+      setActiveSteps(statusIsTerminal ? [] : (Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []));
+      setActiveConcurrencyGroups(statusIsTerminal ? [] : (Array.isArray((status as any).activeConcurrencyGroups) ? (status as any).activeConcurrencyGroups : []));
       const pendingLiveFeedback = Array.isArray((status as any).pendingLiveFeedback)
         ? (status as any).pendingLiveFeedback
         : [];
@@ -4207,8 +4663,6 @@ export default function WorkbenchPage({
         setSupervisorFlow((status as any).supervisorFlow);
       }
       setLatestSupervisorReview((status as any).latestSupervisorReview || null);
-      setSpecRevisionVote((status as any).specRevisionVote || null);
-      setSpecRevisionVoteHistory(Array.isArray((status as any).specRevisionVoteHistory) ? (status as any).specRevisionVoteHistory : []);
       setRehearsalInfo((status as any).rehearsal || null);
       if ((status as any).workspaceGit) {
         setRuntimeGitBaselineEnabled((status as any).workspaceGit.enabled !== false);
@@ -4218,7 +4672,10 @@ export default function WorkbenchPage({
       if ((status as any).agentFlow) {
         setAgentFlow((status as any).agentFlow);
       }
-      setCreationSessionSummary((status as any).creationSession || null);
+      const payloadSpecCodingDisabled = specCodingDisabled || (status as any).specCodingDisabled === true;
+      setSpecRevisionVote(payloadSpecCodingDisabled ? null : ((status as any).specRevisionVote || null));
+      setSpecRevisionVoteHistory(payloadSpecCodingDisabled ? [] : (Array.isArray((status as any).specRevisionVoteHistory) ? (status as any).specRevisionVoteHistory : []));
+      setCreationSessionSummary(payloadSpecCodingDisabled ? null : ((status as any).creationSession || null));
       const preferRunSpec = state.viewMode === 'run' || state.viewMode === 'history';
       const nextSpecCodingSummary = preferRunSpec
         ? ((status as any).runSpecCodingSummary || (status as any).specCodingSummary || (status as any).creationSpecCodingSummary || null)
@@ -4226,9 +4683,10 @@ export default function WorkbenchPage({
       const nextSpecCodingDetails = preferRunSpec
         ? ((status as any).runSpecCodingDetails || (status as any).specCodingDetails || (status as any).creationSpecCodingDetails || null)
         : ((status as any).creationSpecCodingDetails || ((status as any).specCodingSummary?.source === 'creation' ? (status as any).specCodingDetails : null));
-      setSpecCodingSummary(nextSpecCodingSummary);
-      setSpecCodingDetails(nextSpecCodingDetails);
-      setSpecCodingSourceOfTruth((status as any).sourceOfTruth || null);
+      setSpecCodingSummary(payloadSpecCodingDisabled ? null : nextSpecCodingSummary);
+      setSpecCodingDetails(payloadSpecCodingDisabled ? null : nextSpecCodingDetails);
+      setSpecCodingSourceOfTruth(payloadSpecCodingDisabled ? null : ((status as any).sourceOfTruth || null));
+      if (payloadSpecCodingDisabled) setSpecBindingReview(null);
       setPersistMode(status.persistMode);
       setDeltaSpecMerged(Boolean(status.deltaSpecMerged));
       setDeltaMergeState(status.deltaMergeState);
@@ -4281,6 +4739,9 @@ export default function WorkbenchPage({
       if (status.transitionCount !== undefined) {
         setSmTransitionCount(status.transitionCount);
       }
+      setSubworkflowRuns(Array.isArray((status as any).subworkflowRuns) ? (status as any).subworkflowRuns : []);
+      setSubworkflowSummary((status as any).subworkflowSummary || null);
+      setActiveSubworkflowRunId((status as any).activeSubworkflowRunId || null);
       if (smStatus.mode === 'state-machine' && smStatus.currentState === '__human_approval__' && smStatus.pendingCheckpoint) {
         const workflowStates = (workflowConfig as any)?.workflow?.states?.map((state: any) => state.name) || [];
         const restoredAvailableStates = smStatus.pendingCheckpoint.availableStates
@@ -4403,7 +4864,8 @@ export default function WorkbenchPage({
     if (snapshot.workflowFrontendSessionId !== undefined) {
       setWorkflowFrontendSessionId(snapshot.workflowFrontendSessionId || null);
     }
-    const statusIsActive = snapshot.status === 'running' || snapshot.status === 'preparing' || snapshot.status === 'waiting';
+    const statusIsActive = isRuntimeWorkflowStatusActive(snapshot.status);
+    const statusIsTerminal = isTerminalWorkflowStatus(snapshot.status);
     const nextPhase = typeof snapshot.currentPhase === 'string'
       ? snapshot.currentPhase
       : typeof snapshot.currentState === 'string'
@@ -4414,15 +4876,21 @@ export default function WorkbenchPage({
     } else if (snapshot.status && !statusIsActive) {
       dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
     }
-    if (typeof snapshot.currentStep === 'string') {
+    if (statusIsTerminal) {
+      dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+    } else if (typeof snapshot.currentStep === 'string') {
       dispatch({ type: 'SET_CURRENT_STEP', payload: snapshot.currentStep });
     } else if (snapshot.status && !statusIsActive) {
       dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
     }
-    if (Array.isArray(snapshot.activeSteps)) {
+    if (statusIsTerminal) {
+      setActiveSteps([]);
+    } else if (Array.isArray(snapshot.activeSteps)) {
       setActiveSteps(snapshot.activeSteps);
     }
-    if (Array.isArray(snapshot.activeConcurrencyGroups)) {
+    if (statusIsTerminal) {
+      setActiveConcurrencyGroups([]);
+    } else if (Array.isArray(snapshot.activeConcurrencyGroups)) {
       setActiveConcurrencyGroups(snapshot.activeConcurrencyGroups);
     }
     if (Array.isArray(snapshot.completedSteps)) {
@@ -4476,7 +4944,7 @@ export default function WorkbenchPage({
     if (Array.isArray(snapshot.qualityChecks)) {
       setQualityChecks(snapshot.qualityChecks);
     }
-    if (snapshot.runSpecCoding) {
+    if (!specCodingDisabled && snapshot.runSpecCoding) {
       const runSpecCodingPayload = buildSpecCodingRuntimePayload(snapshot.runSpecCoding, 'run');
       setSpecCodingSummary(runSpecCodingPayload.specCodingSummary);
       setSpecCodingDetails(runSpecCodingPayload.specCodingDetails);
@@ -4490,10 +4958,13 @@ export default function WorkbenchPage({
     if (snapshot.deltaMergeState !== undefined) {
       setDeltaMergeState(snapshot.deltaMergeState || undefined);
     }
-    if (Object.prototype.hasOwnProperty.call(snapshot, 'specRevisionVote')) {
+    if (specCodingDisabled) {
+      setSpecRevisionVote(null);
+      setSpecRevisionVoteHistory([]);
+    } else if (Object.prototype.hasOwnProperty.call(snapshot, 'specRevisionVote')) {
       setSpecRevisionVote(snapshot.specRevisionVote || null);
     }
-    if (Array.isArray(snapshot.specRevisionVoteHistory)) {
+    if (!specCodingDisabled && Array.isArray(snapshot.specRevisionVoteHistory)) {
       setSpecRevisionVoteHistory(snapshot.specRevisionVoteHistory);
     }
     if (snapshot.latestSupervisorReview) {
@@ -4502,7 +4973,7 @@ export default function WorkbenchPage({
     if (snapshot.pendingHumanQuestion !== undefined && snapshot.status === 'running') {
       setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
     }
-  }, [dispatch, setPendingHumanQuestionIfChanged]);
+  }, [dispatch, setPendingHumanQuestionIfChanged, specCodingDisabled]);
 
   const clearHumanApprovalData = useCallback(() => {
     humanApprovalSignatureRef.current = null;
@@ -4699,6 +5170,7 @@ export default function WorkbenchPage({
   }, [dispatch, searchParamsString, state.viewMode, viewingHistoryRun]);
 
   useEffect(() => {
+    if (!hasRunWorkbenchTabSearchParam(effectiveSearchParams)) return;
     const nextTab = getRunWorkbenchTabFromSearchParams(effectiveSearchParams);
     setRunWorkbenchTab((prev) => (prev === nextTab ? prev : nextTab));
   }, [searchParamsString]);
@@ -5001,6 +5473,14 @@ export default function WorkbenchPage({
       setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
       dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
       dispatch({ type: 'SET_MCP_SERVERS', payload: config.context?.mcpServers || [] });
+      dispatch({ type: 'SET_RAG_KNOWLEDGE_BASES', payload: Array.isArray(config.context?.capabilitySkills?.rag?.knowledgeBases) ? config.context.capabilitySkills.rag.knowledgeBases : [] });
+      if (config.context?.specCodingEnabled === false || config.context?.skipSpecCoding === true) {
+        setCreationSessionSummary(null);
+        setSpecCodingSummary(null);
+        setSpecCodingDetails(null);
+        setSpecCodingSourceOfTruth(null);
+        setSpecBindingReview(null);
+      }
 
       // Load available skills
       try {
@@ -5012,6 +5492,13 @@ export default function WorkbenchPage({
         const mcpRes = await fetch('/api/mcp');
         const mcpData = await mcpRes.json();
         setAvailableMcpServers(Array.isArray(mcpData.servers) ? mcpData.servers : []);
+      } catch { /* ignore */ }
+      try {
+        const ragRes = await fetch('/api/rag/knowledge-bases', { headers: getAuthHeaders() });
+        const ragData = await ragRes.json();
+        setAvailableKnowledgeBases(Array.isArray(ragData.knowledgeBases)
+          ? ragData.knowledgeBases.map((kb: any) => ({ id: kb.id, name: kb.name || kb.id, description: kb.description || '', chunkCount: kb.chunkCount || 0 }))
+          : []);
       } catch { /* ignore */ }
     } catch (error: any) {
       const message = error?.message || '加载失败';
@@ -5029,29 +5516,33 @@ export default function WorkbenchPage({
     if (!shouldApplyRuntimePayload(event?.data)) return;
 
     switch (event.type) {
-      case 'status':
+      case 'status': {
+        const eventStatusIsTerminal = isTerminalWorkflowStatus(event.data.status);
         dispatch({ type: 'SET_WORKFLOW_STATUS', payload: event.data.status });
         if (typeof event.data.currentPhase === 'string') {
           dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.currentPhase });
         }
-        if (typeof event.data.currentStep === 'string') {
+        if (eventStatusIsTerminal) {
+          dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+        } else if (typeof event.data.currentStep === 'string') {
           dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.currentStep });
         }
         if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
         if (event.data.workflowFrontendSessionId) setWorkflowFrontendSessionId(event.data.workflowFrontendSessionId);
-        if (Array.isArray(event.data.activeSteps)) setActiveSteps(event.data.activeSteps);
+        if (Array.isArray(event.data.activeSteps) || eventStatusIsTerminal) setActiveSteps(eventStatusIsTerminal ? [] : event.data.activeSteps);
         if (Array.isArray(event.data.completedSteps)) dispatch({ type: 'SET_COMPLETED_STEPS', payload: event.data.completedSteps });
         if (Array.isArray(event.data.failedSteps)) dispatch({ type: 'SET_FAILED_STEPS', payload: event.data.failedSteps });
-        if (Array.isArray(event.data.activeConcurrencyGroups)) setActiveConcurrencyGroups(event.data.activeConcurrencyGroups);
+        if (Array.isArray(event.data.activeConcurrencyGroups) || eventStatusIsTerminal) setActiveConcurrencyGroups(eventStatusIsTerminal ? [] : event.data.activeConcurrencyGroups);
         if (event.data.startTime) setRunStartTime(event.data.startTime);
         if (event.data.endTime) setRunEndTime(event.data.endTime);
-        if (event.data.specCodingSummary) setSpecCodingSummary(event.data.specCodingSummary);
-        if (event.data.specCodingDetails) setSpecCodingDetails(event.data.specCodingDetails);
+        if (!specCodingDisabled && event.data.specCodingSummary) setSpecCodingSummary(event.data.specCodingSummary);
+        if (!specCodingDisabled && event.data.specCodingDetails) setSpecCodingDetails(event.data.specCodingDetails);
         applyWorkflowStatusSnapshot(event.data);
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         if (event.data.workingDirectory) dispatch({ type: 'SET_WORKING_DIRECTORY', payload: event.data.workingDirectory });
         addLog('system', 'info', event.data.message);
         break;
+      }
       case 'phase':
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.phase });
@@ -5914,6 +6405,150 @@ export default function WorkbenchPage({
     }
   };
 
+  const findSubworkflowRunForStep = useCallback((step: any, candidates: any[] = subworkflowRuns) => {
+    if (!step || step.type !== 'subworkflow') return null;
+    const stepName = String(step.name || '').trim();
+    const configFile = getSubworkflowConfigFileFromStep(step);
+    const normalizedConfigFile = configFile.toLowerCase();
+    const items = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+    const byStep = [...items].reverse().find((child) =>
+      stepName
+      && String(child?.parentStepName || '').trim() === stepName
+      && (!configFile || String(child?.configFile || '').trim().toLowerCase() === normalizedConfigFile)
+    );
+    if (byStep) return byStep;
+    const byConfig = [...items].reverse().find((child) =>
+      configFile
+      && String(child?.configFile || '').trim().toLowerCase() === normalizedConfigFile
+    );
+    if (byConfig) return byConfig;
+    const fallbackRunId = Array.isArray((workflowStatus as any)?.childRunIds)
+      ? (workflowStatus as any).childRunIds.at(-1)
+      : null;
+    if (configFile && typeof fallbackRunId === 'string' && fallbackRunId.trim()) {
+      return {
+        runId: fallbackRunId.trim(),
+        configFile,
+        parentStepName: stepName,
+        status: 'unknown',
+      };
+    }
+    return null;
+  }, [getSubworkflowConfigFileFromStep, subworkflowRuns]);
+
+  const handleRunDiagramStepClick = useCallback((step: any) => {
+    if (step?.type === 'subworkflow') {
+      const childRun = findSubworkflowRunForStep(step);
+      if (childRun?.configFile && childRun?.runId) {
+        void openSubworkflowRun(childRun);
+        return;
+      }
+      void openSubworkflowConfigPreview(step);
+      return;
+    }
+    selectStep(step);
+  }, [findSubworkflowRunForStep, openSubworkflowConfigPreview, openSubworkflowRun]);
+
+  const renderSubworkflowDrilldown = useCallback(() => {
+    const active = subworkflowDrilldownStack[subworkflowDrilldownStack.length - 1];
+    if (!active) return null;
+    const childConfig = active.config;
+    const childWorkflow = childConfig?.workflow;
+    const childStatus = active.status || {};
+    const childTabKey = getSubworkflowCacheKey(active.configFile, active.runId || '');
+    const childSubworkflowRuns = Array.isArray(childStatus.subworkflowRuns) ? childStatus.subworkflowRuns : [];
+    const handleChildStepClick = (step: any) => {
+      if (step?.type === 'subworkflow') {
+        const childRun = findSubworkflowRunForStep(step, childSubworkflowRuns);
+        if (childRun?.configFile && childRun?.runId) {
+          void openSubworkflowRun(childRun);
+          return;
+        }
+        void openSubworkflowConfigPreview(step);
+        return;
+      }
+      selectStep(step);
+    };
+
+    return (
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-sm">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 gap-1.5"
+              onClick={() => setSubworkflowDrilldownStack((prev) => prev.slice(0, -1))}
+            >
+              <span className="material-symbols-outlined text-base">arrow_back</span>
+              返回父工作流
+            </Button>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">
+                {childWorkflow?.name || active.child?.parentStepName || active.configFile}
+              </div>
+              <div className="truncate text-xs text-muted-foreground">
+                {active.previewOnly ? `${active.configFile} · 未绑定运行记录` : `${active.configFile} · ${active.runId}`}
+              </div>
+            </div>
+          </div>
+          <Badge variant={active.previewOnly ? 'outline' : childStatus.status === 'failed' || childStatus.status === 'crashed' ? 'destructive' : childStatus.status === 'completed' ? 'default' : 'secondary'}>
+            {active.previewOnly ? '预览' : (childStatus.status || active.child?.status || 'unknown')}
+          </Badge>
+        </div>
+        <div className="min-h-0 flex-1 p-4">
+          {childWorkflow?.mode === 'state-machine' ? (
+            <StateMachineExecutionView
+              states={childWorkflow.states || []}
+              agents={active.agents || []}
+              currentState={childStatus.currentPhase || null}
+              currentStep={childStatus.currentStep || null}
+              activeSteps={Array.isArray(childStatus.activeSteps) ? childStatus.activeSteps : []}
+              activeConcurrencyGroups={Array.isArray(childStatus.activeConcurrencyGroups) ? childStatus.activeConcurrencyGroups : []}
+              completedSteps={Array.isArray(childStatus.completedSteps) ? childStatus.completedSteps : []}
+              stateHistory={Array.isArray(childStatus.stateHistory) ? childStatus.stateHistory : []}
+              issueTracker={Array.isArray(childStatus.issueTracker) ? childStatus.issueTracker : []}
+              transitionCount={typeof childStatus.transitionCount === 'number' ? childStatus.transitionCount : 0}
+              maxTransitions={childWorkflow.maxTransitions || 50}
+              status={(childStatus.status || active.child?.status || 'idle') as any}
+              isRunning={childStatus.status === 'running' || childStatus.status === 'preparing'}
+              allowForceTransition={false}
+              focusedState={childStatus.currentPhase || null}
+              startTime={childStatus.startTime || active.child?.startedAt || null}
+              endTime={childStatus.endTime || active.child?.endedAt || null}
+              accumulatedWaitMs={typeof childStatus.accumulatedWaitMs === 'number' ? childStatus.accumulatedWaitMs : 0}
+              waitStartedAt={childStatus.waitStartedAt || null}
+              supervisorFlow={Array.isArray(childStatus.supervisorFlow) ? childStatus.supervisorFlow : []}
+              agentFlow={Array.isArray(childStatus.agentFlow) ? childStatus.agentFlow : []}
+              tokenAnalytics={childStatus.tokenAnalytics}
+              executionTrace={childStatus.executionTrace || null}
+              subworkflowRuns={childSubworkflowRuns}
+              subworkflowSummary={childStatus.subworkflowSummary || null}
+              activeSubworkflowRunId={childStatus.activeSubworkflowRunId || null}
+              onOpenSubworkflowRun={openSubworkflowRun}
+              defaultActiveTab={subworkflowExecutionTabs[childTabKey] || 'trace'}
+              onActiveTabChange={(tab) => setSubworkflowExecutionTabs((prev) => ({ ...prev, [childTabKey]: tab }))}
+              onStateClick={setFocusedState}
+              onStepClick={handleChildStepClick}
+            />
+          ) : (
+            <FlowDiagram
+              workflow={childWorkflow}
+              currentPhase={childStatus.currentPhase || null}
+              currentStep={childStatus.currentStep || null}
+              agents={active.agents || []}
+              completedSteps={Array.isArray(childStatus.completedSteps) ? childStatus.completedSteps : []}
+              failedSteps={Array.isArray(childStatus.failedSteps) ? childStatus.failedSteps : []}
+              iterationStates={childStatus.iterationStates || {}}
+              onSelectStep={selectStep}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }, [findSubworkflowRunForStep, getSubworkflowCacheKey, openSubworkflowConfigPreview, openSubworkflowRun, selectStep, subworkflowDrilldownStack, subworkflowExecutionTabs]);
+
   const selectStateDetails = (stateName: string) => {
     setFocusedState(stateName);
     setRightPanelTab('detail');
@@ -6220,6 +6855,123 @@ export default function WorkbenchPage({
     };
   }, [activeSteps, currentStep, isRunning, liveStreamStepSelection, runId, selectedRun?.id, selectedStep?.name]);
 
+  const liveStreamSources = useMemo(() => {
+    type Source = {
+      key: string;
+      runId: string;
+      stepKey: string;
+      label: string;
+      scope: string;
+      stateName: string | null;
+      stepName: string | null;
+      status?: string;
+    };
+    const sources: Source[] = [];
+    const seen = new Set<string>();
+    const pushSource = (input: {
+      runId?: string | null;
+      stepKey?: string | null;
+      scope: string;
+      stateName?: string | null;
+      stepName?: string | null;
+      status?: string;
+    }) => {
+      const sourceRunId = String(input.runId || '').trim();
+      const stepKey = String(input.stepKey || input.stepName || '').trim();
+      if (!sourceRunId || !stepKey) return;
+      const source = resolveLiveStreamSource(stepKey);
+      const stateName = input.stateName ?? source.stateName ?? null;
+      const stepName = input.stepName ?? source.stepName ?? stepKey;
+      const key = `${sourceRunId}::${stepKey}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      sources.push({
+        key,
+        runId: sourceRunId,
+        stepKey,
+        label: [input.scope, stateName ? formatStateName(stateName) : '', stepName].filter(Boolean).join(' / '),
+        scope: input.scope,
+        stateName,
+        stepName,
+        status: input.status,
+      });
+    };
+
+    const parentRunId = runId || selectedRun?.id || '';
+    for (const stepKey of liveStreamTarget.parallelActiveSteps.length ? liveStreamTarget.parallelActiveSteps : [liveStreamTarget.activeStep]) {
+      pushSource({
+        runId: parentRunId,
+        stepKey,
+        scope: '父工作流',
+        status: workflowStatus,
+      });
+    }
+
+    const appendChildStatus = (child: any, status: any, depth: number) => {
+      const childRunId = child?.runId || status?.runId;
+      const scope = `${'子'.repeat(Math.max(1, depth))}工作流${child?.parentStepName ? ` · ${child.parentStepName}` : ''}`;
+      const childActiveSteps = Array.from(new Set([
+        ...(Array.isArray(status?.activeSteps) ? status.activeSteps : []),
+        status?.currentStep,
+      ].filter(Boolean)));
+      for (const stepKey of childActiveSteps) {
+        pushSource({
+          runId: childRunId,
+          stepKey: String(stepKey),
+          scope,
+          stateName: status?.currentPhase || status?.currentState || null,
+          status: status?.status || child?.status,
+        });
+      }
+      const nestedRuns = Array.isArray(status?.subworkflowRuns) ? status.subworkflowRuns : [];
+      for (const nested of nestedRuns) {
+        const nestedEntry = nested?.runId
+          ? subworkflowDrilldownCacheRef.current.get(getSubworkflowCacheKey(nested.configFile, nested.runId))
+          : null;
+        appendChildStatus(nested, nestedEntry?.status || {}, depth + 1);
+      }
+    };
+
+    for (const child of subworkflowRuns || []) {
+      const cached = child?.runId
+        ? subworkflowDrilldownCacheRef.current.get(getSubworkflowCacheKey(child.configFile, child.runId))
+        : null;
+      appendChildStatus(child, cached?.status || child, 1);
+    }
+    for (const entry of subworkflowDrilldownStack) {
+      appendChildStatus(entry.child, entry.status || {}, 1);
+    }
+
+    return sources;
+  }, [
+    activeSteps,
+    getSubworkflowCacheKey,
+    liveStreamTarget.activeStep,
+    liveStreamTarget.parallelActiveSteps,
+    resolveLiveStreamSource,
+    runId,
+    selectedRun?.id,
+    subworkflowDrilldownStack,
+    subworkflowRuns,
+    workflowStatus,
+  ]);
+
+  const selectedLiveStreamSource = useMemo(() => {
+    if (liveStreamSourceSelection) {
+      const selected = liveStreamSources.find((source) => source.key === liveStreamSourceSelection);
+      if (selected) return selected;
+    }
+    return liveStreamSources[0] || {
+      key: liveStreamTarget.runId && liveStreamTarget.stepKey ? `${liveStreamTarget.runId}::${liveStreamTarget.stepKey}` : '',
+      runId: liveStreamTarget.runId,
+      stepKey: liveStreamTarget.stepKey,
+      label: liveStreamTarget.stepKey || '实时输出',
+      scope: '父工作流',
+      stateName: null,
+      stepName: liveStreamTarget.stepKey || null,
+    };
+  }, [liveStreamSourceSelection, liveStreamSources, liveStreamTarget.runId, liveStreamTarget.stepKey]);
+
   useEffect(() => {
     const parallelActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
     const selectedStepName = selectedStep?.name || '';
@@ -6238,6 +6990,56 @@ export default function WorkbenchPage({
       setLiveStreamStepSelection(parallelActiveSteps[0] || '');
     }
   }, [activeSteps, liveStreamStepSelection, selectedStep?.name]);
+
+  useEffect(() => {
+    if (!liveStreamSources.length) {
+      if (liveStreamSourceSelection) setLiveStreamSourceSelection('');
+      return;
+    }
+    if (!liveStreamSources.some((source) => source.key === liveStreamSourceSelection)) {
+      setLiveStreamSourceSelection(liveStreamSources[0].key);
+    }
+  }, [liveStreamSourceSelection, liveStreamSources]);
+
+  useEffect(() => {
+    const runningChildren = (subworkflowRuns || []).filter((child: any) =>
+      child?.runId
+      && child?.configFile
+      && ['pending', 'starting', 'running', 'waiting-human', 'unknown'].includes(String(child.status || 'unknown'))
+    );
+    if (!runningChildren.length) return;
+    let cancelled = false;
+    const refresh = async () => {
+      for (const child of runningChildren) {
+        if (cancelled) return;
+        try {
+          const key = getSubworkflowCacheKey(child.configFile, child.runId);
+          const existing = subworkflowDrilldownCacheRef.current.get(key);
+          const [configResponse, status] = existing?.config
+            ? [{ config: existing.config, agents: existing.agents || [] }, await workflowApi.getStatus(child.configFile, child.runId)]
+            : await Promise.all([
+                configApi.getConfig(child.configFile),
+                workflowApi.getStatus(child.configFile, child.runId),
+              ]);
+          if (cancelled) return;
+          subworkflowDrilldownCacheRef.current.set(key, {
+            child,
+            configFile: child.configFile,
+            runId: child.runId,
+            config: configResponse.config,
+            agents: configResponse.agents || [],
+            status,
+          });
+        } catch {}
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [getSubworkflowCacheKey, subworkflowRuns]);
 
   // --- Live stream via SSE (opencode) or polling fallback (claude-code) ---
   const startLiveStream = () => {
@@ -6260,11 +7062,14 @@ export default function WorkbenchPage({
       liveStreamRef.current = null;
     }
 
-    const rid = liveStreamTarget.runId;
-    const activeStep = liveStreamTarget.activeStep;
+    const rid = selectedLiveStreamSource.runId;
+    const activeStep = selectedLiveStreamSource.stepKey;
     liveStreamRunRef.current = rid;
-    liveStreamStepRef.current = liveStreamTarget.stepKey;
-    setLiveStreamSource(resolveLiveStreamSource(activeStep));
+    liveStreamStepRef.current = activeStep;
+    setLiveStreamSource({
+      stateName: selectedLiveStreamSource.stateName,
+      stepName: selectedLiveStreamSource.stepName || activeStep,
+    });
 
     // Try SSE live stream if we have runId + step
     if (rid && activeStep) {
@@ -6307,7 +7112,7 @@ export default function WorkbenchPage({
     liveStreamRef.current = setInterval(async () => {
       try {
         const { processes } = await processApi.list();
-        const curRid = runId || selectedRun?.id;
+        const curRid = selectedLiveStreamSource.runId || runId || selectedRun?.id;
 
         // Only show workflow step processes, not dashboard chat processes
         const workflowProcesses = processes.filter((p: any) => !(p.agent === 'chat' && p.step === 'chat'));
@@ -6321,14 +7126,15 @@ export default function WorkbenchPage({
         }
 
         const runningProc = workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid);
-        const latestActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
-        const preferredLiveStep = latestActiveSteps.length > 1 ? liveStreamTarget.activeStep : '';
-        const curStep = preferredLiveStep || runningProc?.step || currentStep || (latestActiveSteps.length === 1 ? latestActiveSteps[0] : '') || (!isRunning ? selectedStep?.name : '');
+        const curStep = selectedLiveStreamSource.stepKey || runningProc?.step || (!isRunning ? selectedStep?.name : '');
 
         if (curStep !== liveStreamStepRef.current) {
           liveStreamRunRef.current = curRid || '';
           liveStreamStepRef.current = curStep;
-          setLiveStreamSource(resolveLiveStreamSource(curStep));
+          setLiveStreamSource({
+            stateName: selectedLiveStreamSource.stateName,
+            stepName: selectedLiveStreamSource.stepName || curStep,
+          });
           liveStreamLenRef.current = 0;
           liveStreamRawRef.current = '';
           setLiveStream([]);
@@ -6407,17 +7213,17 @@ export default function WorkbenchPage({
   // Auto-reconnect live stream when the active run or step changes while the panel is open.
   useEffect(() => {
     if (!showLiveStream) return;
-    if (!liveStreamTarget.runId && !liveStreamTarget.stepKey) return;
+    if (!selectedLiveStreamSource.runId && !selectedLiveStreamSource.stepKey) return;
     if (
       liveStreamRef.current
-      && liveStreamRunRef.current === liveStreamTarget.runId
-      && liveStreamStepRef.current === liveStreamTarget.stepKey
+      && liveStreamRunRef.current === selectedLiveStreamSource.runId
+      && liveStreamStepRef.current === selectedLiveStreamSource.stepKey
     ) {
       return;
     }
     startLiveStream();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showLiveStream, liveStreamTarget.runId, liveStreamTarget.stepKey]);
+  }, [showLiveStream, selectedLiveStreamSource.runId, selectedLiveStreamSource.stepKey]);
 
   const sendLiveFeedback = async (interrupt?: boolean, existingFeedback?: InlineFeedback) => {
     const feedback = existingFeedback?.message || liveFeedbackEditorRef.current?.getMarkdown() || liveFeedbackDraft || liveStreamFeedbackRef.current?.value || '';
@@ -6435,7 +7241,13 @@ export default function WorkbenchPage({
         status: interrupt ? 'interrupting' : 'sending',
       });
       
-      const res = await workflowApi.injectFeedback(feedback.trim(), interrupt, configFile, feedbackId);
+      const res = await workflowApi.injectFeedback(
+        feedback.trim(),
+        interrupt,
+        configFile,
+        feedbackId,
+        selectedLiveStreamSource.runId || undefined,
+      );
       upsertInlineFeedback({
         id: feedbackId,
         message: feedback.trim(),
@@ -6473,7 +7285,7 @@ export default function WorkbenchPage({
 
   const recallFeedback = async (message: string) => {
     try {
-      await workflowApi.recallFeedback(message, configFile);
+      await workflowApi.recallFeedback(message, configFile, selectedLiveStreamSource.runId || undefined);
     } catch (error: any) {
       toast('error', `撤回失败: ${error.message}`);
     }
@@ -6667,28 +7479,29 @@ export default function WorkbenchPage({
               <span className="truncate">{liveStreamSource.stepName || '未定位'}</span>
             </Badge>
           </div>
-          {liveStreamTarget.parallelActiveSteps.length > 1 ? (
+          {liveStreamSources.length > 0 ? (
             <div className="mt-2 flex items-center gap-2">
-              <span className="shrink-0 text-[11px] text-muted-foreground">并发步骤</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">实时源</span>
               <Select
-                value={liveStreamTarget.activeStep || liveStreamStepSelection || liveStreamTarget.parallelActiveSteps[0] || ''}
-                onValueChange={(value) => setLiveStreamStepSelection(value)}
+                value={selectedLiveStreamSource?.key || liveStreamSourceSelection || liveStreamSources[0]?.key || ''}
+                onValueChange={(value) => {
+                  setLiveStreamSourceSelection(value);
+                  const source = liveStreamSources.find((item) => item.key === value);
+                  if (!source) return;
+                  if (source.runId === (runId || selectedRun?.id || '')) {
+                    setLiveStreamStepSelection(source.stepKey);
+                  }
+                }}
               >
                 <SelectTrigger className="h-8 min-w-0 flex-1 text-xs">
-                  <SelectValue placeholder="选择实时输出步骤" />
+                  <SelectValue placeholder="选择实时输出源" />
                 </SelectTrigger>
                 <SelectContent>
-                  {liveStreamTarget.parallelActiveSteps.map((stepKey) => {
-                    const source = resolveLiveStreamSource(stepKey);
-                    const label = [source.stateName ? formatStateName(source.stateName) : '', source.stepName || stepKey]
-                      .filter(Boolean)
-                      .join(' / ');
-                    return (
-                      <SelectItem key={stepKey} value={stepKey} className="text-xs">
-                        {label}
-                      </SelectItem>
-                    );
-                  })}
+                  {liveStreamSources.map((source) => (
+                    <SelectItem key={source.key} value={source.key} className="text-xs">
+                      {source.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -7233,12 +8046,35 @@ export default function WorkbenchPage({
     dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
   };
 
+  const stripSpecBindingsFromWorkflowConfig = useCallback((config: any) => {
+    const next = JSON.parse(JSON.stringify(config));
+    const nodes = Array.isArray(next?.workflow?.states)
+      ? next.workflow.states
+      : Array.isArray(next?.workflow?.phases)
+        ? next.workflow.phases
+        : [];
+    for (const node of nodes) {
+      for (const step of Array.isArray(node?.steps) ? node.steps : []) {
+        if (step && typeof step === 'object') {
+          delete step.specTaskBinding;
+        }
+      }
+    }
+    next.context = {
+      ...(next.context || {}),
+      specCodingEnabled: false,
+      skipSpecCoding: true,
+    };
+    return next;
+  }, []);
+
   const handleSaveConfig = useCallback(async () => {
     if (!editingConfig) return;
     setSaving(true);
     try {
-      const config = buildWorkflowDesignConfigForSave(editingConfig, currentWorkflowDesignDraftState);
-      const specCodingDocument = specCodingSummary && specCodingDetails ? {
+      const rawConfig = buildWorkflowDesignConfigForSave(editingConfig, currentWorkflowDesignDraftState);
+      const config = specCodingDisabled ? stripSpecBindingsFromWorkflowConfig(rawConfig) : rawConfig;
+      const specCodingDocument = !specCodingDisabled && specCodingSummary && specCodingDetails ? {
         id: specCodingSummary.id,
         version: specCodingSummary.version,
         status: specCodingSummary.status,
@@ -7273,8 +8109,10 @@ export default function WorkbenchPage({
     currentWorkflowDesignDraftState,
     dispatch,
     editingConfig,
+    specCodingDisabled,
     specCodingDetails,
     specCodingSummary,
+    stripSpecBindingsFromWorkflowConfig,
     toast,
     workflowConfig?.workflow?.name,
   ]);
@@ -7308,7 +8146,7 @@ export default function WorkbenchPage({
   };
 
   const renderRuntimeInsightPanels = () => {
-    const hasSpecCodingTasks = Boolean(specCodingSummary && specCodingDetails?.tasks?.length);
+    const hasSpecCodingTasks = !specCodingDisabled && Boolean(specCodingSummary && specCodingDetails?.tasks?.length);
     const hasQualityChecks = displayQualityChecks.length > 0;
     const hasMemoryLayers = Boolean(memoryLayers);
     if (!hasSpecCodingTasks && !hasQualityChecks && !hasMemoryLayers) return null;
@@ -7608,6 +8446,8 @@ export default function WorkbenchPage({
   };
 
   const renderSpecCodingOverviewCard = () => {
+    if (specCodingDisabled) return null;
+
     if (!specCodingSummary) {
       return (
         <div className="rounded-2xl border bg-background/75 p-5">
@@ -7827,6 +8667,8 @@ export default function WorkbenchPage({
   };
 
   const renderSpecCodingPanel = (options?: { className?: string; summaryOnly?: boolean }) => {
+    if (specCodingDisabled) return null;
+
     return (
       <div className={options?.className || 'space-y-4'}>
         <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
@@ -8032,7 +8874,16 @@ export default function WorkbenchPage({
     );
   };
 
-  const renderSpecCodingExplorer = () => (
+  const renderSpecCodingExplorer = () => {
+    if (specCodingDisabled || !activeSpecCodingArtifact) {
+      return (
+        <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+          当前工作流未启用 Spec 模式。
+        </div>
+      );
+    }
+
+    return (
     <>
       <div className="border-b border-border px-3 py-2">
         <div className="flex items-center justify-between gap-3">
@@ -8759,7 +9610,8 @@ export default function WorkbenchPage({
         </main>
       </div>
     </>
-  );
+    );
+  };
 
   const workbenchModeSubtitle = isRunMode ? '运行' : isDesignMode ? '设计' : '历史';
   const renderWorkbenchModeTabs = useCallback((variant: 'shell' | 'inline' = 'shell') => {
@@ -8800,13 +9652,132 @@ export default function WorkbenchPage({
       </div>
     );
   }, [isDesignMode, isHistoryMode, isRunMode, switchViewMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleVisibility = (event: Event) => {
+      const detail = (event as CustomEvent<Partial<Record<WorkflowRunWindowId, boolean>>>).detail;
+      if (!detail) return;
+      setWorkflowRunWindowVisibility((prev) => ({ ...prev, ...detail }));
+    };
+    window.addEventListener(WORKFLOW_RUN_VISIBILITY_EVENT, handleVisibility);
+    return () => window.removeEventListener(WORKFLOW_RUN_VISIBILITY_EVENT, handleVisibility);
+  }, []);
+
+  const handleWorkflowRunWindowSelect = useCallback((windowId: 'directory' | 'center' | 'right', visible: boolean) => {
+    if (windowId === 'center') {
+      dispatchWorkflowRunRestore('center');
+      return;
+    }
+    if (visible) {
+      dispatchWorkflowRunHide(windowId === 'directory' ? 'left' : windowId);
+      return;
+    }
+    if (windowId === 'directory') {
+      setLeftRunPanelTab('directory');
+      dispatchWorkflowRunRestore('left');
+      return;
+    }
+    dispatchWorkflowRunRestore(windowId);
+  }, []);
+
+  const restoreWorkflowRunDefaultLayout = useCallback(() => {
+    setLeftRunPanelTab('directory');
+    setRightPanelTab('detail');
+    dispatchWorkflowRunResetLayout();
+  }, []);
+
+  const renderWorkflowRunWindowMenu = useCallback(() => {
+    if (!isRunMode) return null;
+    const leftVisible = workflowRunWindowVisibility.left !== false;
+    const items: Array<{ id: 'directory' | 'center' | 'right'; label: string; visible: boolean; locked?: boolean }> = [
+      { id: 'directory', label: '运行信息', visible: leftVisible },
+      { id: 'center', label: '执行工作区', visible: true, locked: true },
+      { id: 'right', label: '输出详情', visible: workflowRunWindowVisibility.right !== false },
+    ];
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm" className="h-8 shrink-0 gap-1.5 px-2.5 text-xs">
+            <span className="material-symbols-outlined shrink-0" style={{ fontSize: 14 }}>splitscreen</span>
+            <span className="inline shrink-0">窗口</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          {items.map((item) => (
+            <DropdownMenuItem
+              key={item.id}
+              onSelect={() => handleWorkflowRunWindowSelect(item.id, item.visible)}
+              className="gap-2"
+            >
+              <span className="flex-1">{item.label}</span>
+              {item.locked ? (
+                <span className="text-[10px] text-muted-foreground">固定</span>
+              ) : null}
+              {item.visible ? (
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 15 }}>check</span>
+              ) : null}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={restoreWorkflowRunDefaultLayout} className="gap-2">
+            <span className="material-symbols-outlined" style={{ fontSize: 15 }}>restart_alt</span>
+            还原默认布局
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }, [
+    handleWorkflowRunWindowSelect,
+    isRunMode,
+    restoreWorkflowRunDefaultLayout,
+    workflowRunWindowVisibility.center,
+    workflowRunWindowVisibility.left,
+    workflowRunWindowVisibility.right,
+  ]);
+
+  const workbenchHeaderLeadingActions = useMemo(() => (
+      <div className="flex min-w-0 items-center justify-start gap-2 overflow-hidden">
+        {renderWorkbenchModeTabs('shell')}
+        {isRunMode ? (
+          <>
+        <div className={`hidden items-center gap-2 rounded-md border px-2 py-1 transition-colors xl:flex ${
+          rehearsalMode ? 'bg-background/40' : 'border-amber-500/30 bg-amber-500/10'
+        }`}>
+          <Switch checked={rehearsalMode} onCheckedChange={setRehearsalMode} />
+          <span className="text-xs text-muted-foreground">演练</span>
+        </div>
+        <Button size="sm" className={`h-8 shrink-0 text-xs ${canStartWorkflow ? styles.startWorkflowGlow : ''}`} onClick={() => requestStartWorkflow()} disabled={!canStartWorkflow}>
+          {starting ? <ClipLoader color="currentColor" size={14} className="mr-1" /> : <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>play_arrow</span>}
+          <span className="hidden xl:inline">{starting ? '启动中...' : rehearsalMode ? '开始演练' : '启动工作流'}</span>
+          <span className="xl:hidden">启动</span>
+        </Button>
+        {!rehearsalMode ? (
+          <Button variant="outline" size="sm" className="hidden h-8 shrink-0 text-xs xl:inline-flex" onClick={() => requestStartWorkflow('real', { skipPreflight: true })} disabled={!canStartWorkflow}>
+            <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>fast_forward</span>
+            跳过检查
+          </Button>
+        ) : null}
+        <Button variant="destructive" size="sm" className="h-8 shrink-0 text-xs" onClick={requestStopWorkflow} disabled={!isRunning && workflowStatus !== 'running'}>
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>stop</span><span className="hidden xl:inline ml-1">停止</span>
+        </Button>
+          </>
+        ) : null}
+      </div>
+  ), [
+    canStartWorkflow,
+    isRunMode,
+    isRunning,
+    rehearsalMode,
+    requestStartWorkflow,
+    requestStopWorkflow,
+    renderWorkbenchModeTabs,
+    starting,
+    workflowStatus,
+  ]);
+
   const workbenchHeaderActions = useMemo(() => (
-    <div
-      className="grid min-w-[360px] grid-cols-[168px_minmax(0,1fr)] items-center gap-2"
-      style={{ width: 'clamp(360px, calc(100vw - 420px), 780px)' }}
-    >
-      {renderWorkbenchModeTabs('shell')}
-      <div className="flex min-w-0 items-center justify-end gap-2 overflow-hidden">
+    <div className="flex min-w-0 items-center gap-2">
         {isDesignMode && editingName ? (
           <Input
             value={nameValue}
@@ -8833,26 +9804,7 @@ export default function WorkbenchPage({
         ) : null}
         {isRunMode ? (
           <>
-          <div className={`hidden items-center gap-2 rounded-md border px-2 py-1 transition-colors xl:flex ${
-            rehearsalMode ? 'bg-background/40' : 'border-amber-500/30 bg-amber-500/10'
-          }`}>
-            <Switch checked={rehearsalMode} onCheckedChange={setRehearsalMode} />
-            <span className="text-xs text-muted-foreground">演练</span>
-          </div>
-          <Button size="sm" className={`h-8 text-xs ${canStartWorkflow ? styles.startWorkflowGlow : ''}`} onClick={() => requestStartWorkflow()} disabled={!canStartWorkflow}>
-            {starting ? <ClipLoader color="currentColor" size={14} className="mr-1" /> : <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>play_arrow</span>}
-            <span className="hidden xl:inline">{starting ? '启动中...' : rehearsalMode ? '开始演练' : '启动工作流'}</span>
-            <span className="xl:hidden">启动</span>
-          </Button>
-          {!rehearsalMode ? (
-            <Button variant="outline" size="sm" className="hidden h-8 text-xs xl:inline-flex" onClick={() => requestStartWorkflow('real', { skipPreflight: true })} disabled={!canStartWorkflow}>
-              <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>fast_forward</span>
-              跳过检查
-            </Button>
-          ) : null}
-          <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={requestStopWorkflow} disabled={!isRunning && workflowStatus !== 'running'}>
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>stop</span><span className="hidden xl:inline ml-1">停止</span>
-          </Button>
+          {renderWorkflowRunWindowMenu()}
           <ButtonGroup>
             <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => dispatch({ type: 'SET_SHOW_PROCESS_PANEL', payload: !showProcessPanel })}>
               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span><span className="hidden xl:inline ml-1">进程</span>
@@ -8881,10 +9833,8 @@ export default function WorkbenchPage({
         ) : (
           <Badge className="bg-red-500/20 text-red-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
         )}
-      </div>
     </div>
   ), [
-    canStartWorkflow,
     configFile,
     dispatch,
     editingName,
@@ -8893,25 +9843,21 @@ export default function WorkbenchPage({
     isDesignMode,
     isHistoryMode,
     isRunMode,
-    isRunning,
     nameValue,
     openContextEditor,
-    rehearsalMode,
-    requestStartWorkflow,
-    requestStopWorkflow,
-    renderWorkbenchModeTabs,
+    renderWorkflowRunWindowMenu,
     saveWorkflowName,
     saving,
     showProcessPanel,
-    starting,
     workflowConfig?.workflow?.name,
     workflowStatus,
   ]);
   const { isDashboardShell } = useDashboardShellHeader({
     title: workflowTitle,
     subtitle: `${workbenchModeSubtitle} · ${configFile}`,
+    leadingActions: workbenchHeaderLeadingActions,
     actions: workbenchHeaderActions,
-  }, [workflowTitle, workbenchModeSubtitle, configFile, workbenchHeaderActions]);
+  }, [workflowTitle, workbenchModeSubtitle, configFile, workbenchHeaderLeadingActions, workbenchHeaderActions]);
 
   if (pageLoading && isDesignMode && !isHistoryMode) {
     return <BrandLoadingScreen message="加载工作流配置..." />;
@@ -8972,6 +9918,7 @@ export default function WorkbenchPage({
           </div>
           <div className="flex items-center gap-2 shrink-0">
           {isRunMode && (<>
+            {renderWorkflowRunWindowMenu()}
             <div className={`hidden md:flex items-center gap-2 rounded-md border px-2 py-1 transition-colors ${
               rehearsalMode ? 'bg-background/40' : 'bg-amber-500/10 border-amber-500/30'
             }`}>
@@ -9077,96 +10024,11 @@ export default function WorkbenchPage({
         {isRunMode && (
           <ResizablePanels
             leftPanel={
+              !workflowConfig ? (
+                <WorkbenchRunInfoLoadingSkeleton />
+              ) : (
               <div className="flex flex-col h-full overflow-hidden">
-              <ResizablePanelGroup orientation="vertical" className="h-full">
-                <ResizablePanel defaultSize={32} minSize={18}>
-                  <div className="flex h-full flex-col overflow-hidden border-b">
-                    <button
-                      className="w-full flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-primary/10 via-primary/5 to-transparent hover:from-primary/15 transition-colors"
-                      onClick={() => setShowRunRequirements(!showRunRequirements)}
-                    >
-                      <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>assignment</span>
-                      <div className="min-w-0 flex-1 text-left">
-                        <div className="text-sm font-semibold text-primary">运行摘要</div>
-                        {!showRunRequirements ? (
-                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
-                            <span>{workspaceMode === 'isolated-copy' ? '副本执行' : '目录执行'}</span>
-                            <span>·</span>
-                            <span>{timeoutMinutes} 分钟超时</span>
-                            <span>·</span>
-                            <span>{skills.length} Skills</span>
-                          </div>
-                        ) : null}
-                      </div>
-                      <span className="material-symbols-outlined text-muted-foreground ml-auto" style={{ fontSize: 16 }}>{showRunRequirements ? 'expand_less' : 'expand_more'}</span>
-                    </button>
-                    {showRunRequirements ? (
-                      <div className="flex-1 overflow-y-auto overflow-x-hidden bg-card/50 px-4 py-3">
-                        <div className="space-y-3">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="rounded-xl border bg-background/75 p-3">
-                              <div className="text-[10px] text-muted-foreground">工作区模式</div>
-                              <div className="mt-1 text-xs font-medium leading-5">{workspaceMode === 'isolated-copy' ? '先创建副本工程再执行' : '直接在工作目录执行'}</div>
-                            </div>
-                            <div className="rounded-xl border bg-background/75 p-3">
-                              <div className="text-[10px] text-muted-foreground">步骤超时</div>
-                              <div className="mt-1 text-xs font-medium leading-5">{timeoutMinutes} 分钟</div>
-                            </div>
-                          </div>
-                          {projectRoot ? (
-                            <div className="rounded-xl border bg-background/75 p-3">
-                              <div className="text-[10px] text-muted-foreground">项目根目录</div>
-                              <div className="mt-1 break-all text-xs leading-5">{projectRoot}</div>
-                            </div>
-                          ) : null}
-                          <div className="rounded-xl border bg-background/75 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-[10px] text-muted-foreground">需求描述</div>
-                              {requirements ? <Badge variant="outline" className="text-[10px]">Markdown</Badge> : null}
-                            </div>
-                            <div className="mt-2 text-xs leading-6 prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
-                              {requirements?.trim() ? (
-                                <Markdown>{requirements}</Markdown>
-                              ) : (
-                                <div className="text-xs text-muted-foreground">暂无需求描述</div>
-                              )}
-                            </div>
-                          </div>
-                          {skills.length > 0 ? (
-                            <div className="rounded-xl border bg-background/75 p-3">
-                              <div className="text-[10px] text-muted-foreground">Skills</div>
-                              <div className="mt-2 flex flex-wrap gap-1">
-                                {skills.slice(0, showAllSkills ? skills.length : 8).map((s) => (
-                                  <Badge key={s} variant="secondary" className="text-[10px] font-normal">{s}</Badge>
-                                ))}
-                                {skills.length > 8 && (
-                                  <button
-                                    className="text-[10px] text-muted-foreground hover:text-foreground px-1"
-                                    onClick={() => setShowAllSkills(!showAllSkills)}
-                                  >
-                                    {showAllSkills ? '收起' : `+${skills.length - 8} 更多`}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="border-t bg-card/30 px-4 py-2">
-                        <div className="flex flex-wrap gap-1.5">
-                          {projectRoot ? <Badge variant="outline" className="max-w-full truncate text-[10px]">{projectRoot}</Badge> : null}
-                          <Badge variant="secondary" className="text-[10px]">{workspaceMode === 'isolated-copy' ? '副本执行' : '目录执行'}</Badge>
-                          <Badge variant="secondary" className="text-[10px]">{timeoutMinutes} 分钟</Badge>
-                          {requirements?.trim() ? <Badge variant="outline" className="text-[10px]">已填写需求</Badge> : null}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </ResizablePanel>
-                <ResizableHandle withHandle />
-                <ResizablePanel defaultSize={68} minSize={28}>
-              <Tabs value={activeTab === 'spec-coding' ? 'spec' : activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 h-full overflow-hidden">
+              <Tabs value={specCodingDisabled && (activeTab === 'spec' || activeTab === 'spec-coding') ? 'workflow' : activeTab === 'spec-coding' ? 'spec' : activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 h-full overflow-hidden">
                 <TabsList className="w-full rounded-none border-b flex-shrink-0 px-1 !flex flex-wrap h-auto gap-0.5 py-1">
                   <TabsTrigger value="workflow" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>dashboard</span>总览
@@ -9174,9 +10036,11 @@ export default function WorkbenchPage({
                   <TabsTrigger value="agents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>groups</span>Agent
                   </TabsTrigger>
-                  <TabsTrigger value="spec" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>fact_check</span>Spec
-                  </TabsTrigger>
+                  {!specCodingDisabled ? (
+                    <TabsTrigger value="spec" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>fact_check</span>Spec
+                    </TabsTrigger>
+                  ) : null}
                   <TabsTrigger value="documents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>description</span>文档
                   </TabsTrigger>
@@ -9214,6 +10078,71 @@ export default function WorkbenchPage({
 
                         return (
                           <>
+                      <div className="mb-3 rounded-2xl border border-border/60 bg-background/75 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>assignment</span>
+                              <h3 className="text-sm font-semibold leading-5">运行信息</h3>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                              <span>{workspaceMode === 'isolated-copy' ? '副本执行' : '目录执行'}</span>
+                              <span>·</span>
+                              <span>{timeoutMinutes} 分钟超时</span>
+                              <span>·</span>
+                              <span>{skills.length} Skills</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">工作区模式</div>
+                            <div className="mt-1 text-xs font-medium leading-5">{workspaceMode === 'isolated-copy' ? '先创建副本工程再执行' : '直接在工作目录执行'}</div>
+                          </div>
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">步骤超时</div>
+                            <div className="mt-1 text-xs font-medium leading-5">{timeoutMinutes} 分钟</div>
+                          </div>
+                        </div>
+                        {projectRoot ? (
+                          <div className="mt-2 rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">项目根目录</div>
+                            <div className="mt-1 break-all text-xs leading-5">{projectRoot}</div>
+                          </div>
+                        ) : null}
+                        <div className="mt-2 rounded-xl border bg-muted/20 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] text-muted-foreground">需求描述</div>
+                            {requirements ? <Badge variant="outline" className="text-[10px]">Markdown</Badge> : null}
+                          </div>
+                          <div className="mt-2 text-xs leading-6 prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
+                            {requirements?.trim() ? (
+                              <Markdown>{requirements}</Markdown>
+                            ) : (
+                              <div className="text-xs text-muted-foreground">暂无需求描述</div>
+                            )}
+                          </div>
+                        </div>
+                        {skills.length > 0 ? (
+                          <div className="mt-2 rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">Skills</div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {skills.slice(0, showAllSkills ? skills.length : 8).map((s) => (
+                                <Badge key={s} variant="secondary" className="text-[10px] font-normal">{s}</Badge>
+                              ))}
+                              {skills.length > 8 && (
+                                <button
+                                  className="px-1 text-[10px] text-muted-foreground hover:text-foreground"
+                                  onClick={() => setShowAllSkills(!showAllSkills)}
+                                  type="button"
+                                >
+                                  {showAllSkills ? '收起' : `+${skills.length - 8} 更多`}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                       <div className="rounded-2xl border border-border/60 bg-background/75 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -9428,18 +10357,20 @@ export default function WorkbenchPage({
                     </table>
                   </div>
                 </div></TabsContent>
-                <TabsContent value="spec" className="mt-0 overflow-y-auto h-full p-4">
-                  <div className="space-y-3">
-                    <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
-                      <div className="text-sm font-medium">spec 规格与任务状态</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        查看当前 run 的 spec 规格、tasks.md 状态跟踪、修订记录和制品列表。
+                {!specCodingDisabled ? (
+                  <TabsContent value="spec" className="mt-0 overflow-y-auto h-full p-4">
+                    <div className="space-y-3">
+                      <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
+                        <div className="text-sm font-medium">spec 规格与任务状态</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          查看当前 run 的 spec 规格、tasks.md 状态跟踪、修订记录和制品列表。
+                        </div>
                       </div>
+                      {renderPersistedSpecCard()}
+                      {renderSpecCodingPanel()}
                     </div>
-                    {renderPersistedSpecCard()}
-                    {renderSpecCodingPanel()}
-                  </div>
-                </TabsContent>
+                  </TabsContent>
+                ) : null}
                 <TabsContent value="documents" className="mt-0 h-full overflow-hidden p-4">
                   <div className="flex h-full min-h-0 flex-col gap-3">
                     <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
@@ -9516,9 +10447,8 @@ export default function WorkbenchPage({
                 </TabsContent>}
                 </div>
               </Tabs>
-                </ResizablePanel>
-              </ResizablePanelGroup>
               </div>
+              )
             }
             centerPanel={
               <div className="flex h-full flex-col overflow-hidden">
@@ -9601,85 +10531,103 @@ export default function WorkbenchPage({
                                 onForceTransition={handleForceTransition}
                               />
                             ) : (
-                              <div className="h-full p-4">
-                                <StateMachineExecutionView
-                                  states={workflowConfig.workflow.states || []}
-                                  agents={agentConfigs}
-                                  currentState={currentPhase}
-                                  currentStep={currentStep}
-                                  activeSteps={activeSteps}
-                                  activeConcurrencyGroups={activeConcurrencyGroups}
-                                  completedSteps={completedSteps}
-                                  stateHistory={smStateHistory}
-                                  issueTracker={smIssueTracker}
-                                  transitionCount={smTransitionCount}
-                                  maxTransitions={workflowConfig.workflow.maxTransitions || 50}
-                                  status={workflowStatus as any}
-                                  isRunning={isRunning}
-                                  allowForceTransition={canForceTransition}
-                                  focusedState={focusedState}
-                                  startTime={runStartTime}
-                                  endTime={runEndTime}
-                                  accumulatedWaitMs={runAccumulatedWaitMs}
-                                  waitStartedAt={runWaitStartedAt}
-                                  supervisorFlow={supervisorFlow}
-                                  agentFlow={agentFlow}
-                                  tokenAnalytics={workflowTokenAnalytics}
-                                  executionTrace={executionTrace}
-                                  overviewFooter={renderRuntimeInsightPanels()}
-                                  supervisorDirectPanel={(
-                                    <WorkflowSupervisorAgoraPanel
-                                      sessionId={workbenchConversationSessionId || workflowFrontendSessionId}
-                                      title={`Supervisor 协作 · ${workflowBaseTitle}`}
-                                      configFile={configFile}
-                                      runId={runId || selectedRun?.id || null}
-                                      supervisorAgent={runtimeSupervisorAgent}
-                                      supervisorSessionId={runtimeSupervisorSessionId}
-                                      workingDirectory={currentRunWorkspacePath || projectRoot || ''}
-                                      workflowStatus={workflowStatus}
-                                      initialGuests={workflowAgoraInitialGuests}
-                                      agentSessionIds={workflowAgoraAgentSessionIds}
-                                      pendingHumanQuestion={pendingHumanQuestion}
-                                      submittingHumanQuestion={submittingHumanQuestion}
-                                      onSubmitHumanQuestion={handleSubmitHumanQuestion}
-                                      specRevisionVote={specRevisionVote}
-                                      specRevisionVoteHistory={specRevisionVoteHistory}
-                                      formationPanel={(
-                                        <div className="h-full min-h-0 bg-muted/20 p-4">
-                                          <div className="h-full min-h-[420px] overflow-hidden rounded-2xl border bg-background">
-                                            <AgentFormationDiagram
-                                              states={workflowConfig.workflow.states || []}
-                                              agents={supervisorFormationAgents}
-                                              supervisorAgent={runtimeSupervisorAgent}
-                                              currentStep={currentStep}
-                                              activeSteps={activeSteps}
-                                              status={workflowStatus as any}
-                                              className="h-full"
-                                            />
+                              <div className="relative h-full p-4">
+                                {subworkflowDrilldownLoading ? (
+                                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/60 backdrop-blur-[1px]">
+                                    <div className="flex items-center gap-2 rounded-full border bg-background px-4 py-2 text-sm text-muted-foreground shadow-sm">
+                                      <ClipLoader size={14} />
+                                      正在打开子工作流
+                                    </div>
+                                  </div>
+                                ) : null}
+                                {subworkflowDrilldownStack.length > 0 ? (
+                                  renderSubworkflowDrilldown()
+                                ) : (
+                                  <StateMachineExecutionView
+                                    states={workflowConfig.workflow.states || []}
+                                    agents={agentConfigs}
+                                    currentState={currentPhase}
+                                    currentStep={currentStep}
+                                    activeSteps={activeSteps}
+                                    activeConcurrencyGroups={activeConcurrencyGroups}
+                                    completedSteps={completedSteps}
+                                    stateHistory={smStateHistory}
+                                    issueTracker={smIssueTracker}
+                                    transitionCount={smTransitionCount}
+                                    maxTransitions={workflowConfig.workflow.maxTransitions || 50}
+                                    status={workflowStatus as any}
+                                    isRunning={isRunning}
+                                    allowForceTransition={canForceTransition}
+                                    focusedState={focusedState}
+                                    startTime={runStartTime}
+                                    endTime={runEndTime}
+                                    accumulatedWaitMs={runAccumulatedWaitMs}
+                                    waitStartedAt={runWaitStartedAt}
+                                    supervisorFlow={supervisorFlow}
+                                    agentFlow={agentFlow}
+                                    tokenAnalytics={workflowTokenAnalytics}
+                                    executionTrace={executionTrace}
+                                    subworkflowRuns={subworkflowRuns}
+                                    subworkflowSummary={subworkflowSummary}
+                                    activeSubworkflowRunId={activeSubworkflowRunId}
+                                    onOpenSubworkflowRun={openSubworkflowRun}
+                                    overviewFooter={renderRuntimeInsightPanels()}
+                                    supervisorDirectPanel={(
+                                      <WorkflowSupervisorAgoraPanel
+                                        sessionId={workbenchConversationSessionId || workflowFrontendSessionId}
+                                        title={`Supervisor 协作 · ${workflowBaseTitle}`}
+                                        configFile={configFile}
+                                        runId={runId || selectedRun?.id || null}
+                                        supervisorAgent={runtimeSupervisorAgent}
+                                        supervisorSessionId={runtimeSupervisorSessionId}
+                                        workingDirectory={currentRunWorkspacePath || projectRoot || ''}
+                                        workflowStatus={workflowStatus}
+                                        initialGuests={workflowAgoraInitialGuests}
+                                        agentSessionIds={workflowAgoraAgentSessionIds}
+                                        pendingHumanQuestion={pendingHumanQuestion}
+                                        submittingHumanQuestion={submittingHumanQuestion}
+                                        onSubmitHumanQuestion={handleSubmitHumanQuestion}
+                                        specRevisionVote={specRevisionVote}
+                                        specRevisionVoteHistory={specRevisionVoteHistory}
+                                        formationPanel={(
+                                          <div className="h-full min-h-0 bg-muted/20 p-4">
+                                            <div className="h-full min-h-[420px] overflow-hidden rounded-2xl border bg-background">
+                                              <AgentFormationDiagram
+                                                states={workflowConfig.workflow.states || []}
+                                                agents={supervisorFormationAgents}
+                                                supervisorAgent={runtimeSupervisorAgent}
+                                                currentStep={currentStep}
+                                                activeSteps={activeSteps}
+                                                status={workflowStatus as any}
+                                                className="h-full"
+                                              />
+                                            </div>
                                           </div>
-                                        </div>
-                                      )}
-                                      summaryPanel={workflowStatus === 'completed' && finalReview ? (
-                                        <div className="h-full overflow-y-auto bg-muted/20 p-4">
-                                          {renderFinalReviewCard()}
-                                        </div>
-                                      ) : (
-                                        <div className="flex h-full items-center justify-center bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                                          工作流完成后会在这里展示战后总结。
-                                        </div>
-                                      )}
-                                    />
-                                  )}
-                                  supervisorFooter={workflowStatus === 'completed' ? renderFinalReviewCard() : null}
-                                  activeTabOverride={executionViewTabOverride}
-                                  hasPendingHumanQuestion={!!pendingHumanQuestion}
-                                  pendingHumanQuestion={pendingHumanQuestion as any}
-                                  formationAgents={supervisorFormationAgents}
-                                  supervisorAgent={runtimeSupervisorAgent}
-                                  onStateClick={selectStateDetails}
-                                  onStepClick={(step) => selectStep(step)}
-                                  onForceTransition={handleForceTransition}
-                                />
+                                        )}
+                                        summaryPanel={workflowStatus === 'completed' && finalReview ? (
+                                          <div className="h-full overflow-y-auto bg-muted/20 p-4">
+                                            {renderFinalReviewCard()}
+                                          </div>
+                                        ) : (
+                                          <div className="flex h-full items-center justify-center bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                                            工作流完成后会在这里展示战后总结。
+                                          </div>
+                                        )}
+                                      />
+                                    )}
+                                    supervisorFooter={workflowStatus === 'completed' ? renderFinalReviewCard() : null}
+                                    activeTabOverride={executionViewTabOverride}
+                                    defaultActiveTab={mainExecutionActiveTab}
+                                    onActiveTabChange={setMainExecutionActiveTab}
+                                    hasPendingHumanQuestion={!!pendingHumanQuestion}
+                                    pendingHumanQuestion={pendingHumanQuestion as any}
+                                    formationAgents={supervisorFormationAgents}
+                                    supervisorAgent={runtimeSupervisorAgent}
+                                    onStateClick={selectStateDetails}
+                                    onStepClick={handleRunDiagramStepClick}
+                                    onForceTransition={handleForceTransition}
+                                  />
+                                )}
                               </div>
                             )
                           ) : (
@@ -9737,6 +10685,9 @@ export default function WorkbenchPage({
               </div>
             }
             rightPanel={
+              !workflowConfig ? (
+                <WorkbenchRunDetailLoadingSkeleton />
+              ) : (
               <div className="flex flex-col h-full">
                 {(() => {
                   // Resolve the latest iteration key for the selected step
@@ -9779,14 +10730,7 @@ export default function WorkbenchPage({
                   const stepResult = rawStepResult?.error && !shouldShowStepError ? null : rawStepResult;
                   return (<>
                 <div className="border-b bg-muted">
-                  <div className="flex h-10 items-center justify-between gap-2 px-3">
-                    <h2 className="min-w-0 truncate text-sm font-semibold">
-                      {rightPanelTab === 'live'
-                        ? '实时输出'
-                        : selectedStep ? (stepKey !== selectedStep.name ? stepKey : selectedStep.name) : selectedAgent ? selectedAgent.name : 'Agent 详情'}
-                    </h2>
-                  </div>
-                  <div className="flex gap-1 px-2 pb-1">
+                  <div className="flex gap-1 px-2 py-1">
                     {[
                       { key: 'detail' as const, label: '详情', icon: 'info' },
                       { key: 'live' as const, label: '实时', icon: 'cell_tower' },
@@ -9804,6 +10748,13 @@ export default function WorkbenchPage({
                         {tab.label}
                       </button>
                     ))}
+                  </div>
+                  <div className="flex h-9 items-center justify-between gap-2 px-3">
+                    <h2 className="min-w-0 truncate text-sm font-semibold">
+                      {rightPanelTab === 'live'
+                        ? '实时输出'
+                        : selectedStep ? (stepKey !== selectedStep.name ? stepKey : selectedStep.name) : selectedAgent ? selectedAgent.name : 'Agent 详情'}
+                    </h2>
                   </div>
                 </div>
                 <div className={`flex-1 min-h-0 ${rightPanelTab === 'detail' ? 'overflow-auto' : 'overflow-hidden'}`}>
@@ -10084,6 +11035,7 @@ export default function WorkbenchPage({
                   </>);
                 })()}
               </div>
+              )
             }
           />
         )}
@@ -10155,7 +11107,7 @@ export default function WorkbenchPage({
                             <h3 className="text-base font-semibold">工作流概览</h3>
                           </div>
                           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                            查看设计基线、模式、角色/状态数量和 spec 规格基线摘要。
+                            查看设计基线、模式、角色/状态数量。
                           </p>
                         </div>
                         <Badge variant="outline" className="text-[10px]">
@@ -10206,7 +11158,7 @@ export default function WorkbenchPage({
                           </div>
                           <Badge variant="outline" className="text-[10px]">自动生成</Badge>
                         </div>
-                        <div className="grid gap-3 sm:grid-cols-4">
+                        <div className={`grid gap-3 ${specCodingDisabled ? 'sm:grid-cols-3' : 'sm:grid-cols-4'}`}>
                           <div className="rounded-xl border bg-muted/20 p-3">
                             <div className="text-[10px] text-muted-foreground">并发组</div>
                             <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.groups.length}</div>
@@ -10219,10 +11171,12 @@ export default function WorkbenchPage({
                             <div className="text-[10px] text-muted-foreground">通讯通道</div>
                             <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.channelIds.length}</div>
                           </div>
-                          <div className="rounded-xl border bg-muted/20 p-3">
-                            <div className="text-[10px] text-muted-foreground">Spec 任务</div>
-                            <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.specTaskIds.length}</div>
-                          </div>
+                          {!specCodingDisabled ? (
+                            <div className="rounded-xl border bg-muted/20 p-3">
+                              <div className="text-[10px] text-muted-foreground">Spec 任务</div>
+                              <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.specTaskIds.length}</div>
+                            </div>
+                          ) : null}
                         </div>
                         {concurrencyDesignSummary.groups.length ? (
                           <div className="space-y-2">
@@ -10586,24 +11540,39 @@ export default function WorkbenchPage({
                           </div>
                         )}
 
-                        {availableMcpServers.length > 0 && (
-                          <div>
-                            <Label className="text-sm font-medium">MCP Servers</Label>
-                            <div className="mt-2">
-                              <MultiCombobox
-                                value={mcpServers}
-                                onValueChange={(value) => dispatch({ type: 'SET_MCP_SERVERS', payload: value })}
-                                options={availableMcpServers.map((server) => ({
-                                  value: server.name,
-                                  label: server.name,
-                                  description: server.command,
-                                }))}
-                                placeholder="选择 MCP Servers..."
-                              />
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1.5">选择工作流运行时默认启用的 MCP Servers</p>
+                        <div>
+                          <Label className="text-sm font-medium">MCP Servers</Label>
+                          <div className="mt-2">
+                            <MultiCombobox
+                              value={mcpServers}
+                              onValueChange={(value) => dispatch({ type: 'SET_MCP_SERVERS', payload: value })}
+                              options={availableMcpServers.map((server) => ({
+                                value: server.name,
+                                label: server.name,
+                                description: server.command,
+                              }))}
+                              placeholder={availableMcpServers.length > 0 ? '选择 MCP Servers...' : '当前没有可用 MCP Servers'}
+                            />
                           </div>
-                        )}
+                          <p className="text-xs text-muted-foreground mt-1.5">选择工作流运行时默认启用的 MCP Servers</p>
+                        </div>
+
+                        <div>
+                          <Label className="text-sm font-medium">RAG 知识库</Label>
+                          <div className="mt-2">
+                            <MultiCombobox
+                              value={ragKnowledgeBases}
+                              onValueChange={handleWorkflowRagKnowledgeBasesChange}
+                              options={availableKnowledgeBases.map((kb) => ({
+                                value: kb.id,
+                                label: kb.name || kb.id,
+                                description: [kb.description, `Chunks ${kb.chunkCount ?? 0}`].filter(Boolean).join(' · '),
+                              }))}
+                              placeholder={availableKnowledgeBases.length > 0 ? '选择工作流可授权的 RAG 知识库...' : '当前没有可用 RAG 知识库'}
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1.5">选择后运行时会自动启用 aceharness-rag，并授权 Agent 检索这些知识库</p>
+                        </div>
                       </div>
                       <div className="p-5 border-t bg-muted/30 flex justify-end">
                         <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleSaveConfig} disabled={saving}>
@@ -10772,12 +11741,18 @@ export default function WorkbenchPage({
       />
       {editingNode && (<EditNodeModal isOpen={showEditNodeModal} type={editingNode.type} data={getEditingNodeData()} roles={agentConfigs}
         availableSkills={availableSkills}
+        availableMcpServers={availableMcpServers.map((server: any) => ({ name: server.name, command: server.command }))}
+        availableKnowledgeBases={availableKnowledgeBases}
         specTasks={designOptimizationSpecTaskOptions}
         isNew={isNewNode}
         existingPhases={editingConfig?.workflow?.phases || []}
         existingSteps={editingConfig?.workflow?.phases?.flatMap((p: any) => p.steps) || []}
         onClose={() => { dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: false }); dispatch({ type: 'SET_EDITING_NODE', payload: null }); setIsNewNode(false); }}
-        onSave={handleSaveNode} onDelete={handleDeleteNode} />)}
+        onSave={handleSaveNode}
+        onAgentSkillsChange={handleAgentSkillsChange}
+        onAgentMcpServersChange={handleAgentMcpServersChange}
+        onAgentRagKnowledgeBasesChange={handleAgentRagKnowledgeBasesChange}
+        onDelete={handleDeleteNode} />)}
       {showCheckpoint && (<div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false })}>
         <div className="bg-card rounded-lg w-[600px] max-w-[90%] border" onClick={(e) => e.stopPropagation()}>
           <div className="p-5 border-b"><h3 className="text-lg font-semibold"><span className="material-symbols-outlined text-lg mr-2 align-middle">person</span>人工检查点</h3></div>
@@ -11102,7 +12077,7 @@ export default function WorkbenchPage({
           </div>
         </div>
       )}
-      <Dialog open={specCodingModalOpen} onOpenChange={(open) => {
+      <Dialog open={!specCodingDisabled && specCodingModalOpen} onOpenChange={(open) => {
         setSpecCodingModalOpen(open);
         if (!open) setSpecCodingModalFullscreen(false);
       }}>
@@ -11420,7 +12395,7 @@ export default function WorkbenchPage({
           ) : null}
         </DialogContent>
       </Dialog>
-      <Dialog open={!!specBindingReview} onOpenChange={(open) => !open && setSpecBindingReview(null)}>
+      <Dialog open={!specCodingDisabled && !!specBindingReview} onOpenChange={(open) => !open && setSpecBindingReview(null)}>
         <DialogContent className="max-w-3xl w-[92vw] max-h-[85vh] overflow-hidden p-0">
           <DialogTitle className="sr-only">task 绑定检查</DialogTitle>
           {specBindingReview ? (
@@ -12157,6 +13132,69 @@ export default function WorkbenchPage({
           <span>{pendingHumanQuestionKindLabel ? `待${pendingHumanQuestionKindLabel}` : '待人工回复'}</span>
         </button>
       ) : null}
+
+      <Dialog open={!!selectedSubworkflowRun} onOpenChange={(open) => { if (!open) setSelectedSubworkflowRun(null); }}>
+        <DialogContent className="max-w-3xl w-[94vw] max-h-[86vh] overflow-hidden p-0">
+          <div className="flex max-h-[86vh] flex-col">
+            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+              <div className="min-w-0">
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <span className="material-symbols-outlined text-cyan-600">account_tree</span>
+                  子工作流执行视图
+                </DialogTitle>
+                <DialogDescription className="mt-1">
+                  在父流程内查看 child run 的当前状态和摘要。
+                </DialogDescription>
+              </div>
+              {selectedSubworkflowRun ? (
+                <Badge variant={
+                  selectedSubworkflowRun.status === 'failed' || selectedSubworkflowRun.status === 'crashed'
+                    ? 'destructive'
+                    : selectedSubworkflowRun.status === 'completed'
+                      ? 'default'
+                      : 'secondary'
+                }>
+                  {selectedSubworkflowRun.status || 'unknown'}
+                </Badge>
+              ) : null}
+            </div>
+            {selectedSubworkflowRun ? (
+              <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border bg-muted/20 p-3">
+                    <div className="text-xs text-muted-foreground">Child Run</div>
+                    <div className="mt-1 break-all text-sm font-medium">{selectedSubworkflowRun.runId}</div>
+                  </div>
+                  <div className="rounded-lg border bg-muted/20 p-3">
+                    <div className="text-xs text-muted-foreground">Config</div>
+                    <div className="mt-1 break-all text-sm font-medium">{selectedSubworkflowRun.configFile}</div>
+                  </div>
+                  <div className="rounded-lg border bg-muted/20 p-3">
+                    <div className="text-xs text-muted-foreground">父状态</div>
+                    <div className="mt-1 text-sm font-medium">{selectedSubworkflowRun.parentStateName || '-'}</div>
+                  </div>
+                  <div className="rounded-lg border bg-muted/20 p-3">
+                    <div className="text-xs text-muted-foreground">父步骤</div>
+                    <div className="mt-1 text-sm font-medium">{selectedSubworkflowRun.parentStepName || '-'}</div>
+                  </div>
+                </div>
+                <div className="mt-4 rounded-lg border bg-background p-4">
+                  <div className="mb-2 text-sm font-medium">运行摘要</div>
+                  <div className="max-h-[38vh] overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+                    {selectedSubworkflowRun.summary || '暂无 child run 摘要。'}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2 border-t px-6 py-4">
+              <Button variant="outline" onClick={() => setSelectedSubworkflowRun(null)}>关闭</Button>
+              <Button onClick={() => openSubworkflowRunPage(selectedSubworkflowRun)}>
+                打开完整工作台
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 强制跳转对话框 */}
       {forceTransitionModal && (

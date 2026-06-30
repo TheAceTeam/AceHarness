@@ -20,7 +20,7 @@ describe('session directory helpers', () => {
     };
 
     expect(isWorkflowDirectorySession(session)).toBe(true);
-    expect(getSessionDirectoryKind(session)).toBe('workflow');
+    expect(getSessionDirectoryKind(session)).toBe('conversation');
   });
 
   test('treat workflow run sidebar hints as workflow sessions even on commander tab', () => {
@@ -37,7 +37,7 @@ describe('session directory helpers', () => {
     };
 
     expect(isWorkflowDirectorySession(session)).toBe(true);
-    expect(getSessionDirectoryKind(session)).toBe('workflow');
+    expect(getSessionDirectoryKind(session)).toBe('conversation');
   });
 
   test('keep agent creation sidebar hints in the conversation directory', () => {

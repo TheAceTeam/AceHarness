@@ -1,6 +1,5 @@
-import { readFile } from 'fs/promises';
-import { resolve } from 'path';
 import { existsSync, mkdirSync, rmSync } from 'fs';
+import { resolve } from 'path';
 import { loadChatSettings, type ChatSettings } from '@/lib/chat/settings';
 import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
 import { getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/core/app-paths';
@@ -11,9 +10,15 @@ import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { resolveMcpServersByNames, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
+import {
+  buildDatabaseCapabilityPrompt,
+  buildRuntimeDatabaseEnv,
+  createRuntimeDatabaseGrant,
+  expandCapabilitySkillNames,
+  writeRuntimeDatabaseEnvFile,
+} from '@/lib/runtime/database-capabilities';
 
 const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
-const SESSIONS_DIR = getWorkspaceDataFile('chat-sessions');
 const MAX_HISTORY_CHARS = 6000;
 const REQUIRED_DASHBOARD_SKILLS = ['aceharness-workflow-creator'];
 
@@ -177,17 +182,17 @@ async function buildBoundSessionContext(frontendSessionId?: string): Promise<str
 
 export async function loadChatHistory(frontendSessionId: string): Promise<string> {
   try {
-    const filePath = resolve(SESSIONS_DIR, `${frontendSessionId}.json`);
-    const content = await readFile(filePath, 'utf-8');
-    const session = JSON.parse(content);
+    const session = await loadChatSession(frontendSessionId);
+    if (!session) return '';
     const messages: { role: string; content: string }[] = session.messages || [];
     if (messages.length === 0) return '';
 
     let history = '';
     for (const msg of messages) {
-      if (!msg.content) continue;
+      const source = String(msg.content || (msg as any).rawContent || '').trim();
+      if (!source) continue;
       const role = msg.role === 'user' ? '用户' : msg.role === 'assistant' ? 'AI' : '系统';
-      let text = msg.content
+      let text = source
         .replace(/<result>[\s\S]*?<\/result>/gi, '[result block]')
         .replace(/```(?:action|card)\s*\n[\s\S]*?```/g, '[action/card block]')
         .replace(/<\/?result>/g, '')
@@ -219,6 +224,7 @@ export async function buildChatRequestContext(options: {
   enabledSkills: string[];
   runtimeSkillNames: string[];
   enabledMcpServers: ManagedMcpServer[];
+  runtimeDatabaseEnv: Record<string, string>;
 }> {
   const {
     mode,
@@ -233,13 +239,25 @@ export async function buildChatRequestContext(options: {
 
   const isResume = Boolean(sessionId);
   const chatSettings = mode === 'dashboard' ? await loadChatSettings() : null;
-  const enabledSkills = chatSettings ? resolveEnabledSkills(chatSettings, requestedSkills) : [];
+  const enabledSkills = chatSettings
+    ? expandCapabilitySkillNames(resolveEnabledSkills(chatSettings, requestedSkills), chatSettings.capabilitySkills)
+    : [];
   const requestedWorkingDirectory = typeof workingDirectory === 'string' ? workingDirectory.trim() : '';
   const engineRuntimeDirectory = getWorkspaceRoot();
   const resolvedWorkingDirectory = requestedWorkingDirectory || chatSettings?.workingDirectory || engineRuntimeDirectory;
   const enabledMcpServers = chatSettings
     ? await resolveEnabledMcpServers(chatSettings, requestedMcpServers, resolvedWorkingDirectory)
     : [];
+  const runtimeDatabaseGrant = chatSettings
+    ? await createRuntimeDatabaseGrant({
+      capabilitySkills: chatSettings.capabilitySkills,
+      skills: enabledSkills,
+      workspaceRoot: resolvedWorkingDirectory,
+      chatSessionId: frontendSessionId || sessionId,
+    })
+    : null;
+  await writeRuntimeDatabaseEnvFile(runtimeDatabaseGrant);
+  const runtimeDatabaseEnv = buildRuntimeDatabaseEnv(runtimeDatabaseGrant);
 
   let systemPrompt = '';
   let runtimeSkillNames: string[] = [];
@@ -254,6 +272,11 @@ export async function buildChatRequestContext(options: {
         ].filter(Boolean).join('\n')
         : '';
       runtimeSkillNames = [...enabledSkills];
+      const skillsDir = await getRuntimeSkillsDirPath();
+      const dbPrompt = buildDatabaseCapabilityPrompt(runtimeDatabaseGrant, skillsDir);
+      if (dbPrompt) {
+        systemPrompt = `${systemPrompt}${systemPrompt ? '\n\n' : ''}${dbPrompt}`.trim();
+      }
     } else {
       const mergedSkills = [...enabledSkills];
       for (const skillName of REQUIRED_DASHBOARD_SKILLS) {
@@ -264,6 +287,11 @@ export async function buildChatRequestContext(options: {
         personalDir,
         workingDirectory: resolvedWorkingDirectory,
       });
+      const skillsDir = await getRuntimeSkillsDirPath();
+      const dbPrompt = buildDatabaseCapabilityPrompt(runtimeDatabaseGrant, skillsDir);
+      if (dbPrompt) {
+        systemPrompt = `${systemPrompt}\n\n${dbPrompt}`.trim();
+      }
     }
   } else if (!isResume) {
     systemPrompt = DEFAULT_PROMPT;
@@ -281,6 +309,7 @@ export async function buildChatRequestContext(options: {
     enabledSkills,
     runtimeSkillNames,
     enabledMcpServers,
+    runtimeDatabaseEnv,
   };
 }
 

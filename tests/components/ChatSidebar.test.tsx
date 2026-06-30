@@ -135,8 +135,7 @@ describe('ChatSidebar', () => {
     expect(mockCreateSession).toHaveBeenCalled();
   });
 
-  test('shows AI-pushed workflow sessions in the workflow directory', async () => {
-    const user = userEvent.setup();
+  test('shows AI-pushed workflow sessions in the unified conversation list', async () => {
     mockSessions = [
       {
         id: 'workflow-hint-1',
@@ -161,15 +160,11 @@ describe('ChatSidebar', () => {
 
     render(<ChatSidebar />);
 
-    expect(screen.queryByText('Workflow Planning Chat')).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: /工作流/ }));
-
-    expect(screen.getAllByText('Hinted Workflow').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Workflow Planning Chat').length).toBeGreaterThan(0);
+    expect(screen.getByText('群聊和工作流都会显示在这里')).toBeTruthy();
   });
 
-  test('separates workflow sessions into creating, ready, and active buckets', async () => {
-    const user = userEvent.setup();
+  test('shows workflow sessions with badges in the unified conversation list', async () => {
     mockSessions = [
       { id: 'plain-1', title: 'Plain Chat', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 1 },
       {
@@ -223,23 +218,13 @@ describe('ChatSidebar', () => {
     render(<ChatSidebar />);
 
     expect(screen.getByText('Plain Chat')).toBeTruthy();
-    expect(screen.queryByText('Create Workflow')).toBeNull();
-    expect(screen.queryByText('Run Workflow')).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: /工作流/ }));
-
-    expect(screen.queryByText('Run Workflow')).toBeNull();
-    expect(screen.queryByText('Plain Chat')).toBeNull();
-    expect(screen.getByText('Draft Workflow')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: /Draft Workflow/ }));
     expect(screen.getByText('Create Workflow')).toBeTruthy();
     expect(screen.getByText('workflow-draft.yaml · 草稿')).toBeTruthy();
-
-    await user.click(screen.getByRole('button', { name: /未运行/ }));
+    expect(screen.getByText('Run Workflow')).toBeTruthy();
+    expect(screen.getByText('Ready Workflow')).toBeTruthy();
     expect(screen.getAllByText('ready.yaml').length).toBeGreaterThan(0);
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
-    await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
-    expect(screen.getByText('运行')).toBeTruthy();
+    expect(screen.getAllByText('运行').length).toBeGreaterThan(0);
   });
 
   test('shows workflow run sessions without loaded summary', async () => {
@@ -267,23 +252,21 @@ describe('ChatSidebar', () => {
 
     render(<ChatSidebar />);
 
-    await user.click(screen.getByRole('button', { name: /工作流/ }));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /workflow-run.yaml/ })).toBeTruthy();
+      expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
     });
-    await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
 
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
-    expect(screen.getByText('运行')).toBeTruthy();
+    expect(screen.getByText('运行中')).toBeTruthy();
 
-    const runBadge = screen.getByText('运行');
+    const runBadge = screen.getByText('运行中');
     const row = runBadge.closest('.home-chat-session-row');
     expect(row).toBeTruthy();
     await user.click(row as HTMLElement);
     expect(mockSetActiveSessionId).toHaveBeenCalledWith('run-1');
   });
 
-  test('filters sessions within each tab', async () => {
+  test('filters sessions in the unified conversation list', async () => {
     const user = userEvent.setup();
     mockSessions = [
       { id: 'plain-1', title: 'Design Notes', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 1 },
@@ -324,8 +307,8 @@ describe('ChatSidebar', () => {
     expect(screen.getByText('Design Notes')).toBeTruthy();
     expect(screen.queryByText('Bug Bash')).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: /工作流/ }));
-    await user.type(screen.getByPlaceholderText('筛选工作流会话...'), 'docs');
+    await user.click(screen.getByLabelText('清空筛选'));
+    await user.type(screen.getByPlaceholderText('筛选对话...'), 'docs');
 
     expect(screen.getByText('Docs Workflow')).toBeTruthy();
     expect(screen.queryByText('Release Workflow')).toBeNull();

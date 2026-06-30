@@ -3,6 +3,8 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { loadRunState, type WorkflowGitSnapshot } from '@/lib/run/state-persistence';
+import { requireAuth } from '@/lib/auth/middleware';
+import { canAccessRunState } from '@/lib/workflow/run-access';
 import {
   WORKSPACE_TEXT_FILE_SIZE_LIMIT,
   workspaceErrorResponse,
@@ -191,6 +193,8 @@ async function buildFileDetail(input: {
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const { searchParams } = new URL(request.url);
     const runId = searchParams.get('runId');
     const stepDiffId = searchParams.get('stepDiffId');
@@ -202,6 +206,9 @@ export async function GET(request: NextRequest) {
     }
 
     const runState = await loadRunState(runId);
+    if (runState && !canAccessRunState(auth, runState)) {
+      return NextResponse.json({ error: '无权访问该工作流 Git 变更' }, { status: 403 });
+    }
     const gitState = runState?.workspaceGit;
     if (!runState || !gitState?.enabled) {
       return NextResponse.json({

@@ -6,6 +6,7 @@ import { getConfigMeta, deleteConfigMeta } from '@/lib/config/metadata';
 import { getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted } from '@/lib/run/runtime-configs';
 import { deleteRunsByConfig } from '@/lib/run/store';
 import { workflowRegistry } from '@/lib/workflow/registry';
+import { findWorkflowReferences } from '@/lib/workflow/references';
 
 async function stopRunningWorkflow(filename: string): Promise<void> {
   const manager = workflowRegistry.getRunningManager(filename);
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
     const auth = await requireAuth(request);
     if (auth instanceof NextResponse) return auth;
 
-    const { filenames } = await request.json();
+    const { filenames, force } = await request.json();
     if (!Array.isArray(filenames) || filenames.length === 0) {
       return NextResponse.json({ error: '请提供要删除的文件列表' }, { status: 400 });
     }
@@ -40,6 +41,11 @@ export async function POST(request: NextRequest) {
         const meta = await getConfigMeta(filename, 'workflow');
         if (auth.role !== 'admin' && meta?.createdBy && meta.createdBy !== auth.id) {
           errors.push(`${filename}: 无权限`);
+          continue;
+        }
+        const references = await findWorkflowReferences(filename, { id: auth.id, role: auth.role });
+        if (!force && references.length > 0) {
+          errors.push(`${filename}: 正在被 ${references.length} 个工作流引用，需显式 force 删除`);
           continue;
         }
 

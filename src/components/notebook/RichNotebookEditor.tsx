@@ -144,6 +144,37 @@ function countAiSuggestionNodes(editor: Editor): number {
   return count;
 }
 
+function areBooleanRecordsEqual(a: Record<string, boolean>, b: Record<string, boolean>) {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+function areDependencyNodesEqual(a: RFNode[], b: RFNode[]) {
+  if (a.length !== b.length) return false;
+  return a.every((node, index) => {
+    const next = b[index];
+    return node.id === next?.id
+      && node.type === next.type
+      && node.position.x === next.position.x
+      && node.position.y === next.position.y
+      && JSON.stringify(node.data || null) === JSON.stringify(next.data || null);
+  });
+}
+
+function areDependencyEdgesEqual(a: RFEdge[], b: RFEdge[]) {
+  if (a.length !== b.length) return false;
+  return a.every((edge, index) => {
+    const next = b[index];
+    return edge.id === next?.id
+      && edge.source === next.source
+      && edge.target === next.target
+      && edge.type === next.type
+      && JSON.stringify(edge.data || null) === JSON.stringify(next.data || null);
+  });
+}
+
 let cachedCollabIdentity: {
   token: string;
   user: { id: string; name: string; color: string };
@@ -643,7 +674,7 @@ export function RichNotebookEditor({
   }, []);
   const setOutputBackedSuccessWithRef = useCallback((next: Record<string, boolean>) => {
     outputBackedSuccessRef.current = next;
-    setOutputBackedSuccess(next);
+    setOutputBackedSuccess((prev) => (areBooleanRecordsEqual(prev, next) ? prev : next));
   }, []);
 
   useEffect(() => {
@@ -804,13 +835,16 @@ export function RichNotebookEditor({
 
   const refreshDependencyGraph = useCallback((targetEditor: Editor) => {
     const { nodes, edges } = buildDependencyGraph(targetEditor);
-    setDependencyNodes(nodes);
-    setDependencyEdges(edges);
+    setDependencyNodes((prev) => (areDependencyNodesEqual(prev, nodes) ? prev : nodes));
+    setDependencyEdges((prev) => (areDependencyEdgesEqual(prev, edges) ? prev : edges));
   }, []);
 
   const refreshDerivedNotebookState = useCallback((targetEditor: Editor) => {
     setOutputBackedSuccessWithRef(buildOutputBackedStatus(targetEditor));
-    setAiSuggestionCount(countAiSuggestionNodes(targetEditor));
+    setAiSuggestionCount((prev) => {
+      const next = countAiSuggestionNodes(targetEditor);
+      return prev === next ? prev : next;
+    });
     refreshDependencyGraph(targetEditor);
   }, [refreshDependencyGraph, setOutputBackedSuccessWithRef]);
 
@@ -1248,14 +1282,14 @@ export function RichNotebookEditor({
     return base;
   }, [cellRunState, collabSession, collabUser.color, collabUser.id, collabUser.name, filePath, onRunCell, outputBackedSuccess, replaceSuggestionNodeWithText, resolveCellStatus, setCellRunStateWithRef, toast]);
 
-  const canWriteEditorContent = (targetEditor: {
+  const canWriteEditorContent = useCallback((targetEditor: {
     isDestroyed?: boolean;
     commands?: { setContent?: (...args: any[]) => unknown };
   } | null | undefined) => {
     if (!targetEditor) return false;
     if (targetEditor.isDestroyed) return false;
     return typeof targetEditor.commands?.setContent === 'function';
-  };
+  }, []);
 
   const initialEditorContent = collabSession ? lastKnownContentRef.current : content;
 
@@ -1695,6 +1729,7 @@ export function RichNotebookEditor({
   const [translateTarget, setTranslateTarget] = useState<'en' | 'zh' | 'ja' | 'ko'>('en');
   const [bubbleAiMenuOpen, setBubbleAiMenuOpen] = useState(false);
   const [domCodeContext, setDomCodeContext] = useState(false);
+  const domCodeContextRef = useRef(false);
   const [bubbleAiMenuPos, setBubbleAiMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [aiSuggestionCount, setAiSuggestionCount] = useState(0);
   const [uploadingImages, setUploadingImages] = useState(0);
@@ -2381,6 +2416,8 @@ export function RichNotebookEditor({
         anchorEl?.closest('.notebook-code-node') ||
         activeEl?.closest('.notebook-code-node'),
       );
+      if (domCodeContextRef.current === inCode) return;
+      domCodeContextRef.current = inCode;
       setDomCodeContext(inCode);
     };
     document.addEventListener('selectionchange', checkDomCodeContext, true);

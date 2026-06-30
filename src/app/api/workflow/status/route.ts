@@ -10,6 +10,7 @@ import {
   loadWorkflowFinalReview,
 } from '@/lib/workflow/experience-store';
 import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { getConfigMeta } from '@/lib/config/metadata';
 import { getSpecRootDir } from '@/lib/spec/persistence';
 import { resolve } from 'path';
 import type { SpecCodingDocument } from '@/lib/core/schemas';
@@ -101,16 +102,23 @@ async function loadWorkflowRuntimeMeta(configFile: string): Promise<{
   projectRoot?: string;
   requirements?: string;
   specRoot?: string;
+  specCodingDisabled?: boolean;
 }> {
   try {
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
     const raw = await readFile(configPath, 'utf-8');
     const config = parse(raw) as any;
+    const meta = await getConfigMeta(configFile, 'workflow').catch(() => undefined);
+    const specCodingDisabled = config?.context?.specCodingEnabled === false
+      || config?.context?.skipSpecCoding === true
+      || meta?.specCodingEnabled === false
+      || meta?.specCodingSkipped === true;
     return {
       workflowName: typeof config?.workflow?.name === 'string' ? config.workflow.name : undefined,
       projectRoot: typeof config?.context?.projectRoot === 'string' ? config.context.projectRoot : undefined,
       requirements: typeof config?.context?.requirements === 'string' ? config.context.requirements : undefined,
       specRoot: typeof config?.specCoding?.specRoot === 'string' ? config.specCoding.specRoot : undefined,
+      specCodingDisabled,
     };
   } catch {
     return {};
@@ -176,6 +184,7 @@ function enrichPersistentSpecStatus(status: any, runtimeMeta: WorkflowConfigMeta
 type WorkflowConfigMetaLike = {
   projectRoot?: string;
   specRoot?: string;
+  specCodingDisabled?: boolean;
 };
 
 async function withCreationSession(status: any, requestedConfigFile?: string | null) {
@@ -185,9 +194,12 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
   const finalReview = status?.runId ? await loadWorkflowFinalReview(status.runId).catch(() => null) : null;
   const runtimeMeta = await loadWorkflowRuntimeMeta(configFile);
   status = enrichPersistentSpecStatus(status, runtimeMeta);
-  const creationSession = status?.creationSessionId
-    ? await loadCreationSession(status.creationSessionId).catch(() => null)
-    : await loadLatestCreationSessionByFilename(configFile).catch(() => null);
+  const specCodingDisabled = runtimeMeta.specCodingDisabled === true;
+  const creationSession = specCodingDisabled
+    ? null
+    : status?.creationSessionId
+      ? await loadCreationSession(status.creationSessionId).catch(() => null)
+      : await loadLatestCreationSessionByFilename(configFile).catch(() => null);
   const historicalExperiences = configFile
     ? await listWorkflowExperiences({ configFile, limit: 5 }).catch(() => [])
     : [];
@@ -199,8 +211,8 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
     excludeRunId: status?.runId || undefined,
     limit: 5,
   }).catch(() => []);
-  const runSpecCoding = status?.runSpecCoding || null;
-  const creationSpecCoding = creationSession?.specCoding || null;
+  const runSpecCoding = specCodingDisabled ? null : (status?.runSpecCoding || null);
+  const creationSpecCoding = specCodingDisabled ? null : (creationSession?.specCoding || null);
   const displaySpecCoding = runSpecCoding || creationSpecCoding || null;
   const runSpecCodingPayload = runSpecCoding
     ? buildSpecCodingPayload(runSpecCoding, 'run')
@@ -251,6 +263,7 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
     creationSpecCodingDetails: creationSpecCodingPayload?.specCodingDetails || null,
     runSpecCodingSummary: runSpecCodingPayload?.specCodingSummary || null,
     runSpecCodingDetails: runSpecCodingPayload?.specCodingDetails || null,
+    specCodingDisabled,
     sourceOfTruth,
     finalReview,
     qualityChecks: status?.qualityChecks || [],
@@ -432,6 +445,9 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
     'human-question-answered', 'human-question-updated',
     'agent-flow', 'supervisor-review', 'state-executing',
     'parallel-group-start', 'parallel-group-complete', 'circuit-breaker',
+    'subworkflow-start', 'subworkflow-status', 'subworkflow-waiting-human',
+    'subworkflow-complete', 'subworkflow-failed', 'subworkflow-stopped',
+    'subworkflow-cancelled',
   ];
   const handlers = new Map<string, (data: any) => void>();
   const cleanup = () => {
@@ -468,6 +484,10 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
             failedSteps: status?.failedSteps,
             activeSteps: status?.activeSteps,
             activeConcurrencyGroups: status?.activeConcurrencyGroups,
+            childRunIds: status?.childRunIds,
+            subworkflowRuns: status?.subworkflowRuns,
+            subworkflowSummary: status?.subworkflowSummary,
+            activeSubworkflowRunId: status?.activeSubworkflowRunId,
             agents: Array.isArray(status?.agents)
               ? status.agents.map((agent: any) => ({
                   name: agent?.name,

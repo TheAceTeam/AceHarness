@@ -10,6 +10,8 @@ import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assem
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { isRunningWorkflowConversation } from '@/lib/workflow/run-status';
+import { resolveConversationMode, type HomeConversationMode } from '@/lib/chat/conversation-mode';
 
 // --- Types ---
 
@@ -63,12 +65,14 @@ export interface ChatMessage {
     cache_creation_input_tokens?: number;
     cache_read_input_tokens?: number;
   };
+  workflowThinking?: boolean;
   timestamp: number;
 }
 
 export interface ChatSession {
   id: string;
   title: string;
+  conversationMode?: HomeConversationMode;
   backendSessionId?: string;
   creationSession?: {
     creationSessionId: string;
@@ -106,6 +110,7 @@ export interface ChatSession {
 interface SessionSummary {
   id: string;
   title: string;
+  conversationMode?: HomeConversationMode;
   model: string;
   createdAt: number;
   updatedAt: number;
@@ -169,7 +174,45 @@ function isSessionAhead(
   baseline: Pick<ChatSession, 'updatedAt' | 'messages'> | null | undefined,
 ): boolean {
   if (!baseline) return true;
+  if (baseline.messages.length > 0 && candidate.messages.length === 0) return false;
+  if (candidate.messages.length > 0 && baseline.messages.length === 0) return true;
   return candidate.updatedAt > baseline.updatedAt || candidate.messages.length > baseline.messages.length;
+}
+
+function hasReadableSessionMessages(session: Pick<ChatSession, 'messages'> | null | undefined): boolean {
+  return Boolean(session?.messages?.some((message) => (
+    String(message.content || message.rawContent || '').trim()
+    || (message.actions?.length ?? 0) > 0
+    || (message.cards?.length ?? 0) > 0
+  )));
+}
+
+function chooseLoadedSessionSnapshot(input: {
+  liveSession: ChatSession | null;
+  persistedSession: ChatSession | null;
+  latestCached: ChatSession | undefined;
+  currentActive: ChatSession | null;
+  summaryMessageCount?: number;
+}): ChatSession | null {
+  const candidates = [
+    input.liveSession,
+    input.persistedSession,
+    input.latestCached,
+    input.currentActive,
+  ].filter((session): session is ChatSession => Boolean(session));
+  if (candidates.length === 0) return null;
+
+  const nonEmptyCandidates = candidates.filter(hasReadableSessionMessages);
+  const effectiveCandidates = nonEmptyCandidates.length > 0 ? nonEmptyCandidates : candidates;
+  if ((input.summaryMessageCount || 0) > 0 && nonEmptyCandidates.length > 0) {
+    return nonEmptyCandidates.reduce((best, candidate) => (
+      isSessionAhead(candidate, best) ? candidate : best
+    ));
+  }
+
+  return effectiveCandidates.reduce((best, candidate) => (
+    isSessionAhead(candidate, best) ? candidate : best
+  ));
 }
 
 function resolveSessionWorkingDirectory(
@@ -236,6 +279,8 @@ interface DashboardChatContextType {
   discoveredMcpServers: ManagedMcpServer[];
   toggleMcpServer: (serverName: string) => void;
   setMcpServersEnabled: (servers: Record<string, boolean>) => void;
+  capabilitySkills: any;
+  setCapabilitySkills: (capabilitySkills: any) => void;
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   setSessionWorkbenchState: (state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => void;
@@ -268,6 +313,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   undoActionById: async () => {}, retryAction: async () => {}, reloadActionResult: async () => {},
   skillSettings: {}, discoveredSkills: [], toggleSkill: () => {}, setSkillsEnabled: () => {},
   mcpSettings: {}, discoveredMcpServers: [], toggleMcpServer: () => {}, setMcpServersEnabled: () => {},
+  capabilitySkills: {}, setCapabilitySkills: () => {},
   workingDirectory: '', setWorkingDirectory: () => {},
   setSessionWorkbenchState: () => {},
   updateSessionCreationBinding: async () => {},
@@ -361,10 +407,14 @@ async function apiSaveSession(session: ChatSession): Promise<void> {
 }
 
 async function apiDeleteSession(id: string): Promise<void> {
-  await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`, {
+  const res = await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || '删除会话失败');
+  }
 }
 
 async function apiEnsureChatWorkspace(input: {
@@ -396,6 +446,10 @@ async function apiBatchDeleteSessions(ids: string[]): Promise<void> {
   });
   if (!res.ok && res.status !== 207) {
     throw new Error('批量删除会话失败');
+  }
+  const data = await res.json().catch(() => null);
+  if (Array.isArray(data?.protectedRunning) && data.protectedRunning.length > 0) {
+    throw new Error('部分工作流运行中的对话不能删除');
   }
 }
 
@@ -464,7 +518,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
   const effectiveEngine = engine || effectiveGlobalEngine;
   const isModelSelectionReady = Boolean(model && effectiveEngine);
-  const { chatStreamsBySessionId, chatSessionSignalsById } = useWorkflowLiveState();
+  const { chatStreamsBySessionId, chatSessionSignalsById, runStatusById } = useWorkflowLiveState();
 
   const refreshGlobalEngineConfig = useCallback(() => {
     fetch('/api/engine').then(r => r.json()).then(data => {
@@ -494,6 +548,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [discoveredSkills, setDiscoveredSkills] = useState<DiscoveredSkill[]>([]);
   const [mcpSettings, setMcpSettings] = useState<Record<string, boolean>>({});
   const [discoveredMcpServers, setDiscoveredMcpServers] = useState<ManagedMcpServer[]>([]);
+  const [capabilitySkills, setCapabilitySkillsState] = useState<any>({});
   const [workingDirectory, setWorkingDirectoryState] = useState('');
 
   const refreshChatSettings = useCallback(async () => {
@@ -502,6 +557,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (data.discoveredSkills) setDiscoveredSkills(data.discoveredSkills);
       if (data.mcpServers) setMcpSettings(data.mcpServers);
       if (data.discoveredMcpServers) setDiscoveredMcpServers(data.discoveredMcpServers);
+      if (data.capabilitySkills) setCapabilitySkillsState(data.capabilitySkills);
       return data;
     });
   }, []);
@@ -579,6 +635,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }).catch(() => {});
       return next;
     });
+  }, []);
+
+  const setCapabilitySkills = useCallback((nextCapabilitySkills: any) => {
+    setCapabilitySkillsState(nextCapabilitySkills || {});
+    fetch('/api/chat/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ capabilitySkills: nextCapabilitySkills || {} }),
+    }).catch(() => {});
   }, []);
 
   const setWorkingDirectory = useCallback((dir: string) => {
@@ -850,17 +915,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const liveSession = prepareLoadedSession(streamState?.liveSession || null);
       const persistedSession = prepareLoadedSession(loadedSession);
       const latestCached = sessionCacheRef.current[activeSessionId];
-      const nextSession = liveSession
-        || (latestCached
-          && persistedSession
-          && (
-            latestCached.updatedAt > persistedSession.updatedAt
-            || latestCached.messages.length > persistedSession.messages.length
-          )
-          ? latestCached
-          : persistedSession)
-        || latestCached
-        || null;
+      const currentActive = activeSessionRef.current?.id === activeSessionId ? activeSessionRef.current : null;
+      const nextSession = chooseLoadedSessionSnapshot({
+        liveSession,
+        persistedSession,
+        latestCached,
+        currentActive,
+        summaryMessageCount: summary?.messageCount,
+      });
 
       if (!nextSession) {
         setActiveSession(null);
@@ -1064,6 +1126,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const upsertSessionSummary = useCallback((updated: ChatSession) => {
     cacheSessionSnapshot(updated);
     setSessions((list) => {
+      const conversationMode = resolveConversationMode(updated, { runStatusById });
       const summary: SessionSummary = {
         id: updated.id,
         title: updated.title,
@@ -1072,10 +1135,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         updatedAt: updated.updatedAt,
         messageCount: updated.messages.length,
         lastMessage: extractLastMessagePreview(updated.messages),
+        conversationMode,
         agentBinding: updated.agentBinding,
         workflowBinding: updated.workflowBinding,
         creationSession: updated.creationSession,
-        sessionWorkbenchState: updated.sessionWorkbenchState,
+        sessionWorkbenchState: {
+          ...(updated.sessionWorkbenchState || {}),
+          conversationMode,
+        },
       };
       const exists = list.some((item) => item.id === updated.id);
       if (!exists) {
@@ -1091,7 +1158,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
       return changed ? next : list;
     });
-  }, [cacheSessionSnapshot]);
+  }, [cacheSessionSnapshot, runStatusById]);
 
   useEffect(() => {
     const signalEntries = Object.entries(chatSessionSignalsById);
@@ -1362,28 +1429,45 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const setSessionWorkbenchState = useCallback((state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => {
     updateActiveSession((session) => {
       const nextState = typeof state === 'function' ? state(session.sessionWorkbenchState) : state;
-      if (nextState === session.sessionWorkbenchState) return session;
-      if (JSON.stringify(nextState || null) === JSON.stringify(session.sessionWorkbenchState || null)) return session;
+      const conversationMode = resolveConversationMode({ ...session, sessionWorkbenchState: nextState }, { runStatusById });
+      const normalizedState = {
+        ...(nextState || {}),
+        conversationMode,
+      };
+      if (normalizedState === session.sessionWorkbenchState) return session;
+      if (JSON.stringify(normalizedState || null) === JSON.stringify(session.sessionWorkbenchState || null)) return session;
       const previousWorkspace = String(session.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
-      const nextWorkspace = String(nextState?.chatWorkspace?.workingDirectory || '').trim();
+      const nextWorkspace = String(normalizedState?.chatWorkspace?.workingDirectory || '').trim();
       return {
         ...session,
         backendSessionId: previousWorkspace !== nextWorkspace ? undefined : session.backendSessionId,
+        conversationMode,
         updatedAt: Date.now(),
-        sessionWorkbenchState: nextState,
+        sessionWorkbenchState: normalizedState,
       };
     });
-  }, [updateActiveSession]);
+  }, [runStatusById, updateActiveSession]);
 
   const updateSessionCreationBinding = useCallback(async (
     sessionId: string,
     creationSession: ChatSession['creationSession'] | null
   ) => {
-    const applyBinding = (session: ChatSession): ChatSession => ({
-      ...session,
-      updatedAt: Date.now(),
-      creationSession: creationSession || undefined,
-    });
+    const applyBinding = (session: ChatSession): ChatSession => {
+      const nextSession = {
+        ...session,
+        updatedAt: Date.now(),
+        creationSession: creationSession || undefined,
+      };
+      const conversationMode = resolveConversationMode(nextSession, { runStatusById });
+      return {
+        ...nextSession,
+        conversationMode,
+        sessionWorkbenchState: {
+          ...(nextSession.sessionWorkbenchState || {}),
+          conversationMode,
+        },
+      };
+    };
 
     if (activeSessionRef.current?.id === sessionId) {
       updateActiveSession((session) => applyBinding(session));
@@ -1405,7 +1489,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       creationSession: updated.creationSession,
       sessionWorkbenchState: updated.sessionWorkbenchState,
     } : item));
-  }, [updateActiveSession]);
+  }, [runStatusById, updateActiveSession]);
 
   const appendVisibleSessionTag = useCallback(async (sessionId: string, label: string) => {
     const appendMessage = (session: ChatSession): ChatSession => {
@@ -1566,8 +1650,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       id: message.id || genId(),
       timestamp: message.timestamp || now + index,
     }));
-    const session: ChatSession = {
+    const baseSession: ChatSession = {
       id, title, model, engine: engine || undefined, messages: initialMessages,
+      conversationMode: options?.sessionWorkbenchState?.conversationMode,
       agentBinding: options?.agentBinding ? {
         agentName: options.agentBinding.agentName,
         team: options.agentBinding.team,
@@ -1578,11 +1663,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sessionWorkbenchState: options?.sessionWorkbenchState,
       createdAt: now, updatedAt: now,
     };
+    const conversationMode = resolveConversationMode(baseSession, { runStatusById });
+    const session: ChatSession = {
+      ...baseSession,
+      conversationMode,
+      sessionWorkbenchState: {
+        ...(baseSession.sessionWorkbenchState || {}),
+        conversationMode,
+      },
+    };
     const summary: SessionSummary = {
       id, title, model,
       createdAt: session.createdAt, updatedAt: session.updatedAt,
       messageCount: initialMessages.length,
       lastMessage: extractLastMessagePreview(initialMessages),
+      conversationMode: session.conversationMode,
       agentBinding: session.agentBinding,
       sessionWorkbenchState: session.sessionWorkbenchState,
     };
@@ -1592,9 +1687,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setActiveSessionId(id);
     apiCreateSession(session).catch(console.error);
     return id;
-  }, [model, engine]);
+  }, [model, engine, runStatusById]);
 
   const deleteSession = useCallback((id: string) => {
+    const sessionToDelete = sessions.find((session) => session.id === id)
+      || (activeSessionRef.current?.id === id ? activeSessionRef.current : null);
+    const wasActiveSession = activeSessionId === id;
+    if (isRunningWorkflowConversation({
+      conversationMode: sessionToDelete?.conversationMode,
+      workflowBinding: sessionToDelete?.workflowBinding,
+      runStatusById,
+    })) {
+      console.warn('[chat] blocked deletion of running workflow conversation', id);
+      return;
+    }
     if (activeSessionId === id) {
       if (activeEventSourceRef.current) {
         activeEventSourceRef.current.close();
@@ -1618,15 +1724,40 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     void apiTerminateSessionProcesses(id)
       .catch(console.error)
       .finally(() => {
-        apiDeleteSession(id).catch(console.error);
+        apiDeleteSession(id).catch(async (error) => {
+          console.error(error);
+          const [list, restoredSession] = await Promise.all([
+            apiListSessions(),
+            wasActiveSession ? apiLoadSession(id) : Promise.resolve(null),
+          ]);
+          setSessions(list);
+          if (restoredSession) {
+            sessionCacheRef.current[id] = restoredSession;
+            setActiveSession(reparseSession(restoredSession));
+            setActiveSessionId(id);
+          }
+        });
       });
-  }, [activeSessionId, clearSessionTracking]);
+  }, [activeSessionId, clearSessionTracking, runStatusById, sessions]);
 
   const deleteSessions = useCallback((ids: string[]) => {
     const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
     if (uniqueIds.length === 0) return;
-    const deleting = new Set(uniqueIds);
+    const sessionById = new Map<string, SessionSummary | ChatSession>();
+    sessions.forEach((session) => sessionById.set(session.id, session));
+    if (activeSessionRef.current) sessionById.set(activeSessionRef.current.id, activeSessionRef.current);
+    const deletableIds = uniqueIds.filter((id) => !isRunningWorkflowConversation({
+      conversationMode: sessionById.get(id)?.conversationMode,
+      workflowBinding: sessionById.get(id)?.workflowBinding,
+      runStatusById,
+    }));
+    if (deletableIds.length === 0) {
+      console.warn('[chat] blocked deletion of running workflow conversations', uniqueIds);
+      return;
+    }
+    const deleting = new Set(deletableIds);
     const deletingActive = activeSessionId ? deleting.has(activeSessionId) : false;
+    const deletedActiveSessionId = deletingActive ? activeSessionId : null;
     if (deletingActive) {
       if (activeEventSourceRef.current) {
         activeEventSourceRef.current.close();
@@ -1650,16 +1781,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
-    uniqueIds.forEach((id) => clearSessionTracking(id));
-    void apiTerminateSessionsProcesses(uniqueIds)
+    deletableIds.forEach((id) => clearSessionTracking(id));
+    void apiTerminateSessionsProcesses(deletableIds)
       .catch(console.error)
       .finally(() => {
-        apiBatchDeleteSessions(uniqueIds).catch(async (error) => {
+        apiBatchDeleteSessions(deletableIds).catch(async (error) => {
           console.error(error);
-          await Promise.allSettled(uniqueIds.map((id) => apiDeleteSession(id)));
+          await Promise.allSettled(deletableIds.map((id) => apiDeleteSession(id)));
+          const [list, restoredSession] = await Promise.all([
+            apiListSessions(),
+            deletedActiveSessionId ? apiLoadSession(deletedActiveSessionId) : Promise.resolve(null),
+          ]);
+          setSessions(list);
+          if (restoredSession) {
+            sessionCacheRef.current[deletedActiveSessionId!] = restoredSession;
+            setActiveSession(reparseSession(restoredSession));
+            setActiveSessionId(deletedActiveSessionId);
+          }
         });
       });
-  }, [activeSessionId, clearSessionTracking]);
+  }, [activeSessionId, clearSessionTracking, runStatusById, sessions]);
 
   const renameSession = useCallback((id: string, title: string) => {
     if (activeSession?.id === id) {
@@ -2735,6 +2876,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,
       mcpSettings, discoveredMcpServers, toggleMcpServer, setMcpServersEnabled,
+      capabilitySkills, setCapabilitySkills,
       workingDirectory, setWorkingDirectory,
       setSessionWorkbenchState,
       updateSessionCreationBinding,

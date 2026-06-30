@@ -150,7 +150,7 @@ The ACEHarness interface is organized around daily engineering work:
 
 - **Home chat**: regular AI conversations, workflow creation, Agora entry points, and WeChat ClawBot session binding.
 - **Agora**: topic-based or workflow-bound multi-agent chat for design discussion, disagreement resolution, and retrospectives.
-- **Workflow workbench**: state-machine execution, streamed step output, human checkpoints, Preflight results, Git step changes, and run recovery.
+- **Workflow workbench**: state-machine execution, streamed step output, human checkpoints, Preflight results, Git step changes, run recovery, and subworkflow steps that embed another state-machine workflow.
 - **Workspace and Changes**: embedded file editing, directory browsing, Git diff, step-level change review, and baseline comparison.
 - **Cangjie Notebook**: personal and team spaces for documents, notes, run outputs, and retrospectives with collaborative editing, snapshots, and sharing.
 - **Model and engine diagnostics**: standard probes for model and execution-backend evaluation, including SDK, ACP, HTTP drivers, and streaming-event troubleshooting.

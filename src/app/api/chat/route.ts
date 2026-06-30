@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     }
 
     const useModel = model || '';
-    const { systemPrompt, runtimeSkillNames, enabledMcpServers } = await buildChatRequestContext({
+    const { systemPrompt, resolvedWorkingDirectory, runtimeSkillNames, enabledMcpServers, runtimeDatabaseEnv } = await buildChatRequestContext({
       mode,
       sessionId,
       frontendSessionId,
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '引擎不可用，请检查配置' }, { status: 500 });
     }
 
-    await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot(), runtimeSkillNames);
+    await ensureEngineRuntimeSkillsAvailable(engineType, resolvedWorkingDirectory || getWorkspaceRoot(), runtimeSkillNames);
 
     const chunks: string[] = [];
     engine.on('stream', (event: any) => {
@@ -69,11 +69,12 @@ export async function POST(request: NextRequest) {
         prompt: engineCommand.prompt,
         systemPrompt,
         model: useModel,
-        workingDirectory: getWorkspaceRoot(),
+        workingDirectory: resolvedWorkingDirectory || getWorkspaceRoot(),
         sessionId: sessionId || undefined,
         mcpServers: enabledMcpServers,
         userId: auth?.id,
         rawPrompt: engineCommand.rawPrompt,
+        env: runtimeDatabaseEnv,
     });
 
     return NextResponse.json({

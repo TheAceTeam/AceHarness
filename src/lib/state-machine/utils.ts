@@ -88,6 +88,10 @@ export function isEngineLevelFailure(message: string): boolean {
 
   return /acp\s+connection\s+closed/i.test(normalized)
     || /apierror/i.test(normalized)
+    || /模型调用失败(?:\s*\(\s*\d{3}\s*\))?\s*:/i.test(normalized)
+    || /(?:unauthorized|invalid token|invalid api key|authentication failed|permission denied)/i.test(normalized)
+    || /(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/i.test(normalized)
+    || /(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)
     || /context window limit/i.test(normalized)
     || /reached (its |the )?context window limit/i.test(normalized)
     || /maximum context length/i.test(normalized)

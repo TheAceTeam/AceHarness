@@ -74,6 +74,31 @@ function portableWorkflowConfig(name: string) {
   };
 }
 
+function stateMachineSubworkflowConfig(name: string, child?: string) {
+  return {
+    workflow: {
+      name,
+      mode: 'state-machine',
+      states: [
+        {
+          name: 'Start',
+          isInitial: true,
+          steps: child
+            ? [{ name: 'Run Child', type: 'subworkflow', workflow: child }]
+            : [{ name: 'Done', agent: 'developer', task: 'Finish' }],
+          transitions: [
+            { condition: { verdict: 'pass' }, to: 'End', priority: 1 },
+            { condition: { verdict: 'conditional_pass' }, to: 'End', priority: 2 },
+            { condition: { verdict: 'fail' }, to: 'End', priority: 3 },
+          ],
+        },
+        { name: 'End', isFinal: true, steps: [{ name: 'Finalize', agent: 'developer', task: 'Finalize' }], transitions: [] },
+      ],
+    },
+    context: { requirements: 'subworkflow archive test' },
+  };
+}
+
 async function createZip(entries: Record<string, string>): Promise<Buffer> {
   const zipfile = new ZipFile();
   for (const [entryPath, content] of Object.entries(entries)) {
@@ -222,6 +247,34 @@ describe('/api/configs/archive', () => {
         expect(sidecar.specCoding.linkedConfigFilename).toBe('spec-export.yaml');
         expect(sidecar.specCoding.artifacts.requirements).toContain('Preserve this exported spec');
       });
+    });
+  });
+
+  test('exports full subworkflow dependency graph when requested', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { token } = await createAuthToken();
+      const configsDir = path.join(aceHome, 'configs');
+      await mkdir(configsDir, { recursive: true });
+      await writeFile(path.join(configsDir, 'parent.yaml'), stringify(stateMachineSubworkflowConfig('Parent', 'child.yaml')), 'utf8');
+      await writeFile(path.join(configsDir, 'child.yaml'), stringify(stateMachineSubworkflowConfig('Child')), 'utf8');
+
+      const { PUT } = await import('@/app/api/configs/archive/route');
+      const response = await PUT(makeRequest('/api/configs/archive', {
+        method: 'PUT',
+        token,
+        json: { workflows: ['parent.yaml'], dependencyMode: 'full' },
+      }));
+
+      expect(response.status).toBe(200);
+      const zipBuffer = Buffer.from(await response.arrayBuffer());
+      await expect(listZipEntryPaths(zipBuffer)).resolves.toEqual([
+        'child.yaml',
+        'parent.yaml',
+        'workflow-dependencies.json',
+      ]);
+      const manifest = JSON.parse(await readZipEntry(zipBuffer, 'workflow-dependencies.json'));
+      expect(manifest.dependencyMode).toBe('full');
+      expect(manifest.workflows.sort()).toEqual(['child.yaml', 'parent.yaml']);
     });
   });
 
@@ -417,6 +470,28 @@ describe('/api/configs/archive', () => {
         const imported = parse(await readFile(path.join(aceHome, 'configs', 'spec-import.yaml'), 'utf8'));
         expect(imported.workflow.name).toBe('Spec Import');
       });
+    });
+  });
+
+  test('rejects imported subworkflow archives with missing child dependencies', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const archive = await createZip({
+        'parent.yaml': stringify(stateMachineSubworkflowConfig('Parent', 'missing-child.yaml')),
+      });
+      const formData = new FormData();
+      formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
+
+      const { POST } = await import('@/app/api/configs/archive/route');
+      const response = await POST(makeRequest('/api/configs/archive', {
+        method: 'POST',
+        token,
+        body: formData,
+      }));
+
+      expect(response.status).toBe(400);
+      const body = await responseJson<any>(response);
+      expect(body.message).toContain('missing-child.yaml');
     });
   });
 });

@@ -11,6 +11,8 @@ import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { deleteRunsByConfig } from '@/lib/run/store';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { getUserById, loadUsers } from '@/lib/core/user-store';
+import { validateSubworkflowDependenciesForConfig } from '@/lib/workflow/subworkflow-config';
+import { findWorkflowReferences, updateWorkflowReferences } from '@/lib/workflow/references';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -56,6 +58,16 @@ export async function GET(
     const config = parse(content);
     const validation = validateWorkflowDraft(config);
     const meta = await getConfigMeta(filename, 'workflow');
+    const responseConfig = meta?.specCodingEnabled === false || meta?.specCodingSkipped === true
+      ? {
+          ...config,
+          context: {
+            ...(config?.context || {}),
+            specCodingEnabled: false,
+            skipSpecCoding: true,
+          },
+        }
+      : config;
     const owner = meta?.createdBy ? await getUserById(meta.createdBy).catch(() => undefined) : undefined;
 
     // Load agents from configs/agents/*.yaml
@@ -73,7 +85,7 @@ export async function GET(
     } catch { /* agents dir may not exist */ }
 
     return NextResponse.json({
-      config,
+      config: responseConfig,
       raw: content,
       agents,
       meta: {
@@ -82,6 +94,8 @@ export async function GET(
         sharedWithUserIds: meta?.sharedWithUserIds || [],
         createdAt: meta?.createdAt,
         ownerName: owner?.username || '',
+        specCodingEnabled: meta?.specCodingEnabled,
+        specCodingSkipped: meta?.specCodingSkipped,
       },
       validation: {
         ...formatValidationIssuesForResponse(validation),
@@ -124,6 +138,11 @@ export async function POST(
 
     const body = await request.json();
     const { config } = body;
+    const renameFrom = typeof body?.renameFrom === 'string'
+      ? body.renameFrom
+      : typeof body?.previousFilename === 'string'
+        ? body.previousFilename
+        : '';
     const requestedMeta = body?.meta && typeof body.meta === 'object' ? body.meta : null;
 
     // Strip roles before saving — agents are managed separately
@@ -142,10 +161,26 @@ export async function POST(
     }
 
     let normalizedConfig = validationResult.normalized;
+    const dependencyIssues = await validateSubworkflowDependenciesForConfig(normalizedConfig);
+    if (dependencyIssues.length > 0) {
+      return NextResponse.json(
+        {
+          error: '配置验证失败',
+          details: dependencyIssues,
+        },
+        { status: 400 }
+      );
+    }
+
     let bindingValidation: any = undefined;
     const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
     const session = creationSessionId ? await loadCreationSession(creationSessionId).catch(() => null) : null;
-    const specCoding = body.specCoding || session?.specCoding;
+    const meta = await getConfigMeta(filename, 'workflow');
+    const specCodingDisabled = normalizedConfig?.context?.specCodingEnabled === false
+      || normalizedConfig?.context?.skipSpecCoding === true
+      || meta?.specCodingEnabled === false
+      || meta?.specCodingSkipped === true;
+    const specCoding = specCodingDisabled ? null : (body.specCoding || session?.specCoding);
     if (specCoding) {
       const bindingCompilation = compileStepTaskBindings(normalizedConfig, specCoding, {
         requireFullCoverage: true,
@@ -190,8 +225,11 @@ export async function POST(
         sharedWithUserIds: visibility === 'shared' ? sharedWithUserIds : [],
       }, 'workflow');
     }
+    const referenceUpdate = renameFrom && normalizeConfigFilename(renameFrom) !== filename
+      ? await updateWorkflowReferences(renameFrom, filename, { id: auth.id, role: auth.role })
+      : undefined;
 
-    return NextResponse.json({ success: true, message: '配置已保存', bindingValidation });
+    return NextResponse.json({ success: true, message: '配置已保存', bindingValidation, referenceUpdate });
   } catch (error: any) {
     return NextResponse.json(
       { error: '保存配置失败', message: error.message },
@@ -212,6 +250,17 @@ export async function DELETE(
     normalizeConfigFilename(filename);
     if (!(await canEditWorkflow(filename, auth.id, auth.role))) {
       return NextResponse.json({ error: '无权限删除该工作流' }, { status: 403 });
+    }
+    const force = request.nextUrl.searchParams.get('force') === '1';
+    const references = await findWorkflowReferences(filename, { id: auth.id, role: auth.role });
+    if (!force && references.length > 0) {
+      return NextResponse.json({
+        error: '该工作流正在被其他工作流引用',
+        code: 'WORKFLOW_REFERENCED',
+        referenceCount: references.reduce((sum, item) => sum + item.refs.length, 0),
+        workflowCount: references.length,
+        references,
+      }, { status: 409 });
     }
     await stopRunningWorkflow(filename);
     const filepath = await getRuntimeWorkflowConfigPath(filename);

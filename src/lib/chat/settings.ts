@@ -10,6 +10,7 @@ import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { loadMcpRegistry } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill/frontmatter';
+import type { CapabilitySkillsConfig } from '@/lib/core/schemas';
 
 const SETTINGS_PATH = getWorkspaceDataFile('chat-settings.yaml');
 const CACHE_TTL_MS = 5_000;
@@ -35,6 +36,7 @@ export interface ChatSettings {
   skills: Record<string, boolean>;
   mcpServers: Record<string, boolean>;
   workingDirectory?: string;
+  capabilitySkills?: CapabilitySkillsConfig;
 }
 
 /** 从 SKILL.md 提取标题和描述（body 部分，frontmatter 之后） */
@@ -140,6 +142,9 @@ export async function loadChatSettings(): Promise<ChatSettings> {
       skills: { ...defaults, ...persistedSkills },
       mcpServers: { ...defaultMcpServers, ...persistedMcpServers },
       workingDirectory: parsed?.workingDirectory,
+      capabilitySkills: parsed?.capabilitySkills && typeof parsed.capabilitySkills === 'object'
+        ? parsed.capabilitySkills
+        : undefined,
     };
   } catch {
     value = { skills: defaults, mcpServers: defaultMcpServers };

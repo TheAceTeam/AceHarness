@@ -3562,6 +3562,14 @@ export default function NewConfigModal({
   }, [draftCreationSessionId, getValues, previewSession, updateSessionCreationBinding]);
 
   const createPlanningChatSession = useCallback(async () => {
+    if (frontendSessionId) {
+      setPlanningFrontendSessionId(frontendSessionId);
+      restoredPlanningSessionRef.current = null;
+      reconnectingPlanningChatIdRef.current = null;
+      await bindCurrentDraftToChatSession(frontendSessionId).catch(() => {});
+      return frontendSessionId;
+    }
+
     const data = await modalSessionJsonFetch<any>('/api/chat/sessions', {
       method: 'POST',
       body: JSON.stringify({
@@ -3579,7 +3587,7 @@ export default function NewConfigModal({
     reconnectingPlanningChatIdRef.current = null;
     await bindCurrentDraftToChatSession(data.session.id).catch(() => {});
     return data.session.id as string;
-  }, [bindCurrentDraftToChatSession, getValues]);
+  }, [bindCurrentDraftToChatSession, frontendSessionId, getValues]);
 
   const persistStageSessionBinding = useCallback(async (
     stage: CreationStageKey,
@@ -3637,11 +3645,17 @@ export default function NewConfigModal({
   }, [bindCurrentDraftToChatSession, draftCreationSessionId, previewSession?.id]);
 
   const ensurePlanningChatSession = useCallback(async (forceFresh = false) => {
+    if (frontendSessionId) {
+      if (!planningFrontendSessionId) {
+        setPlanningFrontendSessionId(frontendSessionId);
+      }
+      return frontendSessionId;
+    }
     if (!forceFresh && planningFrontendSessionId) return planningFrontendSessionId;
     const sessionId = await createPlanningChatSession();
     await persistPlanningSessionBinding(sessionId);
     return sessionId;
-  }, [createPlanningChatSession, persistPlanningSessionBinding, planningFrontendSessionId]);
+  }, [createPlanningChatSession, frontendSessionId, persistPlanningSessionBinding, planningFrontendSessionId]);
 
   const restartPlanningConversation = useCallback(async () => {
     interruptPlanningRun();
@@ -5207,6 +5221,9 @@ export default function NewConfigModal({
     const hasConfirmedSpecCoding = Boolean(specPlanningEnabled && specCoding?.id);
     const artifacts = specCoding.artifacts || {};
     const targetFrontendSessionId = await ensurePlanningChatSession();
+    const answerContext = clarificationForm
+      ? buildClarificationAnswerContext(clarificationForm.questions || [], clarificationAnswers)
+      : '';
 
     interruptPlanningRun();
     setFormStep(5);
@@ -5289,6 +5306,7 @@ export default function NewConfigModal({
       `工作区模式：${values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place'}`,
       `需求描述：${reqs}`,
       values.description ? `补充说明：${values.description}` : '',
+      answerContext ? `补充问答：\n${answerContext}` : '',
       !hasConfirmedSpecCoding
         ? '创建模式：跳过 Spec，直接根据上面的需求内容编排可执行 workflow。不要创建“生成/修订 Spec”的工作流，除非用户需求本身就是管理 Spec。'
         : '',
@@ -5425,7 +5443,7 @@ export default function NewConfigModal({
       setCurrentStream('');
       setCurrentThinking('');
     }
-  }, [backendSessionId, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, specPlanningEnabled, toast, validateWorkflowDraftConfig]);
+  }, [backendSessionId, clarificationAnswers, clarificationForm, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, specPlanningEnabled, toast, validateWorkflowDraftConfig]);
 
   // Re-trigger AI stream after engine/model change
   useEffect(() => {
@@ -5475,22 +5493,6 @@ export default function NewConfigModal({
     }
 
     try {
-      if (!specPlanningEnabled) {
-        setFormStep(5);
-        setPreviewSession(null);
-        setDraftCreationSessionId(null);
-        setAiMessages([]);
-        setCurrentStream('');
-        setCurrentThinking('');
-        setAiPhase('streaming');
-        setAiFilename('');
-        setWorkflowDraftConfig(null);
-        setWorkflowDraftValidation(null);
-        setWorkflowDraftPreview(null);
-        setBackendSessionId(undefined);
-        await startAiStream(null);
-        return;
-      }
       if (previewSession) {
         const resolvedStep = resolveFormStepFromSession(previewSession);
         if (resolvedStep >= 4) {
@@ -5541,13 +5543,34 @@ export default function NewConfigModal({
         chatSessionId: planningFrontendSessionId,
         workflowName: getValues('workflowName'),
         filename: getValues('filename'),
-      }, '计划生成中');
+      }, specPlanningEnabled ? '计划生成中' : '草案生成中');
     }
 
     try {
-      await generatePlanWithChatSession();
+      if (specPlanningEnabled) {
+        await generatePlanWithChatSession();
+        return;
+      }
+      setPreviewSession(null);
+      setFormStep(5);
+      setAiMessages([]);
+      setCurrentStream('');
+      setCurrentThinking('');
+      setAiPhase('streaming');
+      setAiFilename('');
+      setWorkflowDraftConfig(null);
+      setWorkflowDraftValidation(null);
+      setWorkflowDraftPreview(null);
+      setBackendSessionId(undefined);
+      await persistDraftUiState({
+        formStep: 5,
+        planningStage: 'idle',
+        clarificationForm,
+        clarificationAnswers,
+      });
+      await startAiStream(null);
     } catch (error: any) {
-      toast('error', error?.message || '生成计划预览失败');
+      toast('error', error?.message || (specPlanningEnabled ? '生成计划预览失败' : '生成 workflow 草案失败'));
     }
   };
 
@@ -6329,7 +6352,9 @@ export default function NewConfigModal({
             <CreationWorkspaceShell
               currentStep={2}
               title="补充问答"
-              subtitle="先补全会影响计划和 Agent 编排的关键信息，然后再生成正式计划。"
+              subtitle={specPlanningEnabled
+                ? '先补全会影响计划和 Agent 编排的关键信息，然后再生成正式计划。'
+                : '先补全会影响工作流和 Agent 编排的关键信息，然后直接生成 workflow 草案。'}
               icon="route"
               iconClassName="text-amber-500"
               statusLabel={isGeneratingPlan ? '分析中' : clarificationForm ? `已生成 ${clarificationForm.questions.length} 题` : '等待问题'}
@@ -6366,7 +6391,9 @@ export default function NewConfigModal({
               resultTitle="问答结果"
               resultDescription="中间区域只放可操作的结构化问答，生成过程移到右侧，避免把表单挤到下面。"
               resultMeta={clarificationForm ? <Badge variant="outline">{planningStage === 'awaiting-answers' ? '等待回答' : '可继续补充'}</Badge> : null}
-              footerStatus={clarificationForm ? '回答完成后进入正式计划生成。' : 'AI 会先提出会影响后续计划和 Agent 编排的关键问题。'}
+              footerStatus={clarificationForm
+                ? (specPlanningEnabled ? '回答完成后进入正式计划生成。' : '回答完成后直接进入 workflow 草案生成。')
+                : 'AI 会先提出会影响后续计划和 Agent 编排的关键问题。'}
               footerRight={isGeneratingPlan ? (
                 <Button type="button" variant="destructive" onClick={() => {
                   clarificationAbortRef.current = true;
@@ -6389,7 +6416,9 @@ export default function NewConfigModal({
                     重新提问
                   </Button>
                   <Button type="button" onClick={() => void handleSubmitClarificationAnswers()} disabled={!canSubmitClarificationAnswers}>
-                    {canSubmitClarificationAnswers ? '提交回答并生成计划' : '出题完成后可继续'}
+                    {canSubmitClarificationAnswers
+                      ? (specPlanningEnabled ? '提交回答并生成计划' : '提交回答并生成草案')
+                      : '出题完成后可继续'}
                   </Button>
                 </>
               )}
@@ -7392,7 +7421,7 @@ export default function NewConfigModal({
             </>
           ) : workflowMode === 'ai-guided' ? (
             <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
-              当前处于快速编排模式：会跳过 Spec 计划、补充问答和正式制品确认，下一步直接进入 workflow 草案生成。
+              当前处于快速编排模式：仍会先进入补充问答；回答完成后跳过 Spec 计划和正式制品确认，直接生成 workflow 草案。
             </div>
           ) : workflowMode === 'state-machine' && !specPlanningEnabled ? (
             <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">

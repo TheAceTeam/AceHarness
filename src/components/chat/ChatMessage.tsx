@@ -7,6 +7,7 @@ import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import SpriteAvatar from '@/components/SpriteAvatar';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
@@ -1791,6 +1792,7 @@ interface ChatMessageProps {
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
     };
+    workflowThinking?: boolean;
     timestamp?: number;
   };
   isStreaming?: boolean;
@@ -2094,6 +2096,13 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
   const speakerType = card?.speakerType || 'agent';
   const isSupervisor = speakerType === 'supervisor';
   const isSystem = speakerType === 'system';
+  const speakerName = String(card?.speakerName || 'Agent');
+  const avatarSrc = isSystem
+    ? ''
+    : resolveAgentAvatarSrc(card?.avatarSrc || card?.avatar, speakerName, {
+      team: card?.team,
+      roleType: isSupervisor ? 'supervisor' : card?.roleType,
+    });
   const avatarClass = isSupervisor
     ? 'border-sky-400/30 bg-sky-500/15 text-sky-700 dark:text-sky-300'
     : isSystem
@@ -2109,17 +2118,24 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
     : isSystem
       ? 'text-muted-foreground'
       : 'text-violet-700 dark:text-violet-300';
-  const initial = String(card?.speakerName || 'A').replace(/\s+/g, '').slice(0, 1) || 'A';
   const content = message.rawContent || message.content || '';
   return (
     <div className="group flex items-start gap-3">
-      <div className={`mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarClass}`}>
-        {isSystem ? '系' : initial}
-      </div>
+      {isSystem ? (
+        <div className={`mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarClass}`}>
+          系
+        </div>
+      ) : (
+        <SpriteAvatar
+          avatar={avatarSrc}
+          alt={speakerName}
+          className={`mt-1 h-10 w-10 shrink-0 rounded-full border ${avatarClass}`}
+        />
+      )}
       <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         <div className={`rounded-[24px] rounded-tl-[14px] border px-4 py-3 ${bubbleClass}`}>
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className={`font-semibold ${nameClass}`}>{card?.speakerName || 'Agent'}</span>
+            <span className={`font-semibold ${nameClass}`}>{speakerName}</span>
             {card?.actionLabel ? (
               <span className="rounded-full border border-current/15 bg-background/50 px-2 py-0.5 text-[10px] text-current/80">
                 {card.actionLabel}
@@ -2149,6 +2165,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   const werewolfCard = getWerewolfCard(message);
   const collaborationCard = getCollaborationCard(message);
   const sourceLabel = message.source?.label?.trim() || (message.source?.type === 'wechat' ? '微信' : '');
+  const isWorkflowThinkingMessage = Boolean(message.workflowThinking);
 
   useEffect(() => {
     let cancelled = false;
@@ -2572,7 +2589,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
         {message.cards?.map((card, i) => (
           <UniversalCard key={i} card={card} onAction={onAction} />
         ))}
-        {(sentAt || message.engine || message.model || message.usage || message.costUsd !== undefined || message.durationMs !== undefined) && (
+        {!isWorkflowThinkingMessage && (sentAt || message.engine || message.model || message.usage || message.costUsd !== undefined || message.durationMs !== undefined) && (
           <div className="flex flex-wrap items-center gap-1 px-1 text-[11px] text-muted-foreground opacity-70">
             {sentAt && <span>{sentAt}</span>}
             {message.engine && (
@@ -2590,7 +2607,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             {message.durationMs !== undefined && <span>· {(message.durationMs / 1000).toFixed(1)}s</span>}
           </div>
         )}
-        {!isStreaming && (
+        {!isStreaming && !isWorkflowThinkingMessage && (
           <div className={`${actionBarClass} justify-start`}>
             <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
               <span className="material-symbols-outlined text-sm">content_copy</span>

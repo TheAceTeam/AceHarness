@@ -24,6 +24,9 @@ export async function PUT(request: NextRequest) {
       workingDirectory: typeof body?.workingDirectory === 'string'
         ? body.workingDirectory
         : current.workingDirectory,
+      capabilitySkills: body?.capabilitySkills && typeof body.capabilitySkills === 'object'
+        ? body.capabilitySkills
+        : current.capabilitySkills,
     });
     return NextResponse.json({ success: true });
   } catch (error: any) {

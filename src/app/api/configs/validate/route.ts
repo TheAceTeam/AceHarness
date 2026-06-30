@@ -4,6 +4,7 @@ import { parse } from 'yaml';
 import { requireAuth } from '@/lib/auth/middleware';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { assertSubworkflowDependenciesForConfig, resolveWorkflowConfigDependencyGraph } from '@/lib/workflow/subworkflow-config';
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,10 +28,27 @@ export async function POST(request: NextRequest) {
     }
 
     const validation = validateWorkflowDraft(config);
+    if (validation.ok && config?.workflow?.mode === 'state-machine') {
+      try {
+        if (filename) {
+          await resolveWorkflowConfigDependencyGraph(filename);
+        } else {
+          await assertSubworkflowDependenciesForConfig(config);
+        }
+      } catch (error: any) {
+        validation.issues.push({
+          severity: 'error',
+          path: ['workflow', 'subworkflow'],
+          message: error?.message || '子工作流依赖校验失败',
+          code: 'subworkflow_dependency',
+        });
+      }
+    }
     return NextResponse.json({
       success: true,
       validation: {
         ...formatValidationIssuesForResponse(validation),
+        ok: !validation.issues.some((issue) => issue.severity === 'error'),
         normalized: validation.normalized,
       },
     });

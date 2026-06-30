@@ -9,6 +9,8 @@ import {
   ArrowUp,
   ArrowUpDown,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   History,
   Play,
@@ -47,6 +49,21 @@ interface RunRow {
   id: string;
   configFile: string;
   configName: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  parentStateName?: string;
+  parentStepName?: string;
+  childRuns?: RunRow[];
+  childSummary?: {
+    total: number;
+    active: number;
+    failed: number;
+    waitingHuman: number;
+    detached: number;
+    completed: number;
+    superseded: number;
+    abandoned: number;
+  };
   startTime: string;
   endTime: string | null;
   status: string;
@@ -178,6 +195,7 @@ export default function RunHistoryPage() {
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
 
   useDocumentTitle('运行记录');
 
@@ -211,7 +229,10 @@ export default function RunHistoryPage() {
         setLoading(true);
         setError(null);
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-        const res = await fetch(`/api/run-history${queryString ? `?${queryString}` : ''}`, {
+        const params = new URLSearchParams(queryString);
+        if (view === 'runs') params.set('tree', '1');
+        const nextQuery = params.toString();
+        const res = await fetch(`/api/run-history${nextQuery ? `?${nextQuery}` : ''}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
 
@@ -303,6 +324,21 @@ export default function RunHistoryPage() {
     : '搜索运行记录...';
   const rankingItems = data?.view === 'token-ranking' ? data.rankings || [] : [];
   const runItems = data?.view === 'runs' || !data?.view ? data?.runs || [] : [];
+  const flattenRunItems = (items: RunRow[], depth = 0): Array<RunRow & { depth: number }> =>
+    items.flatMap((item) => {
+      const children = item.childRuns || [];
+      const visibleChildren = expandedRunIds.has(item.id) ? flattenRunItems(children, depth + 1) : [];
+      return [{ ...item, depth }, ...visibleChildren];
+    });
+  const displayedRunItems = useMemo(() => flattenRunItems(runItems), [runItems, expandedRunIds]);
+  const toggleExpandedRun = (runId: string) => {
+    setExpandedRunIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+  };
   const { isDashboardShell } = useDashboardShellHeader({
     title: pageTitle,
     subtitle: pageSubtitle,
@@ -537,8 +573,8 @@ export default function RunHistoryPage() {
                       </TableCell>
                     </TableRow>
                   )
-                ) : runItems.length ? (
-                  runItems.map((run) => (
+                ) : displayedRunItems.length ? (
+                  displayedRunItems.map((run) => (
                     <TableRow
                       key={run.id}
                       className={run.configFile ? 'cursor-pointer' : undefined}
@@ -565,9 +601,42 @@ export default function RunHistoryPage() {
                       }}
                     >
                       <TableCell>
-                        <div className="min-w-[220px]">
-                          <div className="font-medium">{run.configName || run.configFile || '-'}</div>
+                        <div className="min-w-[220px]" style={{ paddingLeft: run.depth ? `${run.depth * 18}px` : undefined }}>
+                          <div className="flex min-w-0 items-center gap-2">
+                            {run.childRuns?.length ? (
+                              <button
+                                type="button"
+                                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground hover:bg-muted"
+                                title={expandedRunIds.has(run.id) ? '折叠子运行' : '展开子运行'}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleExpandedRun(run.id);
+                                }}
+                              >
+                                {expandedRunIds.has(run.id) ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                              </button>
+                            ) : run.depth > 0 ? (
+                              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground">└</span>
+                            ) : (
+                              <span className="h-6 w-6 shrink-0" />
+                            )}
+                            <div className="truncate font-medium">{run.configName || run.configFile || '-'}</div>
+                            {run.parentRunId ? <Badge variant="outline" className="text-[10px]">子流程</Badge> : null}
+                            {run.status === 'detached' || run.status === 'superseded' || run.status === 'abandoned' ? (
+                              <Badge variant="outline" className="text-[10px]">{formatStatusLabel(run.status)}</Badge>
+                            ) : null}
+                            {run.childSummary?.total ? (
+                              <Badge variant="secondary" className="text-[10px]">
+                                子流程 {run.childSummary.total}
+                              </Badge>
+                            ) : null}
+                          </div>
                           <div className="mt-1 text-xs text-muted-foreground">{run.configFile || '-'}</div>
+                          {run.parentStepName ? (
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              来源：{[run.parentStateName, run.parentStepName].filter(Boolean).join(' / ')}
+                            </div>
+                          ) : null}
                         </div>
                       </TableCell>
                       {data?.isAdmin ? (
@@ -593,7 +662,12 @@ export default function RunHistoryPage() {
                         {run.startTime ? new Date(run.startTime).toLocaleString() : '-'}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {run.completedSteps || 0}/{run.totalSteps || 0}
+                        <div>{run.completedSteps || 0}/{run.totalSteps || 0}</div>
+                        {run.childSummary?.total ? (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            完成 {run.childSummary.completed} · 失败 {run.childSummary.failed} · 等待 {run.childSummary.waitingHuman}
+                          </div>
+                        ) : null}
                       </TableCell>
                     </TableRow>
                   ))

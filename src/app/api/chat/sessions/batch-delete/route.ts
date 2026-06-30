@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteChatSession, loadChatSession } from '@/lib/chat/persistence';
 import { requireAuth } from '@/lib/auth/middleware';
+import { isProtectedRunningWorkflowSession } from '@/lib/chat/delete-protection';
 
 function isOwner(session: any, userId: string): boolean {
   if (!session) return false;
@@ -28,14 +29,21 @@ export async function POST(req: NextRequest) {
     const deleted: string[] = [];
     const missing: string[] = [];
     const forbidden: string[] = [];
+    const protectedRunning: string[] = [];
     for (const id of ids) {
       const existing = await loadChatSession(id);
       if (!existing) {
-        missing.push(id);
+        const ok = await deleteChatSession(id);
+        if (ok) deleted.push(id);
+        else missing.push(id);
         continue;
       }
       if (!isOwner(existing, user.id)) {
         forbidden.push(id);
+        continue;
+      }
+      if (await isProtectedRunningWorkflowSession(existing)) {
+        protectedRunning.push(id);
         continue;
       }
       const ok = await deleteChatSession(id);
@@ -44,12 +52,13 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({
-      ok: forbidden.length === 0,
+      ok: forbidden.length === 0 && protectedRunning.length === 0,
       deleted,
       deletedCount: deleted.length,
       missing,
       forbidden,
-    }, { status: forbidden.length > 0 ? 207 : 200 });
+      protectedRunning,
+    }, { status: forbidden.length > 0 || protectedRunning.length > 0 ? 207 : 200 });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

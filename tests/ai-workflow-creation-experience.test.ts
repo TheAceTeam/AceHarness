@@ -175,4 +175,26 @@ describe('AI Workflow Creation Experience', () => {
     expect(config.workflow.states.flatMap((item: any) => item.steps || []).map((step: any) => step.agent)).not.toContain('default-supervisor');
     expect(validateWorkflowDraft(config).ok).toBe(true);
   });
+
+  test('workflow step generation rejects agents outside the available roster so AI can repair them', () => {
+    const validation = validateWorkflowCreationItem({
+      kind: WORKFLOW_STATE_STEPS_KIND,
+      data: {
+        stateName: '审查',
+        steps: [
+          { name: '审查结果', agent: 'reviewer', task: '审查实现结果' },
+        ],
+      },
+    } as any, {
+      expectedStateName: '审查',
+      availableStepAgents: ['architect', 'tester'],
+      supervisorAgents: ['default-supervisor'],
+    });
+
+    expect(validation.ok).toBe(false);
+    if (validation.ok) return;
+    const message = validation.errors.join('\n');
+    expect(message).toContain('步骤 Agent "reviewer" 不在可用普通执行 Agent 列表中');
+    expect(message).toContain('必须从这些 Agent 中选择：architect、tester');
+  });
 });

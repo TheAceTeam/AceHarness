@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { Badge } from './ui/badge';
@@ -94,6 +94,18 @@ interface PendingHumanQuestionView {
   };
 }
 
+interface SubworkflowRunView {
+  runId: string;
+  configFile: string;
+  parentStateName?: string;
+  parentStepName?: string;
+  status: string;
+  summary?: string;
+  verdict?: string;
+  startedAt?: string;
+  endedAt?: string;
+}
+
 interface StateMachineExecutionViewProps {
   // 配置数据
   states: StateMachineState[];
@@ -177,8 +189,19 @@ interface StateMachineExecutionViewProps {
   supervisorDirectPanel?: ReactNode;
   supervisorFooter?: ReactNode;
   activeTabOverride?: string | null;
+  defaultActiveTab?: string;
   hasPendingHumanQuestion?: boolean;
   pendingHumanQuestion?: PendingHumanQuestionView | null;
+  subworkflowRuns?: SubworkflowRunView[];
+  activeSubworkflowRunId?: string | null;
+  subworkflowSummary?: {
+    total?: number;
+    active?: number;
+    failed?: number;
+    waitingHuman?: number;
+    detached?: number;
+    completed?: number;
+  } | null;
   formationAgents?: Array<{
     name: string;
     team?: AgentTeam;
@@ -191,6 +214,8 @@ interface StateMachineExecutionViewProps {
   onStateClick?: (stateName: string) => void;
   onStepClick?: (step: any) => void;
   onForceTransition?: (targetState: string) => void;
+  onOpenSubworkflowRun?: (child: SubworkflowRunView) => void;
+  onActiveTabChange?: (tab: string) => void;
 }
 
 export default function StateMachineExecutionView({
@@ -221,15 +246,37 @@ export default function StateMachineExecutionView({
   supervisorDirectPanel,
   supervisorFooter,
   activeTabOverride,
+  defaultActiveTab,
   hasPendingHumanQuestion,
   pendingHumanQuestion,
+  subworkflowRuns = [],
+  activeSubworkflowRunId,
+  subworkflowSummary,
   formationAgents = [],
   supervisorAgent,
   onStateClick,
   onStepClick,
   onForceTransition,
+  onOpenSubworkflowRun,
+  onActiveTabChange,
 }: StateMachineExecutionViewProps) {
-  const [activeTab, setActiveTab] = useState('overview');
+  const normalizeTab = (tab?: string | null) => tab === 'overview'
+    ? 'overview'
+    : tab === 'history' || tab === 'timeline' || tab === 'agent-flow'
+      ? 'history'
+      : tab === 'supervisor'
+        ? 'supervisor'
+        : tab === 'token'
+          ? 'token'
+          : tab === 'trace'
+            ? 'trace'
+            : 'overview';
+  const [activeTab, setActiveTabState] = useState(() => normalizeTab(defaultActiveTab));
+  const setActiveTab = useCallback((tab: string) => {
+    const normalized = normalizeTab(tab);
+    setActiveTabState(normalized);
+    onActiveTabChange?.(normalized);
+  }, [onActiveTabChange]);
   const [flowKindFilter, setFlowKindFilter] = useState<'all' | 'supervisor' | 'agent' | 'state' | 'concurrency'>('all');
   const [supervisorTimelineOpen, setSupervisorTimelineOpen] = useState(false);
   const [supervisorPanelTab, setSupervisorPanelTab] = useState<'formation' | 'human' | 'timeline' | 'summary'>('human');
@@ -246,17 +293,9 @@ export default function StateMachineExecutionView({
 
   useEffect(() => {
     if (activeTabOverride) {
-      setActiveTab(activeTabOverride === 'overview'
-        ? 'overview'
-        : activeTabOverride === 'history' || activeTabOverride === 'timeline' || activeTabOverride === 'agent-flow'
-          ? 'history'
-          : activeTabOverride === 'supervisor'
-            ? 'supervisor'
-            : activeTabOverride === 'token'
-              ? 'token'
-              : 'trace');
+      setActiveTab(activeTabOverride);
     }
-  }, [activeTabOverride]);
+  }, [activeTabOverride, setActiveTab]);
 
   useEffect(() => {
     if (hasPendingHumanQuestion) {
@@ -290,6 +329,7 @@ export default function StateMachineExecutionView({
   const concurrencyGroupsToDisplay = visibleConcurrencyGroups.length > 0
     ? visibleConcurrencyGroups
     : activeConcurrencyGroups.slice(-3);
+  const visibleSubworkflowRuns = subworkflowRuns.filter(Boolean).slice(-6).reverse();
 
   const formatJoinPolicy = (joinPolicy?: ActiveConcurrencyGroupView['joinPolicy']) => {
     if (!joinPolicy?.mode) return 'all';
@@ -689,6 +729,66 @@ export default function StateMachineExecutionView({
               </div>
             )}
 
+            {visibleSubworkflowRuns.length > 0 && (
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50/40 p-5 dark:border-cyan-800 dark:bg-cyan-950/20">
+                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold">子工作流运行态</h3>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      父步骤展示 child run 摘要，可在当前页面打开子流程详情。
+                    </p>
+                  </div>
+                  {subworkflowSummary ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge variant="secondary" className="text-[10px]">总数 {subworkflowSummary.total || 0}</Badge>
+                      <Badge variant="outline" className="text-[10px]">运行 {subworkflowSummary.active || 0}</Badge>
+                      <Badge variant="outline" className="text-[10px]">等待 {subworkflowSummary.waitingHuman || 0}</Badge>
+                      <Badge variant="outline" className="text-[10px]">失败 {subworkflowSummary.failed || 0}</Badge>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {visibleSubworkflowRuns.map((child) => (
+                    <div
+                      key={child.runId}
+                      className={`rounded-lg border bg-background/80 p-3 ${
+                        child.runId === activeSubworkflowRunId ? 'border-cyan-500 ring-1 ring-cyan-500/30' : 'border-border/70'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{child.parentStepName || child.configFile}</div>
+                          <div className="mt-1 truncate text-xs text-muted-foreground">
+                            {child.configFile} · {child.runId}
+                          </div>
+                        </div>
+                        <Badge variant={child.status === 'failed' || child.status === 'crashed' ? 'destructive' : child.status === 'completed' ? 'default' : 'secondary'} className="shrink-0 text-[10px]">
+                          {child.status}
+                        </Badge>
+                      </div>
+                      {onOpenSubworkflowRun ? (
+                        <div className="mt-3 flex justify-end">
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onOpenSubworkflowRun(child)}>
+                            查看子流程
+                          </Button>
+                        </div>
+                      ) : null}
+                      {child.parentStateName ? (
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          父位置：{child.parentStateName}{child.parentStepName ? ` / ${child.parentStepName}` : ''}
+                        </div>
+                      ) : null}
+                      {child.summary ? (
+                        <div className="mt-2 line-clamp-3 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                          {child.summary}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* 实时统计面板 */}
             <StateMachineRuntimePanel
               currentState={currentState}
@@ -733,24 +833,27 @@ export default function StateMachineExecutionView({
         </TabsContent>
 
         {/* 状态图视图 */}
-        <TabsContent value="trace" className="min-h-0 flex-1 overflow-hidden">
-          <StateMachineDiagram
-            states={states}
-            agents={agents}
-            currentState={currentState}
-            currentStep={currentStep}
-            activeSteps={activeSteps}
-            completedSteps={completedSteps}
-            stateHistory={stateHistory}
-            isRunning={isRunning}
-            allowForceTransition={allowForceTransition}
-            focusedState={focusedState}
-            supervisorFlow={supervisorFlow}
-            pendingHumanQuestion={pendingHumanQuestion}
-            onStateClick={onStateClick}
-            onStepClick={onStepClick}
-            onForceTransition={onForceTransition}
-          />
+        <TabsContent value="trace" className="min-h-0 flex-1 overflow-hidden data-[state=inactive]:pointer-events-none">
+          {activeTab === 'trace' ? (
+            <StateMachineDiagram
+              key={`${currentState || 'none'}:${currentStep || 'none'}:${stateHistory.length}:${activeSteps.join('|')}`}
+              states={states}
+              agents={agents}
+              currentState={currentState}
+              currentStep={currentStep}
+              activeSteps={activeSteps}
+              completedSteps={completedSteps}
+              stateHistory={stateHistory}
+              isRunning={isRunning}
+              allowForceTransition={allowForceTransition}
+              focusedState={focusedState}
+              supervisorFlow={supervisorFlow}
+              pendingHumanQuestion={pendingHumanQuestion}
+              onStateClick={onStateClick}
+              onStepClick={onStepClick}
+              onForceTransition={onForceTransition}
+            />
+          ) : null}
         </TabsContent>
 
 

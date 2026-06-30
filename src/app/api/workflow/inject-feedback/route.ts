@@ -4,7 +4,7 @@ import { workflowRegistry } from '@/lib/workflow/registry';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { message, interrupt, configFile, clientId } = body;
+    const { message, interrupt, configFile, clientId, runId } = body;
 
     if (!message?.trim()) {
       return NextResponse.json(
@@ -13,15 +13,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Must specify configFile to avoid sending to wrong workflow
-    if (!configFile) {
+    // Must specify an explicit target to avoid sending to the wrong workflow.
+    if (!configFile && !runId) {
       return NextResponse.json(
-        { error: '必须指定 configFile 参数' },
+        { error: '必须指定 configFile 或 runId 参数' },
         { status: 400 }
       );
     }
 
-    const manager = workflowRegistry.getRunningManager(configFile);
+    const manager = typeof runId === 'string' && runId.trim()
+      ? await workflowRegistry.getManagerByRunId(runId.trim())
+      : workflowRegistry.getRunningManager(configFile);
     if (!manager) {
       return NextResponse.json(
         { error: '当前没有运行中的工作流' },
