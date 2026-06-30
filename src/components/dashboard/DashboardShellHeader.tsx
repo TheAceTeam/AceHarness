@@ -15,6 +15,7 @@ import {
 export type DashboardShellHeaderConfig = {
   title?: string;
   subtitle?: string;
+  leadingActions?: ReactNode;
   actions?: ReactNode;
 };
 
@@ -36,7 +37,13 @@ type DashboardShellHeaderRegistration = {
 function areHeaderConfigsEqual(a: DashboardShellHeaderConfig, b: DashboardShellHeaderConfig) {
   return a.title === b.title
     && a.subtitle === b.subtitle
+    && a.leadingActions === b.leadingActions
     && a.actions === b.actions;
+}
+
+function areDependencyListsEqual(a: DependencyList, b: DependencyList) {
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => Object.is(item, b[index]));
 }
 
 export function DashboardShellHeaderProvider({ children }: { children: ReactNode }) {
@@ -123,12 +130,23 @@ export function useDashboardShellHeader(
   const scopeId = useContext(DashboardShellHeaderScopeContext);
   const registerHeader = context?.registerHeader;
   const registrationRef = useRef<DashboardShellHeaderRegistration | null>(null);
+  const lastConfigRef = useRef<DashboardShellHeaderConfig | null>(null);
+  const configRef = useRef<DashboardShellHeaderConfig | undefined>(config);
+  const depsRef = useRef<DependencyList>(deps);
+  const updateVersionRef = useRef(0);
   const hasConfig = Boolean(config);
+
+  configRef.current = config;
+  if (!areDependencyListsEqual(depsRef.current, deps)) {
+    depsRef.current = deps;
+    updateVersionRef.current += 1;
+  }
 
   useEffect(() => {
     if (!registerHeader || !scopeId || !config) return;
     const registration = registerHeader(scopeId, config);
     registrationRef.current = registration;
+    lastConfigRef.current = config;
     return () => {
       if (registrationRef.current === registration) {
         registrationRef.current = null;
@@ -139,10 +157,12 @@ export function useDashboardShellHeader(
   }, [registerHeader, scopeId, hasConfig]);
 
   useEffect(() => {
-    if (!config) return;
-    registrationRef.current?.update(config);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [registerHeader, scopeId, ...deps]);
+    const nextConfig = configRef.current;
+    if (!nextConfig) return;
+    if (lastConfigRef.current && areHeaderConfigsEqual(lastConfigRef.current, nextConfig)) return;
+    lastConfigRef.current = nextConfig;
+    registrationRef.current?.update(nextConfig);
+  }, [updateVersionRef.current]);
 
   return {
     isDashboardShell: Boolean(context && scopeId),

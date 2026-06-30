@@ -40,7 +40,7 @@ interface UserInfo {
   reviewNote?: string;
 }
 
-function UsersContent() {
+export function UsersContent({ embedded = false }: { embedded?: boolean } = {}) {
   const router = useRouter();
   useDocumentTitle('用户管理');
   const [users, setUsers] = useState<UserInfo[]>([]);
@@ -284,7 +284,8 @@ function UsersContent() {
 
   /* RENDER */
   return (
-    <div className="min-h-screen bg-background">
+    <div className={embedded ? 'h-full overflow-auto bg-background' : 'min-h-screen bg-background'}>
+      {!embedded ? (
       <header data-tour-step-id="admin-users" className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -305,8 +306,21 @@ function UsersContent() {
           </div>
         </div>
       </header>
+      ) : null}
 
       <div className="container mx-auto px-6 py-8">
+        {embedded ? (
+          <div data-tour-step-id="admin-users" className="mb-6 flex items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold">用户管理</h1>
+              <p className="text-xs text-muted-foreground">
+                {users.length} 个用户
+                {pendingUsers.length > 0 ? ` · ${pendingUsers.length} 个待审核` : ''}
+              </p>
+            </div>
+            <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" />新建用户</Button>
+          </div>
+        ) : null}
         <div className="mb-6 relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input placeholder="搜索用户名或邮箱..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-10" />

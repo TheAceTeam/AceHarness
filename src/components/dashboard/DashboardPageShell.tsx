@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, type DragEvent, type ReactNod
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
-import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, Cog, FileText, History, Key, NotebookTabs, Layers3, Trophy, Loader2, BarChart3, MessageSquare, PanelLeftClose, PanelLeftOpen, UsersRound } from 'lucide-react';
+import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, FileText, History, NotebookTabs, Layers3, Trophy, Loader2, BarChart3, PanelLeftClose, PanelLeftOpen, MessageSquareText, Microchip, ServerCog } from 'lucide-react';
 
 import { useTranslations } from '@/hooks/useTranslations';
 import { Button } from '@/components/ui/button';
@@ -108,15 +108,19 @@ type DashboardUser = {
 function DashboardUnifiedHeader({ currentUser }: { currentUser: DashboardUser | null }) {
   const shellHeader = useDashboardShellHeaderController();
   const activeHeader = shellHeader?.activeHeader;
-  useDocumentTitle(activeHeader?.title || '数据中心');
+  const { t } = useTranslations();
+  useDocumentTitle(activeHeader?.title || t('dashboard.headers.defaultTitle'));
 
   return (
-    <header className="relative z-20 flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-background/95 px-5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-      <div className="min-w-0">
-        <div className="truncate text-base font-semibold">{activeHeader?.title || '数据中心'}</div>
-        <div className="truncate text-xs text-muted-foreground">{activeHeader?.subtitle || '继续对话、管理工作流并查看运行数据'}</div>
+    <header className="relative z-20 flex h-14 shrink-0 items-center gap-4 border-b border-border/60 bg-background/95 px-5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="min-w-0 shrink-0">
+        <div className="truncate text-base font-semibold">{activeHeader?.title || t('dashboard.headers.defaultTitle')}</div>
+        <div className="truncate text-xs text-muted-foreground">{activeHeader?.subtitle || t('dashboard.headers.defaultSubtitle')}</div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center justify-start gap-2 overflow-hidden">
+        {activeHeader?.leadingActions}
+      </div>
+      <div className="flex shrink-0 items-center justify-end gap-2">
         {activeHeader?.actions}
         <UserMenu user={currentUser} />
       </div>
@@ -126,7 +130,9 @@ function DashboardUnifiedHeader({ currentUser }: { currentUser: DashboardUser | 
 
 function DashboardSidebarFooter() {
   const { state, toggleSidebar } = useSidebar();
+  const { t } = useTranslations();
   const collapsed = state === 'collapsed';
+  const toggleLabel = collapsed ? t('dashboard.sidebar.expand') : t('dashboard.sidebar.collapse');
 
   return (
     <SidebarFooter className="border-t border-sidebar-border/70 p-3">
@@ -140,10 +146,10 @@ function DashboardSidebarFooter() {
         size="sm"
         className="h-9 w-full justify-start gap-2 px-2 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
         onClick={toggleSidebar}
-        title={collapsed ? '展开侧边栏' : '收起侧边栏'}
+        title={toggleLabel}
       >
         {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-        <span className="group-data-[collapsible=icon]:hidden">{collapsed ? '展开侧边栏' : '收起侧边栏'}</span>
+        <span className="group-data-[collapsible=icon]:hidden">{toggleLabel}</span>
       </Button>
     </SidebarFooter>
   );
@@ -161,6 +167,8 @@ const EMBEDDED_DASHBOARD_ROUTE_BASES = new Set([
   '/notebook',
   '/account',
   '/account/system-settings',
+  '/account/channels',
+  '/users',
   '/api-docs',
 ]);
 
@@ -235,7 +243,7 @@ export default function DashboardPage() {
   const [conversationView, setConversationView] = useState<SessionDirectoryView>('conversation');
   const [secondarySidebarOpen, setSecondarySidebarOpen] = useState(true);
   const [mainSidebarOpen, setMainSidebarOpen] = useState(readStoredSidebarOpen);
-  const [activeDockTab, setActiveDockTab] = useState<DashboardDockTab | null>({ id: 'chat', title: '对话', kind: 'chat' });
+  const [activeDockTab, setActiveDockTab] = useState<DashboardDockTab | null>({ id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' });
   const workspaceRef = useRef<DashboardDockWorkspaceHandle | null>(null);
   const suppressSidebarClickRef = useRef(false);
 
@@ -252,10 +260,65 @@ export default function DashboardPage() {
     return query ? `${shellPath}?${query}` : shellPath;
   }, [shellPath]);
 
+  const buildShellUrlForDockTab = useCallback((tab: DashboardDockTab | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('reload');
+    if (!tab || tab.kind === 'chat') {
+      params.delete('panel');
+      params.delete('route');
+      return buildShellUrl(params);
+    }
+
+    const panelKindMap: Partial<Record<DashboardDockTab['kind'], DashboardPanel>> = {
+      overview: 'overview',
+      agents: 'agents',
+      skills: 'skills',
+      settings: 'settings',
+    };
+    const panel = panelKindMap[tab.kind];
+    if (panel) {
+      params.delete('route');
+      params.set('panel', panel);
+      return buildShellUrl(params);
+    }
+
+    const routeByKind: Partial<Record<DashboardDockTab['kind'], string>> = {
+      workflows: '/workflows',
+      models: '/models',
+      engines: '/engines',
+      schedules: '/schedules',
+      'run-history': '/run-history',
+      knowledge: '/knowledge',
+      'knowledge-library': '/knowledge/library',
+      'api-docs': '/api-docs',
+      office: '/office',
+      channels: '/account/channels',
+      users: '/users',
+    };
+    let route = routeByKind[tab.kind] || '';
+    if (tab.kind === 'notebook') {
+      route = `/notebook${tab.search ? `?${tab.search}` : ''}`;
+    } else if (tab.kind === 'account') {
+      route = `/account${tab.search ? `?${tab.search}` : ''}`;
+    } else if (tab.kind === 'workbench') {
+      const workbenchParams = new URLSearchParams();
+      if (tab.mode) workbenchParams.set('mode', tab.mode);
+      if (tab.runId) workbenchParams.set('runId', tab.runId);
+      const query = workbenchParams.toString();
+      route = `/workbench/${encodeURIComponent(tab.config)}${query ? `?${query}` : ''}`;
+    }
+
+    if (route) {
+      params.delete('panel');
+      params.set('route', route);
+    }
+    return buildShellUrl(params);
+  }, [buildShellUrl, searchParams]);
+
   const setActivePanel = useCallback((panel: DashboardPanel) => {
     const tabMap: Record<DashboardPanel, DashboardDockTab> = {
-      chat: { id: 'chat', title: '对话', kind: 'chat' },
-      overview: { id: 'overview', title: '数据概览', kind: 'overview' },
+      chat: { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' },
+      overview: { id: 'overview', title: t('dashboard.overviewTitle'), kind: 'overview' },
       agents: { id: 'agents', title: t('dashboard.quickActions.manageAgents'), kind: 'agents' },
       skills: { id: 'skills', title: t('dashboard.quickActions.skills'), kind: 'skills' },
       settings: { id: 'settings', title: t('dashboard.quickActions.envVars'), kind: 'settings' },
@@ -272,17 +335,6 @@ export default function DashboardPage() {
     }
     router.push(buildShellUrl(params));
   }, [buildShellUrl, router, searchParams, t]);
-
-  const openChatDirectory = useCallback((view: SessionDirectoryView) => {
-    setConversationView(view);
-    setSecondarySidebarOpen(true);
-    workspaceRef.current?.openTab({ id: 'chat', title: '对话', kind: 'chat' });
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete('route');
-    params.delete('reload');
-    params.delete('panel');
-    router.push(buildShellUrl(params));
-  }, [buildShellUrl, router, searchParams]);
 
   const handleFallbackChatOpen = useCallback(() => {
     setSecondarySidebarOpen(true);
@@ -332,6 +384,14 @@ export default function DashboardPage() {
       return { id: 'settings', title: '系统设置', kind: 'settings' };
     }
 
+    if (basePath === '/account/channels') {
+      return { id: 'channels', title: '微信接入', kind: 'channels' };
+    }
+
+    if (basePath === '/users') {
+      return { id: 'users', title: '用户管理', kind: 'users' };
+    }
+
     if (basePath === '/account') {
       return {
         id: 'account',
@@ -346,24 +406,31 @@ export default function DashboardPage() {
       '/models': { id: 'models', title: t('dashboard.quickActions.models'), kind: 'models' },
       '/engines': { id: 'engines', title: t('dashboard.quickActions.engines'), kind: 'engines' },
       '/schedules': { id: 'schedules', title: t('dashboard.quickActions.schedules'), kind: 'schedules' },
-      '/run-history': { id: 'run-history', title: '运行记录', kind: 'run-history' },
+      '/run-history': { id: 'run-history', title: t('dashboard.quickActions.runHistory'), kind: 'run-history' },
       '/knowledge': { id: 'knowledge', title: t('dashboard.quickActions.knowledge'), kind: 'knowledge' },
-      '/knowledge/library': { id: 'knowledge-library', title: '知识库', kind: 'knowledge-library' },
+      '/knowledge/library': { id: 'knowledge-library', title: t('dashboard.quickActions.knowledgeLibrary'), kind: 'knowledge-library' },
       '/api-docs': { id: 'api-docs', title: t('dashboard.quickActions.apiDocs'), kind: 'api-docs' },
-      '/office': { id: 'office', title: '一人公司', kind: 'office' },
+      '/office': { id: 'office', title: t('dashboard.quickActions.office'), kind: 'office' },
+      '/account/channels': { id: 'channels', title: '微信接入', kind: 'channels' },
+      '/users': { id: 'users', title: '用户管理', kind: 'users' },
     };
     return routeTabMap[basePath] || null;
   }, [t]);
 
   const handleActiveDockTabChange = useCallback((tab: DashboardDockTab | null) => {
-    const nextTab = tab || { id: 'chat', title: '对话', kind: 'chat' };
+    const nextTab = tab || { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' };
     setActiveDockTab(nextTab);
     if (nextTab.kind === 'chat') {
       setSecondarySidebarOpen(true);
-      return;
+    } else {
+      setSecondarySidebarOpen(false);
     }
-    setSecondarySidebarOpen(false);
-  }, []);
+    const nextUrl = buildShellUrlForDockTab(nextTab);
+    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+    if (nextUrl !== currentUrl) {
+      router.replace(nextUrl);
+    }
+  }, [buildShellUrlForDockTab, pathname, router, searchParams]);
 
   const setActiveRoute = useCallback((route: string) => {
     const normalizedRoute = normalizeEmbeddedRoute(route);
@@ -405,8 +472,8 @@ export default function DashboardPage() {
         if (tab) workspaceRef.current?.openTab(tab);
       } else {
         const tabMap: Record<DashboardPanel, DashboardDockTab> = {
-          chat: { id: 'chat', title: '对话', kind: 'chat' },
-          overview: { id: 'overview', title: '数据概览', kind: 'overview' },
+          chat: { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' },
+          overview: { id: 'overview', title: t('dashboard.overviewTitle'), kind: 'overview' },
           agents: { id: 'agents', title: t('dashboard.quickActions.manageAgents'), kind: 'agents' },
           skills: { id: 'skills', title: t('dashboard.quickActions.skills'), kind: 'skills' },
           settings: { id: 'settings', title: t('dashboard.quickActions.envVars'), kind: 'settings' },
@@ -681,7 +748,7 @@ export default function DashboardPage() {
   }> = [
     {
       id: 'overview',
-      label: '数据概览',
+      label: t('dashboard.overviewTitle'),
       desc: t('dashboard.subtitle'),
       icon: BarChart3,
     },
@@ -701,18 +768,8 @@ export default function DashboardPage() {
       id: 'settings',
       label: t('dashboard.quickActions.envVars'),
       desc: t('dashboard.quickActions.envVarsDesc'),
-      icon: Key,
+      icon: Settings,
     },
-  ];
-
-  const chatDirectoryActions: Array<{
-    id: SessionDirectoryView;
-    label: string;
-    icon: any;
-  }> = [
-    { id: 'conversation', label: '对话', icon: MessageSquare },
-    { id: 'agora', label: '议场', icon: UsersRound },
-    { id: 'workflow', label: '工作流', icon: Workflow },
   ];
 
   const routeActions: Array<{
@@ -723,8 +780,8 @@ export default function DashboardPage() {
     external?: boolean;
   }> = [
     {
-      label: '一人公司',
-      desc: '进入一人公司办公室与团队工作台',
+      label: t('dashboard.quickActions.office'),
+      desc: t('dashboard.quickActions.officeDesc'),
       icon: Building2,
       href: '/office',
     },
@@ -737,13 +794,13 @@ export default function DashboardPage() {
     {
       label: t('dashboard.quickActions.models'),
       desc: t('dashboard.quickActions.modelsDesc'),
-      icon: Settings,
+      icon: Microchip,
       href: '/models',
     },
     {
       label: t('dashboard.quickActions.engines'),
       desc: t('dashboard.quickActions.enginesDesc'),
-      icon: Cog,
+      icon: ServerCog,
       href: '/engines',
     },
     {
@@ -753,8 +810,8 @@ export default function DashboardPage() {
       href: '/schedules',
     },
     {
-      label: '运行记录',
-      desc: '查看历史运行和 Token 排行',
+      label: t('dashboard.quickActions.runHistory'),
+      desc: t('dashboard.quickActions.runHistoryDesc'),
       icon: History,
       href: '/run-history',
     },
@@ -956,13 +1013,13 @@ export default function DashboardPage() {
   const secondarySidebarVisible = isChatWorkspaceActive && secondarySidebarOpen;
   const renderChatSecondarySidebar = useCallback(() => (
     <aside
-      className="ace-dashboard-chat-secondary-sidebar hidden w-[18rem] shrink-0 flex-col overflow-hidden border-r border-border/70 bg-background/95 backdrop-blur-xl lg:flex"
+      className="ace-dashboard-chat-secondary-sidebar flex h-full w-full min-w-0 flex-col overflow-hidden bg-background/95 backdrop-blur-xl"
       onPointerDown={(event) => event.stopPropagation()}
     >
       <ChatSidebar
         compact
-        sessionView={conversationView}
-        onSessionViewChange={setConversationView}
+        sessionView="conversation"
+        onSessionViewChange={() => setConversationView('conversation')}
       />
     </aside>
   ), [conversationView]);
@@ -1025,7 +1082,7 @@ export default function DashboardPage() {
 
         <SidebarContent data-tour-step-id="dashboard-quick-actions">
           <SidebarGroup>
-            <SidebarGroupLabel>控制台</SidebarGroupLabel>
+            <SidebarGroupLabel>{t('dashboard.sidebar.console')}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
@@ -1039,10 +1096,10 @@ export default function DashboardPage() {
                 </SidebarMenuItem>
                 <SidebarMenuItem>
                   <SidebarMenuButton
-                    tooltip="拖到右侧打开对话"
+                    tooltip={t('dashboard.sidebar.openChatHint')}
                     isActive={activeDockTabKind === 'chat'}
                     draggable
-                    onDragStart={(event) => startTabDrag(event, { id: 'chat', title: '对话', kind: 'chat' })}
+                    onDragStart={(event) => startTabDrag(event, { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' })}
                     onDragEnd={finishTabDrag}
                     onClick={() => {
                       if (consumeSuppressedSidebarClick()) return;
@@ -1050,40 +1107,15 @@ export default function DashboardPage() {
                       setActivePanel('chat');
                     }}
                   >
-                    <Bot />
-                    <span>Chat</span>
+                    <MessageSquareText />
+                    <span>{t('dashboard.quickActions.chatMode')}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                <div className="ml-4 mt-1 space-y-0.5 border-l border-sidebar-border/70 pl-2 group-data-[collapsible=icon]:hidden">
-                  {chatDirectoryActions.map((action) => {
-                    const Icon = action.icon;
-                    return (
-                      <SidebarMenuItem key={action.id}>
-                        <SidebarMenuButton
-                          size="sm"
-                          tooltip={action.label}
-                          isActive={activeDockTabKind === 'chat' && conversationView === action.id}
-                          draggable
-                          onDragStart={(event) => startTabDrag(event, { id: 'chat', title: '对话', kind: 'chat' })}
-                          onDragEnd={finishTabDrag}
-                          onClick={() => {
-                            if (consumeSuppressedSidebarClick()) return;
-                            openChatDirectory(action.id);
-                          }}
-                          className="h-8 text-xs"
-                        >
-                          <Icon />
-                          <span>{action.label}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    );
-                  })}
-                </div>
                 {primaryActions.map((action) => {
                   const Icon = action.icon;
                   const tabMap: Record<DashboardPanel, DashboardDockTab> = {
-                    chat: { id: 'chat', title: '对话', kind: 'chat' },
-                    overview: { id: 'overview', title: '数据概览', kind: 'overview' },
+                    chat: { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' },
+                    overview: { id: 'overview', title: t('dashboard.overviewTitle'), kind: 'overview' },
                     agents: { id: 'agents', title: t('dashboard.quickActions.manageAgents'), kind: 'agents' },
                     skills: { id: 'skills', title: t('dashboard.quickActions.skills'), kind: 'skills' },
                     settings: { id: 'settings', title: t('dashboard.quickActions.envVars'), kind: 'settings' },
@@ -1113,7 +1145,7 @@ export default function DashboardPage() {
           </SidebarGroup>
 
           <SidebarGroup>
-            <SidebarGroupLabel>功能</SidebarGroupLabel>
+            <SidebarGroupLabel>{t('dashboard.sidebar.features')}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {routeActions.map((action) => {
@@ -1124,11 +1156,11 @@ export default function DashboardPage() {
                     '/models': { id: 'models', title: t('dashboard.quickActions.models'), kind: 'models' },
                     '/engines': { id: 'engines', title: t('dashboard.quickActions.engines'), kind: 'engines' },
                     '/schedules': { id: 'schedules', title: t('dashboard.quickActions.schedules'), kind: 'schedules' },
-                    '/run-history': { id: 'run-history', title: '运行记录', kind: 'run-history' },
+                    '/run-history': { id: 'run-history', title: t('dashboard.quickActions.runHistory'), kind: 'run-history' },
                     '/knowledge': { id: 'knowledge', title: t('dashboard.quickActions.knowledge'), kind: 'knowledge' },
-                    '/knowledge/library': { id: 'knowledge-library', title: '知识库', kind: 'knowledge-library' },
+                    '/knowledge/library': { id: 'knowledge-library', title: t('dashboard.quickActions.knowledgeLibrary'), kind: 'knowledge-library' },
                     '/api-docs': { id: 'api-docs', title: t('dashboard.quickActions.apiDocs'), kind: 'api-docs' },
-                    '/office': { id: 'office', title: '一人公司', kind: 'office' },
+                    '/office': { id: 'office', title: t('dashboard.quickActions.office'), kind: 'office' },
                   };
                   const draggableTab = routeTabMap[basePath];
                   const isActive = Boolean(draggableTab && activeDockTab?.id === draggableTab.id);
@@ -1286,7 +1318,7 @@ export default function DashboardPage() {
                                 </div>
                                 <div className="flex flex-col">
                                   <span className="font-medium">{configName}</span>
-                                  <span className="text-xs text-muted-foreground">{formatStateName(run.currentPhase || '') || 'Starting...'}</span>
+                                  <span className="text-xs text-muted-foreground">{formatStateName(run.currentPhase || '') || t('dashboard.status.starting')}</span>
                                 </div>
                               </div>
                               <Badge variant="secondary" className="rounded-full px-3 py-1">{run.completedSteps || 0}/{run.totalSteps || 0}</Badge>
@@ -1595,7 +1627,7 @@ export default function DashboardPage() {
                               className="h-8 rounded-full px-3 text-xs"
                               onClick={() => setActiveRoute('/run-history')}
                             >
-                              查看运行记录
+                              {t('dashboard.quickActions.runHistory')}
                             </Button>
                           }
                           className="h-full"

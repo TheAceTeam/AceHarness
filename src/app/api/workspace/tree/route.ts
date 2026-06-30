@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
+import { homedir } from 'os';
 import path from 'path';
-import { isWindows } from '@/lib/core/runtime-platform';
+import { isLinux, isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import {
   assertSafeRelativePath,
   isInsidePath,
@@ -49,6 +50,62 @@ async function getAvailableDriveRoots(): Promise<string[]> {
   );
 
   return checks.filter((item): item is string => Boolean(item));
+}
+
+async function directoryExists(input: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(input);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function uniquePortableRoots(roots: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const root of roots) {
+    const portable = toPortablePath(root).replace(/\/+$/, '') || '/';
+    const normalized = /^[A-Za-z]:$/.test(portable) ? `${portable.toUpperCase()}/` : portable;
+    const key = isWindows() ? normalized.toLowerCase() : normalized;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+async function getAvailableQuickAccessRoots(): Promise<string[]> {
+  const home = homedir();
+  const userRoots = home
+    ? [
+        home,
+        path.join(home, 'Desktop'),
+        path.join(home, 'Documents'),
+        path.join(home, 'Downloads'),
+      ]
+    : [];
+
+  const platformRoots = isWindows()
+    ? [
+        process.env.USERPROFILE || '',
+        process.env.SystemDrive ? `${process.env.SystemDrive}\\` : '',
+        ...await getAvailableDriveRoots(),
+      ]
+    : isMacOS()
+      ? ['/', '/Applications', '/Volumes']
+      : isLinux()
+        ? ['/', '/mnt', '/media', '/tmp', '/opt', '/var']
+        : ['/'];
+
+  const candidates = uniquePortableRoots([...userRoots, ...platformRoots].filter(Boolean));
+  const existing = await Promise.all(
+    candidates.map(async (root) => ((await directoryExists(root)) ? root : null)),
+  );
+
+  return existing.filter((root): root is string => Boolean(root));
 }
 
 // Directories that are typically huge and not useful to browse
@@ -306,7 +363,7 @@ export async function GET(request: NextRequest) {
       ...page,
       workspaceRoot: toPortablePath(rootPath),
       targetPath: toPortablePath(targetPath),
-      availableRoots: await getAvailableDriveRoots(),
+      availableRoots: await getAvailableQuickAccessRoots(),
       truncated: page.hasMore,
     });
   } catch (error: any) {

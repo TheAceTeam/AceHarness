@@ -2,7 +2,34 @@
   "dashboard": {
     "title": "ACEHarness",
     "subtitle": "Full-Lifecycle Multi-Agent Orchestration System",
+    "overviewTitle": "Overview",
     "versionLabel": "Current version",
+    "sidebar": {
+      "console": "Console",
+      "features": "Features",
+      "openChatHint": "Drag to the right to open chat",
+      "expand": "Expand sidebar",
+      "collapse": "Collapse sidebar"
+    },
+    "headers": {
+      "defaultTitle": "Dashboard",
+      "defaultSubtitle": "Continue chats, manage workflows, and inspect run data",
+      "chatSubtitle": "Home chat, agora, and workflow collaboration",
+      "overviewSubtitle": "Runtime status, token usage, and workflow insights",
+      "agentsSubtitle": "Manage schedulable roles and runtime agent formations",
+      "skillsSubtitle": "Manage local Skills, MCP, and marketplace installs",
+      "settingsSubtitle": "Environment variables, account, and system settings",
+      "channels": "WeChat Integration",
+      "channelsSubtitle": "Generate endpoints, connect the bridge, and test runtime messages",
+      "users": "User Management",
+      "usersSubtitle": "Manage users, permissions, and registration reviews",
+      "workbench": "Workflow Workbench",
+      "workbenchSubtitle": "Design, run, and debug workflows",
+      "notebook": "Cangjie Notebook",
+      "notebookSubtitle": "Edit, organize, and run notebooks",
+      "account": "Account Settings",
+      "accountSubtitle": "Profile, directories, and account preferences"
+    },
     "stats": {
       "totalRuns": "Total Runs",
       "successRate": "Success Rate",
@@ -38,19 +65,24 @@
       "modelsDesc": "Manage available AI models",
       "workflows": "Workflows",
       "workflowsDesc": "View and manage all workflows",
+      "office": "One-Person Company",
+      "officeDesc": "Open the office and team workspace",
       "skills": "Skills/MCP",
       "skillsDesc": "Manage agent skills and MCP servers",
       "engines": "Engines",
       "enginesDesc": "Configure execution engine settings",
       "schedules": "Schedules",
       "schedulesDesc": "Set up automated scheduled tasks",
+      "runHistory": "Run History",
+      "runHistoryDesc": "View run history and token rankings",
       "apiDocs": "API Docs",
         "apiDocsDesc": "View REST API documentation",
         "chatMode": "Chat",
         "envVars": "System Settings",
         "envVarsDesc": "Manage system env vars, managed SDKs, and GitCode token",
         "knowledge": "Knowledge",
-        "knowledgeDesc": "Browse team knowledge and shared materials"
+        "knowledgeDesc": "Browse team knowledge and shared materials",
+        "knowledgeLibrary": "Knowledge Base"
       },
     "charts": {
       "agentUsage": "Agent Usage",
@@ -87,6 +119,7 @@
       "completed": "Completed",
       "failed": "Failed",
       "running": "Running",
+      "starting": "Starting...",
       "stopped": "Stopped",
       "crashed": "Crashed"
     },

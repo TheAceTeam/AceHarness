@@ -1,8 +1,35 @@
 {
   "dashboard": {
     "title": "ACEHarness",
-    "subtitle": "Your team of AIs, collaborating to get work done.",
+    "subtitle": "你的 AI 团队，一起把事情做完。",
+    "overviewTitle": "数据概览",
     "versionLabel": "当前版本",
+    "sidebar": {
+      "console": "控制台",
+      "features": "功能",
+      "openChatHint": "拖到右侧打开对话",
+      "expand": "展开侧边栏",
+      "collapse": "收起侧边栏"
+    },
+    "headers": {
+      "defaultTitle": "数据中心",
+      "defaultSubtitle": "继续对话、管理工作流并查看运行数据",
+      "chatSubtitle": "首页对话、议场与工作流协作",
+      "overviewSubtitle": "运行状态、Token 消耗与工作流洞察",
+      "agentsSubtitle": "管理可调度角色与运行时 Agent 编队",
+      "skillsSubtitle": "统一管理本地 Skills、MCP 与应用市场安装",
+      "settingsSubtitle": "环境变量、账户与系统参数",
+      "channels": "微信接入",
+      "channelsSubtitle": "生成地址、接桥接器并在线测试工作流运行时消息",
+      "users": "用户管理",
+      "usersSubtitle": "管理用户、权限与注册审核",
+      "workbench": "工作流工作台",
+      "workbenchSubtitle": "设计、运行和调试工作流",
+      "notebook": "Cangjie Notebook",
+      "notebookSubtitle": "编辑、整理和运行 Notebook",
+      "account": "账户设置",
+      "accountSubtitle": "个人资料、目录和账户偏好"
+    },
     "stats": {
       "totalRuns": "总运行次数",
       "successRate": "成功率",
@@ -38,19 +65,24 @@
       "modelsDesc": "管理可用的 AI 模型",
       "workflows": "工作流管理",
       "workflowsDesc": "查看和管理所有工作流",
+      "office": "一人公司",
+      "officeDesc": "进入一人公司办公室与团队工作台",
       "skills": "Skills/MCP 管理",
       "skillsDesc": "管理 Agent 技能与 MCP Server",
       "engines": "引擎管理",
       "enginesDesc": "配置执行引擎参数",
       "schedules": "定时任务",
       "schedulesDesc": "设置定时自动执行任务",
+      "runHistory": "运行记录",
+      "runHistoryDesc": "查看历史运行和 Token 排行",
       "apiDocs": "API 文档",
       "apiDocsDesc": "查看 REST API 接口文档",
       "chatMode": "对话",
       "envVars": "系统设置",
         "envVarsDesc": "管理系统环境变量、托管 SDK 与 GitCode Token",
         "knowledge": "知识管理",
-        "knowledgeDesc": "管理团队知识内容与共享资料"
+        "knowledgeDesc": "管理团队知识内容与共享资料",
+        "knowledgeLibrary": "知识库"
       },
     "charts": {
       "agentUsage": "Agent 使用统计",
@@ -89,6 +121,7 @@
       "completed": "已完成",
       "failed": "失败",
       "running": "运行中",
+      "starting": "启动中...",
       "stopped": "已停止",
       "crashed": "崩溃"
     },

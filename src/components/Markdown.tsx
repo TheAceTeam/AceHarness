@@ -577,7 +577,11 @@ function rehypePreserveUnknownHtmlAsText() {
 }
 
 function normalizeMarkdownInput(content: unknown): string {
-  return typeof content === 'string' ? content : '';
+  if (typeof content !== 'string') return '';
+  return content
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\r\n/g, '\n');
 }
 
 function stripDanglingTrailingFence(content: string): string {

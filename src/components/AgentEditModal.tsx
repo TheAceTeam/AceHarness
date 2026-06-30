@@ -74,6 +74,8 @@ interface AgentConfig {
   capabilities?: string[];
   constraints?: string[];
   skills?: string[];
+  mcpServers?: string[];
+  ragKnowledgeBases?: string[];
   reviewPanel?: ReviewPanel;
   keywords?: string[];
   description?: string;
@@ -116,6 +118,12 @@ const TEAM_AGENT_SUGGESTIONS: Record<AgentConfig['team'], Partial<Record<ListFie
     keywords: ['调度', '路由', '协调', '计划', '分配'],
   },
 };
+
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  const token = localStorage.getItem('auth-token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 const SUPERVISOR_AGENT_SUGGESTIONS: Partial<Record<ListField, string[]>> = {
   capabilities: ['任务拆解', 'Agent 编排', '状态跟踪', '冲突协调'],
@@ -168,6 +176,8 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     }),
     alwaysAvailableForChat: agent.alwaysAvailableForChat ?? false,
     skills: agent.skills || [],
+    mcpServers: (agent.mcpServers || []).map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean),
+    ragKnowledgeBases: agent.ragKnowledgeBases || [],
     workspaceProfile: agent.workspaceProfile || {},
   };
   const [formData, setFormData] = useState<AgentConfig>(normalizedAgent);
@@ -180,6 +190,8 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [availableSkills, setAvailableSkills] = useState<Array<{ name: string; description?: string }>>([]);
+  const [availableMcpServers, setAvailableMcpServers] = useState<Array<{ name: string; command?: string }>>([]);
+  const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<Array<{ id: string; name: string; description?: string; chunkCount?: number }>>([]);
   const [memoryDraft, setMemoryDraft] = useState('');
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memorySaving, setMemorySaving] = useState(false);
@@ -198,6 +210,22 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       .then((data) => {
         setAvailableSkills(Array.isArray(data.skills)
           ? data.skills.map((skill: any) => ({ name: skill.name, description: skill.description || '' }))
+          : []);
+      })
+      .catch(() => {});
+    fetch('/api/rag/knowledge-bases', { headers: getAuthHeaders() })
+      .then((res) => res.json())
+      .then((data) => {
+        setAvailableKnowledgeBases(Array.isArray(data.knowledgeBases)
+          ? data.knowledgeBases.map((kb: any) => ({ id: kb.id, name: kb.name || kb.id, description: kb.description || '', chunkCount: kb.chunkCount || 0 }))
+          : []);
+      })
+      .catch(() => {});
+    fetch('/api/mcp')
+      .then((res) => res.json())
+      .then((data) => {
+        setAvailableMcpServers(Array.isArray(data.servers)
+          ? data.servers.map((server: any) => ({ name: server.name, command: server.command || '' }))
           : []);
       })
       .catch(() => {});
@@ -394,6 +422,12 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const memoryMaxChars = Math.max(0, Math.min(50000, Number(formData.workspaceProfile?.memory?.baseBudget || 5000)));
   const memoryCharCount = memoryDraft.trim().length;
   const memoryOverLimit = memoryCharCount > memoryMaxChars;
+  const updateAgentRagKnowledgeBases = (ragKnowledgeBases: string[]) => {
+    const nextSkills = ragKnowledgeBases.length > 0
+      ? Array.from(new Set([...(formData.skills || []), 'aceharness-rag']))
+      : (formData.skills || []);
+    setFormData({ ...formData, ragKnowledgeBases, skills: nextSkills });
+  };
 
   const saveAgentMemory = async () => {
     if (isNew || !agent.name) return;
@@ -897,6 +931,36 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
               />
             </div>
           ) : null}
+
+          <div>
+            <Label>Agent MCP Servers</Label>
+            <p className="mb-2 text-xs text-muted-foreground">该 Agent 在工作流步骤中默认可用的 MCP Servers。</p>
+            <MultiCombobox
+              value={formData.mcpServers || []}
+              onValueChange={(mcpServers) => setFormData({ ...formData, mcpServers })}
+              options={availableMcpServers.map((server) => ({
+                value: server.name,
+                label: server.name,
+                description: server.command || '',
+              }))}
+              placeholder={availableMcpServers.length > 0 ? '选择 Agent MCP Servers...' : '当前没有可用 MCP Servers'}
+            />
+          </div>
+
+          <div>
+            <Label>Agent RAG 知识库</Label>
+            <p className="mb-2 text-xs text-muted-foreground">该 Agent 在工作流步骤中默认关联的 RAG 知识库。</p>
+            <MultiCombobox
+              value={formData.ragKnowledgeBases || []}
+              onValueChange={updateAgentRagKnowledgeBases}
+              options={availableKnowledgeBases.map((kb) => ({
+                value: kb.id,
+                label: kb.name || kb.id,
+                description: [kb.description, `Chunks ${kb.chunkCount ?? 0}`].filter(Boolean).join(' · '),
+              }))}
+              placeholder={availableKnowledgeBases.length > 0 ? '选择 Agent RAG 知识库...' : '当前没有可用 RAG 知识库'}
+            />
+          </div>
 
           <div>
             <Label>

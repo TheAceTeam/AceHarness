@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, type DragEvent, type ReactNode } from 'react';
+import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import {
   DockviewReact,
   type DockviewApi,
@@ -17,6 +17,7 @@ import { ChatPageContent } from '@/components/chat/ChatPageContent';
 import AgentsManager from '@/components/agents/AgentsManager';
 import SkillsManager from '@/components/skills/SkillsManager';
 import SystemSettingsContent from '@/components/settings/SystemSettingsContent';
+import ChannelIntegrationsContent from '@/components/settings/ChannelIntegrationsContent';
 import { DashboardShellHeaderScope, useDashboardShellHeader, useDashboardShellHeaderController } from '@/components/dashboard/DashboardShellHeader';
 import {
   ContextMenu,
@@ -25,9 +26,26 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { useTranslations } from '@/hooks/useTranslations';
 import { cn } from '@/lib/core/utils';
 
 export const DASHBOARD_DOCK_DRAG_MIME = 'application/x-aceharness-dashboard-tab';
+const CHAT_SECONDARY_SIDEBAR_WIDTH_STORAGE_KEY = 'aceharness:dashboard-chat-secondary-sidebar-width';
+const CHAT_SECONDARY_SIDEBAR_DEFAULT_PERCENT = 24;
+const CHAT_SECONDARY_SIDEBAR_MIN_PERCENT = 14;
+const CHAT_SECONDARY_SIDEBAR_MAX_PERCENT = 42;
+const clampChatSecondarySidebarPercent = (value: number) =>
+  Math.min(CHAT_SECONDARY_SIDEBAR_MAX_PERCENT, Math.max(CHAT_SECONDARY_SIDEBAR_MIN_PERCENT, value));
+const formatPanelPercent = (value: number) => `${Number(clampChatSecondarySidebarPercent(value).toFixed(2))}%`;
+const parseStoredChatSecondarySidebarPercent = (value: string | null): number => {
+  const raw = String(value || '').trim();
+  if (!raw) return CHAT_SECONDARY_SIDEBAR_DEFAULT_PERCENT;
+  const numeric = Number(raw.endsWith('%') ? raw.slice(0, -1) : raw);
+  if (!Number.isFinite(numeric)) return CHAT_SECONDARY_SIDEBAR_DEFAULT_PERCENT;
+  if (!raw.endsWith('%') && numeric > 100) return CHAT_SECONDARY_SIDEBAR_DEFAULT_PERCENT;
+  return clampChatSecondarySidebarPercent(numeric);
+};
 
 const WorkflowsPage = dynamic(() => import('@/app/workflows/page'), { ssr: false });
 const ModelsPage = dynamic(() => import('@/app/models/page'), { ssr: false });
@@ -40,6 +58,7 @@ const ApiDocsPage = dynamic(() => import('@/app/api-docs/page'), { ssr: false })
 const OfficePage = dynamic(() => import('@/app/office/page'), { ssr: false });
 const NotebookPageContent = dynamic(() => import('@/app/notebook/page').then((m) => m.NotebookPageContent), { ssr: false });
 const AccountContent = dynamic(() => import('@/app/account/page').then((m) => m.AccountContent), { ssr: false });
+const UsersContent = dynamic(() => import('@/app/users/page').then((m) => m.UsersContent), { ssr: false });
 const WorkbenchClient = dynamic(() => import('@/app/workbench/[config]/WorkbenchClient'), { ssr: false });
 
 export type DashboardDockTab =
@@ -48,6 +67,8 @@ export type DashboardDockTab =
   | { id: 'agents'; title: string; kind: 'agents' }
   | { id: 'skills'; title: string; kind: 'skills' }
   | { id: 'settings'; title: string; kind: 'settings' }
+  | { id: 'channels'; title: string; kind: 'channels' }
+  | { id: 'users'; title: string; kind: 'users' }
   | { id: 'workflows'; title: string; kind: 'workflows' }
   | { id: 'models'; title: string; kind: 'models' }
   | { id: 'engines'; title: string; kind: 'engines' }
@@ -105,6 +126,8 @@ const DEFAULT_SHELL_HEADERS: Record<DashboardDockTab['kind'], { title: string; s
   agents: { title: 'Agent 管理', subtitle: '管理可调度角色与运行时 Agent 编队' },
   skills: { title: 'Skills/MCP 管理', subtitle: '统一管理本地 Skills、MCP 与应用市场安装' },
   settings: { title: '系统设置', subtitle: '环境变量、账户与系统参数' },
+  channels: { title: '微信接入', subtitle: '生成地址、接桥接器并在线测试工作流运行时消息' },
+  users: { title: '用户管理', subtitle: '管理用户、权限与注册审核' },
   workflows: { title: '工作流管理', subtitle: '管理和配置工作流' },
   models: { title: '模型中心', subtitle: '模型配置与智能探针监控' },
   engines: { title: '引擎管理', subtitle: '选择和配置 AI 编程引擎' },
@@ -118,6 +141,33 @@ const DEFAULT_SHELL_HEADERS: Record<DashboardDockTab['kind'], { title: string; s
   account: { title: '账户设置', subtitle: '个人资料、目录和账户偏好' },
   workbench: { title: '工作流工作台', subtitle: '设计、运行和调试工作流' },
 };
+
+function useDashboardDockHeader(tab: DashboardDockTab): { title: string; subtitle: string } {
+  const { t } = useTranslations();
+  const headers: Record<DashboardDockTab['kind'], { title: string; subtitle: string }> = {
+    chat: { title: t('dashboard.quickActions.chatMode'), subtitle: t('dashboard.headers.chatSubtitle') },
+    overview: { title: t('dashboard.headers.defaultTitle'), subtitle: t('dashboard.headers.overviewSubtitle') },
+    agents: { title: t('dashboard.quickActions.manageAgents'), subtitle: t('dashboard.headers.agentsSubtitle') },
+    skills: { title: t('dashboard.quickActions.skills'), subtitle: t('dashboard.headers.skillsSubtitle') },
+    settings: { title: t('dashboard.quickActions.envVars'), subtitle: t('dashboard.headers.settingsSubtitle') },
+    channels: { title: t('dashboard.headers.channels'), subtitle: t('dashboard.headers.channelsSubtitle') },
+    users: { title: t('dashboard.headers.users'), subtitle: t('dashboard.headers.usersSubtitle') },
+    workflows: { title: t('dashboard.quickActions.workflows'), subtitle: t('dashboard.quickActions.workflowsDesc') },
+    models: { title: t('dashboard.quickActions.models'), subtitle: t('dashboard.quickActions.modelsDesc') },
+    engines: { title: t('dashboard.quickActions.engines'), subtitle: t('dashboard.quickActions.enginesDesc') },
+    schedules: { title: t('dashboard.quickActions.schedules'), subtitle: t('dashboard.quickActions.schedulesDesc') },
+    'run-history': { title: t('dashboard.quickActions.runHistory'), subtitle: t('dashboard.quickActions.runHistoryDesc') },
+    knowledge: { title: t('dashboard.quickActions.knowledge'), subtitle: t('dashboard.quickActions.knowledgeDesc') },
+    'knowledge-library': { title: t('dashboard.quickActions.knowledgeLibrary'), subtitle: t('dashboard.quickActions.knowledgeDesc') },
+    'api-docs': { title: t('dashboard.quickActions.apiDocs'), subtitle: t('dashboard.quickActions.apiDocsDesc') },
+    office: { title: t('dashboard.quickActions.office'), subtitle: t('dashboard.quickActions.officeDesc') },
+    notebook: { title: t('dashboard.headers.notebook'), subtitle: t('dashboard.headers.notebookSubtitle') },
+    account: { title: t('dashboard.headers.account'), subtitle: t('dashboard.headers.accountSubtitle') },
+    workbench: { title: t('dashboard.headers.workbench'), subtitle: t('dashboard.headers.workbenchSubtitle') },
+  };
+  if (tab.kind === 'workbench') return { title: tab.title, subtitle: headers.workbench.subtitle };
+  return headers[tab.kind] || DEFAULT_SHELL_HEADERS[tab.kind] || { title: tab.title, subtitle: '' };
+}
 
 function buildWorkbenchSearch(tab: Extract<DashboardDockTab, { kind: 'workbench' }>) {
   const params = new URLSearchParams();
@@ -148,27 +198,59 @@ function PageFrame({
 
 function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
   const tab = props.params;
-  const defaultHeader = tab.kind === 'workbench'
-    ? { title: tab.title, subtitle: '设计、运行和调试工作流' }
-    : DEFAULT_SHELL_HEADERS[tab.kind] || { title: tab.title, subtitle: '' };
+  const chatPanelRef = useRef<HTMLDivElement>(null);
+  const [chatSecondarySidebarPercent, setChatSecondarySidebarPercent] = useState(() => {
+    if (typeof window === 'undefined') return CHAT_SECONDARY_SIDEBAR_DEFAULT_PERCENT;
+    return parseStoredChatSecondarySidebarPercent(window.localStorage.getItem(CHAT_SECONDARY_SIDEBAR_WIDTH_STORAGE_KEY));
+  });
+  const handleChatSecondarySidebarLayout = useCallback((layout: number[] | Record<string, number>) => {
+    if (!tab.showChatSecondarySidebar) return;
+    const nextSize = Number(Array.isArray(layout) ? layout[0] : layout['chat-secondary-sidebar-panel']);
+    if (!Number.isFinite(nextSize)) return;
+    const nextPercent = clampChatSecondarySidebarPercent(nextSize);
+    setChatSecondarySidebarPercent((prev) => Math.abs(prev - nextPercent) < 0.1 ? prev : nextPercent);
+    try {
+      window.localStorage.setItem(CHAT_SECONDARY_SIDEBAR_WIDTH_STORAGE_KEY, `${Number(nextPercent.toFixed(2))}%`);
+    } catch {}
+  }, [tab.showChatSecondarySidebar]);
+  const defaultHeader = useDashboardDockHeader(tab);
   let content: ReactNode;
   let scrollable = false;
 
   switch (tab.kind) {
     case 'chat':
       content = (
-        <div className="ace-dashboard-chat-panel-content relative flex h-full min-h-0 w-full min-w-0 overflow-hidden">
-          {tab.showChatSecondarySidebar && tab.renderChatSecondarySidebar
-            ? tab.renderChatSecondarySidebar()
-            : null}
-          <div className="ace-dashboard-chat-panel-main min-w-0 flex-1">
-            <ChatPageContent
-              embedded
-              hideSidebar
-              onOpenSecondarySidebar={tab.onToggleChatSecondarySidebar}
-              secondarySidebarPinned={Boolean(tab.showChatSecondarySidebar)}
-            />
-          </div>
+        <div ref={chatPanelRef} className="ace-dashboard-chat-panel-content relative h-full min-h-0 w-full min-w-0 overflow-hidden">
+          <ResizablePanelGroup
+            orientation="horizontal"
+            className="h-full min-w-0"
+            onLayoutChanged={handleChatSecondarySidebarLayout}
+          >
+            {tab.showChatSecondarySidebar && tab.renderChatSecondarySidebar ? (
+              <>
+                <ResizablePanel
+                  id="chat-secondary-sidebar-panel"
+                  defaultSize={formatPanelPercent(chatSecondarySidebarPercent)}
+                  minSize={formatPanelPercent(CHAT_SECONDARY_SIDEBAR_MIN_PERCENT)}
+                  maxSize={formatPanelPercent(CHAT_SECONDARY_SIDEBAR_MAX_PERCENT)}
+                  className="hidden min-w-0 border-r border-border/70 lg:block"
+                >
+                  {tab.renderChatSecondarySidebar()}
+                </ResizablePanel>
+                <ResizableHandle withHandle className="hidden lg:flex" />
+              </>
+            ) : null}
+            <ResizablePanel id="chat-main-panel" defaultSize={`${100 - chatSecondarySidebarPercent}%`} minSize="35%" className="min-w-0">
+              <div className="ace-dashboard-chat-panel-main h-full min-w-0">
+                <ChatPageContent
+                  embedded
+                  hideSidebar
+                  onOpenSecondarySidebar={tab.onToggleChatSecondarySidebar}
+                  secondarySidebarPinned={Boolean(tab.showChatSecondarySidebar)}
+                />
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </div>
       );
       break;
@@ -190,6 +272,19 @@ function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
           </div>
         </PageFrame>
       );
+      break;
+    case 'channels':
+      content = (
+        <PageFrame padded>
+          <div className="mx-auto w-full max-w-6xl">
+            <ChannelIntegrationsContent />
+          </div>
+        </PageFrame>
+      );
+      break;
+    case 'users':
+      content = <UsersContent embedded />;
+      scrollable = true;
       break;
     case 'workflows':
       content = <WorkflowsPage />;
@@ -250,7 +345,14 @@ function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
 
   return (
     <DashboardShellHeaderScope scopeId={props.api.id}>
-      <WorkspacePanelBody panelId={props.api.id} header={defaultHeader} content={content} scrollable={scrollable} />
+      <WorkspacePanelBody
+        panelId={props.api.id}
+        header={defaultHeader}
+        content={content}
+        scrollable={scrollable}
+        keepAlive={tab.kind !== 'workbench'}
+        registerDefaultHeader={tab.kind !== 'workbench'}
+      />
     </DashboardShellHeaderScope>
   );
 }
@@ -260,13 +362,21 @@ function WorkspacePanelBody({
   header,
   content,
   scrollable = false,
+  keepAlive = true,
+  registerDefaultHeader = true,
 }: {
   panelId: string;
   header: { title: string; subtitle: string };
   content: ReactNode;
   scrollable?: boolean;
+  keepAlive?: boolean;
+  registerDefaultHeader?: boolean;
 }) {
-  useDashboardShellHeader(header, [header.title, header.subtitle]);
+  useDashboardShellHeader(registerDefaultHeader ? header : undefined, [registerDefaultHeader, header.title, header.subtitle]);
+
+  if (!keepAlive) {
+    return <PageFrame scrollable={scrollable}>{content}</PageFrame>;
+  }
 
   return (
     <KeepAlive activeCacheKey={panelId} max={4} cacheNodeClassName="h-full min-h-0">
@@ -598,10 +708,12 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
     const handleTabDragStartCapture = useCallback((event: DragEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement | null;
       if (!target?.closest('.dv-tab')) return;
-      if (tabDragRef.current) {
-        tabDragRef.current.dragging = true;
-        window.requestAnimationFrame(restorePreDragActivePanel);
-      }
+      const pending = tabDragRef.current;
+      if (!pending) return;
+      const distance = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
+      if (distance < 6) return;
+      pending.dragging = true;
+      window.requestAnimationFrame(restorePreDragActivePanel);
     }, [restorePreDragActivePanel]);
 
     const handleTabDragEndCapture = useCallback((event: DragEvent<HTMLDivElement>) => {

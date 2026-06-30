@@ -31,9 +31,11 @@ interface UserInfo {
 export function AccountContent({
   embedded = false,
   embeddedSearch = '',
+  registerShellHeader = true,
 }: {
   embedded?: boolean;
   embeddedSearch?: string;
+  registerShellHeader?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -46,10 +48,10 @@ export function AccountContent({
   const [loading, setLoading] = useState(true);
 
   useDocumentTitle(embedded ? null : '账户设置');
-  const { isDashboardShell } = useDashboardShellHeader({
+  const { isDashboardShell } = useDashboardShellHeader(registerShellHeader ? {
     title: '账户设置',
     subtitle: '个人资料、目录和账户偏好',
-  }, []);
+  } : undefined, []);
 
   // Password change
   const [pwdOpen, setPwdOpen] = useState(false);
@@ -170,14 +172,13 @@ export function AccountContent({
     setNotebookOpen(true);
   }, [dockWorkspace, pushDashboardRoute]);
 
-  const openSystemSettings = useCallback(() => {
+  const openChannelIntegrations = useCallback(() => {
     if (dockWorkspace) {
-      dockWorkspace.openTab({ id: 'settings', title: '系统设置', kind: 'settings' });
-      pushDashboardRoute('/account/system-settings');
+      dockWorkspace.openTab({ id: 'channels', title: '微信接入', kind: 'channels' });
       return;
     }
-    router.push('/account/system-settings');
-  }, [dockWorkspace, pushDashboardRoute, router]);
+    router.push('/account/channels');
+  }, [dockWorkspace, router]);
 
   const handleChangePassword = async () => {
     setPwdError(''); setPwdSuccess('');
@@ -237,14 +238,18 @@ export function AccountContent({
   };
 
   if (loading || !user) {
-    return <div className="min-h-screen flex items-center justify-center bg-background"><p className="text-muted-foreground">加载中...</p></div>;
+    return (
+      <div className={embedded ? 'flex min-h-[320px] items-center justify-center bg-background' : 'min-h-screen flex items-center justify-center bg-background'}>
+        <p className="text-muted-foreground">加载中...</p>
+      </div>
+    );
   }
 
   const initials = user.username?.charAt(0)?.toUpperCase() || '?';
 
   return (
     <div className={embedded ? 'h-full overflow-auto bg-background' : 'min-h-screen bg-background'}>
-      {!isDashboardShell ? (
+      {!embedded && !isDashboardShell ? (
       <header className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4 flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
@@ -319,7 +324,18 @@ export function AccountContent({
           </div>
         </div>
 
-        <Link href="/account/channels" className="block rounded-xl border bg-card p-6 transition-colors hover:bg-muted/40">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={openChannelIntegrations}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              openChannelIntegrations();
+            }
+          }}
+          className="block w-full rounded-xl border bg-card p-6 text-left transition-colors hover:bg-muted/40"
+        >
           <div className="flex items-start gap-4">
             <div className="rounded-lg bg-primary/10 p-3 text-primary">
               <RadioTower className="h-5 w-5" />
@@ -336,7 +352,7 @@ export function AccountContent({
               </div>
             </div>
           </div>
-        </Link>
+        </div>
 
         {/* Actions */}
         <div className="rounded-xl border bg-card divide-y">
@@ -381,13 +397,6 @@ export function AccountContent({
               </button>
             </div>
           </div>
-          <button onClick={openSystemSettings} className="w-full px-6 py-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
-            <div className="flex items-center gap-3">
-              <span className="material-symbols-outlined text-muted-foreground">settings</span>
-              <span>系统设置</span>
-            </div>
-            <span className="material-symbols-outlined text-muted-foreground text-sm">chevron_right</span>
-          </button>
           <button onClick={() => setShowUserEnvVars(true)} className="w-full px-6 py-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
             <div className="flex items-center gap-3">
               <span className="material-symbols-outlined text-muted-foreground">key</span>
@@ -467,24 +476,24 @@ export function AccountContent({
       </Dialog>
 
       {/* Workspace Editor */}
-      {user.personalDir && (
-        <>
-          <WorkspaceEditor
-            open={wsEditorOpen}
-            onOpenChange={setWsEditorOpen}
-            workspacePath={user.personalDir}
-          />
-          <WorkspaceEditor
-            open={notebookOpen}
-            onOpenChange={setNotebookOpen}
-            workspacePath={user.personalDir}
-            mode="notebook"
-            title="Cangjie Notebook"
-            notebookScope={notebookScope}
-            notebookShareToken={notebookShareToken}
-            notebookPermission={notebookPermission}
-          />
-        </>
+      {user.personalDir && wsEditorOpen && (
+        <WorkspaceEditor
+          open={wsEditorOpen}
+          onOpenChange={setWsEditorOpen}
+          workspacePath={user.personalDir}
+        />
+      )}
+      {user.personalDir && notebookOpen && (
+        <WorkspaceEditor
+          open={notebookOpen}
+          onOpenChange={setNotebookOpen}
+          workspacePath={user.personalDir}
+          mode="notebook"
+          title="Cangjie Notebook"
+          notebookScope={notebookScope}
+          notebookShareToken={notebookShareToken}
+          notebookPermission={notebookPermission}
+        />
       )}
 
       {showUserEnvVars && (
