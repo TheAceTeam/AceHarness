@@ -27,6 +27,23 @@ export interface RunSummaryCache {
   runId: string;
   configFile: string;
   configName: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  parentConfigFile?: string;
+  parentStateName?: string;
+  parentStepId?: string;
+  parentStepName?: string;
+  childRunIds?: string[];
+  subworkflowRuns?: Array<{
+    runId: string;
+    configFile: string;
+    parentStateName?: string;
+    parentStepName?: string;
+    status: string;
+    summary?: string;
+    verdict?: string;
+    attempt?: number;
+  }>;
   startTime: string;
   endTime: string | null;
   status: string;
@@ -165,6 +182,25 @@ function normalizeSummary(input: any): RunSummaryCache | null {
     runId,
     configFile,
     configName: stringValue(input.configName) || configFile,
+    parentRunId: stringValue(input.parentRunId) || undefined,
+    rootRunId: stringValue(input.rootRunId) || undefined,
+    parentConfigFile: stringValue(input.parentConfigFile) || undefined,
+    parentStateName: stringValue(input.parentStateName) || undefined,
+    parentStepId: stringValue(input.parentStepId) || undefined,
+    parentStepName: stringValue(input.parentStepName) || undefined,
+    childRunIds: Array.isArray(input.childRunIds) ? input.childRunIds.filter((item: any) => typeof item === 'string') : [],
+    subworkflowRuns: Array.isArray(input.subworkflowRuns)
+      ? input.subworkflowRuns.map((ref: any) => ({
+          runId: stringValue(ref?.runId),
+          configFile: stringValue(ref?.configFile),
+          parentStateName: stringValue(ref?.parentStateName) || undefined,
+          parentStepName: stringValue(ref?.parentStepName) || undefined,
+          status: stringValue(ref?.status) || 'unknown',
+          summary: stringValue(ref?.summary) || undefined,
+          verdict: stringValue(ref?.verdict) || undefined,
+          attempt: numberOrZero(ref?.attempt) || undefined,
+        })).filter((ref: any) => ref.runId && ref.configFile)
+      : [],
     startTime: stringValue(input.startTime),
     endTime: stringValue(input.endTime) || null,
     status: stringValue(input.status) || 'unknown',
@@ -213,6 +249,25 @@ export function buildRunSummaryCacheFromState(state: PersistedRunState): RunSumm
     runId: state.runId,
     configFile: state.configFile,
     configName: stringValue(state.workflowName) || state.configFile,
+    parentRunId: stringValue(state.parentRunId) || undefined,
+    rootRunId: stringValue(state.rootRunId) || undefined,
+    parentConfigFile: stringValue(state.parentConfigFile) || undefined,
+    parentStateName: stringValue(state.parentStateName) || undefined,
+    parentStepId: stringValue(state.parentStepId) || undefined,
+    parentStepName: stringValue(state.parentStepName) || undefined,
+    childRunIds: Array.isArray(state.childRunIds) ? state.childRunIds : [],
+    subworkflowRuns: Array.isArray(state.subworkflowRuns)
+      ? state.subworkflowRuns.map((ref) => ({
+          runId: ref.runId,
+          configFile: ref.configFile,
+          parentStateName: ref.parentStateName,
+          parentStepName: ref.parentStepName,
+          status: ref.status,
+          summary: ref.summary,
+          verdict: ref.verdict,
+          attempt: ref.attempt,
+        }))
+      : [],
     startTime: stringValue(state.startTime),
     endTime: stringValue(state.endTime) || null,
     status: stringValue(state.status) || 'unknown',

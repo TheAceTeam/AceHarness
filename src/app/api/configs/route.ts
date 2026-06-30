@@ -118,14 +118,16 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        // 检测工作流模式
-        const mode = config?.workflow?.mode || 'phase-based';
+        // 检测工作流模式。兼容旧配置：只有 states、没有 workflow.mode 时也应视为状态机。
+        const workflowMode = config?.workflow?.mode === 'state-machine' || (hasStateWorkflow && !hasPhaseWorkflow)
+          ? 'state-machine'
+          : 'phase-based';
 
         // 根据模式计算统计信息
         let phaseCount = 0;
         let stepCount = 0;
 
-        if (mode === 'state-machine') {
+        if (workflowMode === 'state-machine') {
           // 状态机模式
           phaseCount = config?.workflow?.states?.length || 0;
           stepCount = config?.workflow?.states?.reduce(
@@ -145,7 +147,7 @@ export async function GET(request: NextRequest) {
           filename: file,
           name: config?.workflow?.name || file,
           description: config?.workflow?.description || '',
-          mode,
+          mode: workflowMode,
           phaseCount,
           stepCount,
           agentCount,

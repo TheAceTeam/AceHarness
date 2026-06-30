@@ -30,6 +30,14 @@ import { compactEngineContextManually, executeEngineWithContextRecovery, resolve
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getEngineConfigPath, getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import {
+  buildDatabaseCapabilityPrompt,
+  buildRuntimeDatabaseEnv,
+  createRuntimeDatabaseGrant,
+  expandDatabaseCapabilitySkillNames,
+  writeRuntimeDatabaseEnvFile,
+  type RuntimeDatabaseGrant,
+} from '@/lib/runtime/database-capabilities';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { ensureDefaultSupervisorConfig } from '@/lib/core/default-supervisor';
@@ -49,7 +57,7 @@ import {
 } from '@/lib/mcp/registry';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
-export function resolveAgentModel(roleConfig: any, workflowContext?: any): string {
+export function resolveAgentEngineSelection(roleConfig: any, workflowContext?: any): { engine: string; model: string } {
   let globalEngine = '';
   let defaultModel = '';
 
@@ -76,7 +84,15 @@ export function resolveAgentModel(roleConfig: any, workflowContext?: any): strin
     throw new Error('未配置默认模型，请先在首次初始化或引擎设置页面完成配置');
   }
 
-  return resolved.effectiveModel;
+  return {
+    engine: resolved.effectiveEngine,
+    model: resolved.effectiveModel,
+  };
+}
+
+/** 根据工作流引擎配置解析 Agent 实际使用的模型 */
+export function resolveAgentModel(roleConfig: any, workflowContext?: any): string {
+  return resolveAgentEngineSelection(roleConfig, workflowContext).model;
 }
 
 export interface TokenUsage {
@@ -286,6 +302,7 @@ export class WorkflowManager extends EventEmitter {
   private workflowSkillsContent: string = '';
   /** Resolved workflow-level MCP servers from context.mcpServers */
   private workflowMcpServers: ManagedMcpServer[] = [];
+  private runtimeDatabaseGrant: RuntimeDatabaseGrant | null = null;
   /** Skills copied to workspace that need cleanup on finish */
   private copiedSkills: { dir: string; names: string[]; indexCopied: boolean; dirExistedBefore: boolean } | null = null;
   /** Per-agent prompt memory for omitting unchanged repeated context within one run session. */
@@ -312,6 +329,12 @@ export class WorkflowManager extends EventEmitter {
       : [];
     const baseDirectory = this.getWorkingDirectory() || workflowConfig.context?.projectRoot || this.resolveProjectRootPath();
     this.workflowMcpServers = await resolveMcpServersByNames(names, baseDirectory);
+    for (const role of this.agentConfigs || []) {
+      if (!Array.isArray((role as any).mcpServers)) continue;
+      const roleNames = (role as any).mcpServers.filter((item: unknown): item is string => typeof item === 'string');
+      if (roleNames.length === 0) continue;
+      (role as any).mcpServers = await resolveMcpServersByNames(roleNames, baseDirectory);
+    }
   }
 
   private getAgentPromptMemo(agentName: string): AgentPromptMemo {
@@ -926,6 +949,7 @@ try {
         runId: options.runId,
         mcpServers: options.mcpServers,
         userId: this._createdBy,
+        env: buildRuntimeDatabaseEnv(this.runtimeDatabaseGrant),
       }, {
         onContextReset: (event) => {
           this.emit('log', {
@@ -1362,6 +1386,22 @@ try {
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：加载 MCP 配置...', '加载 MCP 配置');
       await this.resolveWorkflowMcpServers(workflowConfig);
+
+      const agentRagKnowledgeBases = (workflowConfig.roles || this.agentConfigs || []).flatMap((role: any) => Array.isArray(role?.ragKnowledgeBases) ? role.ragKnowledgeBases : []);
+      workflowConfig.context.skills = expandDatabaseCapabilitySkillNames({
+        skills: workflowConfig.context.skills,
+        capabilitySkills: workflowConfig.context.capabilitySkills,
+        agentRagKnowledgeBases,
+      });
+      this.runtimeDatabaseGrant = await createRuntimeDatabaseGrant({
+        capabilitySkills: workflowConfig.context.capabilitySkills,
+        skills: workflowConfig.context.skills,
+        agentRagKnowledgeBases,
+        workspaceRoot: workflowConfig.context.projectRoot || workflowGitWorkspacePath || process.cwd(),
+        runId,
+        workflowConfigFile: configFile,
+      });
+      await writeRuntimeDatabaseEnvFile(this.runtimeDatabaseGrant);
 
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：同步 Skills...', '同步 Skills');
@@ -2818,6 +2858,14 @@ try {
         prompt += `以下 Skills 是本步骤/工作流声明的工具。首次使用某个 Skill 前，必须先读取其 SKILL.md，按其中命令和约束执行；不要自行猜测命令参数。\n\n`;
         prompt += `Skills 目录绝对路径: \`${skillsAbsPath}/\`\n\n`;
         memo.skillRulesShown = true;
+      }
+      const dbPrompt = buildDatabaseCapabilityPrompt(this.runtimeDatabaseGrant, skillsAbsPath);
+      if (dbPrompt && !memo.skillContentSeen.has('__aceharness_database_capabilities__')) {
+        prompt += dbPrompt;
+        memo.skillContentSeen.add('__aceharness_database_capabilities__');
+      }
+      if (Array.isArray((roleConfig as any).ragKnowledgeBases) && (roleConfig as any).ragKnowledgeBases.length > 0) {
+        prompt += `当前 Agent 关联的 RAG 知识库：${(roleConfig as any).ragKnowledgeBases.join(', ')}。需要查资料时优先使用 aceharness-rag 检索这些知识库。\n\n`;
       }
       prompt += [...allSkillNames].map((name) => {
         const source = (roleConfig as any).skills?.includes(name) ? 'agent.skills' : 'workflow.context.skills';

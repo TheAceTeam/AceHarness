@@ -4,12 +4,24 @@ import { workflowRegistry } from '@/lib/workflow/registry';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { message, configFile } = body;
+    const { message, runId } = body;
 
     if (!message?.trim()) {
       return NextResponse.json(
         { error: '反馈内容不能为空' },
         { status: 400 }
+      );
+    }
+
+    if (typeof runId === 'string' && runId.trim()) {
+      const manager = await workflowRegistry.getManagerByRunId(runId.trim());
+      const recalled = manager?.recallLiveFeedback(message.trim());
+      if (recalled) {
+        return NextResponse.json({ success: true, message: '反馈已撤回' });
+      }
+      return NextResponse.json(
+        { error: '该反馈已被处理或不存在' },
+        { status: 404 }
       );
     }
 

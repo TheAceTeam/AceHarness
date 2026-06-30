@@ -13,6 +13,8 @@ export interface ConfigMeta {
   visibility: 'public' | 'private' | 'shared';
   sharedWithUserIds?: string[];
   createdAt: number;
+  specCodingEnabled?: boolean;
+  specCodingSkipped?: boolean;
 }
 
 type MetadataMap = Record<string, ConfigMeta>;

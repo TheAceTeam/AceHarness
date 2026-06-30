@@ -15,6 +15,12 @@ import {
   loadLatestCreationSessionByFilename,
   saveCreationSession,
 } from '@/lib/spec/coding-store';
+import {
+  listSubworkflowReferences,
+  normalizeWorkflowConfigRef,
+  readWorkflowConfigForDependency,
+  resolveWorkflowConfigDependencyGraph,
+} from '@/lib/workflow/subworkflow-config';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +34,8 @@ type WorkflowImportCandidate = {
   normalizedConfig: any;
   audit: WorkflowImportAudit;
 };
+
+type ExportDependencyMode = 'selected' | 'direct' | 'full';
 
 type SpecCodingImportCandidate = {
   filename: string;
@@ -129,7 +137,7 @@ async function assertExportableWorkflow(filename: string, user: AuthUser): Promi
   return filePath;
 }
 
-async function zipWorkflowFiles(files: Array<{ filename: string; filePath: string }>): Promise<Buffer> {
+async function zipWorkflowFiles(files: Array<{ filename: string; filePath: string }>, manifest?: any): Promise<Buffer> {
   const zipfile = new ZipFile();
   for (const file of files) {
     zipfile.addFile(file.filePath, file.filename);
@@ -137,6 +145,9 @@ async function zipWorkflowFiles(files: Array<{ filename: string; filePath: strin
     if (session?.specCoding) {
       zipfile.addBuffer(Buffer.from(stringify(session)), `spec-coding/${file.filename}`);
     }
+  }
+  if (manifest) {
+    zipfile.addBuffer(Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), 'workflow-dependencies.json');
   }
 
   const chunks: Buffer[] = [];
@@ -208,6 +219,47 @@ async function readArchiveCandidatesFromZip(
   }
 
   return { workflows: candidates, specSessions };
+}
+
+async function collectExportWorkflowFiles(
+  selectedFiles: string[],
+  user: AuthUser,
+  dependencyMode: ExportDependencyMode,
+): Promise<Array<{ filename: string; filePath: string }>> {
+  const result = new Map<string, { filename: string; filePath: string }>();
+  async function addFile(filename: string) {
+    const normalized = normalizeArchiveWorkflowPath(filename);
+    if (result.has(normalized)) return;
+    const filePath = await assertExportableWorkflow(normalized, user);
+    result.set(normalized, { filename: normalized, filePath });
+  }
+
+  for (const filename of selectedFiles) {
+    await addFile(filename);
+    if (dependencyMode === 'selected') continue;
+    if (dependencyMode === 'full') {
+      const graph = await resolveWorkflowConfigDependencyGraph(filename);
+      for (const dep of graph.configs) {
+        await addFile(dep.file);
+      }
+      continue;
+    }
+    const loaded = await readWorkflowConfigForDependency(filename);
+    for (const ref of listSubworkflowReferences(loaded.config)) {
+      await addFile(ref.configFile);
+    }
+  }
+
+  return Array.from(result.values());
+}
+
+async function buildExportDependencyManifest(files: Array<{ filename: string }>, dependencyMode: ExportDependencyMode) {
+  return {
+    version: 1,
+    dependencyMode,
+    exportedAt: new Date().toISOString(),
+    workflows: files.map((file) => file.filename),
+  };
 }
 
 function emptyImportAudit(): WorkflowImportAudit {
@@ -378,6 +430,46 @@ function mergeImportAudits(audits: WorkflowImportAudit[]): WorkflowImportAudit {
   }), emptyImportAudit());
 }
 
+function validateImportedWorkflowDependencyClosure(candidates: WorkflowImportCandidate[]): void {
+  const byFile = new Map(candidates.map((candidate) => [normalizeWorkflowConfigRef(candidate.filename), candidate]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const missing: string[] = [];
+
+  function visit(file: string, stack: string[]) {
+    const normalized = normalizeWorkflowConfigRef(file);
+    if (stack.includes(normalized)) {
+      throw Object.assign(new Error(`导入候选存在子工作流循环: ${[...stack, normalized].join(' -> ')}`), { status: 400 });
+    }
+    if (visited.has(normalized)) return;
+    if (visiting.has(normalized)) {
+      throw Object.assign(new Error(`导入候选存在子工作流循环: ${[...stack, normalized].join(' -> ')}`), { status: 400 });
+    }
+    const candidate = byFile.get(normalized);
+    if (!candidate) {
+      missing.push(normalized);
+      return;
+    }
+    visiting.add(normalized);
+    for (const ref of listSubworkflowReferences(candidate.normalizedConfig)) {
+      visit(ref.configFile, [...stack, normalized]);
+    }
+    visiting.delete(normalized);
+    visited.add(normalized);
+  }
+
+  for (const candidate of candidates) {
+    visit(candidate.filename, []);
+  }
+  if (missing.length > 0) {
+    const uniqueMissing = Array.from(new Set(missing)).sort();
+    throw Object.assign(new Error(`导入 ZIP 缺少子工作流依赖: ${uniqueMissing.join(', ')}`), {
+      status: 400,
+      details: uniqueMissing.map((file) => ({ path: ['workflow', 'subworkflow'], message: `缺少子工作流依赖: ${file}`, severity: 'error' })),
+    });
+  }
+}
+
 export async function PUT(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
@@ -395,14 +487,18 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: '请选择要导出的工作流' }, { status: 400 });
     }
 
+    const dependencyMode: ExportDependencyMode = body?.dependencyMode === 'full'
+      ? 'full'
+      : body?.dependencyMode === 'direct'
+        ? 'direct'
+        : 'selected';
     const uniqueWorkflowFiles = Array.from(new Set(workflowFiles));
-    const files: Array<{ filename: string; filePath: string }> = [];
-    for (const filename of uniqueWorkflowFiles) {
-      const filePath = await assertExportableWorkflow(filename, auth as AuthUser);
-      files.push({ filename, filePath });
-    }
+    const files = await collectExportWorkflowFiles(uniqueWorkflowFiles, auth as AuthUser, dependencyMode);
+    const manifest = dependencyMode === 'selected'
+      ? undefined
+      : await buildExportDependencyManifest(files, dependencyMode);
 
-    const zipBuffer = await zipWorkflowFiles(files);
+    const zipBuffer = await zipWorkflowFiles(files, manifest);
     return new Response(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
@@ -450,6 +546,7 @@ export async function POST(request: NextRequest) {
     if (candidates.length === 0) {
       return NextResponse.json({ error: 'ZIP 中未找到 workflow YAML' }, { status: 400 });
     }
+    validateImportedWorkflowDependencyClosure(candidates);
 
     for (const candidate of candidates) {
       const existingMeta = await getConfigMeta(candidate.filename, 'workflow');

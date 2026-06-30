@@ -25,6 +25,34 @@ export interface RunSummary extends TokenUsageSummary {
   id: string;
   configFile: string;
   configName: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  parentConfigFile?: string;
+  parentStateName?: string;
+  parentStepId?: string;
+  parentStepName?: string;
+  childRunIds?: string[];
+  subworkflowRuns?: Array<{
+    runId: string;
+    configFile: string;
+    parentStateName?: string;
+    parentStepName?: string;
+    status: string;
+    summary?: string;
+    verdict?: string;
+    attempt?: number;
+  }>;
+  childRuns?: RunSummary[];
+  childSummary?: {
+    total: number;
+    active: number;
+    failed: number;
+    waitingHuman: number;
+    detached: number;
+    completed: number;
+    superseded: number;
+    abandoned: number;
+  };
   startTime: string;
   endTime: string | null;
   status: string;
@@ -267,6 +295,49 @@ export function paginateRuns<T>(items: T[], page: number, pageSize: number) {
   };
 }
 
+function buildChildSummary(children: RunSummary[], refs: RunSummary['subworkflowRuns'] = []): NonNullable<RunSummary['childSummary']> {
+  const byRunId = new Map(children.map((child) => [child.id, child]));
+  const statuses = refs.length > 0
+    ? refs.map((ref) => ref.status)
+    : children.map((child) => child.status);
+  return {
+    total: Math.max(children.length, refs.length),
+    active: statuses.filter((status) => status === 'pending' || status === 'starting' || status === 'running').length,
+    failed: statuses.filter((status) => status === 'failed' || status === 'crashed').length,
+    waitingHuman: statuses.filter((status) => status === 'waiting-human').length,
+    detached: statuses.filter((status) => status === 'detached').length,
+    completed: statuses.filter((status) => status === 'completed').length,
+    superseded: statuses.filter((status) => status === 'superseded').length,
+    abandoned: statuses.filter((status) => status === 'abandoned').length,
+  };
+}
+
+export function attachRunHistoryTree(runs: RunSummary[]): RunSummary[] {
+  const byId = new Map(runs.map((run) => [run.id, { ...run, childRuns: [] as RunSummary[] }]));
+  const roots: RunSummary[] = [];
+
+  for (const run of byId.values()) {
+    if (run.parentRunId && byId.has(run.parentRunId)) {
+      byId.get(run.parentRunId)!.childRuns!.push(run);
+    } else {
+      roots.push(run);
+    }
+  }
+
+  const finalize = (run: RunSummary): RunSummary => {
+    const children = (run.childRuns || [])
+      .sort((a, b) => getSafeTime(b.startTime) - getSafeTime(a.startTime))
+      .map(finalize);
+    return {
+      ...run,
+      childRuns: children,
+      childSummary: buildChildSummary(children, run.subworkflowRuns),
+    };
+  };
+
+  return roots.map(finalize);
+}
+
 export async function readAllRunsSummary() {
   const runs: RunSummary[] = [];
   const agentUsage: Record<string, { calls: number; cost: number }> = {};
@@ -302,6 +373,14 @@ export async function readAllRunsSummary() {
       id: summary.runId || summary.id || '',
       configFile,
       configName: workflowName,
+      parentRunId: summary.parentRunId || undefined,
+      rootRunId: summary.rootRunId || undefined,
+      parentConfigFile: summary.parentConfigFile || undefined,
+      parentStateName: summary.parentStateName || undefined,
+      parentStepId: summary.parentStepId || undefined,
+      parentStepName: summary.parentStepName || undefined,
+      childRunIds: Array.isArray(summary.childRunIds) ? summary.childRunIds : [],
+      subworkflowRuns: Array.isArray(summary.subworkflowRuns) ? summary.subworkflowRuns : [],
       startTime: summary.startTime || '',
       endTime: summary.endTime || null,
       status: summary.status || 'unknown',

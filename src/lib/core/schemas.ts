@@ -108,17 +108,82 @@ export const workflowConcurrencySchema = z.object({
   joinPolicies: z.record(z.string(), joinPolicySchema).default({}).optional(),
 }).optional();
 
+export const subworkflowInputsSchema = z.object({
+  requirements: z.union([z.literal('inherit'), z.string()]).default('inherit').optional(),
+  workspace: z.enum(['inherit', 'child-isolated-copy', 'config']).default('inherit').optional(),
+  context: z.enum(['inherit', 'none', 'custom']).default('inherit').optional(),
+  specCoding: z.enum(['inherit', 'none']).default('inherit').optional(),
+  globalContext: z.enum(['inherit', 'none', 'custom']).default('inherit').optional(),
+  stateContexts: z.enum(['inherit', 'none', 'relevant']).default('relevant').optional(),
+  mcpServers: z.enum(['inherit', 'merge', 'child-only', 'parent-only']).default('merge').optional(),
+  skills: z.enum(['inherit', 'merge', 'child-only', 'parent-only']).default('merge').optional(),
+  rag: z.enum(['inherit', 'merge', 'child-only', 'parent-only']).default('merge').optional(),
+  engine: z.enum(['inherit', 'child', 'override']).default('child').optional(),
+}).optional();
+
+export const subworkflowResultMappingSchema = z.object({
+  completed: z.enum(['pass', 'conditional_pass', 'fail']).default('pass').optional(),
+  failed: z.enum(['pass', 'conditional_pass', 'fail']).default('fail').optional(),
+  stopped: z.enum(['pass', 'conditional_pass', 'fail']).default('fail').optional(),
+  crashed: z.enum(['pass', 'conditional_pass', 'fail']).default('fail').optional(),
+}).optional();
+
+export const subworkflowRuntimeSchema = z.object({
+  humanQuestions: z.enum(['bubble', 'child-only']).default('bubble').optional(),
+  stopPropagation: z.enum(['cascade', 'detach']).default('cascade').optional(),
+  timeoutMinutes: z.number().min(1).optional(),
+  timeoutStrategy: z.enum(['stop', 'ask-human']).default('stop').optional(),
+  maxDepth: z.number().int().min(1).max(8).optional(),
+  workspaceConflictPolicy: z.literal('shared').default('shared').optional(),
+  onUnjoinedBranches: z.enum(['stop', 'detach', 'wait-background']).default('stop').optional(),
+}).optional();
+
+export const subworkflowReferenceSchema = z.object({
+  configFile: z.string().min(1, '子工作流配置不能为空'),
+  inputs: subworkflowInputsSchema,
+  result: subworkflowResultMappingSchema,
+  runtime: subworkflowRuntimeSchema,
+});
+
+export interface WorkflowStep {
+  id?: string;
+  name: string;
+  agent: string;
+  task: string;
+  preCommands?: string[];
+  type?: 'agent' | 'subworkflow';
+  workflow?: string;
+  subworkflow?: Partial<SubworkflowReference>;
+  inputs?: SubworkflowInputs;
+  result?: SubworkflowResultMapping;
+  runtime?: SubworkflowRuntime;
+  role?: 'attacker' | 'defender' | 'judge';
+  constraints?: string[];
+  parallelGroup?: string;
+  concurrency?: StepConcurrency;
+  agentInstanceId?: string;
+  channelIds?: string[];
+  specTaskBinding?: SpecTaskBinding;
+  enableReviewPanel?: boolean;
+  skills?: string[];
+}
+
 // 工作流步骤 Schema
-export const workflowStepSchema = z.object({
+export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1, '步骤名称不能为空'),
-  agent: z.string().min(1, 'Agent 名称不能为空'),
-  task: z.string().min(1, '任务描述不能为空'),
+  agent: z.string().optional(),
+  task: z.string().optional(),
   // 可选：在执行 Agent 之前，由系统自动执行的一组预命令（通常是编译 / 测试命令）
   // 注意：这些命令在后端 Node 环境中串行执行，stdout/stderr 会被收集并注入上下文，
   // 不会中断整个步骤（即使命令本身返回非 0 退出码）。
   preCommands: z.array(z.string()).optional(),
-  type: z.string().optional(),
+  type: z.enum(['agent', 'subworkflow']).optional(),
+  workflow: z.string().optional(),
+  subworkflow: subworkflowReferenceSchema.partial({ configFile: true }).optional(),
+  inputs: subworkflowInputsSchema,
+  result: subworkflowResultMappingSchema,
+  runtime: subworkflowRuntimeSchema,
   role: z.enum(['attacker', 'defender', 'judge']).optional(),
   constraints: z.array(z.string()).optional(),
   parallelGroup: z.string().optional(),
@@ -128,7 +193,34 @@ export const workflowStepSchema = z.object({
   specTaskBinding: specTaskBindingSchema.optional(),
   enableReviewPanel: z.boolean().optional(), // 是否启用会审模式
   skills: z.array(z.string()).optional(), // 兼容旧配置：步骤级 skills 已废弃，新配置写入 Agent.skills
-});
+}).superRefine((step, ctx) => {
+  if (step.type === 'subworkflow') {
+    const configFile = step.workflow?.trim() || step.subworkflow?.configFile?.trim();
+    if (!configFile) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['workflow'],
+        message: '子工作流步骤必须设置 workflow 或 subworkflow.configFile',
+      });
+    }
+    return;
+  }
+
+  if (!step.agent?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['agent'],
+      message: 'Agent 名称不能为空',
+    });
+  }
+  if (!step.task?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['task'],
+      message: '任务描述不能为空',
+    });
+  }
+}) as any;
 
 // 检查点 Schema
 export const checkpointSchema = z.object({
@@ -194,6 +286,7 @@ export const roleConfigSchema = z.object({
   iterationPrompt: z.string().optional(),
   constraints: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(), // Agent 默认可用的 skills
+  ragKnowledgeBases: z.array(z.string()).optional(), // Agent 默认关联的 RAG 知识库
   allowedTools: z.array(z.string()).optional(),
   category: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -213,7 +306,7 @@ export const roleConfigSchema = z.object({
       model: z.string(),
     })),
   }).optional(),
-  mcpServers: z.array(mcpServerSchema).optional(),
+  mcpServers: z.array(z.union([z.string(), mcpServerSchema])).optional(),
 });
 
 export const workflowAgentExecutionOverrideSchema = z.object({
@@ -229,6 +322,33 @@ export const workflowExecutionPolicySchema = z.object({
   agentOverrides: z.record(z.string(), workflowAgentExecutionOverrideSchema).default({}),
 });
 
+export const ragCapabilitySkillSchema = z.object({
+  enabled: z.boolean().default(false).optional(),
+  knowledgeBases: z.array(z.string()).default(['default']).optional(),
+  topK: z.number().int().min(1).max(50).default(8).optional(),
+  autoInject: z.boolean().default(false).optional(),
+  allowAgentQuery: z.boolean().default(true).optional(),
+}).default({});
+
+export const sqliteCapabilityDatabaseSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'SQLite 数据库名称只能包含字母、数字、下划线和连字符'),
+  path: z.string().min(1, 'SQLite 数据库路径不能为空'),
+  allowCreate: z.boolean().default(true).optional(),
+  allowDelete: z.boolean().default(false).optional(),
+  readOnly: z.boolean().default(false).optional(),
+});
+
+export const sqliteCapabilitySkillSchema = z.object({
+  enabled: z.boolean().default(false).optional(),
+  root: z.literal('workspace').default('workspace').optional(),
+  databases: z.array(sqliteCapabilityDatabaseSchema).default([]).optional(),
+}).default({});
+
+export const capabilitySkillsSchema = z.object({
+  rag: ragCapabilitySkillSchema.optional(),
+  sqlite: sqliteCapabilitySkillSchema.optional(),
+}).optional();
+
 // 上下文配置 Schema
 export const contextConfigSchema = z.object({
   projectRoot: z.string().optional(),
@@ -240,6 +360,7 @@ export const contextConfigSchema = z.object({
   gitBaselineEnabled: z.boolean().optional(), // 是否为运行建立 Git 基线和步骤快照，默认开启
   executionPolicy: workflowExecutionPolicySchema.optional(),
   skills: z.array(z.string()).optional(), // 启用的 skills 列表
+  capabilitySkills: capabilitySkillsSchema,
   mcpServers: z.array(z.string()).optional(), // 启用的 MCP server 名称
   routerModel: z.string().optional(), // Supervisor-Lite 路由模型（可选）
 });
@@ -266,13 +387,18 @@ export type StepTaskBindingSnapshot = z.infer<typeof stepTaskBindingSnapshotSche
 export type StepTaskBindingValidation = z.infer<typeof stepTaskBindingValidationSchema>;
 export type StepConcurrency = z.infer<typeof stepConcurrencySchema>;
 export type WorkflowConcurrency = z.infer<typeof workflowConcurrencySchema>;
+export type SubworkflowInputs = z.infer<typeof subworkflowInputsSchema>;
+export type SubworkflowResultMapping = z.infer<typeof subworkflowResultMappingSchema>;
+export type SubworkflowRuntime = z.infer<typeof subworkflowRuntimeSchema>;
+export type SubworkflowReference = z.infer<typeof subworkflowReferenceSchema>;
 export type IterationConfig = z.infer<typeof iterationConfigSchema>;
-export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 export type WorkflowPhase = z.infer<typeof workflowPhaseSchema>;
 export type RoleConfig = z.infer<typeof roleConfigSchema>;
 export type WorkflowAgentExecutionOverride = z.infer<typeof workflowAgentExecutionOverrideSchema>;
 export type WorkflowExecutionPolicy = z.infer<typeof workflowExecutionPolicySchema>;
+export type CapabilitySkillsConfig = z.infer<typeof capabilitySkillsSchema>;
+export type SqliteCapabilityDatabase = z.infer<typeof sqliteCapabilityDatabaseSchema>;
 export type ContextConfig = z.infer<typeof contextConfigSchema>;
 export type WorkflowConfig = z.infer<typeof workflowConfigSchema>;
 

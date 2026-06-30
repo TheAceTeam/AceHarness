@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow/registry';
 import { loadRunState, type HumanQuestionAnswer } from '@/lib/run/state-persistence';
+import { requireAuth } from '@/lib/auth/middleware';
+import { canAccessRunState } from '@/lib/workflow/run-access';
+import { appendWorkflowAuditEvent, getWorkflowAuditRequestMeta } from '@/lib/workflow/audit-log';
 
 const INACTIVE_RUN_STATUSES = new Set(['stopped', 'completed', 'failed', 'crashed']);
 
@@ -9,6 +12,8 @@ export async function POST(
   { params }: { params: Promise<{ questionId: string }> }
 ) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const { questionId } = await params;
     const body = await request.json();
     const runId = typeof body?.runId === 'string' ? body.runId : '';
@@ -28,6 +33,9 @@ export async function POST(
     }
     if (persisted && configFile && persisted.configFile !== configFile) {
       return NextResponse.json({ error: '运行记录与配置文件不匹配' }, { status: 400 });
+    }
+    if (persisted && !canAccessRunState(auth, persisted, 'review')) {
+      return NextResponse.json({ error: '无权回答该工作流问题' }, { status: 403 });
     }
     if (persisted && INACTIVE_RUN_STATUSES.has(persisted.status)) {
       const staleQuestion = persisted.humanQuestions?.find((question) => question.id === questionId) || null;
@@ -55,8 +63,27 @@ export async function POST(
     if (configFile && status.currentConfigFile !== configFile) {
       return NextResponse.json({ error: '目标工作流配置不匹配' }, { status: 409 });
     }
+    if (!canAccessRunState(auth, status, 'review')) {
+      return NextResponse.json({ error: '无权回答该工作流问题' }, { status: 403 });
+    }
 
-    const question = await manager.answerHumanQuestion(questionId, answer);
+    const question = await manager.answerHumanQuestion(questionId, answer, { id: auth.id, name: auth.username });
+    await appendWorkflowAuditEvent({
+      action: 'human-question-answer',
+      runId: question.runId || runId,
+      rootRunId: question.rootRunId || persisted?.rootRunId || runId,
+      childRunId: question.sourceRunId,
+      configFile: question.configFile || configFile,
+      actorId: auth.id,
+      actorName: auth.username,
+      ...getWorkflowAuditRequestMeta(request),
+      before: { questionId, status: 'unanswered' },
+      after: { questionId, status: question.status, answeredAt: question.answeredAt },
+      details: {
+        kind: question.kind,
+        answerType: question.answerSchema?.type,
+      },
+    });
     return NextResponse.json({ question });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || '回答 Supervisor 消息失败' }, { status: 400 });

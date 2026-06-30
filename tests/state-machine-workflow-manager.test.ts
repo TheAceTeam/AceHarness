@@ -1,5 +1,11 @@
-import { describe, expect, test, vi, beforeEach } from 'vitest';
+import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { MockEngine } from './helpers/mock-engine';
+
+const registryMocks = vi.hoisted(() => ({
+  getManagerForRun: vi.fn(),
+  getManagerByRunId: vi.fn(),
+  getRunningManagers: vi.fn().mockReturnValue([]),
+}));
 
 // Mock all heavy external dependencies
 vi.mock('@/lib/run/store', () => ({
@@ -15,6 +21,14 @@ vi.mock('@/lib/run/state-persistence', () => ({
   appendFeedbackToStream: vi.fn().mockResolvedValue(undefined),
   loadRunState: vi.fn().mockResolvedValue(null),
   loadStepOutputs: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock('@/lib/workflow/registry', () => ({
+  workflowRegistry: {
+    getManagerForRun: registryMocks.getManagerForRun,
+    getManagerByRunId: registryMocks.getManagerByRunId,
+    getRunningManagers: registryMocks.getRunningManagers,
+  },
 }));
 
 vi.mock('@/lib/core/process-manager', () => ({
@@ -84,7 +98,7 @@ vi.mock('@/lib/spec/persistence', () => ({
 vi.mock('@/lib/engines', () => ({
   createEngine: vi.fn(),
   getConfiguredEngine: vi.fn().mockResolvedValue('mock-engine'),
-  getLogicalEngineId: vi.fn((engine) => engine),
+  getLogicalEngineId: vi.fn((engine) => engine === 'mock-engine' ? 'claude-code' : engine),
   resolveRequestedEngineType: vi.fn((engine) => engine || 'mock-engine'),
 }));
 
@@ -117,6 +131,7 @@ vi.mock('@/lib/core/app-paths', () => ({
 }));
 
 vi.mock('@/lib/workflow/manager', () => ({
+  resolveAgentEngineSelection: vi.fn().mockReturnValue({ engine: 'mock-engine', model: 'test-model' }),
   resolveAgentModel: vi.fn().mockReturnValue('test-model'),
 }));
 
@@ -215,6 +230,8 @@ function makeAgentState(name: string) {
 }
 
 async function createManagerForTest(engine: MockEngine) {
+  const enginesModule = await import('@/lib/engines');
+  vi.mocked(enginesModule.createEngine).mockResolvedValue(engine as any);
   const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
   const manager = new StateMachineWorkflowManager();
 
@@ -319,10 +336,770 @@ describe('parseVerdict', () => {
   });
 });
 
+describe('subworkflow step dispatch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('uses child final output verdict for parent verdict when subworkflow is the deciding step', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-2024-01-01-000000-test-uui',
+      configFile: 'child.yaml',
+      status: 'completed',
+      currentPhase: '子状态',
+      stepLogs: [{ output: '{"verdict":"conditional_pass","summary":"child asks parent to continue carefully"}', error: '' }],
+    } as any);
+
+    const childStart = vi.fn().mockResolvedValue(undefined);
+    registryMocks.getManagerForRun.mockResolvedValue({
+      start: childStart,
+      getStatus: vi.fn().mockReturnValue({ runId: 'run-2024-01-01-000000-test-uui', status: 'idle' }),
+      on: vi.fn(),
+      removeAllListeners: vi.fn(),
+    });
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).currentProjectRoot = '/tmp/project';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+
+    const state = {
+      name: '父状态',
+      steps: [],
+      transitions: [],
+    } as any;
+    const step = {
+      name: 'run-child',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+    } as any;
+    state.steps = [step];
+    const config = makeConfig({
+      context: { requirements: 'parent requirement', projectRoot: '/tmp/project' },
+      workflow: { states: [state] },
+    });
+
+    const output = await (manager as any).executeWorkflowStepDispatch(step, state, config, 'parent requirement');
+
+    expect(output).toContain('"verdict":"conditional_pass"');
+    expect(childStart).toHaveBeenCalledWith(
+      'child.yaml',
+      'parent requirement',
+      [],
+      expect.objectContaining({ globalContext: expect.stringContaining('Parent workflow context') }),
+      'run-2024-01-01-000000-test-uui',
+    );
+    expect((manager as any).subworkflowRuns[0]).toMatchObject({
+      configFile: 'child.yaml',
+      status: 'completed',
+      verdict: 'conditional_pass',
+      runId: 'run-2024-01-01-000000-test-uui',
+    });
+    expect((manager as any).stepLogs[0]).toMatchObject({
+      stepType: 'subworkflow',
+      childConfigFile: 'child.yaml',
+      childStatus: 'completed',
+      childVerdict: 'conditional_pass',
+      status: 'completed',
+    });
+    expect((manager as any).subworkflowAuditEvents.map((event: any) => event.action)).toEqual(
+      expect.arrayContaining(['start', 'result-mapping'])
+    );
+    expect((manager as any).subworkflowAuditEvents.find((event: any) => event.action === 'result-mapping')).toMatchObject({
+      childRunId: 'run-2024-01-01-000000-test-uui',
+      childConfigFile: 'child.yaml',
+      resultMapping: {
+        childStatus: 'completed',
+        parentVerdict: 'conditional_pass',
+      },
+    });
+  });
+
+  test('does not allow legacy result mapping to hide a failed child workflow', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-2024-01-01-000000-test-uui',
+      configFile: 'child.yaml',
+      status: 'failed',
+      statusReason: 'child failed',
+      currentPhase: '子状态',
+      stepLogs: [{ output: '{"verdict":"conditional_pass","summary":"legacy should not pass"}', error: '' }],
+    } as any);
+
+    registryMocks.getManagerForRun.mockResolvedValue({
+      start: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi.fn().mockReturnValue({ runId: 'run-2024-01-01-000000-test-uui', status: 'idle' }),
+      on: vi.fn(),
+      removeAllListeners: vi.fn(),
+    });
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).currentProjectRoot = '/tmp/project';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = {
+      name: 'run-child',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+      result: { failed: 'conditional_pass' },
+    } as any;
+    state.steps = [step];
+
+    await expect((manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'parent requirement'))
+      .rejects.toThrow(/legacy should not pass|child failed|子工作流失败/);
+    expect((manager as any).subworkflowRuns[0]).toMatchObject({
+      status: 'failed',
+      verdict: 'fail',
+    });
+    expect((manager as any).stepLogs[0]).toMatchObject({
+      stepType: 'subworkflow',
+      childStatus: 'failed',
+      status: 'failed',
+    });
+  });
+
+  test('times out child workflow, stops child, and emits subworkflow-stopped', async () => {
+    vi.useFakeTimers();
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValue(null);
+
+    const childStop = vi.fn().mockResolvedValue(undefined);
+    const childManager: any = {
+      start: vi.fn(() => new Promise<void>(() => {})),
+      stop: childStop,
+      getStatus: vi.fn().mockReturnValue({ runId: 'run-2024-01-01-000000-test-uui', status: 'running' }),
+      on: vi.fn(),
+      off: vi.fn(),
+      removeAllListeners: vi.fn(),
+    };
+    registryMocks.getManagerForRun.mockResolvedValue(childManager);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).currentProjectRoot = '/tmp/project';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+
+    const stoppedEvents: any[] = [];
+    manager.on('subworkflow-stopped', (payload) => stoppedEvents.push(payload));
+
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = {
+      name: 'run-child-timeout',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+      runtime: { timeoutMinutes: 1 },
+    } as any;
+    state.steps = [step];
+
+    const promise = (manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'parent requirement')
+      .then(
+        () => null,
+        (error: any) => error
+      );
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(promise).resolves.toMatchObject({
+      message: expect.stringMatching(/子工作流超时|子工作流失败/),
+    });
+    expect(childStop).toHaveBeenCalledTimes(1);
+    expect((manager as any).subworkflowRuns[0]).toMatchObject({
+      status: 'stopped',
+      verdict: 'fail',
+    });
+    expect(stoppedEvents).toHaveLength(1);
+    expect(stoppedEvents[0]).toMatchObject({
+      runId: 'run-2024-01-01-000000-test-uui',
+      childConfigFile: 'child.yaml',
+      status: 'stopped',
+    });
+  });
+
+  test('timeout ask-human strategy can release parent step as conditional pass', async () => {
+    vi.useFakeTimers();
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValue(null);
+    registryMocks.getManagerForRun.mockResolvedValue({
+      start: vi.fn(() => new Promise<void>(() => {})),
+      stop: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi.fn().mockReturnValue({ status: 'running' }),
+      on: vi.fn(),
+      off: vi.fn(),
+    });
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+    (manager as any).createHumanQuestion = vi.fn().mockImplementation(async (input: any) => {
+      const question = {
+        id: 'timeout-q',
+        runId: 'test-run-001',
+        configFile: 'parent.yaml',
+        status: 'answered',
+        kind: input.kind,
+        title: input.title,
+        message: input.message,
+        createdAt: new Date().toISOString(),
+        answerSchema: input.answerSchema,
+        answer: { selectedOption: 'continue' },
+        answeredAt: new Date().toISOString(),
+        source: input.source,
+      };
+      (manager as any).humanQuestions = [question];
+      return question;
+    });
+
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = {
+      name: 'run-child-timeout-human',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+      runtime: { timeoutMinutes: 1, timeoutStrategy: 'ask-human' },
+    } as any;
+    state.steps = [step];
+    const promise = (manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'req');
+    await vi.advanceTimersByTimeAsync(60_000);
+    const output = await promise;
+
+    expect(output).toContain('"verdict":"conditional_pass"');
+    expect((manager as any).createHumanQuestion).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringContaining('子工作流超时'),
+      source: expect.objectContaining({ type: 'subworkflow-timeout' }),
+    }));
+  });
+
+  test('detached stop propagation persists detached child status without stopping child', async () => {
+    const childStop = vi.fn().mockResolvedValue(undefined);
+    registryMocks.getManagerByRunId.mockResolvedValue({ stop: childStop });
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).currentState = '父状态';
+    (manager as any).currentWorkflowConfig = makeConfig({
+      workflow: {
+        states: [{
+          name: '父状态',
+          steps: [{
+            name: 'run-child-detached',
+            type: 'subworkflow',
+            workflow: 'child.yaml',
+            runtime: { stopPropagation: 'detach' },
+          }],
+          transitions: [],
+        }],
+      },
+    });
+    (manager as any).activeSubworkflowRunId = 'run-child-detached';
+    (manager as any).subworkflowRuns = [{
+      parentStepId: 'step-1',
+      parentStepName: 'run-child-detached',
+      parentStateName: '父状态',
+      configFile: 'child.yaml',
+      runId: 'run-child-detached',
+      attempt: 1,
+      status: 'running',
+      startedAt: '2024-01-01T00:00:00.000Z',
+    }];
+
+    await manager.stop();
+
+    expect(childStop).not.toHaveBeenCalled();
+    expect((manager as any).activeSubworkflowRunId).toBeNull();
+    expect((manager as any).subworkflowRuns[0]).toMatchObject({
+      status: 'detached',
+      summary: expect.stringContaining('脱离父流程继续运行'),
+    });
+  });
+
+  test('force-complete child target forwards to active child manager', async () => {
+    const childForceComplete = vi.fn().mockResolvedValue({
+      step: 'child-state',
+      output: 'child output',
+      target: 'parent-step',
+    });
+    registryMocks.getManagerByRunId.mockResolvedValue({
+      forceCompleteStep: childForceComplete,
+    });
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).currentState = '父状态';
+    (manager as any).activeSubworkflowRunId = 'run-child-force';
+
+    const result = await manager.forceCompleteStep({ target: 'child-current-step' });
+
+    expect(registryMocks.getManagerByRunId).toHaveBeenCalledWith('run-child-force');
+    expect(childForceComplete).toHaveBeenCalledWith({ target: 'parent-step' });
+    expect(result).toMatchObject({
+      step: 'child-state',
+      output: 'child output',
+      target: 'child-current-step',
+    });
+    expect((manager as any).subworkflowAuditEvents[0]).toMatchObject({
+      action: 'force-complete-child',
+      childRunId: 'run-child-force',
+    });
+  });
+
+  test('rejects subworkflow execution beyond runtime maxDepth', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'root-run';
+    (manager as any).nestingPath = [
+      { runId: 'root-run', configFile: 'parent.yaml' },
+      { runId: 'child-run', configFile: 'child.yaml' },
+    ];
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = {
+      name: 'too-deep',
+      type: 'subworkflow',
+      workflow: 'grandchild.yaml',
+      runtime: { maxDepth: 1 },
+    } as any;
+    state.steps = [step];
+
+    await expect((manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'req'))
+      .rejects.toThrow(/最大深度 1/);
+  });
+
+  test('enforces active child run limit before starting another subworkflow', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'root-run';
+    (manager as any).nestingPath = [{ runId: 'root-run', configFile: 'parent.yaml' }];
+    (manager as any).subworkflowRuns = Array.from({ length: 8 }, (_, index) => ({
+      parentStepId: `step-${index}`,
+      parentStepName: `child-${index}`,
+      parentStateName: '父状态',
+      configFile: `child-${index}.yaml`,
+      runId: `run-child-${index}`,
+      attempt: 1,
+      status: 'running',
+    }));
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = {
+      name: 'too-many-active',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+    } as any;
+    state.steps = [step];
+
+    await expect((manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'req'))
+      .rejects.toThrow(/active child runs 超过上限 8/);
+  });
+
+  test('enforces root child run limit before starting another subworkflow', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'root-run';
+    (manager as any).nestingPath = [{ runId: 'root-run', configFile: 'parent.yaml' }];
+    (manager as any).subworkflowRuns = Array.from({ length: 64 }, (_, index) => ({
+      parentStepId: `step-${index}`,
+      parentStepName: `child-${index}`,
+      parentStateName: '父状态',
+      configFile: `child-${index}.yaml`,
+      runId: `run-child-${index}`,
+      attempt: 1,
+      status: 'completed',
+    }));
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = { name: 'too-many-root-children', type: 'subworkflow', workflow: 'child.yaml' } as any;
+
+    await expect((manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'req'))
+      .rejects.toThrow(/root child runs 超过上限 64/);
+  });
+
+  test('enforces child event count limit', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).subworkflowRuns = [{
+      parentStepId: 'step-1',
+      parentStepName: 'run-child',
+      parentStateName: '父状态',
+      configFile: 'child.yaml',
+      runId: 'run-child-event-limit',
+      attempt: 1,
+      status: 'running',
+      eventCount: 500,
+    }];
+
+    expect(() => (manager as any).bumpSubworkflowEventCount('run-child-event-limit', 'status', {
+      childRunId: 'run-child-event-limit',
+      childConfigFile: 'child.yaml',
+      stateName: '父状态',
+      stepName: 'run-child',
+    })).toThrow(/事件数量超过上限 500/);
+  });
+
+  test('enforces parallel subworkflow branch limit', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const segment = {
+      type: 'parallel',
+      groupId: 'too-many-child-branches',
+      steps: Array.from({ length: 9 }, (_, index) => ({
+        name: `child-${index}`,
+        type: 'subworkflow',
+        workflow: `child-${index}.yaml`,
+        parallelGroup: 'too-many-child-branches',
+      })),
+    } as any;
+
+    await expect((manager as any).executeParallelBranches(segment, { name: '父状态' }, makeConfig(), 'req', { mode: 'all' }))
+      .rejects.toThrow(/并发子工作流分支超过上限 8/);
+  });
+
+  test('truncates oversized child output summary before storing parent step log', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-2024-01-01-000000-test-uui',
+      configFile: 'child.yaml',
+      status: 'completed',
+      currentPhase: '子状态',
+      stepLogs: [{ output: 'x'.repeat(20 * 1024), error: '' }],
+    } as any);
+
+    registryMocks.getManagerForRun.mockResolvedValue({
+      start: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      on: vi.fn(),
+      off: vi.fn(),
+    });
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = { name: 'run-child', type: 'subworkflow', workflow: 'child.yaml' } as any;
+
+    await (manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'req');
+
+    expect((manager as any).subworkflowRuns[0].summary).toContain('摘要已截断');
+    expect(Buffer.byteLength((manager as any).subworkflowRuns[0].summary, 'utf-8')).toBeLessThan(17 * 1024);
+  });
+
+  test('collects structured child Spec delta summaries for parent final review', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).subworkflowRuns = [{
+      parentStepId: 'step-child',
+      parentStepName: 'Run Child',
+      parentStateName: 'Parent',
+      configFile: 'child.yaml',
+      runId: 'run-child-spec',
+      attempt: 1,
+      status: 'completed',
+      startedAt: new Date().toISOString(),
+    }];
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-child-spec',
+      configFile: 'child.yaml',
+      status: 'completed',
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      currentPhase: null,
+      currentStep: null,
+      completedSteps: [],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [],
+      iterationStates: {},
+      processes: [],
+      workflowName: 'Child Workflow',
+      runSpecCoding: {
+        id: 'spec-child',
+        version: 3,
+        status: 'completed',
+        title: 'Child Spec',
+        workflowName: 'Child Workflow',
+        summary: 'Child feature',
+        goals: [],
+        nonGoals: [],
+        constraints: [],
+        requirements: [],
+        phases: [],
+        assignments: [],
+        checkpoints: [],
+        tasks: [
+          { id: 't1', title: 'Done task', status: 'completed', requirements: [], children: [] },
+          { id: 't2', title: 'Parent task', status: 'in-progress', requirements: [], children: [
+            { id: 't2-1', title: 'Nested done', status: 'completed', requirements: [], children: [] },
+          ] },
+        ],
+        progress: {
+          overallStatus: 'completed',
+          completedPhaseIds: [],
+          completedTaskIds: ['t1', 't2-1'],
+          summary: 'Child spec delta ready',
+        },
+        revisions: [{ id: 'rev-3', version: 3, summary: 'Updated child design', createdAt: '2026-01-01T00:00:00.000Z' }],
+        artifacts: { requirements: 'req', design: 'design', tasks: '' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      specRevisionVoteHistory: [{
+        id: 'vote-1',
+        trigger: 'state-complete',
+        title: 'Vote',
+        question: 'Keep?',
+        status: 'completed',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        ballots: [],
+        tally: { revise: 0, keep: 1, defer: 0 },
+        recommendedChoice: 'keep',
+        supervisorDecision: { apply: false, summary: 'No parent merge needed', madeAt: '2026-01-01T00:00:00.000Z' },
+      }],
+      deltaMergeState: { status: 'available', requestedAt: '2026-01-01T00:00:00.000Z', aiSummary: 'Merge child delta' },
+    } as any);
+
+    const summaries = await (manager as any).collectChildSpecDeltaSummaries();
+
+    expect(summaries).toEqual([expect.objectContaining({
+      runId: 'run-child-spec',
+      configFile: 'child.yaml',
+      workflowName: 'Child Workflow',
+      specStatus: 'completed',
+      specVersion: 3,
+      completedTaskCount: 2,
+      totalTaskCount: 3,
+      artifactKeys: ['requirements', 'design'],
+      latestRevision: expect.objectContaining({ summary: 'Updated child design' }),
+      latestVote: expect.objectContaining({ recommendedChoice: 'keep', summary: 'No parent merge needed' }),
+      deltaMerge: expect.objectContaining({ status: 'available', aiSummary: 'Merge child delta' }),
+    })]);
+  });
+
+  test('records operation actor for force-transition audit', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).currentState = '父状态';
+    (manager as any).currentWorkflowConfig = makeConfig();
+    (manager as any).forceTransition('实施', 'manual override', { id: 'user-2', name: 'Reviewer' });
+
+    expect((manager as any).subworkflowAuditEvents[0]).toMatchObject({
+      action: 'force-transition',
+      actorId: 'user-2',
+      actorName: 'Reviewer',
+      stateName: '父状态',
+      details: {
+        fromState: '父状态',
+        targetState: '实施',
+        instruction: 'manual override',
+      },
+    });
+  });
+
+  test('marks restored run crashed when workflow snapshot is damaged', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/workflow/subworkflow-config', () => ({
+      createWorkflowConfigSnapshot: vi.fn(),
+      getSubworkflowConfigFile: vi.fn((step: any) => step?.workflow || step?.subworkflow?.configFile || ''),
+      isSubworkflowStep: vi.fn((step: any) => step?.type === 'subworkflow'),
+      normalizeWorkflowConfigRef: vi.fn((input: string) => input),
+      readWorkflowConfigSnapshot: vi.fn().mockRejectedValue(new Error('manifest 校验失败')),
+    }));
+    const { saveRunState } = await import('@/lib/run/state-persistence');
+    const manager = await createManagerForTest(new MockEngine());
+    const runState = {
+      runId: 'run-bad-snapshot',
+      configFile: 'parent.yaml',
+      rootRunId: 'run-bad-snapshot',
+      workflowSnapshotRoot: 'parent.yaml',
+      workflowSnapshotManifestHash: 'old-hash',
+      mode: 'state-machine',
+      status: 'stopped',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: '2024-01-01T00:01:00.000Z',
+      currentPhase: '父状态',
+      currentState: '父状态',
+      completedSteps: [],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [],
+      iterationStates: {},
+      processes: [],
+    } as any;
+
+    await expect((manager as any).restoreRunStateForContinuation(runState))
+      .rejects.toThrow(/配置快照损坏.*crashed/);
+    expect(saveRunState).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'run-bad-snapshot',
+      status: 'crashed',
+      statusReason: expect.stringContaining('manifest 校验失败'),
+    }));
+    vi.doUnmock('@/lib/workflow/subworkflow-config');
+  });
+
+  test('passes workspace and context overrides to child manager', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-2024-01-01-000000-test-uui',
+      configFile: 'child.yaml',
+      status: 'completed',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: '2024-01-01T00:00:01.000Z',
+      agents: [{ costUsd: 1.5 }],
+      issueTracker: [{ type: 'test', severity: 'minor', description: 'child issue' }],
+      stepLogs: [{ output: 'child ok', error: '' }],
+    } as any);
+
+    const childManager: any = {
+      start: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi.fn().mockReturnValue({ runId: 'run-2024-01-01-000000-test-uui', status: 'idle' }),
+      on: vi.fn(),
+      off: vi.fn(),
+      removeAllListeners: vi.fn(),
+    };
+    registryMocks.getManagerForRun.mockResolvedValue(childManager);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).currentProjectRoot = '/tmp/project';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+
+    const config = makeConfig({
+      context: {
+        requirements: 'parent requirement',
+        projectRoot: '/tmp/project',
+        engine: 'parent-engine',
+        mcpServers: ['parent-mcp'],
+      },
+    });
+    (manager as any).currentWorkflowConfig = config;
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = {
+      name: 'run-child',
+      type: 'subworkflow',
+      workflow: 'child.yaml',
+      inputs: {
+        workspace: 'child-isolated-copy',
+        engine: 'inherit',
+        mcpServers: 'parent-only',
+      },
+    } as any;
+    state.steps = [step];
+
+    await (manager as any).executeWorkflowStepDispatch(step, state, config, 'parent requirement');
+
+    expect(childManager._embeddedProjectRoot).toBe('/tmp/project');
+    expect(childManager._embeddedWorkspaceMode).toBe('isolated-copy');
+    expect(childManager._embeddedContextOverrides).toMatchObject({
+      engine: 'parent-engine',
+      defaultEngine: 'parent-engine',
+      mcpServers: ['parent-mcp'],
+    });
+    expect((manager as any).stepLogs[0]).toMatchObject({
+      costUsd: 1.5,
+      durationMs: 1000,
+    });
+    expect((manager as any).stepLogs[0].output).toContain('child issue');
+  });
+
+  test('passes parent workflow skills to child manager according to skills strategy', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-2024-01-01-000000-test-uui',
+      configFile: 'child.yaml',
+      status: 'completed',
+      stepLogs: [{ output: 'child ok', error: '' }],
+    } as any);
+    const childManager: any = {
+      start: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    registryMocks.getManagerForRun.mockResolvedValue(childManager);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+    const config = makeConfig({ context: { projectRoot: '/tmp/project', skills: ['parent-skill'] } });
+    (manager as any).currentWorkflowConfig = config;
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = { name: 'run-child', type: 'subworkflow', workflow: 'child.yaml', inputs: { skills: 'parent-only' } } as any;
+    state.steps = [step];
+
+    await (manager as any).executeWorkflowStepDispatch(step, state, config, 'req');
+
+    expect(childManager._embeddedContextOverrides).toMatchObject({ skills: ['parent-skill'] });
+  });
+
+  test('does not bubble child human questions when strategy is child-only', async () => {
+    const childManager: any = {
+      start: vi.fn().mockImplementation(async () => {
+        childManager.handlers['human-question-required']?.({ question: { id: 'q1' }, message: 'child question' });
+      }),
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      handlers: {} as Record<string, Function>,
+      on: vi.fn((event: string, handler: Function) => { childManager.handlers[event] = handler; }),
+      off: vi.fn(),
+    };
+    registryMocks.getManagerForRun.mockResolvedValue(childManager);
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-2024-01-01-000000-test-uui',
+      configFile: 'child.yaml',
+      status: 'completed',
+      stepLogs: [{ output: 'child ok', error: '' }],
+    } as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).rootRunId = 'test-run-001';
+    (manager as any).nestingPath = [{ runId: 'test-run-001', configFile: 'parent.yaml' }];
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).ensureSubworkflowSnapshot = vi.fn().mockResolvedValue({ snapshotFile: 'configs/child.yaml' });
+    (manager as any).recordStepGitBefore = vi.fn().mockResolvedValue('before-1');
+    (manager as any).recordStepGitAfter = vi.fn().mockResolvedValue('after-1');
+    const bubbled: any[] = [];
+    const statuses: any[] = [];
+    manager.on('subworkflow-waiting-human', (event) => bubbled.push(event));
+    manager.on('subworkflow-status', (event) => statuses.push(event));
+    const state = { name: '父状态', steps: [], transitions: [] } as any;
+    const step = { name: 'run-child', type: 'subworkflow', workflow: 'child.yaml', runtime: { humanQuestions: 'child-only' } } as any;
+    state.steps = [step];
+
+    await (manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'req');
+
+    expect(bubbled).toEqual([]);
+    expect(statuses.some((event) => event.childOnly === true && event.message === 'child question')).toBe(true);
+  });
+});
+
 describe('engine-level failure detection', () => {
   test('treats Claude context window limit as an engine-level failure', async () => {
     const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
     expect(isEngineLevelFailure('ApiError: the model has reached its context window limit')).toBe(true);
+  });
+
+  test('treats localized model auth failure as an engine-level failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure('模型调用失败 (401): 无效的令牌 (request id: abc)')).toBe(true);
   });
 
   test('does not treat AI file-read ENOENT as an engine-level failure', async () => {
@@ -341,6 +1118,44 @@ describe('engine-level failure detection', () => {
     const config = makeConfig();
 
     await expect((manager as any).executeStateMachine(config, 'Build a feature')).rejects.toThrow(/context window limit/i);
+  });
+
+  test('stops the workflow when an engine returns localized 401 as plain output', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '模型调用失败 (401): 无效的令牌 (request id: abc)',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+
+    await expect((manager as any).executeStateMachine(config, 'Build a feature')).rejects.toThrow(/无效的令牌|401/);
+    expect((manager as any).completedSteps).not.toContain('设计-实现功能');
+  });
+
+  test('supervisor review fails hard on localized 401 instead of creating a review', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '模型调用失败 (401): 无效的令牌 (request id: supervisor)',
+    });
+    const manager = await createManagerForTest(engine);
+    (manager as any).collectSupervisorReview = vi.fn(
+      Object.getPrototypeOf(manager).collectSupervisorReview.bind(manager)
+    );
+    (manager as any).agents.push(makeAgentState('default-supervisor'));
+    (manager as any).agentConfigs.push({ name: 'default-supervisor', systemPrompt: 'You are supervisor' });
+    const config = makeConfig();
+    const state = config.workflow.states[0];
+    const result = {
+      stateName: state.name,
+      verdict: 'pass',
+      issues: [],
+      stepOutputs: ['ok'],
+      summary: 'ok',
+    };
+
+    await expect((manager as any).collectSupervisorReview('state-review', state, result, config, '完成'))
+      .rejects.toThrow(/无效的令牌|401/);
+    expect((manager as any).latestSupervisorReview).toBeNull();
   });
 
   test('automatically resumes recoverable file-read failures in the same step conversation', async () => {

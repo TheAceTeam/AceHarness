@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/auth/middleware';
 import {
   applyConfigNamesToRuns,
   buildTokenRankingsForRuns,
+  attachRunHistoryTree,
   type HistoryView,
   paginateRuns,
   readAccessibleConfigNameMap,
@@ -66,6 +67,9 @@ export async function GET(request: NextRequest) {
     ]);
 
     let runs = applyConfigNamesToRuns(runsResult.runs, configNameMap, auth.role);
+    if (auth.role !== 'admin') {
+      runs = runs.filter((run) => !run.ownerId || run.ownerId === auth.id);
+    }
 
     if (auth.role === 'admin' && ownerId && ownerId !== 'all') {
       runs = runs.filter((run) => run.ownerId === ownerId);
@@ -111,12 +115,15 @@ export async function GET(request: NextRequest) {
     }
 
     const sortKey = readRunSortKey(searchParams.get('sortKey'));
+    const tree = searchParams.get('tree') === '1';
     runs = sortRuns(runs, sortKey, sortDirection);
-    const paged = paginateRuns(runs, page, pageSize);
+    const responseRuns = tree ? attachRunHistoryTree(runs) : runs;
+    const paged = paginateRuns(responseRuns, page, pageSize);
 
     return NextResponse.json({
       view,
       runs: paged.items,
+      tree,
       pagination: {
         total: paged.total,
         totalPages: paged.totalPages,

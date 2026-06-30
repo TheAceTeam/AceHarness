@@ -88,6 +88,58 @@ function compactHumanQuestion(question: any) {
   };
 }
 
+function compactSubworkflowRun(ref: any) {
+  if (!ref) return null;
+  return {
+    parentStepId: ref.parentStepId,
+    parentStepName: ref.parentStepName,
+    parentStateName: ref.parentStateName,
+    configFile: ref.configFile,
+    snapshotFile: ref.snapshotFile,
+    runId: ref.runId,
+    attempt: ref.attempt,
+    status: ref.status,
+    startedAt: ref.startedAt,
+    endedAt: ref.endedAt,
+    summary: truncateLiveText(ref.summary || '', 1600),
+    verdict: ref.verdict,
+    error: truncateLiveText(ref.error || '', 1200),
+    eventCount: typeof ref.eventCount === 'number' ? ref.eventCount : undefined,
+  };
+}
+
+function compactSubworkflowAuditEvent(event: any) {
+  if (!event) return null;
+  return {
+    id: event.id,
+    timestamp: event.timestamp,
+    action: event.action,
+    actorId: event.actorId,
+    actorName: event.actorName,
+    childRunId: event.childRunId,
+    childConfigFile: event.childConfigFile,
+    stateName: event.stateName,
+    stepName: event.stepName,
+    details: event.details ? compactJsonValue(event.details) : undefined,
+  };
+}
+
+function compactSubworkflowSummary(summary: any) {
+  if (!summary) return null;
+  return {
+    total: summary.total || 0,
+    active: summary.active || 0,
+    failed: summary.failed || 0,
+    waitingHuman: summary.waitingHuman || 0,
+    detached: summary.detached || 0,
+    completed: summary.completed || 0,
+    stopped: summary.stopped || 0,
+    superseded: summary.superseded || 0,
+    abandoned: summary.abandoned || 0,
+    latest: compactSubworkflowRun(summary.latest),
+  };
+}
+
 function compactSpecCodingSummary(specCoding: any, source: 'run') {
   if (!specCoding) return null;
   const phases = Array.isArray(specCoding.phases) ? specCoding.phases : [];
@@ -156,6 +208,15 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
     stateHistory: Array.isArray(status.stateHistory) ? status.stateHistory.map(compactTransition) : [],
     issueTracker: Array.isArray(status.issueTracker) ? status.issueTracker.map(compactIssue) : [],
     transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
+    childRunIds: Array.isArray(status.childRunIds) ? status.childRunIds : [],
+    subworkflowRuns: Array.isArray(status.subworkflowRuns) ? status.subworkflowRuns.map(compactSubworkflowRun) : [],
+    subworkflowSummary: compactSubworkflowSummary(status.subworkflowSummary),
+    activeSubworkflowRunId: status.activeSubworkflowRunId || null,
+    subworkflowAuditEvents: Array.isArray(status.subworkflowAuditEvents)
+      ? status.subworkflowAuditEvents.slice(0, 50).map(compactSubworkflowAuditEvent)
+      : [],
+    workflowSnapshotRoot: status.workflowSnapshotRoot || null,
+    workflowSnapshotManifestHash: status.workflowSnapshotManifestHash || null,
     startTime: status.startTime || null,
     endTime: status.endTime || null,
     accumulatedWaitMs: typeof status.accumulatedWaitMs === 'number' ? status.accumulatedWaitMs : 0,
@@ -204,6 +265,15 @@ export function compactWorkflowStatusDeltaForLive(status: any, configFile?: stri
     completedStepCount: Array.isArray(status.completedSteps) ? status.completedSteps.length : 0,
     failedStepCount: Array.isArray(status.failedSteps) ? status.failedSteps.length : 0,
     transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
+    childRunIds: Array.isArray(status.childRunIds) ? status.childRunIds : [],
+    subworkflowRuns: Array.isArray(status.subworkflowRuns) ? status.subworkflowRuns.map(compactSubworkflowRun) : [],
+    subworkflowSummary: compactSubworkflowSummary(status.subworkflowSummary),
+    activeSubworkflowRunId: status.activeSubworkflowRunId || null,
+    subworkflowAuditEvents: Array.isArray(status.subworkflowAuditEvents)
+      ? status.subworkflowAuditEvents.slice(0, 50).map(compactSubworkflowAuditEvent)
+      : [],
+    workflowSnapshotRoot: status.workflowSnapshotRoot || null,
+    workflowSnapshotManifestHash: status.workflowSnapshotManifestHash || null,
     pendingHumanQuestionId: status.pendingHumanQuestionId || null,
     pendingHumanQuestion: compactHumanQuestion(status.pendingHumanQuestion),
     startTime: status.startTime || null,

@@ -62,6 +62,12 @@ function sampleRun(overrides: Record<string, any>) {
     cacheReadInputTokens: overrides.cacheReadInputTokens ?? 0,
     ownerId: overrides.ownerId || '',
     ownerName: overrides.ownerName || '未知用户',
+    parentRunId: overrides.parentRunId,
+    rootRunId: overrides.rootRunId,
+    parentStateName: overrides.parentStateName,
+    parentStepName: overrides.parentStepName,
+    childRunIds: overrides.childRunIds || [],
+    subworkflowRuns: overrides.subworkflowRuns || [],
   };
 }
 
@@ -161,6 +167,132 @@ describe('run history route', () => {
       expect(json.runs[0].ownerName).toBe(alice.username);
       expect(json.userOptions.some((entry: any) => entry.id === alice.id && entry.username === alice.username)).toBe(true);
       expect(json.userOptions.some((entry: any) => entry.id === bob.id && entry.username === bob.username)).toBe(true);
+    });
+  });
+
+  test('returns parent-child tree when requested', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token, user } = await createAuthToken('user', 'member');
+      const route = await loadRouteWithMockedRuns([
+        sampleRun({
+          id: 'run-parent',
+          configFile: 'parent.yaml',
+          startTime: '2026-05-08T12:00:00.000Z',
+          ownerId: user.id,
+          ownerName: user.username,
+          childRunIds: ['run-child'],
+          subworkflowRuns: [{
+            runId: 'run-child',
+            configFile: 'child.yaml',
+            parentStateName: 'Build',
+            parentStepName: 'Child flow',
+            status: 'waiting-human',
+          }],
+        }),
+        sampleRun({
+          id: 'run-child',
+          configFile: 'child.yaml',
+          parentRunId: 'run-parent',
+          rootRunId: 'run-parent',
+          parentStateName: 'Build',
+          parentStepName: 'Child flow',
+          startTime: '2026-05-08T12:01:00.000Z',
+          status: 'running',
+          ownerId: user.id,
+          ownerName: user.username,
+        }),
+      ], {
+        'parent.yaml': 'Parent',
+        'child.yaml': 'Child',
+      });
+
+      const response = await route.GET(makeRequest('/api/run-history?tree=1', { token }));
+
+      expect(response.status).toBe(200);
+      const json = await responseJson<any>(response);
+      expect(json.tree).toBe(true);
+      expect(json.runs).toHaveLength(1);
+      expect(json.runs[0].id).toBe('run-parent');
+      expect(json.runs[0].childRuns).toHaveLength(1);
+      expect(json.runs[0].childRuns[0].id).toBe('run-child');
+      expect(json.runs[0].childSummary).toMatchObject({
+        total: 1,
+        waitingHuman: 1,
+      });
+    });
+  });
+
+  test('filters parent-child run tree by owner for non-admin users', async () => {
+    await withIsolatedAceHome(async () => {
+      const alice = await createAuthToken('user', 'alice');
+      const bob = await createAuthToken('user', 'bob');
+      const route = await loadRouteWithMockedRuns([
+        sampleRun({
+          id: 'run-alice-parent',
+          configFile: 'parent.yaml',
+          ownerId: alice.user.id,
+          ownerName: alice.user.username,
+          childRunIds: ['run-alice-child'],
+          subworkflowRuns: [{ runId: 'run-alice-child', configFile: 'child.yaml', status: 'completed' }],
+        }),
+        sampleRun({
+          id: 'run-alice-child',
+          configFile: 'child.yaml',
+          parentRunId: 'run-alice-parent',
+          rootRunId: 'run-alice-parent',
+          ownerId: alice.user.id,
+          ownerName: alice.user.username,
+        }),
+        sampleRun({
+          id: 'run-bob-parent',
+          configFile: 'parent.yaml',
+          ownerId: bob.user.id,
+          ownerName: bob.user.username,
+        }),
+      ], {
+        'parent.yaml': 'Parent',
+        'child.yaml': 'Child',
+      });
+
+      const response = await route.GET(makeRequest('/api/run-history?tree=1', { token: alice.token }));
+      const json = await responseJson<any>(response);
+
+      expect(response.status).toBe(200);
+      expect(json.runs.map((run: any) => run.id)).toEqual(['run-alice-parent']);
+      expect(json.runs[0].childRuns.map((run: any) => run.id)).toEqual(['run-alice-child']);
+    });
+  });
+
+  test('keeps legacy run summaries without parent-child fields displayable', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token, user } = await createAuthToken('user', 'legacy');
+      const legacyRun = sampleRun({
+        id: 'run-legacy',
+        configFile: 'legacy.yaml',
+        ownerId: user.id,
+        ownerName: user.username,
+      });
+      delete (legacyRun as any).childRunIds;
+      delete (legacyRun as any).subworkflowRuns;
+      delete (legacyRun as any).parentRunId;
+      delete (legacyRun as any).rootRunId;
+      const route = await loadRouteWithMockedRuns([legacyRun], {
+        'legacy.yaml': 'Legacy Workflow',
+      });
+
+      const response = await route.GET(makeRequest('/api/run-history?tree=1', { token }));
+
+      expect(response.status).toBe(200);
+      const json = await responseJson<any>(response);
+      expect(json.runs).toHaveLength(1);
+      expect(json.runs[0]).toMatchObject({
+        id: 'run-legacy',
+        configName: 'Legacy Workflow',
+        childRuns: [],
+        childSummary: {
+          total: 0,
+        },
+      });
     });
   });
 });

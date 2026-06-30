@@ -7,6 +7,7 @@ import {
 } from '@/lib/core/schemas';
 import { normalizeAgentAvatar } from '@/lib/agent/personas';
 import { getWorkspaceAgentsDir } from '@/lib/core/app-paths';
+import { getSubworkflowConfigFile, isSubworkflowStep, normalizeWorkflowConfigRef } from '@/lib/workflow/subworkflow-config';
 
 export interface ValidationIssue {
   path: string[];
@@ -232,6 +233,20 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
       }
       stateNames.add(state.name);
       for (const [stepIndex, step] of (state.steps || []).entries()) {
+        if (isSubworkflowStep(step)) {
+          const childConfigFile = getSubworkflowConfigFile(step);
+          try {
+            normalizeWorkflowConfigRef(childConfigFile);
+          } catch (error: any) {
+            pushIssue(
+              issues,
+              'error',
+              ['workflow', 'states', String(stateIndex), 'steps', String(stepIndex), 'workflow'],
+              error?.message || '子工作流配置路径非法'
+            );
+          }
+          continue;
+        }
         referencedAgents.add(step.agent);
         stepAgentRefs.push({
           agent: step.agent,
@@ -312,6 +327,15 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   } else {
     for (const [phaseIndex, phase] of (workflowAny.phases || []).entries()) {
       for (const [stepIndex, step] of (phase.steps || []).entries()) {
+        if (isSubworkflowStep(step)) {
+          pushIssue(
+            issues,
+            'error',
+            ['workflow', 'phases', String(phaseIndex), 'steps', String(stepIndex), 'type'],
+            '子工作流步骤仅支持状态机模式，phase-based 工作流不能嵌入子工作流'
+          );
+          continue;
+        }
         referencedAgents.add(step.agent);
         stepAgentRefs.push({
           agent: step.agent,

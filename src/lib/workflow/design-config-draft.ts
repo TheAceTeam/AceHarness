@@ -11,6 +11,7 @@ export interface WorkflowDesignDraftState {
   workflowAgentOverrides: Record<string, WorkflowAgentExecutionOverride>;
   skills: string[];
   mcpServers: string[];
+  ragKnowledgeBases?: string[];
 }
 
 type WorkflowDesignConfigLike = {
@@ -36,6 +37,9 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
   baseConfig: T,
   draftState: WorkflowDesignDraftState,
 ): T {
+  const ragKnowledgeBases = Array.isArray(draftState.ragKnowledgeBases) ? [...draftState.ragKnowledgeBases] : [];
+  const skills = Array.isArray(draftState.skills) ? [...draftState.skills] : [];
+  if (ragKnowledgeBases.length > 0 && !skills.includes('aceharness-rag')) skills.push('aceharness-rag');
   return {
     ...baseConfig,
     context: {
@@ -51,8 +55,19 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
         autoCompactOnStepChange: draftState.workflowAutoCompactOnStepChange,
         agentOverrides: normalizeWorkflowAgentOverridesForSave(draftState.workflowAgentOverrides),
       },
-      skills: Array.isArray(draftState.skills) ? [...draftState.skills] : [],
+      skills,
       mcpServers: Array.isArray(draftState.mcpServers) ? [...draftState.mcpServers] : [],
+      capabilitySkills: {
+        ...((baseConfig.context as any)?.capabilitySkills || {}),
+        rag: {
+          ...(((baseConfig.context as any)?.capabilitySkills || {}).rag || {}),
+          enabled: ragKnowledgeBases.length > 0,
+          knowledgeBases: ragKnowledgeBases,
+          topK: Number((((baseConfig.context as any)?.capabilitySkills || {}).rag || {}).topK || 8),
+          allowAgentQuery: true,
+          autoInject: false,
+        },
+      },
     },
   } as T;
 }
