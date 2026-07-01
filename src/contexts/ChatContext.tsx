@@ -1390,7 +1390,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return {
           ...current,
           backendSessionId: previousWorkspace === result.workspacePath ? current.backendSessionId : undefined,
-          updatedAt: Date.now(),
           sessionWorkbenchState: {
             ...(current.sessionWorkbenchState || {}),
             chatWorkspace: {
@@ -1442,7 +1441,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         ...session,
         backendSessionId: previousWorkspace !== nextWorkspace ? undefined : session.backendSessionId,
         conversationMode,
-        updatedAt: Date.now(),
         sessionWorkbenchState: normalizedState,
       };
     });

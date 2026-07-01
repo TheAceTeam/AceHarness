@@ -44,7 +44,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: '无权修改该会话' }, { status: 403 });
     }
     const body = await req.json();
-    const session = normalizeSessionWorkbenchConversationMode({ ...body, id, createdBy: existing.createdBy, updatedAt: Date.now() });
+    const requestedUpdatedAt = typeof body?.updatedAt === 'number' && Number.isFinite(body.updatedAt)
+      ? body.updatedAt
+      : existing.updatedAt;
+    const session = normalizeSessionWorkbenchConversationMode({
+      ...body,
+      id,
+      createdBy: existing.createdBy,
+      updatedAt: requestedUpdatedAt,
+    });
     await saveChatSession(session);
     return NextResponse.json({ ok: true });
   } catch (error: any) {
