@@ -81,6 +81,13 @@ const EMPTY_SKILL_SETTINGS: Record<string, boolean> = {};
 const EMPTY_SKILLS: SkillItem[] = [];
 const EMPTY_MCP_SETTINGS: Record<string, boolean> = {};
 const EMPTY_MCP_SERVERS: McpServerItem[] = [];
+const DEFAULT_CHAT_KNOWLEDGE_BASE = {
+  id: 'default',
+  name: '默认知识库',
+  description: 'ACEHarness 默认 RAG 知识库',
+  chunkCount: 0,
+  documentCount: 0,
+};
 const AGORA_WORKSPACE_SEGMENT = 'agora-workspaces';
 const noopToggleSetting = (_name: string) => {};
 const noopSetSettings = (_settings: Record<string, boolean>) => {};
@@ -1545,13 +1552,20 @@ function SkillManagerModal({
   useEffect(() => {
     if (activeTab !== 'rag') return;
     let cancelled = false;
-    fetch('/api/rag/knowledge-bases')
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('auth-token') : '';
+    fetch('/api/rag/knowledge-bases', {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
       .then((response) => response.json())
       .then((data) => {
-        if (!cancelled && Array.isArray(data?.knowledgeBases)) setKnowledgeBases(data.knowledgeBases);
+        if (!cancelled && Array.isArray(data?.knowledgeBases)) {
+          setKnowledgeBases(data.knowledgeBases.length > 0 ? data.knowledgeBases : [DEFAULT_CHAT_KNOWLEDGE_BASE]);
+        } else if (!cancelled) {
+          setKnowledgeBases([DEFAULT_CHAT_KNOWLEDGE_BASE]);
+        }
       })
       .catch(() => {
-        if (!cancelled) setKnowledgeBases([]);
+        if (!cancelled) setKnowledgeBases([DEFAULT_CHAT_KNOWLEDGE_BASE]);
       });
     return () => { cancelled = true; };
   }, [activeTab]);
@@ -1623,7 +1637,8 @@ function SkillManagerModal({
     { key: 'rag' as const, label: '知识库', count: capabilitySkills?.rag?.enabled ? (capabilitySkills?.rag?.knowledgeBases?.length || 0) : 0 },
   ];
   const ragEnabled = Boolean(capabilitySkills?.rag?.enabled);
-  const selectedKnowledgeBases = new Set(Array.isArray(capabilitySkills?.rag?.knowledgeBases) ? capabilitySkills.rag.knowledgeBases : ['default']);
+  const configuredKnowledgeBases = Array.isArray(capabilitySkills?.rag?.knowledgeBases) ? capabilitySkills.rag.knowledgeBases : [];
+  const selectedKnowledgeBases = new Set(ragEnabled ? configuredKnowledgeBases : []);
   const ragTopK = Number(capabilitySkills?.rag?.topK || 8);
   const updateRagCapability = (patch: Record<string, unknown>) => {
     const previous = capabilitySkills || {};
@@ -1647,15 +1662,16 @@ function SkillManagerModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-card rounded-lg w-[620px] max-w-[92vw] max-h-[75vh] flex flex-col border"
+        className="bg-card rounded-lg w-[620px] max-w-[92vw] h-[680px] max-h-[75vh] flex flex-col border"
         onClick={e => e.stopPropagation()}
       >
         <div className="p-4 border-b flex items-center justify-between shrink-0">
           <div>
-            <h3 className="text-base font-semibold">Skills/MCP</h3>
+            <h3 className="text-base font-semibold">Skills/MCP/知识库</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               <span>已启用 {enabledCount} / {skills.length} 个技能</span>
               <span> · MCP {enabledMcpCount}/{servers.length}</span>
+              <span> · 知识库 {ragEnabled ? selectedKnowledgeBases.size : 0}</span>
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -1726,13 +1742,6 @@ function SkillManagerModal({
             <div className="space-y-3">
               <div className="rounded-md border bg-muted/20 p-3 flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-xs font-medium">允许首页对话使用 RAG 知识库</div>
-                  <div className="text-[11px] text-muted-foreground mt-0.5">启用后，AI 会通过 aceharness-rag Python 脚本调用受控 runtime API。</div>
-                </div>
-                <Switch checked={ragEnabled} onCheckedChange={(checked) => updateRagCapability({ enabled: checked })} className="scale-75" />
-              </div>
-              <div className="rounded-md border bg-muted/20 p-3 flex items-center justify-between gap-3">
-                <div>
                   <div className="text-xs font-medium">默认 TopK</div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">AI 主动检索时默认返回的片段数量。</div>
                 </div>
@@ -1774,7 +1783,7 @@ function SkillManagerModal({
                               const next = new Set(selectedKnowledgeBases);
                               if (nextChecked) next.add(kb.id);
                               else next.delete(kb.id);
-                              updateRagCapability({ enabled: next.size > 0 ? true : ragEnabled, knowledgeBases: [...next] });
+                              updateRagCapability({ enabled: next.size > 0, knowledgeBases: [...next] });
                             }}
                             className="scale-75 mt-0.5"
                           />

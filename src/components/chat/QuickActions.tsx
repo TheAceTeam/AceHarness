@@ -22,11 +22,13 @@ import { Suggestions, Suggestion } from '@/components/ai-elements/suggestion';
 type SlashCommandLike = {
   id: string;
   command: string;
+  displayCommand?: string;
   title: string;
   subtext: string;
   icon: string;
   aliases: string[];
   prompt?: string;
+  engineTag?: string;
 };
 
 interface QuickActionsProps {
@@ -62,11 +64,20 @@ function buildCodespecQuickActions(slashCommands?: SlashCommandLike[]): HomePlug
   const codespecEnabled = getAllPlugins({ includeDisabled: true }).some(
     (plugin) => plugin.id === 'codespec' && plugin.enabled !== false,
   );
-  if (!codespecEnabled || !slashCommands?.length) return [];
+  if (!codespecEnabled) return [];
 
-  const seen = new Set<string>();
-  const actions: HomePluginQuickAction[] = [];
-  for (const [index, command] of slashCommands.entries()) {
+  const actions: HomePluginQuickAction[] = [{
+    id: 'codespec-create-workflow-from-docs',
+    label: '根据 Codespec 创建工作流',
+    icon: 'account_tree',
+    color: 'from-indigo-600 to-sky-600',
+    prompt: '根据仓库下codespec文档需求创建工作流',
+    pinned: false,
+    category: 'codespec',
+    order: 30,
+  }];
+  const seen = new Set<string>(actions.map((action) => normalizeActionKey(action.prompt)).filter(Boolean));
+  for (const [index, command] of (slashCommands || []).entries()) {
     if (!isCodespecSlashCommand(command)) continue;
     const prompt = command.prompt || command.command;
     const key = normalizeActionKey(prompt);
@@ -78,6 +89,7 @@ function buildCodespecQuickActions(slashCommands?: SlashCommandLike[]): HomePlug
       icon: command.icon || 'terminal',
       color: 'from-violet-600 to-cyan-600',
       prompt,
+      sourceTag: command.engineTag,
       pinned: false,
       category: 'codespec',
       order: 35 + index,
@@ -299,7 +311,14 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
                   <div className="absolute -right-4 -bottom-4 w-16 h-16 bg-white/10 rounded-full blur-xl" />
                   <div className="relative z-10 flex flex-col gap-1.5">
                     <span className="material-symbols-outlined text-white/90 text-lg">{a.icon}</span>
-                    <span className="text-xs font-medium text-white">{a.label}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-xs font-medium text-white">{a.label}</span>
+                      {a.sourceTag ? (
+                        <span className="shrink-0 rounded-full bg-white/18 px-1.5 py-0.5 text-[9px] leading-none text-white/85 ring-1 ring-white/20">
+                          {a.sourceTag}
+                        </span>
+                      ) : null}
+                    </span>
                   </div>
                 </motion.button>
               ))}
@@ -407,7 +426,12 @@ export function QuickActionsBar({ onAction, skillSettings, slashCommands }: Quic
                         className={`inline-flex items-center gap-1 bg-gradient-to-r ${a.color} rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white`}
                       >
                         <span className="material-symbols-outlined text-xs">{a.icon}</span>
-                        {a.label}
+                        <span>{a.label}</span>
+                        {a.sourceTag ? (
+                          <span className="rounded-full bg-white/18 px-1.5 py-0.5 text-[9px] leading-none text-white/85 ring-1 ring-white/20">
+                            {a.sourceTag}
+                          </span>
+                        ) : null}
                       </motion.button>
                     ))}
                   </div>

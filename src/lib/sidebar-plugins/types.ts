@@ -55,6 +55,7 @@ export interface HomePluginQuickAction {
   icon: string;
   color: string;
   prompt: string;
+  sourceTag?: string;
   pinned?: boolean;
   category: string;
   order?: number;
