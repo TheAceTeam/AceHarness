@@ -9,7 +9,11 @@
       "features": "功能",
       "openChatHint": "拖到右侧打开对话",
       "expand": "展开侧边栏",
-      "collapse": "收起侧边栏"
+      "collapse": "收起侧边栏",
+      "classicMode": "经典 Dashboard 模式",
+      "modernMode": "新版界面",
+      "backToOverview": "返回仪表盘",
+      "dashboardEntry": "仪表盘"
     },
     "headers": {
       "defaultTitle": "数据中心",

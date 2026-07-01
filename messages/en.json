@@ -9,7 +9,11 @@
       "features": "Features",
       "openChatHint": "Drag to the right to open chat",
       "expand": "Expand sidebar",
-      "collapse": "Collapse sidebar"
+      "collapse": "Collapse sidebar",
+      "classicMode": "Classic Dashboard Mode",
+      "modernMode": "Modern UI",
+      "backToOverview": "Back to dashboard",
+      "dashboardEntry": "Dashboard"
     },
     "headers": {
       "defaultTitle": "Dashboard",

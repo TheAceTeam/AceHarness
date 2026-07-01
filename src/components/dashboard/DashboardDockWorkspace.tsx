@@ -80,7 +80,7 @@ export type DashboardDockTab =
   | { id: 'office'; title: string; kind: 'office' }
   | { id: string; title: string; kind: 'notebook'; search?: string }
   | { id: string; title: string; kind: 'account'; search?: string }
-  | { id: string; title: string; kind: 'workbench'; config: string; mode?: string; runId?: string | null };
+  | { id: string; title: string; kind: 'workbench'; config: string; mode?: string; runId?: string | null; search?: string };
 
 export type DashboardDockWorkspaceHandle = {
   openTab: (tab: DashboardDockTab, options?: DashboardDockOpenOptions) => void;
@@ -100,6 +100,7 @@ type DashboardDockWorkspaceProps = {
   chatSecondarySidebarPinned?: boolean;
   showChatSecondarySidebar?: boolean;
   renderChatSecondarySidebar?: () => ReactNode;
+  singlePanelMode?: boolean;
 };
 
 type DashboardDockWorkspaceContextValue = {
@@ -170,6 +171,7 @@ function useDashboardDockHeader(tab: DashboardDockTab): { title: string; subtitl
 }
 
 function buildWorkbenchSearch(tab: Extract<DashboardDockTab, { kind: 'workbench' }>) {
+  if (tab.search) return tab.search.startsWith('?') ? tab.search.slice(1) : tab.search;
   const params = new URLSearchParams();
   if (tab.mode) params.set('mode', tab.mode);
   if (tab.runId) params.set('runId', tab.runId);
@@ -401,7 +403,8 @@ function hasSameTabIdentity(current: WorkspacePanelParams, next: DashboardDockTa
   if (current.kind === 'workbench' && next.kind === 'workbench') {
     return current.config === next.config
       && (current.mode || 'run') === (next.mode || 'run')
-      && (current.runId || '') === (next.runId || '');
+      && (current.runId || '') === (next.runId || '')
+      && (current.search || '') === (next.search || '');
   }
 
   if ((current.kind === 'notebook' && next.kind === 'notebook')
@@ -531,6 +534,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
     chatSecondarySidebarPinned,
     showChatSecondarySidebar,
     renderChatSecondarySidebar,
+    singlePanelMode,
   }, ref) {
     const apiRef = useRef<DockviewApi | null>(null);
     const renderOverviewRef = useRef(renderOverview);
@@ -538,8 +542,10 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
     const chatSecondarySidebarPinnedRef = useRef(chatSecondarySidebarPinned);
     const showChatSecondarySidebarRef = useRef(showChatSecondarySidebar);
     const renderChatSecondarySidebarRef = useRef(renderChatSecondarySidebar);
+    const singlePanelModeRef = useRef(singlePanelMode);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const shellHeader = useDashboardShellHeaderController();
+    const replacingSinglePanelRef = useRef(false);
     const tabDragRef = useRef<{
       previousPanelId: string | null;
       startX: number;
@@ -550,6 +556,10 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
     useEffect(() => {
       renderOverviewRef.current = renderOverview;
     }, [renderOverview]);
+
+    useEffect(() => {
+      singlePanelModeRef.current = singlePanelMode;
+    }, [singlePanelMode]);
 
     useEffect(() => {
       toggleChatSecondarySidebarRef.current = onToggleChatSecondarySidebar;
@@ -597,10 +607,22 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
           });
         }
         existing.api.setActive();
+        if (singlePanelModeRef.current) {
+          for (const panel of [...api.panels]) {
+            if (panel.id !== existing.id) panel.api.close();
+          }
+        }
         return;
       }
 
-      api.addPanel<WorkspacePanelParams>({
+      if (singlePanelModeRef.current) {
+        replacingSinglePanelRef.current = true;
+        for (const panel of [...api.panels]) {
+          panel.api.close();
+        }
+      }
+
+      const addedPanel = api.addPanel<WorkspacePanelParams>({
         id: tab.id,
         title: tab.title,
         component: 'workspace',
@@ -616,6 +638,10 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
           renderChatSecondarySidebar: () => renderChatSecondarySidebarRef.current?.(),
         },
       });
+      if (singlePanelModeRef.current) {
+        replacingSinglePanelRef.current = false;
+        addedPanel.api.setActive();
+      }
     }, []);
 
     useImperativeHandle(ref, () => ({
@@ -658,6 +684,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       });
       const removePanelDisposable = event.api.onDidRemovePanel(() => {
         window.setTimeout(() => {
+          if (replacingSinglePanelRef.current) return;
           if (event.api.panels.length > 0) return;
           const fallbackPanel = openFallbackChatPanel();
           shellHeader?.setActiveScopeId(fallbackPanel.id);
@@ -754,6 +781,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
         ref={rootRef}
         className={cn(
           'ace-dashboard-dockview dockview-theme-light h-full min-h-0 overflow-hidden',
+          singlePanelMode && 'ace-dashboard-dockview--single-panel',
           className
         )}
         onPointerDownCapture={handlePointerDownCapture}

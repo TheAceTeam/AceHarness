@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, type DragEvent, type ReactNod
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
-import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, FileText, History, NotebookTabs, Layers3, Trophy, Loader2, BarChart3, PanelLeftClose, PanelLeftOpen, MessageSquareText, Microchip, ServerCog } from 'lucide-react';
+import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, FileText, History, NotebookTabs, Layers3, Trophy, Loader2, BarChart3, PanelLeftClose, PanelLeftOpen, MessageSquareText, Microchip, ServerCog, Grid2X2, Zap } from 'lucide-react';
 
 import { useTranslations } from '@/hooks/useTranslations';
 import { Button } from '@/components/ui/button';
@@ -88,6 +88,7 @@ const WORKFLOW_TOKEN_RANKING_HREF = '/run-history?view=token-ranking&dimension=w
 const DASHBOARD_CACHE_KEY = 'dashboard-cache';
 const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
 const SIDEBAR_COOKIE_NAME = 'sidebar:state';
+const DASHBOARD_NAVIGATION_MODE_STORAGE_KEY = 'aceharness:dashboard:navigation-mode';
 const CHART_SERIES_COLORS = ['#38bdf8', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
 const TOKEN_STACK_COLORS = {
   inputTokens: '#38bdf8',
@@ -97,6 +98,7 @@ const TOKEN_STACK_COLORS = {
 
 type DashboardPanel = 'chat' | 'overview' | 'agents' | 'skills' | 'settings';
 type DashboardDragTab = DashboardDockTab;
+type DashboardNavigationMode = 'modern' | 'classic';
 
 type DashboardUser = {
   username: string;
@@ -105,7 +107,21 @@ type DashboardUser = {
   avatar?: string;
 };
 
-function DashboardUnifiedHeader({ currentUser }: { currentUser: DashboardUser | null }) {
+function DashboardUnifiedHeader({
+  currentUser,
+  navigationMode,
+  onNavigationModeChange,
+  activeTabKind,
+  onBackToOverview,
+  onOpenChat,
+}: {
+  currentUser: DashboardUser | null;
+  navigationMode: DashboardNavigationMode;
+  onNavigationModeChange: (mode: DashboardNavigationMode) => void;
+  activeTabKind: DashboardDockTab['kind'] | null;
+  onBackToOverview: () => void;
+  onOpenChat: () => void;
+}) {
   const shellHeader = useDashboardShellHeaderController();
   const activeHeader = shellHeader?.activeHeader;
   const { t } = useTranslations();
@@ -113,6 +129,18 @@ function DashboardUnifiedHeader({ currentUser }: { currentUser: DashboardUser | 
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-4 border-b border-border/60 bg-background/95 px-5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      {navigationMode === 'classic' && activeTabKind !== 'overview' && activeTabKind !== 'chat' ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 shrink-0 gap-2 rounded-full px-3 text-xs"
+          onClick={onBackToOverview}
+        >
+          <BarChart3 className="h-3.5 w-3.5" />
+          {t('dashboard.sidebar.backToOverview')}
+        </Button>
+      ) : null}
       <div className="min-w-0 shrink-0">
         <div className="truncate text-base font-semibold">{activeHeader?.title || t('dashboard.headers.defaultTitle')}</div>
         <div className="truncate text-xs text-muted-foreground">{activeHeader?.subtitle || t('dashboard.headers.defaultSubtitle')}</div>
@@ -122,13 +150,55 @@ function DashboardUnifiedHeader({ currentUser }: { currentUser: DashboardUser | 
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2">
         {activeHeader?.actions}
+        {navigationMode === 'classic' && activeTabKind === 'overview' ? (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-2 rounded-full px-3 text-xs"
+              onClick={onOpenChat}
+            >
+              <MessageSquareText className="h-3.5 w-3.5" />
+              {t('dashboard.quickActions.chatMode')}
+            </Button>
+            <div className="hidden items-center gap-2 sm:flex">
+              <ThemeTabs className="shrink-0" />
+              <LanguageSelectorDropdown className="w-[112px]" />
+            </div>
+          </>
+        ) : null}
+        {navigationMode === 'classic' && activeTabKind === 'chat' ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-2 rounded-full px-3 text-xs"
+            onClick={onBackToOverview}
+          >
+            <Grid2X2 className="h-3.5 w-3.5" />
+            {t('dashboard.sidebar.dashboardEntry')}
+          </Button>
+        ) : null}
+        {navigationMode === 'classic' ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="hidden h-8 gap-2 rounded-full px-3 text-xs md:inline-flex"
+            onClick={() => onNavigationModeChange('modern')}
+          >
+            <PanelLeftOpen className="h-3.5 w-3.5" />
+            {t('dashboard.sidebar.modernMode')}
+          </Button>
+        ) : null}
         <UserMenu user={currentUser} />
       </div>
     </header>
   );
 }
 
-function DashboardSidebarFooter() {
+function DashboardSidebarFooter({ onUseClassicMode }: { onUseClassicMode: () => void }) {
   const { state, toggleSidebar } = useSidebar();
   const { t } = useTranslations();
   const collapsed = state === 'collapsed';
@@ -150,6 +220,17 @@ function DashboardSidebarFooter() {
       >
         {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         <span className="group-data-[collapsible=icon]:hidden">{toggleLabel}</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-9 w-full justify-start gap-2 px-2 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
+        onClick={onUseClassicMode}
+        title={t('dashboard.sidebar.classicMode')}
+      >
+        <PanelLeftClose className="h-4 w-4" />
+        <span className="group-data-[collapsible=icon]:hidden">{t('dashboard.sidebar.classicMode')}</span>
       </Button>
     </SidebarFooter>
   );
@@ -212,6 +293,11 @@ function readStoredSidebarOpen(): boolean {
   return match.split('=')[1] !== 'false';
 }
 
+function readStoredNavigationMode(): DashboardNavigationMode {
+  if (typeof window === 'undefined') return 'modern';
+  return window.localStorage.getItem(DASHBOARD_NAVIGATION_MODE_STORAGE_KEY) === 'classic' ? 'classic' : 'modern';
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -243,6 +329,7 @@ export default function DashboardPage() {
   const [conversationView, setConversationView] = useState<SessionDirectoryView>('conversation');
   const [secondarySidebarOpen, setSecondarySidebarOpen] = useState(true);
   const [mainSidebarOpen, setMainSidebarOpen] = useState(readStoredSidebarOpen);
+  const [navigationMode, setNavigationModeState] = useState<DashboardNavigationMode>(readStoredNavigationMode);
   const [activeDockTab, setActiveDockTab] = useState<DashboardDockTab | null>({ id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' });
   const workspaceRef = useRef<DashboardDockWorkspaceHandle | null>(null);
   const suppressSidebarClickRef = useRef(false);
@@ -301,11 +388,15 @@ export default function DashboardPage() {
     } else if (tab.kind === 'account') {
       route = `/account${tab.search ? `?${tab.search}` : ''}`;
     } else if (tab.kind === 'workbench') {
+      if (tab.search) {
+        route = `/workbench/${encodeURIComponent(tab.config)}${tab.search.startsWith('?') ? tab.search : `?${tab.search}`}`;
+      } else {
       const workbenchParams = new URLSearchParams();
       if (tab.mode) workbenchParams.set('mode', tab.mode);
       if (tab.runId) workbenchParams.set('runId', tab.runId);
       const query = workbenchParams.toString();
       route = `/workbench/${encodeURIComponent(tab.config)}${query ? `?${query}` : ''}`;
+      }
     }
 
     if (route) {
@@ -349,6 +440,13 @@ export default function DashboardPage() {
     setMainSidebarOpen(open);
   }, []);
 
+  const setNavigationMode = useCallback((mode: DashboardNavigationMode) => {
+    setNavigationModeState(mode);
+    try {
+      window.localStorage.setItem(DASHBOARD_NAVIGATION_MODE_STORAGE_KEY, mode);
+    } catch {}
+  }, []);
+
   const buildDockTabForRoute = useCallback((route: string): DashboardDockTab | null => {
     const normalizedRoute = normalizeEmbeddedRoute(route);
     if (!normalizedRoute) return null;
@@ -365,6 +463,7 @@ export default function DashboardPage() {
         config,
         mode: params.get('mode') || 'run',
         runId: params.get('runId') || params.get('run'),
+        search: queryString,
       };
     }
 
@@ -445,6 +544,33 @@ export default function DashboardPage() {
     params.delete('reload');
     router.push(buildShellUrl(params));
   }, [buildDockTabForRoute, buildShellUrl, router, searchParams]);
+
+  const openWorkbenchDesignTab = useCallback((filename: string) => {
+    const tab: DashboardDockTab = {
+      id: `workbench:${filename}:design:`,
+      title: filename,
+      kind: 'workbench',
+      config: filename,
+      mode: 'design',
+      runId: null,
+    };
+    workspaceRef.current?.openTab(tab);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('panel');
+    params.delete('reload');
+    params.set('route', `/workbench/${encodeURIComponent(filename)}?mode=design`);
+    router.push(buildShellUrl(params));
+  }, [buildShellUrl, router, searchParams]);
+
+  const backToOverview = useCallback(() => {
+    setSecondarySidebarOpen(false);
+    setActivePanel('overview');
+  }, [setActivePanel]);
+
+  const openChatPanel = useCallback(() => {
+    setSecondarySidebarOpen(true);
+    setActivePanel('chat');
+  }, [setActivePanel]);
 
   const startTabDrag = useCallback((event: DragEvent<HTMLElement>, tab: DashboardDragTab) => {
     suppressSidebarClickRef.current = true;
@@ -580,6 +706,10 @@ export default function DashboardPage() {
     } catch {}
     void loadDashboardData();
   }, [loadDashboardData]);
+
+  useEffect(() => {
+    workspaceRef.current?.refreshActiveTab();
+  }, [navigationMode]);
 
   const StatCard = ({ icon: Icon, label, value, trend, color }: any) => (
     <motion.div
@@ -920,6 +1050,104 @@ export default function DashboardPage() {
     </section>
   );
 
+  const ClassicQuickActions = () => (
+    <section data-tour-step-id="dashboard-quick-actions">
+      <div className="mb-4 flex items-center gap-2">
+        <Zap className="h-5 w-5 text-primary" />
+        <h2 className="text-xl font-semibold">{t('dashboard.quickActions.title')}</h2>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        {[
+          {
+            key: 'new-workflow',
+            label: t('dashboard.quickActions.newWorkflow'),
+            desc: t('dashboard.quickActions.newWorkflowDesc'),
+            icon: Play,
+            color: 'from-blue-500 to-blue-600',
+            onClick: () => setShowNewModal(true),
+          },
+          {
+            key: 'chat',
+            label: t('dashboard.quickActions.chatMode'),
+            desc: t('dashboard.headers.chatSubtitle'),
+            icon: MessageSquareText,
+            color: 'from-slate-500 to-slate-600',
+            onClick: () => {
+              setSecondarySidebarOpen(true);
+              setActivePanel('chat');
+            },
+          },
+          ...primaryActions
+            .filter((action) => action.id !== 'overview')
+            .map((action) => ({
+              key: action.id,
+              label: action.label,
+              desc: action.desc,
+              icon: action.icon,
+              color: action.id === 'agents'
+                ? 'from-purple-500 to-purple-600'
+                : action.id === 'skills'
+                  ? 'from-pink-500 to-pink-600'
+                  : 'from-amber-500 to-amber-600',
+              onClick: () => {
+                setSecondarySidebarOpen(false);
+                setActivePanel(action.id);
+              },
+            })),
+          ...routeActions.map((action) => ({
+            key: action.href,
+            label: action.label,
+            desc: action.desc,
+            icon: action.icon,
+            color: action.href === '/workflows'
+              ? 'from-cyan-500 to-cyan-600'
+              : action.href === '/models'
+                ? 'from-orange-500 to-orange-600'
+                : action.href === '/engines'
+                  ? 'from-indigo-500 to-indigo-600'
+                  : action.href === '/schedules'
+                    ? 'from-teal-500 to-teal-600'
+                    : action.href === '/knowledge'
+                      ? 'from-emerald-500 to-emerald-600'
+                      : action.href === '/api-docs'
+                        ? 'from-green-500 to-green-600'
+                        : action.href === '/office'
+                          ? 'from-violet-500 to-violet-600'
+                          : 'from-sky-500 to-sky-600',
+            onClick: () => {
+              setSecondarySidebarOpen(false);
+              if (action.external) {
+                router.push(action.href);
+              } else {
+                setActiveRoute(action.href);
+              }
+            },
+          })),
+        ].map((action) => {
+          const Icon = action.icon;
+          return (
+            <button
+              key={action.key}
+              type="button"
+              className="group relative overflow-hidden rounded-xl border border-border/60 bg-card px-4 py-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-card/80 hover:shadow-[0_12px_30px_-8px_rgba(0,0,0,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={action.onClick}
+            >
+              <div className="flex items-center gap-3.5">
+                <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${action.color} shadow-sm`}>
+                  <Icon className="h-5 w-5 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-semibold text-foreground transition-colors group-hover:text-primary">{action.label}</div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{action.desc}</div>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   const ModernTooltip = ({
     active,
     payload,
@@ -1011,6 +1239,8 @@ export default function DashboardPage() {
   const activeDockTabKind = activeDockTab?.kind || 'chat';
   const isChatWorkspaceActive = activeDockTabKind === 'chat';
   const secondarySidebarVisible = isChatWorkspaceActive && secondarySidebarOpen;
+  const isClassicDashboard = navigationMode === 'classic';
+  const MainContainer = isClassicDashboard ? 'main' : SidebarInset;
   const renderChatSecondarySidebar = useCallback(() => (
     <aside
       className="ace-dashboard-chat-secondary-sidebar flex h-full w-full min-w-0 flex-col overflow-hidden bg-background/95 backdrop-blur-xl"
@@ -1050,6 +1280,7 @@ export default function DashboardPage() {
         }} />
       </div>
 
+      {!isClassicDashboard && (
       <Sidebar
         variant="inset"
         collapsible="icon"
@@ -1195,12 +1426,24 @@ export default function DashboardPage() {
           </SidebarGroup>
         </SidebarContent>
 
-        <DashboardSidebarFooter />
+        <DashboardSidebarFooter onUseClassicMode={() => {
+          setNavigationMode('classic');
+          setSecondarySidebarOpen(false);
+          setActivePanel('overview');
+        }} />
         <SidebarRail />
       </Sidebar>
+      )}
 
-      <SidebarInset className="relative z-10 min-w-0 overflow-hidden bg-transparent">
-        <DashboardUnifiedHeader currentUser={currentUser} />
+      <MainContainer className="relative z-10 flex min-h-svh min-w-0 flex-1 flex-col overflow-hidden bg-transparent">
+        <DashboardUnifiedHeader
+          currentUser={currentUser}
+          navigationMode={navigationMode}
+          onNavigationModeChange={setNavigationMode}
+          activeTabKind={activeDockTab?.kind || null}
+          onBackToOverview={backToOverview}
+          onOpenChat={openChatPanel}
+        />
         <div
           className="relative min-h-0 flex-1 overflow-hidden"
           data-tour-step-id="dashboard-overview"
@@ -1215,6 +1458,7 @@ export default function DashboardPage() {
               chatSecondarySidebarPinned={secondarySidebarOpen}
               showChatSecondarySidebar={secondarySidebarVisible}
               renderChatSecondarySidebar={renderChatSecondarySidebar}
+              singlePanelMode={isClassicDashboard}
               renderOverview={() => (
             <div className="min-h-full">
               <div className="mx-auto w-full max-w-[1680px] space-y-8 px-6 py-8">
@@ -1224,6 +1468,7 @@ export default function DashboardPage() {
                   <StatCard icon={Cpu} label={t('dashboard.stats.tokenConsumption')} value={formatTokens(stats.totalTokenUsage)} color="from-purple-500 to-purple-600" />
                   <StatCard icon={TrendingUp} label={t('dashboard.stats.weeklyTokenConsumption')} value={formatTokens(stats.weeklyTokenUsage)} color="from-orange-500 to-orange-600" />
                 </div>
+                {isClassicDashboard ? <ClassicQuickActions /> : null}
                 <SectionShell
                   title={t('dashboard.charts.runtimeSectionTitle')}
                   icon={Activity}
@@ -1668,7 +1913,7 @@ export default function DashboardPage() {
             />
           </div>
         </div>
-      </SidebarInset>
+      </MainContainer>
 
       {showNewModal && (
         <NewConfigModal
@@ -1676,7 +1921,7 @@ export default function DashboardPage() {
           onClose={() => setShowNewModal(false)}
           onSuccess={(filename) => {
             setShowNewModal(false);
-            setActiveRoute(`/workbench/${encodeURIComponent(filename)}?mode=design`);
+            openWorkbenchDesignTab(filename);
           }}
         />
       )}

@@ -41,6 +41,7 @@ import CliRunDialog, { type CliRunDialogRequest } from '@/components/chat/CliRun
 import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
@@ -110,11 +111,13 @@ const COLLABORATION_MODE_OPTIONS: Array<{ value: CollaborationChatroomMode; labe
 type HomepageSlashCommand = {
   id: string;
   command: string;
+  displayCommand?: string;
   title: string;
   subtext: string;
   icon: string;
   aliases: string[];
   prompt?: string;
+  engineTag?: string;
 };
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
@@ -1772,6 +1775,7 @@ export function ChatPageContent({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const dockWorkspace = useDashboardDockWorkspace();
   const dashboardRouteParam = searchParams.get('route');
   const shouldHandleChatSearchParams = !embedded || !dashboardRouteParam;
   useSidebarPluginPreferences();
@@ -2361,11 +2365,13 @@ export function ChatPageContent({
             return {
               id: `${namespace}:${name}`,
               command: `/${namespace}:${name}`,
-              title: `${namespace}: ${name}`,
+              displayCommand: `/${name}`,
+              title: name,
               subtext: description || `${namespace} 命令`,
               icon: 'terminal',
               aliases: [namespace, name, description].filter(Boolean),
               prompt: `/${namespace}:${name}`,
+              engineTag: namespace,
             };
           })
           .filter(Boolean) as HomepageSlashCommand[];
@@ -3993,8 +3999,19 @@ export function ChatPageContent({
     setInput('');
     editorRef.current?.clear();
     if (loading) stopStreaming();
+    if (embedded && dockWorkspace) {
+      dockWorkspace.openTab({
+        id: `workbench:${configFile}:run:`,
+        title: configFile,
+        kind: 'workbench',
+        config: configFile,
+        mode: 'run',
+        search: 'mode=run',
+      });
+      return;
+    }
     router.push(`/workbench/${encodeURIComponent(configFile)}`);
-  }, [loading, router, stopStreaming, toast, unlockAutoScroll]);
+  }, [dockWorkspace, embedded, loading, router, stopStreaming, toast, unlockAutoScroll]);
 
   const handleWorkflowStartAction = useCallback((configFile: string) => {
     if (!configFile) {
@@ -4005,8 +4022,19 @@ export function ChatPageContent({
     setInput('');
     editorRef.current?.clear();
     if (loading) stopStreaming();
+    if (embedded && dockWorkspace) {
+      dockWorkspace.openTab({
+        id: `workbench:${configFile}:run:`,
+        title: configFile,
+        kind: 'workbench',
+        config: configFile,
+        mode: 'run',
+        search: 'mode=run&autoStart=1',
+      });
+      return;
+    }
     router.push(`/workbench/${encodeURIComponent(configFile)}?mode=run&autoStart=1`);
-  }, [loading, router, stopStreaming, toast, unlockAutoScroll]);
+  }, [dockWorkspace, embedded, loading, router, stopStreaming, toast, unlockAutoScroll]);
 
   const handleQuickAction = useCallback((prompt: string) => {
     if (prompt.startsWith(WORKFLOW_DRAFT_ACTION_PREFIX)) {
@@ -5256,7 +5284,7 @@ export function ChatPageContent({
                                       ref={(node) => {
                                         slashItemRefs.current[index] = node;
                                       }}
-                                      value={`${item.command} ${item.title}`}
+                                      value={`${item.command} ${item.displayCommand || ''} ${item.title} ${item.engineTag || ''}`}
                                       className={cn(
                                         'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 data-[selected=true]:bg-transparent data-[selected=true]:text-popover-foreground',
                                         index === slashActiveIndex && 'bg-accent text-accent-foreground data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground'
@@ -5266,7 +5294,14 @@ export function ChatPageContent({
                                     >
                                       <span className="material-symbols-outlined text-[18px] text-muted-foreground">{item.icon}</span>
                                       <span className="min-w-0 flex-1">
-                                        <span className="block truncate text-sm font-medium">{item.command}</span>
+                                        <span className="flex min-w-0 items-center gap-1.5">
+                                          <span className="block truncate text-sm font-medium">{item.displayCommand || item.command}</span>
+                                          {item.engineTag ? (
+                                            <span className="shrink-0 rounded-full border border-border/70 bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+                                              {item.engineTag}
+                                            </span>
+                                          ) : null}
+                                        </span>
                                         <span className="block truncate text-xs text-muted-foreground">{item.subtext}</span>
                                       </span>
                                     </PromptInputCommandItem>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { agentApi, configApi, specCodingApi, workflowApi } from '@/lib/core/api';
 import type {
   CollaborationChatroomState,
@@ -1189,6 +1189,8 @@ export default function HomeCommandSidebar({
   werewolfMode = false,
 }: HomeCommandSidebarProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const dockWorkspace = useDashboardDockWorkspace();
   const { toast } = useToast();
   const { confirm, dialogProps: confirmDialogProps } = useConfirmDialog();
@@ -1246,6 +1248,7 @@ export default function HomeCommandSidebar({
   const openWorkflowDesign = useCallback((filename: string) => {
     const target = filename.trim();
     if (!target) return;
+    const route = `/workbench/${encodeURIComponent(target)}?mode=design`;
     if (dockWorkspace) {
       dockWorkspace.openTab({
         id: `workbench:${target}:design:`,
@@ -1253,11 +1256,40 @@ export default function HomeCommandSidebar({
         kind: 'workbench',
         config: target,
         mode: 'design',
+        search: 'mode=design',
       });
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('panel');
+      params.delete('reload');
+      params.set('route', route);
+      router.push(`${pathname}?${params.toString()}`);
       return;
     }
-    router.push(`/workbench/${encodeURIComponent(target)}?mode=design`);
-  }, [dockWorkspace, router]);
+    router.push(route);
+  }, [dockWorkspace, pathname, router, searchParams]);
+
+  const openWorkflowRun = useCallback((filename: string) => {
+    const target = filename.trim();
+    if (!target) return;
+    const route = `/workbench/${encodeURIComponent(target)}?mode=run`;
+    if (dockWorkspace) {
+      dockWorkspace.openTab({
+        id: `workbench:${target}:run:`,
+        title: target,
+        kind: 'workbench',
+        config: target,
+        mode: 'run',
+        search: 'mode=run',
+      });
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('panel');
+      params.delete('reload');
+      params.set('route', route);
+      router.push(`${pathname}?${params.toString()}`);
+      return;
+    }
+    router.push(route);
+  }, [dockWorkspace, pathname, router, searchParams]);
   const [phaseTransitionBanner, setPhaseTransitionBanner] = useState<{ key: string; label: string } | null>(null);
   const collaborationPendingMessageIdRef = useRef<string | null>(null);
   const collaborationStreamingMessageIdRef = useRef<string | null>(null);
@@ -2177,13 +2209,13 @@ export default function HomeCommandSidebar({
         }));
       }
       toast('success', `已启动工作流：${targetWorkflow}`);
-      router.push(`/workbench/${encodeURIComponent(targetWorkflow)}?mode=run`);
+      openWorkflowRun(targetWorkflow);
     } catch (error: any) {
       toast('error', error?.message || '启动工作流失败');
     } finally {
       setStartingWorkflow(false);
     }
-  }, [activeSessionId, boundWorkflow, ensureSessionId, router, selectedWorkflow, runCreationSessionId, setSessionWorkbenchState, toast]);
+  }, [activeSessionId, boundWorkflow, ensureSessionId, openWorkflowRun, selectedWorkflow, runCreationSessionId, setSessionWorkbenchState, toast]);
 
   const handleCreateAgent = useCallback(async () => {
     const displayName = agentDraft.displayName.trim();
@@ -5022,7 +5054,7 @@ export default function HomeCommandSidebar({
               }}>
                 设为当前目标
               </Button>
-              <Button variant="outline" onClick={() => inspectedWorkflow?.filename && router.push(`/workbench/${encodeURIComponent(inspectedWorkflow.filename)}`)}>
+              <Button variant="outline" onClick={() => inspectedWorkflow?.filename && openWorkflowRun(inspectedWorkflow.filename)}>
                 打开
               </Button>
             </div>

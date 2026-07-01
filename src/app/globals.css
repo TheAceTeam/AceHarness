@@ -118,6 +118,10 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   background-color: hsl(var(--background)) !important;
 }
 
+.ace-dashboard-dockview--single-panel .dv-tabs-and-actions-container {
+  display: none !important;
+}
+
 .ace-workflow-run-dock .dv-tabs-and-actions-container {
   height: 32px !important;
   min-height: 32px !important;
