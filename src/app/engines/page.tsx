@@ -325,18 +325,13 @@ export default function EnginesPage() {
       const response = await fetch('/api/engine', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine: engineId, targetEngine: engineId, driver: nextDriver }),
+        body: JSON.stringify({ engine: currentEngine, targetEngine: engineId, driver: nextDriver }),
       });
       if (!response.ok) {
         throw new Error('切换失败');
       }
-      setCurrentEngine(engineId);
-      const compatible = getModelsForEngine(engineId);
-      if (defaultModel && !compatible.find(m => m.value === defaultModel)) {
-        setDefaultModel('');
-      }
       broadcastEngineUpdated();
-      toast('success', `已切换到 ${engines.find((item) => item.id === engineId)?.name || engineId} / ${nextDriver}`);
+      toast('success', `已设置 ${engines.find((item) => item.id === engineId)?.name || engineId} / ${nextDriver}`);
     } catch (error) {
       setDriverSelections((prev) => ({ ...prev, [engineId]: previousDriver }));
       toast('error', error instanceof Error ? error.message : '切换失败');
@@ -708,6 +703,33 @@ export default function EnginesPage() {
                 </Button>
               )}
 
+              {engine.status === 'available' && !['codex', 'magic-cli'].includes(engine.id) && (
+                <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={detecting}
+                    onClick={() => handleDetectModels(engine.id)}
+                  >
+                    <Search className="w-4 h-4 mr-2" />
+                    {detecting && detectingEngine === engine.id ? '检测中...' : '检测可用模型'}
+                  </Button>
+                  {engine.id === 'claude-code' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full mt-2"
+                      disabled={smokeTesting}
+                      onClick={handleSmokeTestClaudeModels}
+                    >
+                      <Search className="w-4 h-4 mr-2" />
+                      {smokeTesting ? '测试中...' : '测试官方别名'}
+                    </Button>
+                  )}
+                </div>
+              )}
+
               {/* Default Model Selector — only for current engine */}
               {currentEngine === engine.id && (
                 <div className="mt-4 pt-4 border-t border-border/50" onClick={(e) => e.stopPropagation()}>
@@ -725,32 +747,6 @@ export default function EnginesPage() {
                     placeholder="选择默认模型"
                     triggerClassName="h-9 text-sm"
                   />
-                  {!['codex', 'magic-cli'].includes(engine.id) && (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full mt-2"
-                        disabled={detecting}
-                        onClick={() => handleDetectModels(engine.id)}
-                      >
-                        <Search className="w-4 h-4 mr-2" />
-                        {detecting && detectingEngine === engine.id ? '检测中...' : '检测可用模型'}
-                      </Button>
-                      {engine.id === 'claude-code' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full mt-2"
-                          disabled={smokeTesting}
-                          onClick={handleSmokeTestClaudeModels}
-                        >
-                          <Search className="w-4 h-4 mr-2" />
-                          {smokeTesting ? '测试中...' : '测试官方别名'}
-                        </Button>
-                      )}
-                    </>
-                  )}
                 </div>
               )}
             </motion.div>

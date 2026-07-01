@@ -45,6 +45,7 @@ import { Separator } from '@/components/ui/separator';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Switch } from '@/components/ui/switch';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import { EngineSelect } from '@/components/EngineSelect';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -661,6 +662,24 @@ type QualityCheckRecord = {
     errorText?: string | null;
   }>;
 };
+
+function formatQualityCommandResult(command: QualityCheckRecord['commands'][number], index?: number) {
+  const lines = [
+    typeof index === 'number' ? `命令 ${index + 1}: ${command.command || '-'}` : `命令: ${command.command || '-'}`,
+    `状态: ${command.status === 'passed' ? '通过' : command.status === 'warning' ? '警告' : '失败'}`,
+    `退出码: ${command.exitCode ?? '无'}`,
+  ];
+  if (command.errorText) lines.push(`错误: ${command.errorText}`);
+  if (command.stderr) lines.push(`stderr:\n${command.stderr}`);
+  if (command.stdout) lines.push(`stdout:\n${command.stdout}`);
+  return lines.join('\n');
+}
+
+function formatQualityCheckCommandResults(check: QualityCheckRecord) {
+  const commands = check.commands || [];
+  if (commands.length === 0) return '';
+  return commands.map((command, index) => formatQualityCommandResult(command, commands.length > 1 ? index : undefined)).join('\n\n---\n\n');
+}
 
 type WorkflowMemoryLayers = {
   schema?: {
@@ -1344,6 +1363,7 @@ export default function WorkbenchPage({
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
+  const dockWorkspace = useDashboardDockWorkspace();
   const [embeddedSearchState, setEmbeddedSearchState] = useState(embeddedSearch ?? '');
 
   useEffect(() => {
@@ -1689,12 +1709,24 @@ export default function WorkbenchPage({
   const openSubworkflowRunPage = useCallback((child: any) => {
     if (!child?.configFile || !child?.runId) return;
     const route = `/workbench/${encodeURIComponent(child.configFile)}?mode=history&runId=${encodeURIComponent(child.runId)}`;
+    if (embeddedInDashboard && dockWorkspace) {
+      dockWorkspace.openTab({
+        id: `workbench:${child.configFile}:history:${child.runId}`,
+        title: child.configFile,
+        kind: 'workbench',
+        config: child.configFile,
+        mode: 'history',
+        runId: child.runId,
+        search: `mode=history&runId=${encodeURIComponent(child.runId)}`,
+      });
+      return;
+    }
     if (typeof window !== 'undefined') {
       window.open(route, '_blank', 'noopener,noreferrer');
     } else {
       router.push(route);
     }
-  }, [router]);
+  }, [dockWorkspace, embeddedInDashboard, router]);
   const [persistedStepLogs, setPersistedStepLogs] = useState<Array<{
     id: string;
     stepName: string;
@@ -5920,17 +5952,34 @@ export default function WorkbenchPage({
         setRehearsalProgressSteps((prev) => [...prev, '已跳过启动前检查']);
       }
       if (!preflight.ok) {
+        const failedDetails = (preflight.checks || [])
+          .filter((check) => check.status === 'failed')
+          .slice(0, 5)
+          .map((check) => {
+            const commandResult = formatQualityCheckCommandResults(check);
+            return `${check.summary || describeQualityCheck(check)}${commandResult ? `\n${commandResult}` : ''}`;
+          })
+          .join('\n\n');
         setRehearsalProgressSteps((prev) => [...prev, isRehearsalStart ? '演练已停止，请先处理启动前检查失败项' : '正式启动已停止，请先处理启动前检查失败项']);
         dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
-        addLog('system', 'error', `启动前检查未通过: ${preflight.failedCount} 项失败`);
-        toast('error', `启动前检查未通过：${preflight.failedCount} 项失败`);
+        addLog('system', 'error', `启动前检查未通过: ${preflight.failedCount} 项失败${failedDetails ? `\n\n${failedDetails}` : ''}`);
+        await confirm({
+          title: '启动前检查未通过',
+          description: failedDetails || `启动前检查未通过：${preflight.failedCount} 项失败。`,
+          confirmLabel: '知道了',
+          cancelLabel: '关闭',
+          variant: 'destructive',
+        });
         return;
       }
       if (preflight.warningCount > 0) {
         const warningDescription = (preflight.checks || [])
           .filter((check) => check.status === 'warning')
           .slice(0, 3)
-          .map((check) => `${check.summary}${check.commands[0]?.command ? `\n${check.commands[0].command}` : ''}`)
+          .map((check) => {
+            const commandResult = formatQualityCheckCommandResults(check);
+            return `${check.summary || describeQualityCheck(check)}${commandResult ? `\n${commandResult}` : ''}`;
+          })
           .join('\n\n');
         const confirmed = await confirm({
           title: '启动前检查存在警告',
@@ -12965,6 +13014,17 @@ export default function WorkbenchPage({
           setResumeCreationDraftId(null);
           void loadCreationDrafts();
           if (filename) {
+            if (embeddedInDashboard && dockWorkspace) {
+              dockWorkspace.openTab({
+                id: `workbench:${filename}:design:`,
+                title: filename,
+                kind: 'workbench',
+                config: filename,
+                mode: 'design',
+                search: 'mode=design',
+              });
+              return;
+            }
             router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
           }
         }}
@@ -13295,6 +13355,22 @@ export default function WorkbenchPage({
                             {formatQualityCheckStatus(check.status)}
                           </Badge>
                         </div>
+                        {check.commands?.length > 0 ? (
+                          <div className="mt-3 space-y-2">
+                            {check.commands.map((command, commandIndex) => (
+                              <div key={`${check.id}-command-${commandIndex}`} className="rounded-md border bg-background/80 p-2">
+                                <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                                  <span>命令结果</span>
+                                  <span>状态: {formatQualityCheckStatus(command.status)}</span>
+                                  <span>退出码: {command.exitCode ?? '无'}</span>
+                                </div>
+                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-2 text-[11px] leading-5 text-foreground">
+                                  {formatQualityCommandResult(command)}
+                                </pre>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                     {rehearsalCheckStats.total === 0 ? (

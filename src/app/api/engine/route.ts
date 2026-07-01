@@ -55,10 +55,6 @@ export async function POST(request: Request) {
   try {
     const { engine, targetEngine, defaultModel, driver, engineRuntime, cangjieRuntime } = await request.json();
 
-    if (!engine) {
-      return NextResponse.json({ error: 'Engine is required' }, { status: 400 });
-    }
-
     // Read existing config to preserve fields
     let existing: Partial<EngineConfig> = {};
     try {
@@ -66,11 +62,15 @@ export async function POST(request: Request) {
       existing = JSON.parse(content);
     } catch { /* new file */ }
 
-    const driverTarget = String(targetEngine || engine || '').trim();
+    const nextEngine = String(engine || existing.engine || '').trim();
+    const driverTarget = String(targetEngine || engine || existing.engine || '').trim();
+    if (!nextEngine && !driverTarget) {
+      return NextResponse.json({ error: 'Engine is required' }, { status: 400 });
+    }
 
     const config: EngineConfig = {
       ...existing,
-      engine,
+      engine: nextEngine,
       updatedAt: new Date().toISOString(),
     };
     // Only update defaultModel if explicitly provided
@@ -132,10 +132,12 @@ export async function POST(request: Request) {
     // Create the shared engine config dir. Skills are linked per chat request
     // based on the enabled skill list, not as a full runtime directory mirror.
     try {
-      const engineConfigDir = getEngineConfigDir(engine);
-      const configDir = path.join(getWorkspaceRoot(), engineConfigDir);
-      if (!existsSync(configDir)) {
-        mkdirSync(configDir, { recursive: true });
+      if (config.engine) {
+        const engineConfigDir = getEngineConfigDir(config.engine);
+        const configDir = path.join(getWorkspaceRoot(), engineConfigDir);
+        if (!existsSync(configDir)) {
+          mkdirSync(configDir, { recursive: true });
+        }
       }
     } catch (e) {
       console.warn('[Engine] Failed to setup engine config directory:', e);
