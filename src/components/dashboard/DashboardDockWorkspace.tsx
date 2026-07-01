@@ -261,10 +261,10 @@ function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
       scrollable = true;
       break;
     case 'agents':
-      content = <AgentsManager embedded returnTarget={{ href: '/dashboard', label: '返回控制台' }} />;
+      content = <AgentsManager embedded returnTarget={{ href: '/dashboard', label: '返回仪表盘' }} />;
       break;
     case 'skills':
-      content = <SkillsManager embedded returnTarget={{ href: '/dashboard', label: '返回控制台' }} />;
+      content = <SkillsManager embedded returnTarget={{ href: '/dashboard', label: '返回仪表盘' }} />;
       break;
     case 'settings':
       content = (

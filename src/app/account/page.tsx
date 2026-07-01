@@ -253,7 +253,7 @@ export function AccountContent({
       <header className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4 flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
-            <Link href="/dashboard"><ArrowLeft className="w-4 h-4 mr-2" />返回 Dashboard</Link>
+            <Link href="/dashboard"><ArrowLeft className="w-4 h-4 mr-2" />返回仪表盘</Link>
           </Button>
           <div className="h-6 w-px bg-border" />
           <h1 className="text-2xl font-bold">账户设置</h1>

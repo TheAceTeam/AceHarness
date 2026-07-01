@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AvatarPicker from '@/components/AvatarPicker';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import AuthGuard from '@/components/AuthGuard';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
@@ -106,6 +107,18 @@ export function UsersContent({ embedded = false }: { embedded?: boolean } = {}) 
     setFormError('');
     setDialogOpen(true);
   };
+
+  const pendingUserCount = users.filter((user) => user.status === 'pending').length;
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: '用户管理',
+    subtitle: `${users.length} 个用户${pendingUserCount > 0 ? ` · ${pendingUserCount} 个待审核` : ''}`,
+    actions: (
+      <Button size="sm" onClick={openCreate}>
+        <Plus className="w-4 h-4 mr-2" />
+        新建用户
+      </Button>
+    ),
+  }, [users.length, pendingUserCount]);
 
   const openEdit = (user: UserInfo) => {
     setEditingUser(user);
@@ -285,12 +298,12 @@ export function UsersContent({ embedded = false }: { embedded?: boolean } = {}) 
   /* RENDER */
   return (
     <div className={embedded ? 'h-full overflow-auto bg-background' : 'min-h-screen bg-background'}>
-      {!embedded ? (
+      {!embedded && !isDashboardShell ? (
       <header data-tour-step-id="admin-users" className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="sm" asChild>
-              <Link href="/"><ArrowLeft className="w-4 h-4 mr-2" />返回首页</Link>
+              <Link href="/dashboard"><ArrowLeft className="w-4 h-4 mr-2" />返回仪表盘</Link>
             </Button>
             <div className="h-6 w-px bg-border" />
             <div>
@@ -309,7 +322,7 @@ export function UsersContent({ embedded = false }: { embedded?: boolean } = {}) 
       ) : null}
 
       <div className="container mx-auto px-6 py-8">
-        {embedded ? (
+        {embedded && !isDashboardShell ? (
           <div data-tour-step-id="admin-users" className="mb-6 flex items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold">用户管理</h1>

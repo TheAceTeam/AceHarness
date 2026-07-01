@@ -9918,7 +9918,7 @@ export default function WorkbenchPage({
         <span className="material-symbols-outlined text-4xl text-destructive">error</span>
         <p className="text-sm text-destructive">{loadError}</p>
         <div className="flex gap-2">
-          <Button variant="outline" asChild><Link href="/">返回首页</Link></Button>
+          <Button variant="outline" asChild><Link href="/dashboard">返回仪表盘</Link></Button>
           <Button onClick={() => void loadWorkflowConfig()}>重试</Button>
         </div>
       </div>

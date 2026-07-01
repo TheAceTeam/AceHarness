@@ -1245,7 +1245,7 @@ function McpServersTab() {
 
 export default function SkillsManager({
   embedded = false,
-  returnTarget = { href: '/dashboard', label: '返回首页' },
+  returnTarget = { href: '/dashboard', label: '返回仪表盘' },
 }: SkillsManagerProps) {
   const { toast } = useToast();
   const { confirm, dialogProps } = useConfirmDialog();

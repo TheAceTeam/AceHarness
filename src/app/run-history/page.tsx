@@ -352,7 +352,7 @@ export default function RunHistoryPage() {
           <Button variant="ghost" size="sm" asChild>
             <Link href="/dashboard">
               <ArrowLeft className="mr-2 h-4 w-4" />
-              返回首页
+              返回仪表盘
             </Link>
           </Button>
           <div className="h-6 w-px bg-border" />

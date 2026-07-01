@@ -74,7 +74,7 @@ interface AgentsManagerProps {
 
 export default function AgentsManager({
   embedded = false,
-  returnTarget = { href: '/dashboard', label: '返回首页' },
+  returnTarget = { href: '/dashboard', label: '返回仪表盘' },
 }: AgentsManagerProps) {
   const VIEW_MODE_STORAGE_KEY = 'aceharness:agents:view-mode';
   const { toast } = useToast();
