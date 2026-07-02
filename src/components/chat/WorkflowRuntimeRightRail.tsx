@@ -183,6 +183,34 @@ type LiveOutputSource = {
   stepName: string | null;
 };
 
+function normalizeActiveWorkflowSteps(input: {
+  activeSteps?: unknown;
+  currentStep?: unknown;
+  currentPhase?: unknown;
+  currentState?: unknown;
+  completedSteps?: unknown;
+  failedSteps?: unknown;
+  terminal?: boolean;
+}): string[] {
+  if (input.terminal) return [];
+  const rawSteps = Array.isArray(input.activeSteps)
+    ? input.activeSteps.map((step) => String(step || '').trim()).filter(Boolean)
+    : [];
+  const currentStep = typeof input.currentStep === 'string' ? input.currentStep.trim() : '';
+  const currentState = String(input.currentPhase || input.currentState || '').trim();
+  const completed = new Set(Array.isArray(input.completedSteps) ? input.completedSteps.map((step) => String(step || '').trim()).filter(Boolean) : []);
+  const failed = new Set(Array.isArray(input.failedSteps) ? input.failedSteps.map((step) => String(step || '').trim()).filter(Boolean) : []);
+  const normalized = rawSteps.filter((step) => {
+    if (currentStep && step === currentStep) return true;
+    if (currentState && !step.startsWith(`${currentState}-`)) return false;
+    return !completed.has(step) && !failed.has(step);
+  });
+  if (currentStep && (!currentState || currentStep.startsWith(`${currentState}-`)) && !normalized.includes(currentStep)) {
+    normalized.unshift(currentStep);
+  }
+  return Array.from(new Set(normalized));
+}
+
 function buildLiveOutputSources({
   workflow,
   status,
@@ -224,17 +252,31 @@ function buildLiveOutputSources({
   };
 
   const parentRunId = runId || status?.runId || '';
-  for (const stepKey of Array.from(new Set([...activeSteps, currentStep || ''].map((step) => String(step || '').trim()).filter(Boolean)))) {
-    pushSource({ runId: parentRunId, stepKey, scope: '父工作流' });
+  const rootActiveSteps = normalizeActiveWorkflowSteps({
+    activeSteps,
+    currentStep,
+    currentPhase: status?.currentPhase,
+    currentState: status?.currentState,
+    completedSteps: status?.completedSteps,
+    failedSteps: status?.failedSteps,
+    terminal: ['completed', 'failed', 'stopped', 'crashed'].includes(String(status?.status || '').toLowerCase()),
+  });
+  for (const stepKey of rootActiveSteps) {
+    pushSource({ runId: parentRunId, stepKey, scope: '当前工作流' });
   }
 
   const appendChild = (child: any, depth: number) => {
     const childRunId = child?.runId || child?.status?.runId;
     const childStatus = child?.status || child;
-    const childSteps = Array.from(new Set([
-      ...(Array.isArray(childStatus?.activeSteps) ? childStatus.activeSteps : []),
-      childStatus?.currentStep,
-    ].map((step) => String(step || '').trim()).filter(Boolean)));
+    const childSteps = normalizeActiveWorkflowSteps({
+      activeSteps: childStatus?.activeSteps,
+      currentStep: childStatus?.currentStep,
+      currentPhase: childStatus?.currentPhase,
+      currentState: childStatus?.currentState,
+      completedSteps: childStatus?.completedSteps,
+      failedSteps: childStatus?.failedSteps,
+      terminal: ['completed', 'failed', 'stopped', 'crashed'].includes(String(childStatus?.status || '').toLowerCase()),
+    });
     const scope = `${'子'.repeat(Math.max(1, depth))}工作流${child?.parentStepName ? ` · ${child.parentStepName}` : ''}`;
     for (const stepKey of childSteps) {
       pushSource({ runId: childRunId, stepKey, scope, status: childStatus } as any);

@@ -496,12 +496,22 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
                   completedTasks: agent?.completedTasks,
                 }))
               : [],
-            stepLogCount: Array.isArray(status?.stepLogs) ? status.stepLogs.length : 0,
-            stateHistoryCount: Array.isArray(status?.stateHistory) ? status.stateHistory.length : 0,
+            stepLogs: Array.isArray(status?.stepLogs)
+              ? status.stepLogs.map((log: any) => ({
+                  id: log?.id,
+                  stepName: log?.stepName,
+                  status: log?.status,
+                  outputRef: log?.outputRef,
+                  outputBytes: log?.outputBytes,
+                  error: log?.error,
+                  timestamp: log?.timestamp,
+                }))
+              : [],
+            stateHistory: status?.stateHistory,
             transitionCount: status?.transitionCount,
-            issueCount: Array.isArray(status?.issueTracker) ? status.issueTracker.length : 0,
-            supervisorFlowCount: Array.isArray(status?.supervisorFlow) ? status.supervisorFlow.length : 0,
-            agentFlowCount: Array.isArray(status?.agentFlow) ? status.agentFlow.length : 0,
+            issueTracker: status?.issueTracker,
+            supervisorFlow: status?.supervisorFlow,
+            agentFlow: status?.agentFlow,
             pendingLiveFeedback: status?.pendingLiveFeedback,
             pendingHumanQuestionId: status?.pendingHumanQuestionId,
             pendingHumanQuestion: status?.pendingHumanQuestion,

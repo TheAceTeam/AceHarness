@@ -124,6 +124,35 @@ function compactSubworkflowAuditEvent(event: any) {
   };
 }
 
+function compactStepLog(log: any) {
+  if (!log) return null;
+  return {
+    id: log.id,
+    stepName: log.stepName,
+    agent: log.agent,
+    status: log.status,
+    output: truncateLiveText(log.output || '', 4000),
+    outputRef: log.outputRef,
+    outputBytes: log.outputBytes,
+    error: truncateLiveText(log.error || '', 2000),
+    costUsd: log.costUsd,
+    durationMs: log.durationMs,
+    timestamp: log.timestamp,
+    tokenUsage: log.tokenUsage,
+    sessionId: log.sessionId || null,
+    engineName: log.engineName,
+    stepType: log.stepType,
+    childRunId: log.childRunId,
+    childConfigFile: log.childConfigFile,
+    childStatus: log.childStatus,
+    childSummary: truncateLiveText(log.childSummary || '', 1600),
+    childVerdict: log.childVerdict,
+    gitStepDiffId: log.gitStepDiffId,
+    gitBeforeSnapshotId: log.gitBeforeSnapshotId,
+    gitAfterSnapshotId: log.gitAfterSnapshotId,
+  };
+}
+
 function compactSubworkflowSummary(summary: any) {
   if (!summary) return null;
   return {
@@ -203,6 +232,7 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
     activeConcurrencyGroups: terminalStatus ? [] : (Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : []),
     completedSteps: Array.isArray(status.completedSteps) ? status.completedSteps : [],
     failedSteps: Array.isArray(status.failedSteps) ? status.failedSteps : [],
+    stepLogs: Array.isArray(status.stepLogs) ? status.stepLogs.slice(-80).map(compactStepLog) : [],
     agents: Array.isArray(status.agents) ? status.agents.map(compactAgent) : [],
     iterationStates: status.iterationStates || {},
     stateHistory: Array.isArray(status.stateHistory) ? status.stateHistory.map(compactTransition) : [],

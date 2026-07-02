@@ -112,7 +112,6 @@ import type {
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
 import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
-import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPanel';
 import { cn } from '@/lib/core/utils';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
@@ -226,6 +225,34 @@ function workflowStepKeyMatchesName(stepKey: string | null | undefined, stepName
     || key.endsWith(`-${name}`)
     || key.endsWith(`-${baseName}`)
   );
+}
+
+function normalizeActiveWorkflowSteps(input: {
+  activeSteps?: unknown;
+  currentStep?: unknown;
+  currentPhase?: unknown;
+  currentState?: unknown;
+  completedSteps?: unknown;
+  failedSteps?: unknown;
+  terminal?: boolean;
+}): string[] {
+  if (input.terminal) return [];
+  const rawSteps = Array.isArray(input.activeSteps)
+    ? input.activeSteps.map((step) => String(step || '').trim()).filter(Boolean)
+    : [];
+  const currentStep = typeof input.currentStep === 'string' ? input.currentStep.trim() : '';
+  const currentState = String(input.currentPhase || input.currentState || '').trim();
+  const completed = new Set(Array.isArray(input.completedSteps) ? input.completedSteps.map((step) => String(step || '').trim()).filter(Boolean) : []);
+  const failed = new Set(Array.isArray(input.failedSteps) ? input.failedSteps.map((step) => String(step || '').trim()).filter(Boolean) : []);
+  const normalized = rawSteps.filter((step) => {
+    if (currentStep && step === currentStep) return true;
+    if (currentState && !step.startsWith(`${currentState}-`)) return false;
+    return !completed.has(step) && !failed.has(step);
+  });
+  if (currentStep && (!currentState || currentStep.startsWith(`${currentState}-`)) && !normalized.includes(currentStep)) {
+    normalized.unshift(currentStep);
+  }
+  return Array.from(new Set(normalized));
 }
 
 function countGitWorkingTreeFiles(summary?: GitBrowserSummaryResponse | null): number {
@@ -1486,8 +1513,6 @@ export default function WorkbenchPage({
     availableStates: string[];
     supervisorAdvice?: string;
   } | null>(null);
-  const [humanApprovalMinimized, setHumanApprovalMinimized] = useState(false);
-  const [humanApprovalMinimizedPulse, setHumanApprovalMinimizedPulse] = useState(false);
   const humanApprovalSignatureRef = useRef<string | null>(null);
   const [pendingHumanQuestion, setPendingHumanQuestion] = useState<HumanQuestion | null>(null);
   const [submittingHumanQuestion, setSubmittingHumanQuestion] = useState(false);
@@ -4651,9 +4676,19 @@ export default function WorkbenchPage({
       else if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       if (status.agents?.length) dispatch({ type: 'SET_AGENTS', payload: status.agents });
-      if (status.completedSteps) dispatch({ type: 'SET_COMPLETED_STEPS', payload: status.completedSteps });
-      dispatch({ type: 'SET_FAILED_STEPS', payload: status.failedSteps || [] });
-      setActiveSteps(statusIsTerminal ? [] : (Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []));
+      const nextCompletedSteps = Array.isArray(status.completedSteps) ? status.completedSteps : [];
+      const nextFailedSteps = Array.isArray(status.failedSteps) ? status.failedSteps : [];
+      if (status.completedSteps) dispatch({ type: 'SET_COMPLETED_STEPS', payload: nextCompletedSteps });
+      dispatch({ type: 'SET_FAILED_STEPS', payload: nextFailedSteps });
+      setActiveSteps(normalizeActiveWorkflowSteps({
+        activeSteps: (status as any).activeSteps,
+        currentStep: status.currentStep,
+        currentPhase: status.currentPhase,
+        currentState: smStatus.currentState,
+        completedSteps: nextCompletedSteps,
+        failedSteps: nextFailedSteps,
+        terminal: statusIsTerminal,
+      }));
       setActiveConcurrencyGroups(statusIsTerminal ? [] : (Array.isArray((status as any).activeConcurrencyGroups) ? (status as any).activeConcurrencyGroups : []));
       const pendingLiveFeedback = Array.isArray((status as any).pendingLiveFeedback)
         ? (status as any).pendingLiveFeedback
@@ -4727,8 +4762,10 @@ export default function WorkbenchPage({
       setQualityChecks((status as any).qualityChecks || []);
       setMemoryLayers((status as any).memoryLayers || null);
       const nextPendingHumanQuestion = (status as any).pendingHumanQuestion || null;
-      // 只有运行中的工作流才弹出人工审查
-      if (status.status === 'running') {
+      const shouldRestorePendingHumanQuestion = nextPendingHumanQuestion
+        && nextPendingHumanQuestion.status === 'unanswered'
+        && !statusIsTerminal;
+      if (shouldRestorePendingHumanQuestion) {
         setPendingHumanQuestionIfChanged(nextPendingHumanQuestion);
       }
 
@@ -4880,8 +4917,6 @@ export default function WorkbenchPage({
 
     humanQuestionSignatureRef.current = signature;
     setPendingHumanQuestion(next);
-    setHumanApprovalMinimized(false);
-    setHumanApprovalMinimizedPulse(false);
   }, [clearPendingHumanQuestion]);
 
   const applyWorkflowStatusSnapshot = useCallback((snapshot: any) => {
@@ -4915,11 +4950,15 @@ export default function WorkbenchPage({
     } else if (snapshot.status && !statusIsActive) {
       dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
     }
-    if (statusIsTerminal) {
-      setActiveSteps([]);
-    } else if (Array.isArray(snapshot.activeSteps)) {
-      setActiveSteps(snapshot.activeSteps);
-    }
+    setActiveSteps(normalizeActiveWorkflowSteps({
+      activeSteps: snapshot.activeSteps,
+      currentStep: snapshot.currentStep,
+      currentPhase: snapshot.currentPhase,
+      currentState: snapshot.currentState,
+      completedSteps: snapshot.completedSteps,
+      failedSteps: snapshot.failedSteps,
+      terminal: statusIsTerminal,
+    }));
     if (statusIsTerminal) {
       setActiveConcurrencyGroups([]);
     } else if (Array.isArray(snapshot.activeConcurrencyGroups)) {
@@ -5002,7 +5041,7 @@ export default function WorkbenchPage({
     if (snapshot.latestSupervisorReview) {
       setLatestSupervisorReview(snapshot.latestSupervisorReview);
     }
-    if (snapshot.pendingHumanQuestion !== undefined && snapshot.status === 'running') {
+    if (snapshot.pendingHumanQuestion !== undefined && !isTerminalWorkflowStatus(snapshot.status)) {
       setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
     }
   }, [dispatch, setPendingHumanQuestionIfChanged, specCodingDisabled]);
@@ -5010,8 +5049,6 @@ export default function WorkbenchPage({
   const clearHumanApprovalData = useCallback(() => {
     humanApprovalSignatureRef.current = null;
     setHumanApprovalData(null);
-    setHumanApprovalMinimized(false);
-    setHumanApprovalMinimizedPulse(false);
   }, []);
 
   const clearTransientRunUiState = useCallback(() => {
@@ -5050,17 +5087,6 @@ export default function WorkbenchPage({
     clearHumanApprovalData();
   }, [clearHumanApprovalData, clearPendingHumanQuestion, dispatch, workflowConfig?.context?.gitBaselineEnabled]);
 
-  const minimizeHumanApprovalDialog = useCallback(() => {
-    if (!humanApprovalData && !pendingHumanQuestion) return;
-    setHumanApprovalMinimized(true);
-    setHumanApprovalMinimizedPulse(true);
-  }, [humanApprovalData, pendingHumanQuestion]);
-
-  const restoreHumanApprovalDialog = useCallback(() => {
-    setHumanApprovalMinimized(false);
-    setHumanApprovalMinimizedPulse(false);
-  }, []);
-
   const setHumanApprovalDataIfChanged = useCallback((next: {
     currentState: string;
     nextState: string;
@@ -5090,15 +5116,13 @@ export default function WorkbenchPage({
 
     humanApprovalSignatureRef.current = signature;
     setHumanApprovalData(next);
-    setHumanApprovalMinimized(false);
-    setHumanApprovalMinimizedPulse(false);
   }, [clearHumanApprovalData]);
 
   useEffect(() => {
     if (focusTarget !== 'human-question') return;
-    setHumanApprovalMinimized(false);
-    setHumanApprovalMinimizedPulse(false);
-  }, [focusTarget, focusQuestionId]);
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'workflow' });
+    setExecutionViewTabOverride('supervisor');
+  }, [dispatch, focusTarget, focusQuestionId]);
 
   useEffect(() => {
     setWorkbenchConversationSessionId(null);
@@ -5112,14 +5136,6 @@ export default function WorkbenchPage({
     dispatch({ type: 'SET_ACTIVE_TAB', payload: 'workflow' });
     setExecutionViewTabOverride('supervisor');
   }, [dispatch, pendingHumanQuestion, workflowStatus]);
-
-  useEffect(() => {
-    if (!humanApprovalMinimizedPulse) return;
-    const timer = window.setTimeout(() => {
-      setHumanApprovalMinimizedPulse(false);
-    }, 6000);
-    return () => window.clearTimeout(timer);
-  }, [humanApprovalMinimizedPulse]);
 
   const restoreHumanApprovalFromDetail = useCallback((detail: any) => {
     if (detail?.mode !== 'state-machine' || detail?.currentState !== '__human_approval__') {
@@ -6947,11 +6963,19 @@ export default function WorkbenchPage({
     };
 
     const parentRunId = runId || selectedRun?.id || '';
-    for (const stepKey of liveStreamTarget.parallelActiveSteps.length ? liveStreamTarget.parallelActiveSteps : [liveStreamTarget.activeStep]) {
+    const rootActiveSteps = normalizeActiveWorkflowSteps({
+      activeSteps: liveStreamTarget.parallelActiveSteps.length ? liveStreamTarget.parallelActiveSteps : [liveStreamTarget.activeStep],
+      currentStep,
+      currentPhase,
+      completedSteps,
+      failedSteps,
+      terminal: isTerminalWorkflowStatus(workflowStatus),
+    });
+    for (const stepKey of rootActiveSteps) {
       pushSource({
         runId: parentRunId,
         stepKey,
-        scope: '父工作流',
+        scope: '当前工作流',
         status: workflowStatus,
       });
     }
@@ -6959,10 +6983,15 @@ export default function WorkbenchPage({
     const appendChildStatus = (child: any, status: any, depth: number) => {
       const childRunId = child?.runId || status?.runId;
       const scope = `${'子'.repeat(Math.max(1, depth))}工作流${child?.parentStepName ? ` · ${child.parentStepName}` : ''}`;
-      const childActiveSteps = Array.from(new Set([
-        ...(Array.isArray(status?.activeSteps) ? status.activeSteps : []),
-        status?.currentStep,
-      ].filter(Boolean)));
+      const childActiveSteps = normalizeActiveWorkflowSteps({
+        activeSteps: status?.activeSteps,
+        currentStep: status?.currentStep,
+        currentPhase: status?.currentPhase,
+        currentState: status?.currentState,
+        completedSteps: status?.completedSteps,
+        failedSteps: status?.failedSteps,
+        terminal: isTerminalWorkflowStatus(status?.status),
+      });
       for (const stepKey of childActiveSteps) {
         pushSource({
           runId: childRunId,
@@ -6994,6 +7023,10 @@ export default function WorkbenchPage({
     return sources;
   }, [
     activeSteps,
+    completedSteps,
+    currentPhase,
+    currentStep,
+    failedSteps,
     getSubworkflowCacheKey,
     liveStreamTarget.activeStep,
     liveStreamTarget.parallelActiveSteps,
@@ -7015,14 +7048,21 @@ export default function WorkbenchPage({
       runId: liveStreamTarget.runId,
       stepKey: liveStreamTarget.stepKey,
       label: liveStreamTarget.stepKey || '实时输出',
-      scope: '父工作流',
+      scope: '当前工作流',
       stateName: null,
       stepName: liveStreamTarget.stepKey || null,
     };
   }, [liveStreamSourceSelection, liveStreamSources, liveStreamTarget.runId, liveStreamTarget.stepKey]);
 
   useEffect(() => {
-    const parallelActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
+    const parallelActiveSteps = normalizeActiveWorkflowSteps({
+      activeSteps,
+      currentStep,
+      currentPhase,
+      completedSteps,
+      failedSteps,
+      terminal: isTerminalWorkflowStatus(workflowStatus),
+    });
     const selectedStepName = selectedStep?.name || '';
     const selectedStepChanged = lastLiveStreamSelectedStepNameRef.current !== selectedStepName;
     lastLiveStreamSelectedStepNameRef.current = selectedStepName;
@@ -7038,7 +7078,7 @@ export default function WorkbenchPage({
     if (!parallelActiveSteps.includes(liveStreamStepSelection)) {
       setLiveStreamStepSelection(parallelActiveSteps[0] || '');
     }
-  }, [activeSteps, liveStreamStepSelection, selectedStep?.name]);
+  }, [activeSteps, completedSteps, currentPhase, currentStep, failedSteps, liveStreamStepSelection, selectedStep?.name, workflowStatus]);
 
   useEffect(() => {
     if (!liveStreamSources.length) {
@@ -13143,55 +13183,6 @@ export default function WorkbenchPage({
           </div>
         </div>
       )}
-
-      <Dialog
-        open={Boolean(pendingHumanQuestion && !humanApprovalMinimized)}
-        onOpenChange={(open) => {
-          if (!open) minimizeHumanApprovalDialog();
-          else restoreHumanApprovalDialog();
-        }}
-      >
-        <DialogContent className="max-w-2xl w-[94vw] max-h-[88vh] overflow-hidden p-0">
-          <div className="flex max-h-[88vh] flex-col">
-            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
-              <div className="min-w-0">
-                <DialogTitle className="flex items-center gap-2 text-base">
-                  <span className="material-symbols-outlined text-amber-600">support_agent</span>
-                  {pendingHumanQuestionKindLabel ? `等待${pendingHumanQuestionKindLabel}` : '等待人工回复'}
-                </DialogTitle>
-                <DialogDescription className="mt-1">
-                  当前步骤已阻塞，提交回复后工作流会继续执行。
-                </DialogDescription>
-              </div>
-              <Button variant="outline" size="sm" onClick={minimizeHumanApprovalDialog}>
-                最小化
-              </Button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
-              {pendingHumanQuestion ? (
-                <HumanQuestionCard
-                  question={pendingHumanQuestion}
-                  submitting={submittingHumanQuestion}
-                  onSubmit={handleSubmitHumanQuestion}
-                  collapsible={false}
-                  autoFocus
-                />
-              ) : null}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {pendingHumanQuestion && humanApprovalMinimized ? (
-        <button
-          type="button"
-          onClick={restoreHumanApprovalDialog}
-          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full border border-amber-300 bg-amber-500 px-4 py-2 text-sm font-medium text-black shadow-lg transition hover:bg-amber-400 ${humanApprovalMinimizedPulse ? 'animate-pulse' : ''}`}
-        >
-          <span className="material-symbols-outlined text-base">support_agent</span>
-          <span>{pendingHumanQuestionKindLabel ? `待${pendingHumanQuestionKindLabel}` : '待人工回复'}</span>
-        </button>
-      ) : null}
 
       <Dialog open={!!selectedSubworkflowRun} onOpenChange={(open) => { if (!open) setSelectedSubworkflowRun(null); }}>
         <DialogContent className="max-w-3xl w-[94vw] max-h-[86vh] overflow-hidden p-0">
