@@ -1,6 +1,7 @@
 import { getChannelIntegration, listChannelBindings, type ChannelIntegration, type ChannelSessionBinding } from '@/lib/channel/store';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { sendHumanReviewEmailNotification } from '@/lib/notify/human-review-email';
+import { loadRunState } from '@/lib/run/state-persistence';
 
 export interface OutboundChannelMessage {
   text: string;
@@ -58,7 +59,7 @@ export async function sendOutboundChannelMessage(integration: ChannelIntegration
   if (
     integration.provider === 'wechat-bridge'
     && input.binding?.frontendSessionId
-    && input.metadata?.eventType === 'human-question-required'
+    && (input.metadata?.eventType === 'human-question-required' || input.metadata?.eventType === 'human-approval-required')
   ) {
     const { sendWeChatNotificationToFrontendSession } = await import('@/lib/channel/wechat/session-notifier');
     const direct = await sendWeChatNotificationToFrontendSession({
@@ -99,6 +100,28 @@ function formatWorkflowEvent(type: string, data: any): { title: string; text: st
       text: `${data.question.message || ''}\n\nquestionId: ${data.question.id || ''}`.trim(),
     };
   }
+  if (type === 'human-approval-required') {
+    const suggested = data?.suggestedNextState || data?.nextState || '';
+    const current = data?.currentState || '__human_approval__';
+    const availableStates = Array.isArray(data?.availableStates) && data.availableStates.length
+      ? `可选状态：${data.availableStates.join(', ')}`
+      : '';
+    const advice = data?.supervisorAdvice
+      ? `Supervisor 建议：${typeof data.supervisorAdvice === 'string' ? data.supervisorAdvice : JSON.stringify(data.supervisorAdvice)}`
+      : '';
+    const questionId = data?.humanQuestion?.id ? `questionId: ${data.humanQuestion.id}` : '';
+    return {
+      title: '等待人工审查',
+      text: [
+        `当前状态：${current}`,
+        suggested ? `建议进入：${suggested}` : '',
+        availableStates,
+        advice,
+        questionId,
+        '微信可回复：/approve 批准，或 /iterate <反馈> 要求继续迭代。',
+      ].filter(Boolean).join('\n'),
+    };
+  }
   if (type === 'state-change') {
     return {
       title: 'Workflow 状态变化',
@@ -128,11 +151,53 @@ function formatWorkflowEvent(type: string, data: any): { title: string; text: st
 
 let bridgeRegistered = false;
 
+const HUMAN_WAITING_EVENT_TYPES = new Set(['human-question-required', 'human-approval-required']);
+
+async function resolveWorkflowEventOwnerId(payload: any, runId: string): Promise<string> {
+  const direct = payload?.runOwnerId
+    || payload?.createdBy
+    || payload?.question?.runOwnerId
+    || payload?.question?.createdBy
+    || payload?.humanQuestion?.runOwnerId
+    || payload?.humanQuestion?.createdBy;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  if (!runId) return '';
+  const state = await loadRunState(runId).catch(() => null);
+  const persisted = state?.runOwnerId || state?.createdBy;
+  return typeof persisted === 'string' ? persisted.trim() : '';
+}
+
+function getWorkflowRunTargets(bindings: ChannelSessionBinding[], runId: string, configFile: string): ChannelSessionBinding[] {
+  return bindings.filter((binding) => (
+    binding.bindingType === 'workflow-run'
+    && ((runId && binding.runId === runId) || (configFile && binding.configFile === configFile))
+  ));
+}
+
+function getHomeSessionFallbackTargets(bindings: ChannelSessionBinding[], ownerId: string): ChannelSessionBinding[] {
+  if (!ownerId) return [];
+  const candidates = bindings
+    .filter((binding) => (
+      binding.bindingType === 'agent-chat'
+      && binding.createdBy === ownerId
+      && Boolean(binding.frontendSessionId)
+      && binding.metadata?.source === 'home-session-bind'
+    ))
+    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+
+  const seenIntegrations = new Set<string>();
+  return candidates.filter((binding) => {
+    if (seenIntegrations.has(binding.integrationId)) return false;
+    seenIntegrations.add(binding.integrationId);
+    return true;
+  });
+}
+
 export function ensureChannelEventBridgeRegistered(): void {
   if (bridgeRegistered) return;
   bridgeRegistered = true;
 
-  const eventTypes = ['human-question-required', 'state-change', 'step-complete', 'transition', 'feedback-injected'];
+  const eventTypes = ['human-question-required', 'human-approval-required', 'state-change', 'step-complete', 'transition', 'feedback-injected'];
   for (const type of eventTypes) {
     workflowRegistry.on(type, async (payload: any) => {
       const formatted = formatWorkflowEvent(type, payload);
@@ -143,18 +208,27 @@ export function ensureChannelEventBridgeRegistered(): void {
       const bindings = await listChannelBindings().catch(() => []);
       const configFile = payload?.__configFile || payload?.currentConfigFile || payload?.configFile || '';
       const runId = payload?.runId || payload?.question?.runId || '';
-      const targets = bindings.filter((binding) => (
-        binding.bindingType === 'workflow-run'
-        && ((runId && binding.runId === runId) || (configFile && binding.configFile === configFile))
-      ));
+      const workflowTargets = getWorkflowRunTargets(bindings, runId, configFile);
+      const ownerId = HUMAN_WAITING_EVENT_TYPES.has(type) && workflowTargets.length === 0
+        ? await resolveWorkflowEventOwnerId(payload, runId)
+        : '';
+      const targets = workflowTargets.length > 0
+        ? workflowTargets
+        : getHomeSessionFallbackTargets(bindings, ownerId);
       for (const binding of targets) {
         const integration = await getChannelIntegration(binding.integrationId).catch(() => null);
         if (!integration || !integration.enabled) continue;
+        if (binding.bindingType === 'agent-chat' && integration.provider !== 'wechat-bridge') continue;
         void sendOutboundChannelMessage(integration, {
           title: formatted.title,
           text: formatted.text,
           binding,
-          metadata: { eventType: type, configFile, runId },
+          metadata: {
+            eventType: type,
+            configFile,
+            runId,
+            ...(binding.bindingType === 'agent-chat' ? { fallbackTarget: 'home-session-bind', ownerId } : {}),
+          },
         });
       }
     });
