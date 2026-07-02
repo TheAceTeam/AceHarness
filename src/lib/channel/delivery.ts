@@ -152,6 +152,8 @@ function formatWorkflowEvent(type: string, data: any): { title: string; text: st
 let bridgeRegistered = false;
 
 const HUMAN_WAITING_EVENT_TYPES = new Set(['human-question-required', 'human-approval-required']);
+const deliveredWorkflowEventKeys = new Map<string, number>();
+const WORKFLOW_EVENT_DEDUPE_TTL_MS = 2 * 60 * 1000;
 
 async function resolveWorkflowEventOwnerId(payload: any, runId: string): Promise<string> {
   const direct = payload?.runOwnerId
@@ -193,6 +195,73 @@ function getHomeSessionFallbackTargets(bindings: ChannelSessionBinding[], ownerI
   });
 }
 
+function getWorkflowEventIds(type: string, payload: any): { configFile: string; runId: string; questionId: string } {
+  return {
+    configFile: payload?.__configFile
+      || payload?.currentConfigFile
+      || payload?.configFile
+      || payload?.question?.configFile
+      || payload?.question?.sourceConfigFile
+      || payload?.humanQuestion?.configFile
+      || payload?.humanQuestion?.sourceConfigFile
+      || '',
+    runId: payload?.runId
+      || payload?.question?.runId
+      || payload?.question?.sourceRunId
+      || payload?.humanQuestion?.runId
+      || payload?.humanQuestion?.sourceRunId
+      || '',
+    questionId: payload?.question?.id || payload?.humanQuestion?.id || payload?.pendingHumanQuestion?.id || '',
+  };
+}
+
+function shouldDeliverWorkflowEvent(type: string, ids: { configFile: string; runId: string; questionId: string }): boolean {
+  const now = Date.now();
+  for (const [key, timestamp] of deliveredWorkflowEventKeys) {
+    if (now - timestamp > WORKFLOW_EVENT_DEDUPE_TTL_MS) deliveredWorkflowEventKeys.delete(key);
+  }
+  if (!HUMAN_WAITING_EVENT_TYPES.has(type)) return true;
+  const key = `${type}:${ids.runId || ids.configFile}:${ids.questionId || 'no-question'}`;
+  const last = deliveredWorkflowEventKeys.get(key);
+  if (last && now - last <= WORKFLOW_EVENT_DEDUPE_TTL_MS) return false;
+  deliveredWorkflowEventKeys.set(key, now);
+  return true;
+}
+
+export async function deliverWorkflowEventToChannels(type: string, payload: any): Promise<void> {
+  const formatted = formatWorkflowEvent(type, payload);
+  if (!formatted) return;
+  if (type === 'human-question-required' && payload?.question) {
+    void sendHumanReviewEmailNotification(payload.question).catch(() => {});
+  }
+  const ids = getWorkflowEventIds(type, payload);
+  if (!shouldDeliverWorkflowEvent(type, ids)) return;
+  const bindings = await listChannelBindings().catch(() => []);
+  const workflowTargets = getWorkflowRunTargets(bindings, ids.runId, ids.configFile);
+  const ownerId = HUMAN_WAITING_EVENT_TYPES.has(type) && workflowTargets.length === 0
+    ? await resolveWorkflowEventOwnerId(payload, ids.runId)
+    : '';
+  const targets = workflowTargets.length > 0
+    ? workflowTargets
+    : getHomeSessionFallbackTargets(bindings, ownerId);
+  for (const binding of targets) {
+    const integration = await getChannelIntegration(binding.integrationId).catch(() => null);
+    if (!integration || !integration.enabled) continue;
+    if (binding.bindingType === 'agent-chat' && integration.provider !== 'wechat-bridge') continue;
+    void sendOutboundChannelMessage(integration, {
+      title: formatted.title,
+      text: formatted.text,
+      binding,
+      metadata: {
+        eventType: type,
+        configFile: ids.configFile,
+        runId: ids.runId,
+        ...(binding.bindingType === 'agent-chat' ? { fallbackTarget: 'home-session-bind', ownerId } : {}),
+      },
+    });
+  }
+}
+
 export function ensureChannelEventBridgeRegistered(): void {
   if (bridgeRegistered) return;
   bridgeRegistered = true;
@@ -200,37 +269,7 @@ export function ensureChannelEventBridgeRegistered(): void {
   const eventTypes = ['human-question-required', 'human-approval-required', 'state-change', 'step-complete', 'transition', 'feedback-injected'];
   for (const type of eventTypes) {
     workflowRegistry.on(type, async (payload: any) => {
-      const formatted = formatWorkflowEvent(type, payload);
-      if (!formatted) return;
-      if (type === 'human-question-required' && payload?.question) {
-        void sendHumanReviewEmailNotification(payload.question).catch(() => {});
-      }
-      const bindings = await listChannelBindings().catch(() => []);
-      const configFile = payload?.__configFile || payload?.currentConfigFile || payload?.configFile || '';
-      const runId = payload?.runId || payload?.question?.runId || '';
-      const workflowTargets = getWorkflowRunTargets(bindings, runId, configFile);
-      const ownerId = HUMAN_WAITING_EVENT_TYPES.has(type) && workflowTargets.length === 0
-        ? await resolveWorkflowEventOwnerId(payload, runId)
-        : '';
-      const targets = workflowTargets.length > 0
-        ? workflowTargets
-        : getHomeSessionFallbackTargets(bindings, ownerId);
-      for (const binding of targets) {
-        const integration = await getChannelIntegration(binding.integrationId).catch(() => null);
-        if (!integration || !integration.enabled) continue;
-        if (binding.bindingType === 'agent-chat' && integration.provider !== 'wechat-bridge') continue;
-        void sendOutboundChannelMessage(integration, {
-          title: formatted.title,
-          text: formatted.text,
-          binding,
-          metadata: {
-            eventType: type,
-            configFile,
-            runId,
-            ...(binding.bindingType === 'agent-chat' ? { fallbackTarget: 'home-session-bind', ownerId } : {}),
-          },
-        });
-      }
+      void deliverWorkflowEventToChannels(type, payload);
     });
   }
 }

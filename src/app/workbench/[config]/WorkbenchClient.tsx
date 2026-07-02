@@ -4763,8 +4763,7 @@ export default function WorkbenchPage({
       setMemoryLayers((status as any).memoryLayers || null);
       const nextPendingHumanQuestion = (status as any).pendingHumanQuestion || null;
       const shouldRestorePendingHumanQuestion = nextPendingHumanQuestion
-        && nextPendingHumanQuestion.status === 'unanswered'
-        && !statusIsTerminal;
+        && nextPendingHumanQuestion.status === 'unanswered';
       if (shouldRestorePendingHumanQuestion) {
         setPendingHumanQuestionIfChanged(nextPendingHumanQuestion);
       }
@@ -4856,7 +4855,7 @@ export default function WorkbenchPage({
     } catch { /* server might not be ready */ }
   };
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
       const { runs } = await runsApi.listByConfig(configFile);
@@ -4866,7 +4865,7 @@ export default function WorkbenchPage({
     } finally {
       setHistoryLoading(false);
     }
-  };
+  }, [configFile]);
 
   const loadContexts = async () => {
     try {
@@ -5041,7 +5040,7 @@ export default function WorkbenchPage({
     if (snapshot.latestSupervisorReview) {
       setLatestSupervisorReview(snapshot.latestSupervisorReview);
     }
-    if (snapshot.pendingHumanQuestion !== undefined && !isTerminalWorkflowStatus(snapshot.status)) {
+    if (snapshot.pendingHumanQuestion !== undefined) {
       setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
     }
   }, [dispatch, setPendingHumanQuestionIfChanged, specCodingDisabled]);
@@ -6098,15 +6097,43 @@ export default function WorkbenchPage({
 
   const stopWorkflow = useCallback(async () => {
     try {
-      await workflowApi.stop(configFile);
+      const stopResult = await workflowApi.stop(configFile) as { runIds?: string[] };
+      const stoppedAt = new Date().toISOString();
+      const stoppedRunIds = new Set(
+        (Array.isArray(stopResult.runIds) ? stopResult.runIds : [])
+          .concat(runId || selectedRun?.id || initialRunId || [])
+          .filter(Boolean) as string[]
+      );
       // Directly update local state — don't rely solely on SSE
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'stopped' });
       dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+      setRunStatusReason('用户手动停止');
+      setActiveSteps([]);
+      setActiveConcurrencyGroups([]);
+      clearHumanApprovalData();
+      clearPendingHumanQuestion();
+      setPendingCheckpointPhase(null);
+      setHistoryRuns((prev) => prev.map((item) => (
+        stoppedRunIds.has(item.id)
+          ? { ...item, status: 'stopped', endTime: item.endTime || stoppedAt }
+          : item
+      )));
+      setSelectedRun((prev: any) => (
+        prev && stoppedRunIds.has(prev.id)
+          ? { ...prev, status: 'stopped', endTime: prev.endTime || stoppedAt }
+          : prev
+      ));
+      setRunDetail((prev: any) => (
+        prev && stoppedRunIds.has(prev.id || prev.runId)
+          ? { ...prev, status: 'stopped', endTime: prev.endTime || stoppedAt, activeSteps: [], activeConcurrencyGroups: [] }
+          : prev
+      ));
       addLog('system', 'warning', '工作流已停止');
+      await loadHistory();
     } catch (error: any) {
       addLog('system', 'error', `停止失败: ${error.message}`);
     }
-  }, [addLog, configFile, dispatch]);
+  }, [addLog, clearHumanApprovalData, clearPendingHumanQuestion, configFile, dispatch, initialRunId, loadHistory, runId, selectedRun?.id]);
 
   const requestStopWorkflow = useCallback(async () => {
     const ok = await confirm({

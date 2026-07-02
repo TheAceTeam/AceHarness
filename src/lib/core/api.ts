@@ -1796,8 +1796,9 @@ export const runsApi = {
     return response.json();
   },
 
-  async listByConfig(configFile: string): Promise<{ runs: RunRecord[] }> {
-    const response = await authFetch(`${API_BASE}/runs/by-config/${encodeURIComponent(configFile)}`);
+  async listByConfig(configFile: string, options: { repair?: boolean } = {}): Promise<{ runs: RunRecord[] }> {
+    const suffix = options.repair === false ? '' : '?repair=1';
+    const response = await authFetch(`${API_BASE}/runs/by-config/${encodeURIComponent(configFile)}${suffix}`);
     if (!response.ok) throw new Error('获取运行记录失败');
     return response.json();
   },

@@ -44,11 +44,13 @@ export async function POST(request: NextRequest) {
       state.endTime = state.endTime || new Date().toISOString();
       state.processes = [];
       await saveRunState(state);
+      touchedRunIds.add(run.id);
     }
 
     return NextResponse.json({
       success: true,
       message: killed > 0 ? `工作流已停止，清理了 ${killed} 个残留进程` : '工作流已停止',
+      runIds: Array.from(touchedRunIds),
     });
   } catch (error: any) {
     return NextResponse.json(

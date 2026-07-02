@@ -8,25 +8,26 @@ async function resolveWeChatDeliveryTarget(frontendSessionId: string): Promise<{
 } | null> {
   const session = await loadChatSession(frontendSessionId).catch(() => null);
   const wechatBinding = session?.sessionWorkbenchState?.wechatBinding;
-  if (!wechatBinding?.integrationId || !wechatBinding?.accountId) return null;
-
-  const integration = await getChannelIntegration(wechatBinding.integrationId).catch(() => null);
-  if (!integration || !integration.enabled || integration.provider !== 'wechat-bridge') return null;
-
   const bindings = await listChannelBindings().catch(() => []);
   const binding = bindings.find((item) =>
-    item.id === wechatBinding.bindingId
-    || (
-      item.frontendSessionId === frontendSessionId
-      && item.integrationId === wechatBinding.integrationId
-      && item.externalConversationId === wechatBinding.externalConversationId
-    )
-  );
-  const userId = binding?.externalUserId || binding?.externalConversationId;
+    item.frontendSessionId === frontendSessionId
+    && (!wechatBinding?.integrationId || item.integrationId === wechatBinding.integrationId)
+    && (!wechatBinding?.externalConversationId || item.externalConversationId === wechatBinding.externalConversationId)
+  ) || bindings.find((item) => item.id === wechatBinding?.bindingId);
+  const integrationId = wechatBinding?.integrationId || binding?.integrationId;
+  if (!integrationId) return null;
+
+  const integration = await getChannelIntegration(integrationId).catch(() => null);
+  if (!integration || !integration.enabled || integration.provider !== 'wechat-bridge') return null;
+
+  const accountId = wechatBinding?.accountId
+    || (typeof integration.providerConfig?.wechatOfficialAccountId === 'string' ? integration.providerConfig.wechatOfficialAccountId : '');
+  const userId = binding?.externalUserId || binding?.externalConversationId || wechatBinding?.externalConversationId;
+  if (!accountId) return null;
   if (!userId) return null;
 
   return {
-    accountId: wechatBinding.accountId,
+    accountId,
     userId,
   };
 }

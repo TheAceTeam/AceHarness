@@ -127,4 +127,109 @@ describe('channel delivery bridge', () => {
     const firstCall = notifyMock.mock.calls[0]?.[0] as any;
     expect(firstCall.text).toContain('/approve');
   });
+
+  it('resolves restored human approval events from humanQuestion metadata', async () => {
+    const notifyMock = vi.fn(async (_input: any) => ({ ok: true }));
+    vi.doMock('@/lib/channel/wechat/session-notifier', () => ({
+      sendWeChatNotificationToFrontendSession: notifyMock,
+    }));
+
+    const channelStore = await import('@/lib/channel/store');
+    const delivery = await import('@/lib/channel/delivery');
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+
+    const integration = await channelStore.createChannelIntegration({
+      name: 'WeChat bridge',
+      provider: 'wechat-bridge',
+      createdBy: 'user-1',
+      capabilities: ['agent-chat', 'workflow-runtime'],
+      providerConfig: {
+        wechatOfficialAccountId: 'wechat-bot',
+      },
+    });
+
+    await channelStore.saveChannelBinding({
+      id: 'binding-home-wechat-restored',
+      integrationId: integration.id,
+      bindingType: 'agent-chat',
+      createdBy: 'user-1',
+      createdAt: 100,
+      updatedAt: 200,
+      externalConversationId: 'wechat-conv-restored',
+      frontendSessionId: 'home-session-restored',
+      metadata: { source: 'home-session-bind' },
+    });
+
+    delivery.ensureChannelEventBridgeRegistered();
+    workflowRegistry.emit('human-approval-required', {
+      currentState: '__human_approval__',
+      suggestedNextState: '实施',
+      availableStates: ['设计', '实施'],
+      humanQuestion: {
+        id: 'hq-restored',
+        runId: 'run-restored',
+        configFile: 'restored.yaml',
+        createdBy: 'user-1',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+    });
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
+      frontendSessionId: 'home-session-restored',
+      text: expect.stringContaining('等待人工审查'),
+    }));
+  });
+
+  it('dedupes direct and registry delivery for the same human approval question', async () => {
+    const notifyMock = vi.fn(async (_input: any) => ({ ok: true }));
+    vi.doMock('@/lib/channel/wechat/session-notifier', () => ({
+      sendWeChatNotificationToFrontendSession: notifyMock,
+    }));
+
+    const channelStore = await import('@/lib/channel/store');
+    const delivery = await import('@/lib/channel/delivery');
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+
+    const integration = await channelStore.createChannelIntegration({
+      name: 'WeChat bridge',
+      provider: 'wechat-bridge',
+      createdBy: 'user-1',
+      capabilities: ['agent-chat', 'workflow-runtime'],
+      providerConfig: {
+        wechatOfficialAccountId: 'wechat-bot',
+      },
+    });
+
+    await channelStore.saveChannelBinding({
+      id: 'binding-home-wechat-dedupe',
+      integrationId: integration.id,
+      bindingType: 'agent-chat',
+      createdBy: 'user-1',
+      createdAt: 100,
+      updatedAt: 200,
+      externalConversationId: 'wechat-conv-dedupe',
+      frontendSessionId: 'home-session-dedupe',
+      metadata: { source: 'home-session-bind' },
+    });
+
+    const payload = {
+      runId: 'run-dedupe',
+      configFile: 'dedupe.yaml',
+      runOwnerId: 'user-1',
+      currentState: '__human_approval__',
+      suggestedNextState: '实施',
+      availableStates: ['设计', '实施'],
+      humanQuestion: { id: 'hq-dedupe', runId: 'run-dedupe', configFile: 'dedupe.yaml' },
+    };
+
+    delivery.ensureChannelEventBridgeRegistered();
+    workflowRegistry.emit('human-approval-required', payload);
+    await delivery.deliverWorkflowEventToChannels('human-approval-required', payload);
+
+    await vi.waitFor(() => {
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -203,11 +203,15 @@ export default function WorkflowSupervisorAgoraPanel({
     });
   }, [loaded, roster, rosterKey, sessionMap, sessionMapKey, setSessionWorkbenchState, topic, workingDirectory]);
 
-  const terminalWorkflowStatus = ['stopped', 'completed', 'failed', 'crashed'].includes(String(workflowStatus || '').toLowerCase());
+  const hasPendingHumanQuestion = Boolean(
+    pendingHumanQuestion
+    && pendingHumanQuestion.status === 'unanswered'
+    && onSubmitHumanQuestion,
+  );
   const activeSpecVote = specRevisionVote?.status === 'running' ? specRevisionVote : null;
-  const chatBanner = (!terminalWorkflowStatus && pendingHumanQuestion && onSubmitHumanQuestion) || activeSpecVote ? (
+  const chatBanner = hasPendingHumanQuestion || activeSpecVote ? (
     <div className="space-y-2">
-      {!terminalWorkflowStatus && pendingHumanQuestion && onSubmitHumanQuestion ? (
+      {hasPendingHumanQuestion && pendingHumanQuestion && onSubmitHumanQuestion ? (
         <>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {(() => {

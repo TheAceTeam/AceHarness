@@ -4379,7 +4379,14 @@ try {
         });
 
         // Emit human approval required event and wait
-        this.emit('human-approval-required', {
+        const humanApprovalPayload = {
+          runId: this.currentRunId,
+          rootRunId: this.rootRunId || this.currentRunId,
+          configFile: this.currentConfigFile,
+          currentConfigFile: this.currentConfigFile,
+          runOwnerId: this._createdBy,
+          createdBy: this._createdBy,
+          workflowFrontendSessionId: this._frontendSessionId || null,
           currentState: '__human_approval__',
           nextState,
           suggestedNextState: nextState,
@@ -4387,7 +4394,11 @@ try {
           availableStates: config.workflow.states.map(s => s.name),
           supervisorAdvice: checkpointAdvice || undefined,
           humanQuestion,
-        });
+        };
+        this.emit('human-approval-required', humanApprovalPayload);
+        void import('@/lib/channel/delivery')
+          .then((mod) => mod.deliverWorkflowEventToChannels('human-approval-required', humanApprovalPayload))
+          .catch(() => {});
 
         // Wait for human decision via forceTransition
         await this.waitForHumanApproval();
@@ -7819,7 +7830,14 @@ try {
         message: '等待人工审查决策',
       });
 
-      this.emit('human-approval-required', {
+      const humanApprovalPayload = {
+        runId: this.currentRunId,
+        rootRunId: this.rootRunId || this.currentRunId,
+        configFile: this.currentConfigFile,
+        currentConfigFile: this.currentConfigFile,
+        runOwnerId: this._createdBy,
+        createdBy: this._createdBy,
+        workflowFrontendSessionId: this._frontendSessionId || null,
         currentState: '__human_approval__',
         nextState: suggestedNextState,
         suggestedNextState,
@@ -7827,7 +7845,11 @@ try {
         availableStates,
         supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
         humanQuestion: pendingHumanQuestion,
-      });
+      };
+      this.emit('human-approval-required', humanApprovalPayload);
+      void import('@/lib/channel/delivery')
+        .then((mod) => mod.deliverWorkflowEventToChannels('human-approval-required', humanApprovalPayload))
+        .catch(() => {});
 
       if (pendingHumanQuestion) {
         this.emit('human-question-required', { question: pendingHumanQuestion, humanQuestions: this.humanQuestions });
