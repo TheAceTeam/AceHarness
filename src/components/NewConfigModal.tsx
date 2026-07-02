@@ -5315,7 +5315,7 @@ export default function NewConfigModal({
       specContext,
       buildCreationRecommendationsPrompt(effectiveCreationRecommendations),
       '',
-      'Workflow 装配规则：状态按主要执行顺序组织；如果审查、返工、失败恢复或提前收口需要不同目标，请在 transitions 中明确 pass / conditional_pass / fail 的目标状态。并发只允许出现在同一个状态的 steps 内，用相同 parallelGroup 表达。',
+      'Workflow 装配规则：状态按主要执行顺序组织；必须在 transitions 中明确 pass / conditional_pass / fail 的目标状态。三种 verdict 的下一步完全由当前状态 transitions 决定，不要根据名称假设 conditional_pass 一定前进或一定回退；如果希望它自迭代就配置到当前状态，如果希望它放行就配置到下一状态。并发只允许出现在同一个状态的 steps 内，用相同 parallelGroup 表达。',
       `Supervisor "${effectiveCreationRecommendations?.recommendedSupervisorAgent || recommendedSupervisorAgent}" 只用于 workflow.supervisor 的调度、审阅和检查点建议，不作为任何 state.steps 或 phase.steps 的执行 agent；步骤 agent 必须选择普通执行角色。`,
       '每个非终态状态都应该有 1-4 个步骤；如果需要红蓝审查或多角色协作，把这些并行或协作步骤放在同一个状态中。',
       hasConfirmedSpecCoding
@@ -5328,7 +5328,7 @@ export default function NewConfigModal({
         kind: WORKFLOW_STATE_OUTLINE_KIND,
         name: 'state_outline',
         title: 'Workflow 状态轮廓',
-        guidance: '生成 3-5 个按主要执行顺序组织的状态。第一个状态是初始状态，最后一个状态标记 isFinal=true。状态名短、稳定、适合状态图展示；如果流程需要返工、审查分支或失败恢复，可在非终态状态上补 transitions，使用 condition.verdict=pass/conditional_pass/fail 指向目标状态。',
+        guidance: '生成 3-5 个按主要执行顺序组织的状态。第一个状态是初始状态，最后一个状态标记 isFinal=true。状态名短、稳定、适合状态图展示；必须在非终态状态上补 transitions，使用 condition.verdict=pass/conditional_pass/fail 指向目标状态。conditional_pass 的目标不要写死，按该状态希望表达的真实流程配置。',
       };
       const outlineOutput = await runWorkflowCreationItemStream({
         step: outlineStep,
@@ -5352,7 +5352,7 @@ export default function NewConfigModal({
           guidance: [
             `只为状态 "${outlineState.name}" 生成 steps。data.stateName 必须完全等于 "${outlineState.name}"。`,
             '每个步骤包含 name、agent、task；如果需要并发，只能给同一状态内的多个步骤设置相同 parallelGroup。',
-            '不要描述跨状态并发，不要创建下一状态的步骤；但可以在 data.transitions 中补充当前状态的 pass/conditional_pass/fail 流转目标。',
+            '不要描述跨状态并发，不要创建下一状态的步骤；但可以在 data.transitions 中补充当前状态的 pass/conditional_pass/fail 流转目标。三种 verdict 的含义以当前状态 transitions 的目标为准。',
             hasConfirmedSpecCoding
               ? '必须给每个步骤补上 specTaskBinding.taskIds、requirementIds、artifactKeys，只能引用当前 SpecCoding tasks 中真实存在的叶子任务。'
               : '不要输出 specTaskBinding、taskIds、requirementIds 或 artifactKeys；步骤 task 必须直接围绕用户需求本身，不要创建“生成/修订 Spec”的步骤。',

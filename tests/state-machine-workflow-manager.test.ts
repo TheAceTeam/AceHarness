@@ -1316,10 +1316,43 @@ describe('state machine live feedback', () => {
 
     expect(context).toContain('全局工作流路线与当前职责边界');
     expect(context).toContain('不能把当前步骤的核心交付留给后续步骤');
+    expect(context).toContain('当前状态 verdict 转移规则');
+    expect(context).toContain('下一步都以本状态 transitions 的真实配置为准');
+    expect(context).toContain('conditional_pass 可能自迭代，也可能前进');
     expect(context).toContain('状态: 设计');
     expect(context).toContain('状态: 实施');
     expect(context).toContain('步骤: impl-step [待执行]');
-    expect(context).toContain('可能流向: 完成 / 设计');
+    expect(context).toContain('verdict 流向: pass -> 完成 / fail -> 设计');
+    expect(context).toContain('当前状态 verdict 实际流向');
+    expect(context).toContain('- pass: 进入 "完成"');
+    expect(context).toContain('- fail: 进入 "设计"');
+  });
+
+  test('injects current state verdict transitions even when roadmap memo is reused', async () => {
+    const engine = new MockEngine({ success: true, output: 'ok' });
+    const manager = await createManagerForTest(engine);
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const config = makeConfig();
+
+    await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[1].steps[0],
+      config.workflow.states[1],
+      config,
+      'Build a feature',
+    );
+    const context = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[1].steps[0],
+      config.workflow.states[1],
+      config,
+      'Build a feature',
+    );
+
+    expect(context).toContain('当前状态 verdict 转移规则');
+    expect(context).toContain('- pass: 进入 "完成"');
+    expect(context).toContain('- fail: 进入 "设计"');
+    expect(context).toContain('下一步都以本状态 transitions 的真实配置为准');
   });
 });
 
@@ -2369,6 +2402,66 @@ describe('state machine execution flow', () => {
       config
     );
     expect(nextState).toBe('设计'); // self-transition
+  });
+
+  test('conditional_pass cannot use unconfigured next_state to move forward', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '```json\n{"verdict": "conditional_pass", "next_state": "实施"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+
+    const config = makeConfig();
+    const state = config.workflow.states[0];
+    const result = await (manager as any).executeState(state, config, 'Build a feature');
+
+    expect(result.verdict).toBe('conditional_pass');
+
+    const nextState = await (manager as any).evaluateTransitions(
+      state.transitions,
+      result,
+      config
+    );
+    expect(nextState).toBe('设计');
+  });
+
+  test('conditional_pass may move forward when configured for that verdict', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '```json\n{"verdict": "conditional_pass", "next_state": "实施"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', task: 'Design the feature', role: 'judge' },
+            ],
+            transitions: [
+              { condition: { verdict: 'pass' }, to: '实施', priority: 1 },
+              { condition: { verdict: 'conditional_pass' }, to: '实施', priority: 2 },
+              { condition: { verdict: 'fail' }, to: '设计', priority: 3 },
+            ],
+          },
+          ...makeConfig().workflow.states.slice(1),
+        ],
+      },
+    });
+    const state = config.workflow.states[0];
+    const result = await (manager as any).executeState(state, config, 'Build a feature');
+
+    expect(result.verdict).toBe('conditional_pass');
+
+    const nextState = await (manager as any).evaluateTransitions(
+      state.transitions,
+      result,
+      config
+    );
+    expect(nextState).toBe('实施');
   });
 
   test('maxTransitions limit throws error', async () => {

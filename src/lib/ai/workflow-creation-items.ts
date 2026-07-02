@@ -402,8 +402,8 @@ type WorkflowTransitionVerdict = typeof REQUIRED_WORKFLOW_VERDICTS[number];
 
 const WORKFLOW_VERDICT_LABELS: Record<WorkflowTransitionVerdict, string> = {
   pass: '通过',
-  conditional_pass: '有条件通过',
-  fail: '失败重试',
+  conditional_pass: '条件性通过',
+  fail: '失败回退',
 };
 
 const WORKFLOW_VERDICT_PRIORITIES: Record<WorkflowTransitionVerdict, number> = {
@@ -1225,7 +1225,7 @@ function normalizeWorkflowTransitions(input: {
   const nextState = input.outline[input.stateIndex + 1]?.name || finalState || input.stateName;
   const defaultTargets: Record<WorkflowTransitionVerdict, string> = {
     pass: nextState,
-    conditional_pass: nextState,
+    conditional_pass: input.stateName,
     fail: input.stateName,
   };
   const grouped: Record<WorkflowTransitionVerdict, any[]> = {

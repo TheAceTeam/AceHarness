@@ -357,6 +357,9 @@ export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationProm
       ? '- 如果需要引用 spec 任务，specTaskBinding.taskIds 只能使用下面列出的真实 task id。'
       : '- 当前没有 Spec 制品；不要新增 specTaskBinding，也不要把优化目标改成“创建/修订 Spec”。',
     '- 保持现有主语言、术语和重要命名风格一致。',
+    workflowMode === 'state-machine'
+      ? '- 状态机 verdict 流向必须显式：pass / conditional_pass / fail 都只是转移条件枚举，下一步完全由当前状态 transitions 配置决定。不要根据名称假设 conditional_pass 一定前进或一定回退；优化时必须让目标状态和步骤说明保持一致。'
+      : '',
     '',
     '用户优化要求：',
     input.instruction.trim(),

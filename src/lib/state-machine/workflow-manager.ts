@@ -575,6 +575,16 @@ function buildStepAutoRecoveryPrompt(input: {
   ].join('\n');
 }
 
+function hasAdvancedTransitionCondition(transition: StateTransition): boolean {
+  const condition = transition.condition || {};
+  return Boolean(
+    condition.issueTypes?.length
+    || condition.severities?.length
+    || condition.minIssueCount !== undefined
+    || condition.maxIssueCount !== undefined
+  );
+}
+
 export class StateMachineWorkflowManager extends EventEmitter {
   private status: 'idle' | 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' = 'idle';
   private statusReason: string | null = null;
@@ -2131,6 +2141,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const now = new Date().toISOString();
     const existing = this.humanQuestions[index];
     if (existing.status === 'answered') return existing;
+    if (existing.status !== 'unanswered') {
+      throw new Error('该 Supervisor 消息已失效，不能重复回答');
+    }
+    if (existing.requiresWorkflowPause && this.pendingHumanQuestionId !== questionId) {
+      throw new Error('该人工审查点已不是当前等待项，请刷新运行状态后重试');
+    }
+    if (existing.answerSchema.type === 'approval-transition' && this.currentState !== '__human_approval__') {
+      throw new Error('该人工审查点已离开等待状态，请刷新运行状态后重试');
+    }
     const updated: HumanQuestion = {
       ...existing,
       status: 'answered',
@@ -4053,6 +4072,7 @@ try {
         }).catch(() => [])
       : [];
     const experienceBlock = buildWorkflowExperiencePromptBlock(relatedExperiences, '修订前相关历史经验');
+    const verdictTransitionContext = this.buildStateVerdictTransitionContext(state);
     const prompt = [
       `你是工作流指挥官 ${this.currentSupervisorAgent}。`,
       type === 'state-review'
@@ -4061,6 +4081,7 @@ try {
       '',
       `当前 verdict: ${result.verdict}`,
       nextState ? `建议下一状态: ${nextState}` : '',
+      verdictTransitionContext,
       '',
       '问题摘要：',
       issueSummary,
@@ -6410,14 +6431,37 @@ try {
         }
       }
       const transitions = (state.transitions || [])
-        .map((transition) => transition.to)
+        .map((transition) => {
+          const verdict = transition.condition?.verdict;
+          if (verdict === 'pass') return `pass -> ${transition.to}`;
+          if (verdict === 'conditional_pass') return `conditional_pass -> ${transition.to}`;
+          if (verdict === 'fail') return `fail -> ${transition.to}`;
+          return transition.to;
+        })
         .filter(Boolean);
       if (transitions.length > 0) {
-        lines.push(`   可能流向: ${Array.from(new Set(transitions)).join(' / ')}`);
+        lines.push(`   verdict 流向: ${Array.from(new Set(transitions)).join(' / ')}`);
       }
     }
 
     return lines.join('\n');
+  }
+
+  private buildStateVerdictTransitionContext(state: StateMachineState): string {
+    const transitions = (state.transitions || [])
+      .filter((transition) => transition.condition?.verdict)
+      .map((transition) => {
+        const verdict = transition.condition.verdict;
+        return `- ${verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`;
+      });
+
+    return [
+      '\n# 当前状态 verdict 转移规则',
+      '本节是当前步骤必须遵守的流程控制规则，不是建议。',
+      '`pass`、`conditional_pass`、`fail` 的下一步都以本状态 transitions 的真实配置为准，不要根据名称自行假设。',
+      transitions.length > 0 ? transitions.join('\n') : '- 当前状态没有配置 verdict 转移。',
+      '如果你的自然语言建议进入某个状态，最终 JSON verdict 必须能通过上述配置到达该状态；例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标。',
+    ].join('\n');
   }
 
   private async buildStepContext(
@@ -6440,7 +6484,15 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
-    const roadmapKey = `${state.name}:${config.workflow.states.map((item) => `${item.name}:${(item.steps || []).map((stateStep) => stateStep.name).join('|')}`).join('>')}`;
+    parts.push(this.buildStateVerdictTransitionContext(state));
+
+    const roadmapKey = `${state.name}:${config.workflow.states.map((item) => {
+      const stepSig = (item.steps || []).map((stateStep) => stateStep.name).join('|');
+      const transitionSig = (item.transitions || [])
+        .map((transition) => `${transition.condition?.verdict || '*'}->${transition.to}`)
+        .join('|');
+      return `${item.name}:${stepSig}:${transitionSig}`;
+    }).join('>')}`;
     if (memo.roadmapKey !== roadmapKey) {
       parts.push(this.buildWorkflowRoadmapContext(step, state, config));
       memo.roadmapKey = roadmapKey;
@@ -6601,7 +6653,11 @@ try {
 
     // Add structured JSON output requirement for every state final decision step.
     if (requiresFinalVerdict) {
-      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+      const verdictTransitions = (state.transitions || [])
+        .filter((transition) => transition.condition?.verdict)
+        .map((transition) => `- ${transition.condition.verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`)
+        .join('\n') || '- 当前状态未配置 verdict 转移。';
+      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们的真实流向完全由当前状态 transitions 决定。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     if (this.currentRunId) {
@@ -7362,10 +7418,17 @@ try {
       return target;
     }
 
-    // Check if judge suggested a next_state in JSON output. A fail verdict must
-    // follow configured fail transitions instead of being overridden by next_state.
-    const aiSuggestedState = result.verdict === 'fail' ? null : this.parseNextStateFromOutputs(result.stepOutputs, config);
-    if (aiSuggestedState) {
+    // AI-suggested next_state is only accepted when it is one of the configured
+    // fallback targets for the emitted verdict.
+    const aiSuggestedState = this.parseNextStateFromOutputs(result.stepOutputs, config);
+    const configuredSuggestedTarget = aiSuggestedState
+      ? transitions.some((transition) => (
+          transition.to === aiSuggestedState
+          && this.matchCondition(transition.condition, result)
+          && !hasAdvancedTransitionCondition(transition)
+        ))
+      : false;
+    if (aiSuggestedState && configuredSuggestedTarget) {
       return aiSuggestedState;
     }
 
