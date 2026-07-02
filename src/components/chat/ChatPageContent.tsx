@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type ClipboardEvent, type DragEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import dynamic from 'next/dynamic';
@@ -15,6 +15,11 @@ import {
   PromptInputCommandItem,
   PromptInputCommandList,
 } from '@/components/ai-elements/prompt-input';
+import {
+  Attachment,
+  Attachments,
+  type AttachmentData,
+} from '@/components/ai-elements/attachments';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
@@ -31,6 +36,7 @@ import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences
 import ChatSidebar, { readStoredSessionDirectoryOrder, type SessionDirectoryView } from '@/components/chat/ChatSidebar';
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
 import ChatMessage, { ThinkingBot } from '@/components/chat/ChatMessage';
+import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
@@ -146,10 +152,20 @@ const sidebarPixelsToPercent = (width: number, containerWidth: number) => {
   if (!containerWidth) return 22;
   return Math.min(38, Math.max(14, (clampSidebarWidth(width) / containerWidth) * 100));
 };
+type WebkitFileSystemEntryLike = { name?: string; fullPath?: string; isDirectory?: boolean; isFile?: boolean };
+type DataTransferItemWithEntry = DataTransferItem & { webkitGetAsEntry?: () => WebkitFileSystemEntryLike | null };
+type ChatPendingAttachment = {
+  name: string;
+  path: string;
+  size: number;
+  workspace: string;
+};
 const DEFAULT_HOME_SIDEBAR_SIZE = 26;
 const MIN_HOME_SIDEBAR_SIZE = 20;
 const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
+const CHAT_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
+const CHAT_ATTACHMENT_UPLOAD_DIR = '.aceharness/chat-attachments';
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 export function isChatAiBusy(input: {
   loading?: boolean;
@@ -205,6 +221,26 @@ const SPEC_LANGUAGE_RULE = '语言一致性规则：先判断用户原始需求�
 
 function normalizeBackendSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function hasDroppedFiles(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false;
+  if (Array.from(dataTransfer.types || []).includes('Files')) return true;
+  return Array.from(dataTransfer.items || []).some((item) => item.kind === 'file');
+}
+
+function getDroppedDirectoryEntry(dataTransfer: DataTransfer): WebkitFileSystemEntryLike | null {
+  for (const item of Array.from(dataTransfer.items || [])) {
+    const entry = (item as DataTransferItemWithEntry).webkitGetAsEntry?.();
+    if (entry?.isDirectory) return entry;
+  }
+  return null;
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${bytes}B`;
 }
 
 function decodeWorkflowDraftAction(prompt: string): { action: string; values: Record<string, unknown> } | null {
@@ -1793,6 +1829,10 @@ export function ChatPageContent({
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
+  const [fileDropActive, setFileDropActive] = useState(false);
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<ChatPendingAttachment | null>(null);
+  const [attachmentPreviewPath, setAttachmentPreviewPath] = useState<string | null>(null);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [engineSlashCommands, setEngineSlashCommands] = useState<HomepageSlashCommand[]>([]);
@@ -1867,6 +1907,7 @@ export function ChatPageContent({
   const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
   const lastHomeSidebarSyncRef = useRef('');
   const lastSessionDirectoryAutoSwitchRef = useRef('');
+  const autoCreatedSessionIdRef = useRef<string | null>(null);
 
   const parsedSidebarHint = useMemo<HomeSidebarHint | null>(() => {
     // 已有持久化状态时跳过昂贵的 parseActions 解析
@@ -1889,6 +1930,11 @@ export function ChatPageContent({
   const activeChatWorkspacePath = String(activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
   const fallbackWorkingDirectory = String(workingDirectory || '').trim();
   const effectiveWorkingDirectory = activeChatWorkspacePath || fallbackWorkingDirectory;
+  useEffect(() => {
+    if (activeSessionId || activeSession?.id) {
+      autoCreatedSessionIdRef.current = activeSessionId || activeSession?.id || null;
+    }
+  }, [activeSession?.id, activeSessionId]);
   const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding || activeSession?.sessionWorkbenchState?.embeddedWorkflow?.configFile);
   const hasWorkflowRuntimeRightRailContext = Boolean(
     (activeSession?.workflowBinding?.configFile && activeSession?.workflowBinding?.runId)
@@ -3838,8 +3884,27 @@ export function ChatPageContent({
 
   const submitMessage = useCallback(async (text: string) => {
     const normalized = text.trim();
-    if (!normalized) return;
-    if (normalized === '/compact') {
+    if (!normalized && !pendingAttachment) return;
+    if (attachmentUploading) {
+      toast('warning', '附件上传中，请稍候再发送');
+      return;
+    }
+    const attachmentContext = pendingAttachment
+      ? [
+          '',
+          '附件：',
+          `- 文件名：${pendingAttachment.name}`,
+          `- 工作区路径：${pendingAttachment.path}`,
+          `- 大小：${formatAttachmentSize(pendingAttachment.size)}`,
+          '',
+          '请在需要读取附件时使用上面的工作区路径。',
+        ].join('\n')
+      : '';
+    const messageToSend = [normalized, attachmentContext].filter(Boolean).join('\n');
+    const displayMessage = pendingAttachment
+      ? [normalized || '请查看附件', `\n[附件] ${pendingAttachment.name} (${formatAttachmentSize(pendingAttachment.size)})`].join('\n')
+      : normalized;
+    if (!pendingAttachment && normalized === '/compact') {
       if (loading) {
         toast('warning', '当前正在生成，请先停止后再压缩上下文');
         return;
@@ -3858,7 +3923,7 @@ export function ChatPageContent({
       }
       return;
     }
-    if (normalized === '/workflow' || normalized.startsWith('/workflow ')) {
+    if (!pendingAttachment && (normalized === '/workflow' || normalized.startsWith('/workflow '))) {
       const requirements = normalized.replace(/^\/workflow\b/i, '').trim();
       await startLightweightWorkflowDraft(requirements);
       return;
@@ -3874,15 +3939,16 @@ export function ChatPageContent({
 
     unlockAutoScroll();
     setInput('');
+    setPendingAttachment(null);
     editorRef.current?.clear();
 
-    if (await sendUnifiedAgentChatMessage(normalized)) {
+    if (await sendUnifiedAgentChatMessage(messageToSend)) {
       editorRef.current?.focus();
       return;
     }
     // Route to legacy collaboration handler only when one is explicitly mounted.
     if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
-      collaborationMessageHandlerRef.current(normalized);
+      collaborationMessageHandlerRef.current(messageToSend);
       editorRef.current?.focus();
       return;
     }
@@ -3895,9 +3961,9 @@ export function ChatPageContent({
       setSidebarOpen(true);
       setSessionDirectoryView('conversation');
     }
-    await sendMessage(normalized);
+    await sendMessage(messageToSend, { displayText: displayMessage });
     editorRef.current?.focus();
-  }, [activeSession, activeSessionId, compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, sendMessage, sendUnifiedAgentChatMessage, startLightweightWorkflowDraft, stopStreaming, toast, unlockAutoScroll]);
+  }, [activeSession, activeSessionId, attachmentUploading, compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, pendingAttachment, sendMessage, sendUnifiedAgentChatMessage, startLightweightWorkflowDraft, stopStreaming, toast, unlockAutoScroll]);
 
   const applySlashCommand = useCallback(async (commandId: string) => {
     if (commandId === 'compact') {
@@ -3919,20 +3985,20 @@ export function ChatPageContent({
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
-    if (!text) return;
+    if (!text && !pendingAttachment) return;
     await submitMessage(text);
-  }, [getInputMarkdown, submitMessage]);
+  }, [getInputMarkdown, pendingAttachment, submitMessage]);
 
   const handleEditorEnter = useCallback(async (text: string) => {
     const markdown = text.trim() || getInputMarkdown();
-    if (!markdown) return;
+    if (!markdown && !pendingAttachment) return;
     if (slashMenuOpen && filteredSlashCommands.length > 0) {
       const index = Math.max(0, Math.min(slashActiveIndex, filteredSlashCommands.length - 1));
       await applySlashCommand(filteredSlashCommands[index].id);
       return;
     }
     await submitMessage(markdown);
-  }, [applySlashCommand, filteredSlashCommands, getInputMarkdown, slashActiveIndex, slashMenuOpen, submitMessage]);
+  }, [applySlashCommand, filteredSlashCommands, getInputMarkdown, pendingAttachment, slashActiveIndex, slashMenuOpen, submitMessage]);
 
   useEffect(() => {
     if (!slashMenuOpen) return;
@@ -4300,6 +4366,181 @@ export function ChatPageContent({
     editorRef.current?.insertMarkdown(`${prefix}${content}`);
     editorRef.current?.focus();
   }, []);
+
+  const ensureChatSessionForComposer = useCallback((): string => {
+    const existing = activeSessionId || activeSession?.id || autoCreatedSessionIdRef.current;
+    if (existing) return existing;
+    const nextSessionId = createSession({ title: '新对话' });
+    autoCreatedSessionIdRef.current = nextSessionId;
+    setSidebarOpen(true);
+    setSessionDirectoryView('conversation');
+    return nextSessionId;
+  }, [activeSession?.id, activeSessionId, createSession]);
+
+  const ensureAttachmentWorkspace = useCallback(async (): Promise<string> => {
+    const targetSessionId = ensureChatSessionForComposer();
+
+    const existingWorkspace = targetSessionId === activeSessionId
+      ? String(activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim()
+      : '';
+    if (existingWorkspace) return existingWorkspace;
+
+    const result = await agoraApi.ensureWorkspace({
+      sessionId: targetSessionId,
+      sourceWorkspace: fallbackWorkingDirectory || undefined,
+      title: activeSession?.title?.trim() || '新对话',
+      skills: skillSettings,
+      mcpServers: mcpSettings,
+      purpose: 'chat',
+    });
+    if (!result.workspacePath) throw new Error('准备对话工作区失败');
+    setSessionWorkbenchState((prev) => ({
+      ...(prev || {}),
+      chatWorkspace: {
+        ...(prev?.chatWorkspace || {}),
+        workingDirectory: result.workspacePath,
+        sourceWorkspace: result.sourceWorkspace || fallbackWorkingDirectory || prev?.chatWorkspace?.sourceWorkspace,
+        autoCreated: result.created,
+        gitBaselineReady: true,
+        updatedAt: Date.now(),
+      },
+    }));
+    setWorkingDirectory(result.workspacePath);
+    return result.workspacePath;
+  }, [
+    activeSession?.id,
+    activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory,
+    activeSession?.title,
+    activeSessionId,
+    ensureChatSessionForComposer,
+    fallbackWorkingDirectory,
+    mcpSettings,
+    setSessionWorkbenchState,
+    setWorkingDirectory,
+    skillSettings,
+  ]);
+
+  const uploadChatAttachment = useCallback(async (file: File) => {
+    if (file.size > CHAT_ATTACHMENT_MAX_BYTES) {
+      toast('warning', `文件超过 ${formatAttachmentSize(CHAT_ATTACHMENT_MAX_BYTES)} 限制`);
+      return;
+    }
+    setAttachmentUploading(true);
+    try {
+      const workspace = await ensureAttachmentWorkspace();
+      const result = await workspaceApi.upload(workspace, CHAT_ATTACHMENT_UPLOAD_DIR, [file], {
+        conflict: 'rename',
+        relativePaths: [file.name],
+      });
+      const saved = result.files[0];
+      if (!saved?.path) throw new Error('上传结果缺少文件路径');
+      setPendingAttachment({
+        name: saved.name || file.name,
+        path: saved.path,
+        size: saved.size || file.size,
+        workspace,
+      });
+      toast('success', `已添加附件：${saved.name || file.name}`);
+      requestAnimationFrame(() => editorRef.current?.focus());
+    } catch (error: any) {
+      toast('error', error?.message || '附件上传失败');
+    } finally {
+      setAttachmentUploading(false);
+    }
+  }, [ensureAttachmentWorkspace, toast]);
+
+  const handleComposerDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!hasDroppedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setFileDropActive(true);
+  }, []);
+
+  const handleComposerDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!hasDroppedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+    setFileDropActive(true);
+  }, []);
+
+  const handleComposerDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setFileDropActive(false);
+  }, []);
+
+  const handleComposerDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (!hasDroppedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setFileDropActive(false);
+    const directoryEntry = getDroppedDirectoryEntry(event.dataTransfer);
+    if (directoryEntry) {
+      toast('warning', '首页对话附件暂只支持单个文件，不支持文件夹');
+      return;
+    }
+    const files = Array.from(event.dataTransfer.files || []);
+    if (files.length !== 1) {
+      toast('warning', '一次只能添加一个附件文件');
+      return;
+    }
+    void uploadChatAttachment(files[0]);
+  }, [toast, uploadChatAttachment]);
+
+  const handleComposerPaste = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
+    const files = Array.from(event.clipboardData?.files || []);
+    if (files.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (files.length !== 1) {
+      toast('warning', '一次只能添加一个附件文件');
+      return;
+    }
+    void uploadChatAttachment(files[0]);
+  }, [toast, uploadChatAttachment]);
+
+  const handleComposerFocus = useCallback(() => {
+    ensureChatSessionForComposer();
+  }, [ensureChatSessionForComposer]);
+
+  const composerDropProps = useMemo(() => ({
+    onDragEnterCapture: handleComposerDragEnter,
+    onDragOverCapture: handleComposerDragOver,
+    onDragLeave: handleComposerDragLeave,
+    onDropCapture: handleComposerDrop,
+    onPasteCapture: handleComposerPaste,
+    onFocusCapture: handleComposerFocus,
+  }), [handleComposerDragEnter, handleComposerDragLeave, handleComposerDragOver, handleComposerDrop, handleComposerFocus, handleComposerPaste]);
+
+  const fileDropOverlay = fileDropActive ? (
+    <div className="pointer-events-none absolute inset-0 z-[140] flex items-center justify-center gap-2 rounded-[28px] border border-primary/45 bg-primary/10 text-sm font-medium text-primary backdrop-blur-[2px]">
+      <span className="material-symbols-outlined text-[22px]">drive_folder_upload</span>
+      松开后添加附件
+    </div>
+  ) : null;
+
+  const pendingAttachmentPart = useMemo<AttachmentData | null>(() => {
+    if (attachmentUploading) {
+      return {
+        filename: '上传中...',
+        id: 'uploading',
+        mediaType: 'application/octet-stream',
+        status: 'uploading',
+        type: 'file',
+        url: '',
+      };
+    }
+    if (!pendingAttachment) return null;
+    return {
+      filename: pendingAttachment.name,
+      id: pendingAttachment.path,
+      mediaType: 'workspace/file',
+      size: pendingAttachment.size,
+      status: 'uploaded',
+      type: 'file',
+      url: pendingAttachment.path,
+    };
+  }, [attachmentUploading, pendingAttachment]);
 
   const isChatroomCentralTranscript = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
   const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(messages as any[], {
@@ -4677,6 +4918,7 @@ export function ChatPageContent({
         embedded ? 'h-full min-h-0 flex overflow-hidden bg-background' : 'h-screen flex overflow-hidden bg-background',
         isWerewolfLabMode && 'werewolf-wood-bg'
       )}
+      {...composerDropProps}
     >
       {/* Mobile overlay backdrop */}
       {!hideSidebar && isMobile && sidebarOpen && (
@@ -4820,7 +5062,26 @@ export function ChatPageContent({
               </div>
               <div className="home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16">
                 <div className="mx-auto max-w-5xl">
-                  <div className="home-chat-composer relative overflow-hidden rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]" data-tour-step-id="home-chat-composer">
+                  <div
+                    className="home-chat-composer relative overflow-hidden rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]"
+                    data-tour-step-id="home-chat-composer"
+                    {...composerDropProps}
+                  >
+                    {fileDropOverlay}
+                    {pendingAttachmentPart ? (
+                      <Attachments className="px-5 pt-4">
+                        <Attachment
+                          data={pendingAttachmentPart}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (pendingAttachment?.path) {
+                              setAttachmentPreviewPath(`${pendingAttachment.workspace.replace(/\\/g, '/').replace(/\/+$/, '')}/${pendingAttachment.path.replace(/\\/g, '/')}`);
+                            }
+                          }}
+                          onRemove={() => setPendingAttachment(null)}
+                        />
+                      </Attachments>
+                    ) : null}
                     <RichTextEditor
                       ref={editorRef}
                       content={input}
@@ -4851,7 +5112,7 @@ export function ChatPageContent({
                                 : 'bg-[#1f6fff] hover:bg-[#1a61de]'
                             )}
                             onClick={activeAiBusy ? stopActiveAiAction : handleSend}
-                            disabled={!activeAiBusy && (!getInputMarkdown() || !isModelSelectionReady)}
+                            disabled={!activeAiBusy && (attachmentUploading || (!getInputMarkdown() && !pendingAttachment) || !isModelSelectionReady)}
                             title={activeAiBusy ? '停止生成' : '发送'}
                           >
                             <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>
@@ -5271,7 +5532,26 @@ export function ChatPageContent({
                       </div>
                     )}
                     <div className="mx-auto max-w-5xl">
-                      <div className="home-chat-composer relative z-10 rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]" data-tour-step-id="home-chat-composer">
+                      <div
+                        className="home-chat-composer relative z-10 rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]"
+                        data-tour-step-id="home-chat-composer"
+                        {...composerDropProps}
+                      >
+                        {fileDropOverlay}
+                        {pendingAttachmentPart ? (
+                          <Attachments className="px-5 pt-4">
+                            <Attachment
+                              data={pendingAttachmentPart}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (pendingAttachment?.path) {
+                                  setAttachmentPreviewPath(`${pendingAttachment.workspace.replace(/\\/g, '/').replace(/\/+$/, '')}/${pendingAttachment.path.replace(/\\/g, '/')}`);
+                                }
+                              }}
+                              onRemove={() => setPendingAttachment(null)}
+                            />
+                          </Attachments>
+                        ) : null}
                         {slashMenuOpen ? (
                           <div className="absolute bottom-[calc(100%+8px)] left-0 z-[120] w-[320px] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-xl">
                             <PromptInputCommand className="bg-transparent">
@@ -5377,7 +5657,7 @@ export function ChatPageContent({
                                     : 'bg-[#1f6fff] hover:bg-[#1a61de]'
                                 )}
                                 onClick={activeAiBusy ? stopActiveAiAction : handleSend}
-                                disabled={!activeAiBusy && (!getInputMarkdown() || !isModelSelectionReady)}
+                                disabled={!activeAiBusy && (attachmentUploading || (!getInputMarkdown() && !pendingAttachment) || !isModelSelectionReady)}
                                 title={activeAiBusy ? '停止生成' : '发送'}
                               >
                                 <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>
@@ -5715,6 +5995,13 @@ export function ChatPageContent({
             if (!open) {
               setCliRunRequest(null);
             }
+          }}
+        />
+        <FilePreviewDialog
+          absolutePath={attachmentPreviewPath || ''}
+          open={Boolean(attachmentPreviewPath)}
+          onOpenChange={(open) => {
+            if (!open) setAttachmentPreviewPath(null);
           }}
         />
       </div>

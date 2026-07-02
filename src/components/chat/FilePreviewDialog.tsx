@@ -21,14 +21,16 @@ interface FilePreviewDialogProps {
 }
 
 function fileNameOf(path: string): string {
-  const parts = path.split('/').filter(Boolean);
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
   return parts[parts.length - 1] || path;
 }
 
 function parentDirOf(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  if (parts.length <= 1) return '/';
-  return `/${parts.slice(0, -1).join('/')}`;
+  const normalized = path.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length <= 1) return normalized.startsWith('/') ? '/' : '';
+  const prefix = normalized.startsWith('/') ? '/' : '';
+  return `${prefix}${parts.slice(0, -1).join('/')}`;
 }
 
 function extOf(path: string): string {
@@ -147,12 +149,11 @@ export function FilePreviewDialog({ absolutePath, open, onOpenChange }: FilePrev
 
   const handleOpenInPage = () => {
     if (typeof window === 'undefined') return;
-    const encoded = absolutePath
-      .split('/')
-      .filter(Boolean)
-      .map((seg) => encodeURIComponent(seg))
-      .join('/');
-    window.open(`/${encoded}`, '_blank', 'noopener,noreferrer');
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('file', file);
+    params.set('mode', 'blob');
+    window.open(`/api/workspace/file?${params.toString()}`, '_blank', 'noopener,noreferrer');
   };
 
   return (
