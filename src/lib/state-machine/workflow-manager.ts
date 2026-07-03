@@ -6408,6 +6408,7 @@ try {
     currentStep: WorkflowStep,
     currentState: StateMachineState,
     config: StateMachineWorkflowConfig,
+    options: { includeVerdictTransitions?: boolean } = {},
   ): string {
     const states = config.workflow?.states || [];
     const currentStepKey = this.getWorkflowStepKey(currentState.name, currentStep);
@@ -6441,17 +6442,19 @@ try {
           lines.push(`     任务: ${compactTask.slice(0, 220)}${compactTask.length > 220 ? '...' : ''}`);
         }
       }
-      const transitions = (state.transitions || [])
-        .map((transition) => {
-          const verdict = transition.condition?.verdict;
-          if (verdict === 'pass') return `pass -> ${transition.to}`;
-          if (verdict === 'conditional_pass') return `conditional_pass -> ${transition.to}`;
-          if (verdict === 'fail') return `fail -> ${transition.to}`;
-          return transition.to;
-        })
-        .filter(Boolean);
-      if (transitions.length > 0) {
-        lines.push(`   verdict 流向: ${Array.from(new Set(transitions)).join(' / ')}`);
+      if (options.includeVerdictTransitions) {
+        const transitions = (state.transitions || [])
+          .map((transition) => {
+            const verdict = transition.condition?.verdict;
+            if (verdict === 'pass') return `pass -> ${transition.to}`;
+            if (verdict === 'conditional_pass') return `conditional_pass -> ${transition.to}`;
+            if (verdict === 'fail') return `fail -> ${transition.to}`;
+            return transition.to;
+          })
+          .filter(Boolean);
+        if (transitions.length > 0) {
+          lines.push(`   verdict 流向: ${Array.from(new Set(transitions)).join(' / ')}`);
+        }
       }
     }
 
@@ -6495,9 +6498,11 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
-    parts.push(this.buildStateVerdictTransitionContext(state));
+    if (requiresFinalVerdict) {
+      parts.push(this.buildStateVerdictTransitionContext(state));
+    }
 
-    const roadmapKey = `${state.name}:${config.workflow.states.map((item) => {
+    const roadmapKey = `${state.name}:${requiresFinalVerdict ? 'with-verdict' : 'without-verdict'}:${config.workflow.states.map((item) => {
       const stepSig = (item.steps || []).map((stateStep) => stateStep.name).join('|');
       const transitionSig = (item.transitions || [])
         .map((transition) => `${transition.condition?.verdict || '*'}->${transition.to}`)
@@ -6505,7 +6510,9 @@ try {
       return `${item.name}:${stepSig}:${transitionSig}`;
     }).join('>')}`;
     if (memo.roadmapKey !== roadmapKey) {
-      parts.push(this.buildWorkflowRoadmapContext(step, state, config));
+      parts.push(this.buildWorkflowRoadmapContext(step, state, config, {
+        includeVerdictTransitions: requiresFinalVerdict,
+      }));
       memo.roadmapKey = roadmapKey;
     } else {
       parts.push(`\n# 工作流定位\n当前状态: ${state.name}\n当前步骤: ${step.name}\n上下游路线未变；继续按当前步骤任务推进，不要把本步骤核心交付留给后续步骤。`);

@@ -419,6 +419,21 @@ function hasRunWorkbenchTabSearchParam(searchParams: { get: (key: string) => str
   return searchParams.get('changes') === '1' || searchParams.get('workspace') === '1';
 }
 
+const WORKBENCH_OUTER_QUERY_KEYS = [
+  'mode',
+  'run',
+  'runId',
+  'workspace',
+  'workspaceFile',
+  'workspaceLine',
+  'workspaceColumn',
+  'changes',
+  'history',
+  'designTab',
+  'focus',
+  'questionId',
+];
+
 function getWorkflowRunPanelTabsStorageKey(configFile: string) {
   return `${WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX}:${configFile}`;
 }
@@ -1413,6 +1428,7 @@ export default function WorkbenchPage({
 
   const initialMode = (effectiveSearchParams.get('mode') as ViewMode) || 'run';
   const initialRunId = effectiveSearchParams.get('run') || effectiveSearchParams.get('runId');
+  const initialHistoryRun = effectiveSearchParams.get('history') === '1';
   const focusTarget = effectiveSearchParams.get('focus');
   const focusQuestionId = effectiveSearchParams.get('questionId');
   const searchParamsString = effectiveSearchParams.toString();
@@ -1425,12 +1441,33 @@ export default function WorkbenchPage({
       if (val === null) sp.delete(key);
       else sp.set(key, val);
     }
-    if (Object.prototype.hasOwnProperty.call(updates, 'run')) {
+    if (Object.prototype.hasOwnProperty.call(updates, 'run') && updates.run !== null) {
       sp.delete('runId');
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'runId') && updates.runId !== null) {
+      sp.delete('run');
     }
     const qs = sp.toString();
     if (embeddedInDashboard) {
       setEmbeddedSearchState(qs);
+      dockWorkspace?.updateActiveWorkbenchSearch?.(configFile, qs);
+      if (typeof window !== 'undefined') {
+        const outerParams = new URLSearchParams(window.location.search);
+        const currentRoute = outerParams.get('route') || '';
+        const currentWorkbenchPrefix = `/workbench/${encodeURIComponent(configFile)}`;
+        if (!currentRoute.startsWith(currentWorkbenchPrefix)) {
+          return;
+        }
+        outerParams.delete('panel');
+        outerParams.delete('reload');
+        WORKBENCH_OUTER_QUERY_KEYS.forEach((key) => outerParams.delete(key));
+        outerParams.set('route', `/workbench/${encodeURIComponent(configFile)}${qs ? `?${qs}` : ''}`);
+        const nextOuterUrl = `${window.location.pathname}${outerParams.toString() ? `?${outerParams.toString()}` : ''}`;
+        const currentOuterUrl = `${window.location.pathname}${window.location.search}`;
+        if (nextOuterUrl !== currentOuterUrl) {
+          router.replace(nextOuterUrl, { scroll: false });
+        }
+      }
       return;
     }
     const currentUrl = `/workbench/${encodeURIComponent(configFile)}${searchParamsString ? `?${searchParamsString}` : ''}`;
@@ -1439,7 +1476,7 @@ export default function WorkbenchPage({
       return;
     }
     router.replace(nextUrl, { scroll: false });
-  }, [embeddedInDashboard, searchParamsString, configFile, router]);
+  }, [dockWorkspace, embeddedInDashboard, searchParamsString, configFile, router]);
 
   const { toast } = useToast();
   const { confirm, dialogProps: confirmDialogProps } = useConfirmDialog();
@@ -1733,16 +1770,16 @@ export default function WorkbenchPage({
   }, [getSubworkflowCacheKey, toast]);
   const openSubworkflowRunPage = useCallback((child: any) => {
     if (!child?.configFile || !child?.runId) return;
-    const route = `/workbench/${encodeURIComponent(child.configFile)}?mode=history&runId=${encodeURIComponent(child.runId)}`;
+    const route = `/workbench/${encodeURIComponent(child.configFile)}?mode=run&runId=${encodeURIComponent(child.runId)}&history=1`;
     if (embeddedInDashboard && dockWorkspace) {
       dockWorkspace.openTab({
-        id: `workbench:${child.configFile}:history:${child.runId}`,
+        id: `workbench:${child.configFile}:run:${child.runId}`,
         title: child.configFile,
         kind: 'workbench',
         config: child.configFile,
-        mode: 'history',
+        mode: 'run',
         runId: child.runId,
-        search: `mode=history&runId=${encodeURIComponent(child.runId)}`,
+        search: `mode=run&runId=${encodeURIComponent(child.runId)}&history=1`,
       });
       return;
     }
@@ -2436,11 +2473,11 @@ export default function WorkbenchPage({
       setDesignTab('overview');
     }
     if (mode === 'run') {
-      updateUrl({ mode: 'run', run: runId || null });
+      updateUrl({ mode: 'run', run: runId || null, runId: null, history: null });
     } else if (mode === 'design') {
-      updateUrl({ mode: 'design', run: null });
+      updateUrl({ mode: 'design', run: null, runId: null, history: null });
     } else {
-      updateUrl({ mode: 'history', run: null });
+      updateUrl({ mode: 'history', run: null, runId: null, history: null });
     }
   }, [dispatch, runId, updateUrl]);
 
@@ -5229,7 +5266,7 @@ export default function WorkbenchPage({
     }
 
     const modeFromUrl = (effectiveSearchParams.get('mode') as ViewMode) || 'run';
-    if (modeFromUrl === 'history') {
+    if (modeFromUrl === 'history' || initialHistoryRun) {
       void viewHistoryRun(initialRunId);
       return;
     }
@@ -5238,7 +5275,7 @@ export default function WorkbenchPage({
     dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
     setViewingHistoryRun(false);
     void fetchCurrentStatus();
-  }, [dispatch, fetchCurrentStatus, initialRunId, runId, searchParamsString]);
+  }, [dispatch, fetchCurrentStatus, initialHistoryRun, initialRunId, runId, searchParamsString]);
 
   useEffect(() => {
     const activeRunId = runId || initialRunId;
@@ -5257,11 +5294,19 @@ export default function WorkbenchPage({
 
   // Sync runId to URL
   useEffect(() => {
+    const modeFromUrl = (effectiveSearchParams.get('mode') as ViewMode) || 'run';
+    if (initialHistoryRun || viewingHistoryRun) {
+      const currentUrlRunId = effectiveSearchParams.get('runId');
+      if (runId && runId !== currentUrlRunId) {
+        updateUrl({ run: null, runId: runId, mode: 'run', history: '1' });
+      }
+      return;
+    }
     const currentUrlRun = effectiveSearchParams.get('run');
     if (runId && runId !== currentUrlRun) {
-      updateUrl({ run: runId });
+      updateUrl({ run: runId, runId: null });
     }
-  }, [runId, searchParamsString, updateUrl]);
+  }, [initialHistoryRun, runId, searchParamsString, updateUrl, viewingHistoryRun]);
 
   // Live status stream replaces periodic /api/workflow/status polling.
   useEffect(() => {
@@ -5474,7 +5519,7 @@ export default function WorkbenchPage({
       // Switch to run view
       setViewingHistoryRun(true);
       dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
-      updateUrl({ run: runId, mode: 'run' });
+      updateUrl({ run: null, runId, mode: 'run', history: '1' });
       if (agents.length > 0) {
         dispatch({ type: 'SET_SELECTED_AGENT', payload: agents[0] });
       }

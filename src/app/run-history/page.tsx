@@ -580,15 +580,16 @@ export default function RunHistoryPage() {
                       className={run.configFile ? 'cursor-pointer' : undefined}
                       onClick={() => {
                         if (!run.configFile) return;
-                        const route = `/workbench/${encodeURIComponent(run.configFile)}?mode=history&runId=${run.id}`;
+                        const route = `/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`;
                         if (dockWorkspace) {
                           dockWorkspace.openTab({
-                            id: `workbench:${run.configFile}:history:${run.id}`,
+                            id: `workbench:${run.configFile}:run:${run.id}`,
                             title: run.configName || run.configFile,
                             kind: 'workbench',
                             config: run.configFile,
-                            mode: 'history',
+                            mode: 'run',
                             runId: run.id,
+                            search: `mode=run&runId=${encodeURIComponent(run.id)}&history=1`,
                           });
                           const params = new URLSearchParams(searchParams.toString());
                           params.delete('panel');

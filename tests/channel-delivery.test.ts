@@ -126,6 +126,8 @@ describe('channel delivery bridge', () => {
     }));
     const firstCall = notifyMock.mock.calls[0]?.[0] as any;
     expect(firstCall.text).toContain('/approve');
+    expect(firstCall.text).toContain('\n\n');
+    expect(firstCall.dedupeKey).toContain('human-approval-required');
   });
 
   it('resolves restored human approval events from humanQuestion metadata', async () => {

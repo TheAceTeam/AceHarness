@@ -198,6 +198,21 @@ function DashboardUnifiedHeader({
   );
 }
 
+const WORKBENCH_OUTER_QUERY_KEYS = [
+  'mode',
+  'run',
+  'runId',
+  'workspace',
+  'workspaceFile',
+  'workspaceLine',
+  'workspaceColumn',
+  'changes',
+  'history',
+  'designTab',
+  'focus',
+  'questionId',
+];
+
 function DashboardSidebarFooter({ onUseClassicMode }: { onUseClassicMode: () => void }) {
   const { state, toggleSidebar } = useSidebar();
   const { t } = useTranslations();
@@ -347,9 +362,12 @@ export default function DashboardPage() {
     return query ? `${shellPath}?${query}` : shellPath;
   }, [shellPath]);
 
-  const buildShellUrlForDockTab = useCallback((tab: DashboardDockTab | null) => {
-    const params = new URLSearchParams(searchParams.toString());
+  const buildShellUrlForDockTab = useCallback((tab: DashboardDockTab | null, baseSearch?: string) => {
+    const params = new URLSearchParams(baseSearch ?? searchParams.toString());
     params.delete('reload');
+    if (tab?.kind !== 'workbench') {
+      WORKBENCH_OUTER_QUERY_KEYS.forEach((key) => params.delete(key));
+    }
     if (!tab || tab.kind === 'chat') {
       params.delete('panel');
       params.delete('route');
@@ -388,6 +406,7 @@ export default function DashboardPage() {
     } else if (tab.kind === 'account') {
       route = `/account${tab.search ? `?${tab.search}` : ''}`;
     } else if (tab.kind === 'workbench') {
+      WORKBENCH_OUTER_QUERY_KEYS.forEach((key) => params.delete(key));
       if (tab.search) {
         route = `/workbench/${encodeURIComponent(tab.config)}${tab.search.startsWith('?') ? tab.search : `?${tab.search}`}`;
       } else {
@@ -419,6 +438,7 @@ export default function DashboardPage() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('route');
     params.delete('reload');
+    WORKBENCH_OUTER_QUERY_KEYS.forEach((key) => params.delete(key));
     if (panel === 'chat') {
       params.delete('panel');
     } else {
@@ -524,8 +544,9 @@ export default function DashboardPage() {
     } else {
       setSecondarySidebarOpen(false);
     }
-    const nextUrl = buildShellUrlForDockTab(nextTab);
-    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+    const currentSearch = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : searchParams.toString();
+    const nextUrl = buildShellUrlForDockTab(nextTab, currentSearch);
+    const currentUrl = `${pathname}${currentSearch ? `?${currentSearch}` : ''}`;
     if (nextUrl !== currentUrl) {
       router.replace(nextUrl);
     }
@@ -1555,7 +1576,7 @@ export default function DashboardPage() {
                               transition={{ delay: 0.35 + i * 0.06 }}
                               whileHover={{ x: 4 }}
                               className="group flex cursor-pointer items-center justify-between rounded-2xl border border-border/50 bg-background/55 p-3.5 shadow-sm transition-all hover:border-primary/35 hover:bg-background/72"
-                              onClick={() => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=history&runId=${run.id}`)}
+                              onClick={() => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`)}
                             >
                               <div className="flex items-center gap-3">
                                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500 ring-1 ring-emerald-500/15">
@@ -1615,7 +1636,7 @@ export default function DashboardPage() {
                             initial={{ opacity: 0, x: 20 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.4 + i * 0.06 }}
-                            onClick={() => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=history&runId=${run.id}`)}
+                            onClick={() => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`)}
                             className="group flex cursor-pointer items-center justify-between rounded-2xl border border-border/50 bg-background/55 p-3.5 shadow-sm transition-all hover:border-primary/35 hover:bg-background/72"
                           >
                             <div className="flex min-w-0 items-center gap-3">

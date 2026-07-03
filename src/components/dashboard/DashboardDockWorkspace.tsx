@@ -105,6 +105,7 @@ type DashboardDockWorkspaceProps = {
 
 type DashboardDockWorkspaceContextValue = {
   openTab: (tab: DashboardDockTab, options?: DashboardDockOpenOptions) => void;
+  updateActiveWorkbenchSearch: (config: string, search: string) => void;
 };
 
 const DashboardDockWorkspaceContext = createContext<DashboardDockWorkspaceContextValue | null>(null);
@@ -644,8 +645,28 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       }
     }, []);
 
+    const updateActiveWorkbenchSearch = useCallback((config: string, search: string) => {
+      const api = apiRef.current;
+      const activePanel = api?.activePanel;
+      if (!activePanel) return;
+      const params = activePanel.params as WorkspacePanelParams | undefined;
+      if (!params || params.kind !== 'workbench' || params.config !== config) return;
+
+      const normalizedSearch = search.startsWith('?') ? search.slice(1) : search;
+      const searchParams = new URLSearchParams(normalizedSearch);
+      activePanel.update({
+        params: {
+          ...params,
+          search: normalizedSearch,
+          mode: searchParams.get('mode') || params.mode || 'run',
+          runId: searchParams.get('runId') || searchParams.get('run') || params.runId || null,
+        },
+      });
+    }, []);
+
     useImperativeHandle(ref, () => ({
       openTab,
+      updateActiveWorkbenchSearch,
       refreshActiveTab: () => {
         const panel = apiRef.current?.activePanel;
         if (!panel) return;
@@ -655,7 +676,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
           panel.update({ params: { ...params } });
         }
       },
-    }), [openTab]);
+    }), [openTab, updateActiveWorkbenchSearch]);
 
     const handleReady = useCallback((event: DockviewReadyEvent) => {
       apiRef.current = event.api;
@@ -774,7 +795,10 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       } : undefined);
     }, [openTab]);
 
-    const workspaceContextValue = useMemo<DashboardDockWorkspaceContextValue>(() => ({ openTab }), [openTab]);
+    const workspaceContextValue = useMemo<DashboardDockWorkspaceContextValue>(() => ({
+      openTab,
+      updateActiveWorkbenchSearch,
+    }), [openTab, updateActiveWorkbenchSearch]);
 
     return (
       <div

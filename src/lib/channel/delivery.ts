@@ -7,6 +7,7 @@ export interface OutboundChannelMessage {
   text: string;
   title?: string;
   binding?: ChannelSessionBinding | null;
+  dedupeKey?: string;
   metadata?: Record<string, any>;
   messages?: Array<{
     kind: 'text' | 'system';
@@ -67,6 +68,7 @@ export async function sendOutboundChannelMessage(integration: ChannelIntegration
       text: input.title ? `${input.title}\n${input.text}` : input.text,
       sourceLabel: '微信审查提醒',
       syncToChat: true,
+      dedupeKey: input.dedupeKey,
     });
     if (direct.ok) {
       return { ok: true, status: 200 };
@@ -93,6 +95,22 @@ export async function sendOutboundChannelMessage(integration: ChannelIntegration
   }
 }
 
+function normalizeNotificationText(value: unknown, maxChars = 1800): string {
+  const raw = typeof value === 'string' ? value : JSON.stringify(value ?? '', null, 2);
+  const text = raw
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars).trim()}\n\n...`;
+}
+
+function formatHumanApprovalAdvice(advice: unknown): string {
+  const text = normalizeNotificationText(advice, 1400);
+  if (!text) return '';
+  return ['Supervisor 建议：', text].join('\n');
+}
+
 function formatWorkflowEvent(type: string, data: any): { title: string; text: string } | null {
   if (type === 'human-question-required' && data?.question) {
     return {
@@ -104,11 +122,9 @@ function formatWorkflowEvent(type: string, data: any): { title: string; text: st
     const suggested = data?.suggestedNextState || data?.nextState || '';
     const current = data?.currentState || '__human_approval__';
     const availableStates = Array.isArray(data?.availableStates) && data.availableStates.length
-      ? `可选状态：${data.availableStates.join(', ')}`
+      ? `可选状态：\n${data.availableStates.map((state: string) => `- ${state}`).join('\n')}`
       : '';
-    const advice = data?.supervisorAdvice
-      ? `Supervisor 建议：${typeof data.supervisorAdvice === 'string' ? data.supervisorAdvice : JSON.stringify(data.supervisorAdvice)}`
-      : '';
+    const advice = data?.supervisorAdvice ? formatHumanApprovalAdvice(data.supervisorAdvice) : '';
     const questionId = data?.humanQuestion?.id ? `questionId: ${data.humanQuestion.id}` : '';
     return {
       title: '等待人工审查',
@@ -118,8 +134,10 @@ function formatWorkflowEvent(type: string, data: any): { title: string; text: st
         availableStates,
         advice,
         questionId,
-        '微信可回复：/approve 批准，或 /iterate <反馈> 要求继续迭代。',
-      ].filter(Boolean).join('\n'),
+        '微信可回复：',
+        '/approve 批准',
+        '/iterate <反馈> 要求继续迭代',
+      ].filter(Boolean).join('\n\n'),
     };
   }
   if (type === 'state-change') {
@@ -228,6 +246,16 @@ function shouldDeliverWorkflowEvent(type: string, ids: { configFile: string; run
   return true;
 }
 
+function getWorkflowDeliveryDedupeKey(type: string, ids: { configFile: string; runId: string; questionId: string }, binding: ChannelSessionBinding): string {
+  return [
+    'workflow-event',
+    type,
+    ids.runId || ids.configFile || 'unknown-run',
+    ids.questionId || 'no-question',
+    binding.id || binding.frontendSessionId || binding.externalConversationId || 'unknown-target',
+  ].join(':');
+}
+
 export async function deliverWorkflowEventToChannels(type: string, payload: any): Promise<void> {
   const formatted = formatWorkflowEvent(type, payload);
   if (!formatted) return;
@@ -252,6 +280,7 @@ export async function deliverWorkflowEventToChannels(type: string, payload: any)
       title: formatted.title,
       text: formatted.text,
       binding,
+      dedupeKey: getWorkflowDeliveryDedupeKey(type, ids, binding),
       metadata: {
         eventType: type,
         configFile: ids.configFile,

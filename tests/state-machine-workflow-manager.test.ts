@@ -1354,6 +1354,66 @@ describe('state machine live feedback', () => {
     expect(context).toContain('- fail: 进入 "设计"');
     expect(context).toContain('下一步都以本状态 transitions 的真实配置为准');
   });
+
+  test('injects verdict transition rules only for the final step in a state', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '需求拆解',
+            isInitial: true,
+            steps: [
+              { name: '收集输入', agent: 'developer', task: 'Collect input', role: 'analyst' },
+              { name: '形成裁决', agent: 'developer', task: 'Decide whether the state can move on', role: 'judge' },
+            ],
+            transitions: [
+              { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
+              { condition: { verdict: 'conditional_pass' }, to: '需求拆解', priority: 2 },
+              { condition: { verdict: 'fail' }, to: '需求拆解', priority: 3 },
+            ],
+          },
+          {
+            name: '完成',
+            isFinal: true,
+            steps: [],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const firstStepContext = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Build a feature',
+    );
+
+    expect(firstStepContext).not.toContain('当前状态 verdict 转移规则');
+    expect(firstStepContext).not.toContain('当前状态 verdict 实际流向');
+    expect(firstStepContext).not.toContain('verdict 流向:');
+    expect(firstStepContext).not.toContain('"verdict": "pass | conditional_pass | fail"');
+    expect(firstStepContext).toContain('当前步骤不是状态 "需求拆解" 的最后一个步骤');
+    expect(firstStepContext).toContain('不要输出 pass / conditional_pass / fail 流程裁决');
+
+    const finalStepContext = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[0].steps[1],
+      config.workflow.states[0],
+      config,
+      'Build a feature',
+    );
+
+    expect(finalStepContext).toContain('当前状态 verdict 转移规则');
+    expect(finalStepContext).toContain('当前状态 verdict 实际流向');
+    expect(finalStepContext).toContain('- pass: 进入 "完成"');
+    expect(finalStepContext).toContain('- conditional_pass: 进入 "需求拆解"');
+    expect(finalStepContext).toContain('"verdict": "pass | conditional_pass | fail"');
+    expect(finalStepContext).toContain('当前步骤是状态 "需求拆解" 的最后一个步骤');
+  });
 });
 
 describe('state machine resume', () => {

@@ -37,6 +37,7 @@ export async function sendWeChatNotificationToFrontendSession(input: {
   text: string;
   syncToChat?: boolean;
   sourceLabel?: string;
+  dedupeKey?: string;
 }): Promise<{ ok: boolean; reason?: string; text?: string }> {
   const frontendSessionId = String(input.frontendSessionId || '').trim();
   if (!frontendSessionId) return { ok: false, reason: 'missing-frontend-session' };
@@ -68,7 +69,7 @@ export async function sendWeChatNotificationToFrontendSession(input: {
         direction: 'outbound',
       },
     }, {
-      dedupeKey: `wechat-notify:${frontendSessionId}:${deliveredText}`,
+      dedupeKey: input.dedupeKey || `wechat-notify:${frontendSessionId}:${deliveredText}`,
     }).catch(() => {});
   }
 
