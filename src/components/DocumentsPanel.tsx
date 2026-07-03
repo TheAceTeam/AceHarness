@@ -214,6 +214,8 @@ function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: Sort
 export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0, onOpenWorkspaceDirectory }: DocumentsPanelProps) {
   const { toast } = useToast();
   const [files, setFiles] = useState<DocFile[]>([]);
+  const [docPage, setDocPage] = useState(1);
+  const [docPagination, setDocPagination] = useState<{ total: number; totalPages: number; page: number; pageSize: number } | null>(null);
   const [documentDirectory, setDocumentDirectory] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -339,17 +341,20 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     if (!runId) return;
     setLoading(true);
     try {
-      const data = await runsApi.listDocuments(runId, { includeChildren: true });
+      const data = await runsApi.listDocuments(runId, { page: docPage, pageSize: 200, sortDirection: 'asc' });
       setFiles(data.files || []);
+      setDocPagination(data.pagination || null);
       setDocumentDirectory(data.documentDirectory || null);
     } catch {
       setFiles([]);
+      setDocPagination(null);
       setDocumentDirectory(null);
     }
     setLoading(false);
-  }, [runId]);
+  }, [docPage, runId]);
 
   useEffect(() => { loadFiles(); }, [loadFiles]);
+  useEffect(() => { setDocPage(1); }, [runId]);
 
   // Filter files by doc type
   const tabFiles = useMemo(() => {
@@ -447,12 +452,13 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     if (!runId) return;
     setLoading(true);
     try {
-      const data = await runsApi.listDocuments(runId, { includeChildren: true });
+      const data = await runsApi.listDocuments(runId, { includeChildren: true, page: 1, pageSize: 500, sortDirection: 'desc' });
       const nextFiles = data.files || [];
       setFiles(nextFiles);
+      setDocPagination(data.pagination || null);
       const latestFile = nextFiles
         .filter(file => hasTimestamp(file.filename))
-        .sort((a, b) => b.filename.localeCompare(a.filename))[0];
+        .sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime())[0];
 
       if (!latestFile) {
         toast('error', '未找到 AI 最新结论文档');
@@ -686,6 +692,31 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         </div>
       )}
       <div className="flex-1" />
+      {!compact && docPagination && docPagination.totalPages > 1 && (
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            disabled={loading || docPagination.page <= 1}
+            onClick={() => setDocPage((page) => Math.max(1, page - 1))}
+            title="上一页"
+          >
+            <span className="material-symbols-outlined text-sm">chevron_left</span>
+          </Button>
+          <span className="min-w-16 text-center">{docPagination.page}/{docPagination.totalPages}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            disabled={loading || docPagination.page >= docPagination.totalPages}
+            onClick={() => setDocPage((page) => Math.min(docPagination.totalPages, page + 1))}
+            title="下一页"
+          >
+            <span className="material-symbols-outlined text-sm">chevron_right</span>
+          </Button>
+        </div>
+      )}
       {documentDirectory && onOpenWorkspaceDirectory && (
         <Button
           variant="outline"

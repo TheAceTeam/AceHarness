@@ -397,6 +397,14 @@ function shouldAlwaysRenderTab(tab: DashboardDockTab) {
   return tab.kind === 'chat';
 }
 
+function normalizeDashboardDockTab(tab: DashboardDockTab): DashboardDockTab {
+  if (tab.kind !== 'workbench') return tab;
+  return {
+    ...tab,
+    id: `workbench:${tab.config}`,
+  };
+}
+
 function hasSameTabIdentity(current: WorkspacePanelParams, next: DashboardDockTab) {
   if (current.id !== next.id || current.kind !== next.kind || current.title !== next.title) {
     return false;
@@ -594,18 +602,19 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
     const openTab = useCallback((tab: DashboardDockTab, options?: DashboardDockOpenOptions) => {
       const api = apiRef.current;
       if (!api) return;
+      const normalizedTab = normalizeDashboardDockTab(tab);
 
-      const existing = api.getPanel(tab.id);
+      const existing = api.getPanel(normalizedTab.id);
       if (existing) {
         const params = existing.params as WorkspacePanelParams | undefined;
-        if (params && !hasSameTabIdentity(params, tab)) {
-          if (existing.api.title !== tab.title) {
-            existing.api.setTitle(tab.title);
+        if (params && !hasSameTabIdentity(params, normalizedTab)) {
+          if (existing.api.title !== normalizedTab.title) {
+            existing.api.setTitle(normalizedTab.title);
           }
           existing.update({
             params: {
               ...params,
-              ...tab,
+              ...normalizedTab,
               renderOverview: () => renderOverviewRef.current(),
               onToggleChatSecondarySidebar: () => toggleChatSecondarySidebarRef.current?.(),
               chatSecondarySidebarPinned: chatSecondarySidebarPinnedRef.current,
@@ -631,14 +640,14 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       }
 
       const addedPanel = api.addPanel<WorkspacePanelParams>({
-        id: tab.id,
-        title: tab.title,
+        id: normalizedTab.id,
+        title: normalizedTab.title,
         component: 'workspace',
-        renderer: shouldAlwaysRenderTab(tab) ? 'always' : undefined,
+        renderer: shouldAlwaysRenderTab(normalizedTab) ? 'always' : undefined,
         floating: false,
         position: options?.position,
         params: {
-          ...tab,
+          ...normalizedTab,
           renderOverview: () => renderOverviewRef.current(),
           onToggleChatSecondarySidebar: () => toggleChatSecondarySidebarRef.current?.(),
           chatSecondarySidebarPinned: chatSecondarySidebarPinnedRef.current,

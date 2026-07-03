@@ -235,7 +235,7 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
     stepLogs: Array.isArray(status.stepLogs) ? status.stepLogs.slice(-80).map(compactStepLog) : [],
     agents: Array.isArray(status.agents) ? status.agents.map(compactAgent) : [],
     iterationStates: status.iterationStates || {},
-    stateHistory: Array.isArray(status.stateHistory) ? status.stateHistory.map(compactTransition) : [],
+    stateHistory: Array.isArray(status.stateHistory) ? status.stateHistory.slice(-80).map(compactTransition) : [],
     issueTracker: Array.isArray(status.issueTracker) ? status.issueTracker.map(compactIssue) : [],
     transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
     childRunIds: Array.isArray(status.childRunIds) ? status.childRunIds : [],

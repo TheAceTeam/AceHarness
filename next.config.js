@@ -45,7 +45,6 @@ const nextConfig = {
     NEXT_PUBLIC_BASEURL: baseUrlConfig.basePath,
   },
   serverExternalPackages: [
-    'node-cron',
     'ssh2-no-cpu-features',
     'node-ssh-no-cpu-features',
     '@marsaud/smb2',

@@ -4,13 +4,17 @@ import { resolve } from 'path';
 import { parse } from 'yaml';
 import { requireAuth } from '@/lib/auth/middleware';
 import { canAccessConfigMeta, listConfigsWithMeta } from '@/lib/config/metadata';
-import { getUserById } from '@/lib/core/user-store';
+import { loadUsers } from '@/lib/core/user-store';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 
 export const dynamic = 'force-dynamic';
 
 type ConfigSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
+type ConfigCandidate = {
+  filename: string;
+  createdAt: number | string;
+};
 
 function readPositiveInt(value: string | null, fallback: number): number {
   const parsed = Number.parseInt(value || '', 10);
@@ -49,6 +53,35 @@ function paginate<T>(items: T[], page: number, pageSize: number) {
   };
 }
 
+async function collectWorkflowConfigCandidates(configsDir: string, metaMap: Record<string, any>, auth: { id: string; role: 'admin' | 'user' }): Promise<ConfigCandidate[]> {
+  const entries = await readdir(configsDir, { withFileTypes: true });
+  const candidates: ConfigCandidate[] = [];
+
+  const pushCandidate = async (filename: string) => {
+    const meta = metaMap[filename];
+    if (!canAccessConfigMeta(meta, auth.id, auth.role)) return;
+    const createdAt = meta?.createdAt || (await stat(resolve(configsDir, filename))).birthtimeMs;
+    candidates.push({ filename, createdAt });
+  };
+
+  for (const entry of entries) {
+    if (entry.isFile() && (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml'))) {
+      await pushCandidate(entry.name);
+    } else if (entry.isDirectory() && entry.name !== 'agents') {
+      try {
+        const subEntries = await readdir(resolve(configsDir, entry.name), { withFileTypes: true });
+        for (const subEntry of subEntries) {
+          if (subEntry.isFile() && (subEntry.name.endsWith('.yaml') || subEntry.name.endsWith('.yml'))) {
+            await pushCandidate(`${entry.name}/${subEntry.name}`);
+          }
+        }
+      } catch { /* subdirectory may not exist */ }
+    }
+  }
+
+  return candidates;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
@@ -64,37 +97,8 @@ export async function GET(request: NextRequest) {
 
     await ensureRuntimeConfigsSeeded();
     const configsDir = await getRuntimeConfigsDirPath();
-    const entries = await readdir(configsDir, { withFileTypes: true });
     const metaMap = await listConfigsWithMeta('workflow');
-
-    // Filter only workflow YAML files (not directories, not settings)
-    const yamlFiles: string[] = [];
-
-    // Collect files from both root and subdirectories
-    for (const entry of entries) {
-      if (entry.isFile() && (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml'))) {
-        const meta = metaMap[entry.name];
-        if (!canAccessConfigMeta(meta, auth.id, auth.role)) {
-          continue;
-        }
-        yamlFiles.push(entry.name);
-      } else if (entry.isDirectory() && entry.name !== 'agents') {
-        // Recursively scan subdirectories (except 'agents')
-        try {
-          const subEntries = await readdir(resolve(configsDir, entry.name), { withFileTypes: true });
-          for (const subEntry of subEntries) {
-            if (subEntry.isFile() && (subEntry.name.endsWith('.yaml') || subEntry.name.endsWith('.yml'))) {
-              const relPath = `${entry.name}/${subEntry.name}`;
-              const meta = metaMap[relPath];
-              if (!canAccessConfigMeta(meta, auth.id, auth.role)) {
-                continue;
-              }
-              yamlFiles.push(relPath);
-            }
-          }
-        } catch { /* subdirectory may not exist */ }
-      }
-    }
+    const candidates = await collectWorkflowConfigCandidates(configsDir, metaMap, auth);
 
     // Count agents from configs/agents/ directory
     let agentCount = 0;
@@ -104,8 +108,19 @@ export async function GET(request: NextRequest) {
       agentCount = agentFiles.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml')).length;
     } catch { /* agents dir may not exist */ }
 
+    const canPageBeforeYamlRead = !keyword && mode === 'all' && sortKey === 'createdAt';
+    const direction = sortDirection === 'asc' ? 1 : -1;
+    const candidateSource = canPageBeforeYamlRead
+      ? paginate([...candidates].sort((a, b) => {
+          const diff = getCreatedAtTime(a.createdAt) - getCreatedAtTime(b.createdAt);
+          if (diff !== 0) return diff * direction;
+          return a.filename.localeCompare(b.filename, 'zh-CN');
+        }), page, pageSize).items
+      : candidates;
+    const usersById = new Map((await loadUsers().catch(() => [])).map((user) => [user.id, user]));
     const configs = [];
-    for (const file of yamlFiles) {
+    for (const candidate of candidateSource) {
+      const file = candidate.filename;
       try {
         const filePath = resolve(configsDir, file);
         const content = await readFile(filePath, 'utf-8');
@@ -142,7 +157,7 @@ export async function GET(request: NextRequest) {
         }
 
         const meta = metaMap[file];
-        const owner = meta?.createdBy ? await getUserById(meta.createdBy).catch(() => undefined) : undefined;
+        const owner = meta?.createdBy ? usersById.get(meta.createdBy) : undefined;
         configs.push({
           filename: file,
           name: config?.workflow?.name || file,
@@ -151,7 +166,7 @@ export async function GET(request: NextRequest) {
           phaseCount,
           stepCount,
           agentCount,
-          createdAt: meta?.createdAt || (await stat(filePath)).birthtimeMs,
+          createdAt: candidate.createdAt,
           visibility: meta?.visibility || 'private',
           sharedWithUserIds: meta?.sharedWithUserIds || [],
           ownerName: owner?.username || '',
@@ -161,7 +176,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const unfilteredTotal = configs.length;
+    const unfilteredTotal = canPageBeforeYamlRead ? candidates.length : configs.length;
     let filteredConfigs = configs;
 
     if (mode === 'phase-based' || mode === 'state-machine') {
@@ -175,7 +190,6 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const direction = sortDirection === 'asc' ? 1 : -1;
     filteredConfigs = [...filteredConfigs].sort((a, b) => {
       if (sortKey === 'createdAt') {
         const diff = getCreatedAtTime(a.createdAt) - getCreatedAtTime(b.createdAt);
@@ -187,7 +201,15 @@ export async function GET(request: NextRequest) {
       return a.filename.localeCompare(b.filename, 'zh-CN') * direction;
     });
 
-    const paged = paginate(filteredConfigs, page, pageSize);
+    const paged = canPageBeforeYamlRead
+      ? {
+          items: filteredConfigs,
+          total: candidates.length,
+          totalPages: Math.max(1, Math.ceil(candidates.length / pageSize)),
+          page: Math.min(Math.max(1, page), Math.max(1, Math.ceil(candidates.length / pageSize))),
+          pageSize,
+        }
+      : paginate(filteredConfigs, page, pageSize);
 
     return NextResponse.json({
       files: paged.items.map((item) => item.filename),

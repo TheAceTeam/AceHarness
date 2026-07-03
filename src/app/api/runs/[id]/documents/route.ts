@@ -9,6 +9,25 @@ import { resolveWorkflowConfigPath } from '@/lib/workflow/config-path';
 
 const TIMESTAMP_PREFIX_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/;
 
+function readPositiveInt(value: string | null, fallback: number): number {
+  const parsed = Number.parseInt(value || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function paginate<T>(items: T[], page: number, pageSize: number) {
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * pageSize;
+  return {
+    items: items.slice(start, start + pageSize),
+    total,
+    totalPages,
+    page: safePage,
+    pageSize,
+  };
+}
+
 /** Resolve the .ace-outputs dir and runs/outputs dir for a given runId */
 async function resolveOutputDirs(runId: string) {
   const state = await loadRunState(runId);
@@ -226,6 +245,9 @@ export async function GET(
   const runId = (await params).id;
   const filePath = request.nextUrl.searchParams.get('file');
   const includeChildren = request.nextUrl.searchParams.get('includeChildren') === '1';
+  const page = readPositiveInt(request.nextUrl.searchParams.get('page'), 1);
+  const pageSize = Math.min(readPositiveInt(request.nextUrl.searchParams.get('pageSize'), 200), 500);
+  const sortDirection = request.nextUrl.searchParams.get('sortDirection') === 'desc' ? 'desc' : 'asc';
   const sourceRunId = request.nextUrl.searchParams.get('sourceRunId') || runId;
 
   try {
@@ -268,9 +290,24 @@ export async function GET(
         }
       }
     }
-    files.sort((a, b) => new Date(a.modifiedTime).getTime() - new Date(b.modifiedTime).getTime());
+    files.sort((a, b) => {
+      const diff = new Date(a.modifiedTime).getTime() - new Date(b.modifiedTime).getTime();
+      return sortDirection === 'desc' ? -diff : diff;
+    });
+    const paged = paginate(files, page, pageSize);
 
-    return NextResponse.json({ files, aceDir: rootDocs.aceDir, documentDirectory: rootDocs.documentDirectory, childRuns });
+    return NextResponse.json({
+      files: paged.items,
+      aceDir: rootDocs.aceDir,
+      documentDirectory: rootDocs.documentDirectory,
+      childRuns,
+      pagination: {
+        total: paged.total,
+        totalPages: paged.totalPages,
+        page: paged.page,
+        pageSize: paged.pageSize,
+      },
+    });
   } catch (error: any) {
     return NextResponse.json(
       { error: '获取文档失败', message: error.message },

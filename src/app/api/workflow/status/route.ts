@@ -569,9 +569,14 @@ export async function GET(request: NextRequest) {
     const configFile = request.nextUrl.searchParams.get('configFile');
     const requestedRunId = request.nextUrl.searchParams.get('runId');
     const live = request.nextUrl.searchParams.get('live') === '1';
+    const compact = request.nextUrl.searchParams.get('compact') === '1';
 
     if (live) {
       return createWorkflowStatusStream(request, configFile, requestedRunId);
+    }
+
+    if (compact) {
+      return NextResponse.json(await resolveWorkflowLiveStatusPayload(configFile, requestedRunId));
     }
 
     return NextResponse.json(await resolveWorkflowStatusPayload(configFile, requestedRunId));

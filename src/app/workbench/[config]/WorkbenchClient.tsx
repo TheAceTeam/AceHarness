@@ -967,9 +967,12 @@ function AceAwareMarkdown({
   isStreaming?: boolean;
   className?: string;
 }) {
-  const prepared = isStreaming
+  const rawPrepared = isStreaming
     ? getStreamingAceProcessReadyContent(content)
     : String(content || '');
+  const prepared = isStreaming && rawPrepared.length > 30000
+    ? `[实时输出较长，当前仅渲染最近 30000 字；完整内容请打开输出详情。]\n\n${rawPrepared.slice(-30000)}`
+    : rawPrepared;
   if (prepared.includes('<ace-process>')) {
     return (
       <div className={className}>
@@ -1487,6 +1490,7 @@ export default function WorkbenchPage({
   const [historyLoading, setHistoryLoading] = useState(initialMode === 'history');
   const [historyRuns, setHistoryRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<any>(null);
+  const [historyRunAction, setHistoryRunAction] = useState<{ runId: string; action: 'view' | 'resume' | 'analyze' | 'delete' } | null>(null);
   const [focusedState, setFocusedState] = useState<string | null>(null); // 用于流程图视图跳转
   const [executionViewTabOverride, setExecutionViewTabOverride] = useState<string | null>(null);
   const [executionPolicyDialogOpen, setExecutionPolicyDialogOpen] = useState(false);
@@ -4893,7 +4897,7 @@ export default function WorkbenchPage({
         || selectedRun?.id
         || (startupInProgressRef.current ? undefined : initialRunId)
         || undefined;
-      const status = await workflowApi.getStatus(configFile, requestedRunId);
+      const status = await workflowApi.getStatus(configFile, requestedRunId, { compact: true });
       applyWorkflowStatusPayload(status, requestedRunId);
     } catch { /* server might not be ready */ }
   };
@@ -5363,6 +5367,7 @@ export default function WorkbenchPage({
   }, [viewMode, workflowConfig]);
 
   const viewHistoryRun = async (runId: string) => {
+    setHistoryRunAction({ runId, action: 'view' });
     try {
       const detail = await runsApi.getRunDetail(runId);
       if (!detail) return;
@@ -5549,6 +5554,8 @@ export default function WorkbenchPage({
       addLog('system', 'info', `查看历史运行: ${runId}`);
     } catch (error: any) {
       addLog('system', 'error', `加载历史运行失败: ${error.message}`);
+    } finally {
+      setHistoryRunAction((current) => current?.runId === runId && current.action === 'view' ? null : current);
     }
   };
 
@@ -6288,6 +6295,7 @@ export default function WorkbenchPage({
   const resumeWorkflow = async (resumeRunId?: string) => {
     const rid = resumeRunId || runId || selectedRun?.id;
     if (!rid) return;
+    if (resumeRunId) setHistoryRunAction({ runId: rid, action: 'resume' });
     try {
       setViewingHistoryRun(false);
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
@@ -6302,6 +6310,8 @@ export default function WorkbenchPage({
     } catch (error: any) {
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
       addLog('system', 'error', `恢复失败: ${error.message}`);
+    } finally {
+      if (resumeRunId) setHistoryRunAction((current) => current && current.runId === rid && current.action === 'resume' ? null : current);
     }
   };
 
@@ -6413,6 +6423,7 @@ export default function WorkbenchPage({
     });
     if (!confirmed) return;
 
+    setHistoryRunAction({ runId, action: 'delete' });
     try {
       await runsApi.deleteRun(runId);
       toast('success', '运行记录已删除');
@@ -6420,10 +6431,13 @@ export default function WorkbenchPage({
       await loadHistory();
     } catch (error: any) {
       toast('error', `删除失败: ${error.message}`);
+    } finally {
+      setHistoryRunAction((current) => current?.runId === runId && current.action === 'delete' ? null : current);
     }
   };
 
   const handleAnalyzeRunPrompts = async (runId: string) => {
+    setHistoryRunAction({ runId, action: 'analyze' });
     setAnalyzingRunId(runId);
     setShowPromptAnalysis(true);
     setAnalysisResults([]);
@@ -6444,6 +6458,7 @@ export default function WorkbenchPage({
       toast('error', `分析失败: ${error.message}`);
     } finally {
       setAnalyzingRunId(null);
+      setHistoryRunAction((current) => current?.runId === runId && current.action === 'analyze' ? null : current);
     }
   };
 
@@ -6862,6 +6877,7 @@ export default function WorkbenchPage({
     if (!text) return text;
     return text
       .replace(/<step-conclusion>\s*([\s\S]*?)\s*<\/step-conclusion>/gi, '$1')
+      .replace(/<\/?step-conclusion\s*>?/gi, '')
       .trim();
   };
 
@@ -11776,8 +11792,8 @@ export default function WorkbenchPage({
                 onClick={handleBatchDeleteRuns}
                 disabled={batchDeleting}
               >
-                <span className="material-symbols-outlined text-sm mr-1">delete</span>
-                删除选中 ({selectedRunIds.length})
+                <span className={`material-symbols-outlined text-sm mr-1 ${batchDeleting ? 'animate-spin' : ''}`}>{batchDeleting ? 'progress_activity' : 'delete'}</span>
+                {batchDeleting ? '删除中...' : `删除选中 (${selectedRunIds.length})`}
               </Button>
             )}
           </div>
@@ -11813,14 +11829,19 @@ export default function WorkbenchPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {historyRuns.map((run) => (
-                      <tr key={run.id} className="border-b hover:bg-accent transition-colors">
+                    {historyRuns.map((run) => {
+                      const activeHistoryAction = historyRunAction;
+                      const rowAction = activeHistoryAction && activeHistoryAction.runId === run.id ? activeHistoryAction.action : null;
+                      const rowBusy = Boolean(rowAction);
+                      return (
+                      <tr key={run.id} className={`border-b transition-colors ${rowBusy ? 'bg-muted/60' : 'hover:bg-accent'}`}>
                         <td className="p-3">
                           {run.status !== 'running' && (
                             <input
                               type="checkbox"
                               checked={selectedRunIds.includes(run.id)}
                               onChange={() => toggleRunSelection(run.id)}
+                              disabled={rowBusy || batchDeleting}
                               className="cursor-pointer"
                             />
                           )}
@@ -11861,32 +11882,33 @@ export default function WorkbenchPage({
                         <td className="p-3 text-sm">{run.completedSteps}/{run.totalSteps}</td>
                         <td className="p-3">
                           <div className="flex gap-2">
-                            <Button size="sm" variant="outline" onClick={() => { setSelectedRun(run); viewHistoryRun(run.id); }}>
-                              <span className="material-symbols-outlined text-sm mr-1">visibility</span>
-                              查看
+                            <Button size="sm" variant="outline" disabled={rowBusy} onClick={() => { setSelectedRun(run); viewHistoryRun(run.id); }}>
+                              <span className={`material-symbols-outlined text-sm mr-1 ${rowAction === 'view' ? 'animate-spin' : ''}`}>{rowAction === 'view' ? 'progress_activity' : 'visibility'}</span>
+                              {rowAction === 'view' ? '加载中...' : '查看'}
                             </Button>
                             {(run.status === 'failed' || run.status === 'stopped' || run.status === 'pending' || run.status === 'crashed') && (
-                              <Button size="sm" variant="outline" className="text-green-600 hover:text-green-700" onClick={() => { setSelectedRun(run); resumeWorkflow(run.id); }}>
-                                <span className="material-symbols-outlined text-sm mr-1">refresh</span>
-                                恢复
+                              <Button size="sm" variant="outline" className="text-green-600 hover:text-green-700" disabled={rowBusy} onClick={() => { setSelectedRun(run); resumeWorkflow(run.id); }}>
+                                <span className={`material-symbols-outlined text-sm mr-1 ${rowAction === 'resume' ? 'animate-spin' : ''}`}>{rowAction === 'resume' ? 'progress_activity' : 'refresh'}</span>
+                                {rowAction === 'resume' ? '恢复中...' : '恢复'}
                               </Button>
                             )}
                             {run.status !== 'running' && (
-                              <Button size="sm" variant="outline" className="text-blue-500 hover:text-blue-600" onClick={() => handleAnalyzeRunPrompts(run.id)}>
-                                <span className="material-symbols-outlined text-sm mr-1">psychology</span>
-                                分析
+                              <Button size="sm" variant="outline" className="text-blue-500 hover:text-blue-600" disabled={rowBusy} onClick={() => handleAnalyzeRunPrompts(run.id)}>
+                                <span className={`material-symbols-outlined text-sm mr-1 ${rowAction === 'analyze' ? 'animate-spin' : ''}`}>{rowAction === 'analyze' ? 'progress_activity' : 'psychology'}</span>
+                                {rowAction === 'analyze' ? '分析中...' : '分析'}
                               </Button>
                             )}
                             {run.status !== 'running' && run.status !== 'preparing' && (
-                              <Button size="sm" variant="destructive" onClick={() => handleDeleteRun(run.id)}>
-                                <span className="material-symbols-outlined text-sm mr-1">delete</span>
-                                删除
+                              <Button size="sm" variant="destructive" disabled={rowBusy} onClick={() => handleDeleteRun(run.id)}>
+                                <span className={`material-symbols-outlined text-sm mr-1 ${rowAction === 'delete' ? 'animate-spin' : ''}`}>{rowAction === 'delete' ? 'progress_activity' : 'delete'}</span>
+                                {rowAction === 'delete' ? '删除中...' : '删除'}
                               </Button>
                             )}
                           </div>
                         </td>
                       </tr>
-                    ))}
+                    );
+                    })}
                   </tbody>
                 </table>
               </div>

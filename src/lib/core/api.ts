@@ -101,10 +101,11 @@ function attachStreamFallback(
   return eventSource;
 }
 
-async function fetchWorkflowStatusSnapshot(configFile?: string, runId?: string): Promise<WorkflowStatusResponse> {
+async function fetchWorkflowStatusSnapshot(configFile?: string, runId?: string, options: { compact?: boolean } = {}): Promise<WorkflowStatusResponse> {
   const search = new URLSearchParams();
   if (configFile) search.set('configFile', configFile);
   if (runId) search.set('runId', runId);
+  if (options.compact) search.set('compact', '1');
   const params = search.toString() ? `?${search.toString()}` : '';
   const response = await authFetch(`${API_BASE}/workflow/status${params}`);
   if (!response.ok) throw new Error('获取状态失败');
@@ -1833,8 +1834,13 @@ export const runsApi = {
     return response.json();
   },
 
-  async listDocuments(id: string, options?: { includeChildren?: boolean }): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string; sourceRunId?: string; sourceConfigFile?: string; sourceLabel?: string; parentRunId?: string | null; rootRunId?: string | null }[]; documentDirectory?: string | null; childRuns?: { runId: string; configFile?: string; status?: string }[] }> {
-    const params = options?.includeChildren ? '?includeChildren=1' : '';
+  async listDocuments(id: string, options?: { includeChildren?: boolean; page?: number; pageSize?: number; sortDirection?: 'asc' | 'desc' }): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string; sourceRunId?: string; sourceConfigFile?: string; sourceLabel?: string; parentRunId?: string | null; rootRunId?: string | null }[]; documentDirectory?: string | null; childRuns?: { runId: string; configFile?: string; status?: string }[]; pagination?: { total: number; totalPages: number; page: number; pageSize: number } }> {
+    const search = new URLSearchParams();
+    if (options?.includeChildren) search.set('includeChildren', '1');
+    if (options?.page) search.set('page', String(options.page));
+    if (options?.pageSize) search.set('pageSize', String(options.pageSize));
+    if (options?.sortDirection) search.set('sortDirection', options.sortDirection);
+    const params = search.toString() ? `?${search.toString()}` : '';
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents${params}`);
     if (!response.ok) return { files: [], documentDirectory: null };
     return response.json();
@@ -2121,8 +2127,8 @@ export const workflowApi = {
     return response.json();
   },
 
-  async getStatus(configFile?: string, runId?: string): Promise<WorkflowStatusResponse> {
-    return fetchWorkflowStatusSnapshot(configFile, runId);
+  async getStatus(configFile?: string, runId?: string, options?: { compact?: boolean }): Promise<WorkflowStatusResponse> {
+    return fetchWorkflowStatusSnapshot(configFile, runId, options);
   },
 
   async getEventLog(runId: string, options: { afterSeq?: number; limit?: number } = {}): Promise<{

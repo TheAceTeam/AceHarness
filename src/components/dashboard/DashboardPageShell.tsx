@@ -477,7 +477,7 @@ export default function DashboardPage() {
       const config = decodeURIComponent(path.replace('/workbench/', ''));
       const params = new URLSearchParams(queryString);
       return {
-        id: `workbench:${config}:${params.get('mode') || 'run'}:${params.get('runId') || params.get('run') || ''}`,
+        id: `workbench:${config}`,
         title: config,
         kind: 'workbench',
         config,
@@ -583,7 +583,7 @@ export default function DashboardPage() {
 
   const openWorkbenchDesignTab = useCallback((filename: string) => {
     const tab: DashboardDockTab = {
-      id: `workbench:${filename}:design:`,
+      id: `workbench:${filename}`,
       title: filename,
       kind: 'workbench',
       config: filename,

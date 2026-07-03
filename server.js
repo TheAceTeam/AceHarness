@@ -116,6 +116,22 @@ const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();
 const docs = new Map();
 let ragStore = null;
+async function restoreScheduler() {
+    try {
+        const schedulerModulePath = path.join(__dirname, 'dist', 'lib', 'core', 'scheduler.js');
+        if (!fs.existsSync(schedulerModulePath)) {
+            return;
+        }
+        const { scheduler } = require(schedulerModulePath);
+        if (scheduler?.init) {
+            await scheduler.init();
+            console.log('[ACEHarness] Scheduler restored');
+        }
+    }
+    catch (error) {
+        console.error('[ACEHarness] Scheduler restore failed:', error);
+    }
+}
 function stripBasePath(pathname) {
     if (!basePath)
         return pathname;
@@ -615,6 +631,8 @@ app.prepare().then(() => {
     });
     server.listen(port, host, () => {
         console.log(`[ACEHarness] Server ready on http://${host}:${port}`);
+        process.env.ACE_INTERNAL_BASE_URL = process.env.ACE_INTERNAL_BASE_URL || `http://${host}:${port}`;
+        void restoreScheduler();
         startMemoryWatchdog();
     });
 });

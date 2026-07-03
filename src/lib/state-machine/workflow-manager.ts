@@ -140,6 +140,7 @@ const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
+const TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS = 2;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_PARENT = 8;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_USER = 16;
 const MAX_SUBWORKFLOW_RUNS_PER_ROOT = 64;
@@ -542,6 +543,22 @@ export function isEngineLevelFailure(message: string): boolean {
     || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized);
 }
 
+function isTransientEngineFailure(message: string): boolean {
+  const normalized = String(message || '');
+  if (!normalized.trim()) return false;
+  if (/(?:unauthorized|invalid token|invalid api key|authentication failed)/i.test(normalized)) return false;
+  if (/(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/.test(normalized)) return false;
+  if (/(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)) return false;
+  if (/context window limit|maximum context length|prompt is too long/i.test(normalized)) return false;
+
+  return /acp\s+connection\s+closed/i.test(normalized)
+    || /SDK API retry limit/i.test(normalized)
+    || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
+    || /(?:HTTP\s*)?(?:429|500|502|503|504)\b/i.test(normalized)
+    || /engine (?:unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
+    || /引擎(?:不可用|连接.*失败|连接.*断开)/.test(normalized);
+}
+
 function isRecoverableStepExecutionError(message: string): boolean {
   const normalized = String(message || '').trim();
   return Boolean(normalized) && !isEngineLevelFailure(normalized);
@@ -701,6 +718,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   public _frontendSessionId?: string;
   /** Explicit creation session to bind to the next run */
   public _creationSessionId?: string;
+  private runtimeGeneration = 0;
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
@@ -1943,6 +1961,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     if (instruction) {
       this.pendingForceInstruction = instruction;
     }
+    this.runtimeGeneration += 1;
+    this.clearRuntimeActivity();
     const activeChild = this.activeSubworkflowRunId
       ? this.subworkflowRuns.find((item) => item.runId === this.activeSubworkflowRunId)
       : null;
@@ -1960,6 +1980,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
       },
     });
     void this.persistState();
+    this.emit('status', {
+      status: this.status,
+      currentState: this.currentState,
+      currentStep: this.currentStep,
+      activeSteps: Array.from(this.activeStepKeys),
+      activeConcurrencyGroups: this.activeConcurrencyGroups,
+      message: `正在强制跳转到 ${targetState}`,
+    });
     this.emit('force-transition', { targetState, from: this.currentState, instruction, actor });
     if (fromState !== '__human_approval__' && fromState !== targetState && this.currentWorkflowConfig) {
       this.queueSpecRevisionVote({
@@ -4009,6 +4037,42 @@ try {
     }
   }
 
+  private getSegmentHandoffDelayMs(config: StateMachineWorkflowConfig): number {
+    const raw = config.context?.segmentDelayMs ?? process.env.ACE_STATE_SEGMENT_DELAY_MS;
+    const parsed = typeof raw === 'number' ? raw : Number.parseInt(String(raw || '0'), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.min(parsed, 30000);
+  }
+
+  private runSupervisorReviewInBackground(
+    type: 'state-review' | 'checkpoint-advice',
+    state: StateMachineState,
+    result: StateExecutionResult,
+    config: StateMachineWorkflowConfig,
+    nextState?: string
+  ): void {
+    void this.collectSupervisorReview(type, state, result, config, nextState).catch((error: any) => {
+      const message = error?.message || 'Supervisor 审阅失败';
+      const timestamp = new Date().toISOString();
+      this.supervisorFlow.push({
+        type: `${type}-error`,
+        from: this.currentSupervisorAgent,
+        to: state.name,
+        question: message,
+        round: this.transitionCount,
+        timestamp,
+        stateName: state.name,
+      });
+      this.emit('supervisor-review', {
+        type,
+        stateName: state.name,
+        content: `Supervisor 异步审阅失败: ${message}`,
+        timestamp,
+      });
+      this.emit('log', { message: `Supervisor 异步审阅失败: ${message}` });
+    });
+  }
+
   private async collectSupervisorReview(
     type: 'state-review' | 'checkpoint-advice',
     state: StateMachineState,
@@ -4269,7 +4333,11 @@ try {
         await this.persistState();
       }
 
-      await this.collectSupervisorReview('state-review', stateConfig, result, config, nextState);
+      if (config.workflow.supervisor?.stageReviewAsync === false) {
+        await this.collectSupervisorReview('state-review', stateConfig, result, config, nextState);
+      } else {
+        this.runSupervisorReviewInBackground('state-review', stateConfig, result, config, nextState);
+      }
 
       // Check self-transition circuit breaker
       if (nextState === this.currentState) {
@@ -4913,6 +4981,7 @@ try {
     config: StateMachineWorkflowConfig,
     requirements?: string
   ): Promise<StateExecutionResult> {
+    const stateGeneration = this.runtimeGeneration;
     const stateLead = state.steps[0]?.agent || this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
     const stateCloser = [...state.steps].reverse().find((step) => step.agent)?.agent || stateLead;
     this.emit('state-executing', {
@@ -4995,7 +5064,10 @@ try {
 
       // Delay between segments when using non-claude engines to avoid throttling
       if (executedSegmentInThisPass && getLogicalEngineId(this.engineType) !== 'claude-code') {
-        await new Promise(r => setTimeout(r, 30000));
+        const delayMs = this.getSegmentHandoffDelayMs(config);
+        if (delayMs > 0) {
+          await new Promise(r => setTimeout(r, delayMs));
+        }
       }
 
       if (segment.type === 'parallel') {
@@ -5012,7 +5084,15 @@ try {
 
       const step = segment.step;
       try {
+        const stepGeneration = this.runtimeGeneration;
         const output = await this.executeWorkflowStepDispatch(step, state, config, requirements, previousParallelSummary, useSegmentVerdict);
+        if (stepGeneration !== this.runtimeGeneration || stateGeneration !== this.runtimeGeneration) {
+          this.emit('log', {
+            level: 'warning',
+            message: `忽略旧执行链路输出：${state.name}/${step.name}`,
+          });
+          continue;
+        }
         executedSegmentInThisPass = true;
         previousParallelSummary = '';
         stepOutputs.push(output);
@@ -6012,6 +6092,7 @@ try {
     requirements?: string,
     extraContext?: string
   ): Promise<string> {
+    const stepStartGeneration = this.runtimeGeneration;
     const runtimeAgentName = getStepRuntimeAgentName(step);
     this.assertValidStepRuntimeAgent(step, state, runtimeAgentName);
     const agent = this.agents.find(a => a.name === runtimeAgentName);
@@ -6118,6 +6199,13 @@ try {
       }
       this.assertStepOutputIsNotSupervisorReview(step, state, runtimeAgentName, output);
       const conclusion = compactStepConclusion(stepResult.lastRoundOutput || output);
+      if (stepStartGeneration !== this.runtimeGeneration) {
+        this.emit('log', {
+          level: 'warning',
+          message: `跳过旧执行链路成功写回：${state.name}/${step.name}`,
+        });
+        return output;
+      }
 
       agent.status = 'completed';
       agent.completedTasks++;
@@ -6239,6 +6327,15 @@ try {
 
       return output;
     } catch (error: any) {
+      if (stepStartGeneration !== this.runtimeGeneration) {
+        this.markStepInactive(stepKey);
+        this.removeCurrentProcess(stepId);
+        this.emit('log', {
+          level: 'warning',
+          message: `跳过旧执行链路失败写回：${state.name}/${step.name}`,
+        });
+        throw error;
+      }
       agent.status = 'failed';
       this.markStepInactive(stepKey);
       this.removeCurrentProcess(stepId);
@@ -7033,6 +7130,7 @@ try {
     let accumulatedCost = 0;
     let accumulatedDuration = 0;
     let autoRecoveryAttempts = 0;
+    let transientEngineRetryAttempts = 0;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
@@ -7259,6 +7357,21 @@ try {
 
       if (result.is_error) {
         const errorMsg = result.result || '引擎执行失败（无输出）';
+        if (isTransientEngineFailure(errorMsg) && transientEngineRetryAttempts < TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS) {
+          transientEngineRetryAttempts += 1;
+          const retryDelayMs = 1000 * transientEngineRetryAttempts;
+          this.emit('log', {
+            agent: runtimeAgentName,
+            level: 'warning',
+            message: `步骤 "${streamStepName}" 出现临时引擎异常，${retryDelayMs}ms 后重试 ${transientEngineRetryAttempts}/${TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS}: ${errorMsg}`,
+          });
+          await new Promise((resolveRetry) => setTimeout(resolveRetry, retryDelayMs));
+          currentProcessId = stepId || currentProcessId;
+          currentProcessStreamLength = 0;
+          lastStreamAt = Date.now();
+          watchdogTriggeredForProcess = '';
+          continue;
+        }
         if (!isRecoverableStepExecutionError(errorMsg)) {
           throw new Error(errorMsg);
         }
@@ -7305,6 +7418,9 @@ try {
 
       if (autoRecoveryAttempts > 0) {
         autoRecoveryAttempts = 0;
+      }
+      if (transientEngineRetryAttempts > 0) {
+        transientEngineRetryAttempts = 0;
       }
       const roundOutput = result.result || '';
       const humanHelpRequests = this.parseHumanHelpRequests(roundOutput, config);

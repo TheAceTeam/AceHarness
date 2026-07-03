@@ -21,6 +21,7 @@ const workflowSupervisorConfigSchema = z.object({
   enabled: z.boolean().default(true),
   agent: z.string().min(1).default('default-supervisor'),
   stageReviewEnabled: z.boolean().default(true),
+  stageReviewAsync: z.boolean().default(true),
   checkpointAdviceEnabled: z.boolean().default(true),
   scoringEnabled: z.boolean().default(true),
   experienceEnabled: z.boolean().default(true),
@@ -356,6 +357,7 @@ export const contextConfigSchema = z.object({
   requirements: z.string().optional(),
   codebase: z.string().optional(),
   timeoutMinutes: z.number().min(1).optional(),
+  segmentDelayMs: z.number().int().min(0).max(30000).optional(),
   engine: z.string().optional(), // 工作流级别引擎覆盖
   gitBaselineEnabled: z.boolean().optional(), // 是否为运行建立 Git 基线和步骤快照，默认开启
   executionPolicy: workflowExecutionPolicySchema.optional(),

@@ -1223,8 +1223,8 @@ export function AgoraShell({
                 'hidden min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background/92 shadow-xl backdrop-blur transition-[width] duration-200 xl:flex',
                 fixedGuestPanel
                   ? guestPanelCollapsed
-                    ? 'fixed right-6 top-[8.5rem] z-40'
-                    : 'fixed bottom-6 right-6 top-[8.5rem] z-40'
+                    ? 'fixed right-6 top-[8.5rem] z-[80] max-h-[calc(100dvh-10rem)]'
+                    : 'fixed bottom-24 right-6 top-[8.5rem] z-[80] max-h-[calc(100dvh-14.5rem)]'
                   : guestPanelCollapsed
                     ? 'absolute right-4 top-4 z-10'
                     : 'absolute bottom-4 right-4 top-4 z-10',
