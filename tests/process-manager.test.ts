@@ -46,6 +46,22 @@ describe('ProcessManager', () => {
     expect(proc!.streamContent).toContain('x');
   });
 
+  test('appendStreamContent does not retain a truncated ace-process tail fragment', () => {
+    processManager.registerExternalProcess('stream-protocol-trunc', 'dev', 'step');
+    const largeToolOutput = [
+      '<ace-process>{"toolName":"read","title":"📖 读取文件","output":"',
+      'UC-10-OPEN-RECEIVING-SETTINGS -> entry/src/test/cangjie/RiderOrderHallSpecTest.cj\\n'.repeat(5000),
+      'C:\\\\Users\\\\Shawn\\\\Desktop\\\\App\\\\specs\\\\FEATURE-RIDER-ORDER-HALL.yaml',
+      '","exitCode":0,"kind":"tool-result","body":""}</ace-process>',
+    ].join('');
+
+    processManager.appendStreamContent('stream-protocol-trunc', largeToolOutput);
+    const proc = processManager.getProcess('stream-protocol-trunc');
+
+    expect(proc!.streamContent).not.toContain('","exitCode":0,"kind":"tool-result","body":""}');
+    expect(proc!.streamContent).not.toContain('FEATURE-RIDER-ORDER-HALL.yaml","exitCode"');
+  });
+
   test('setProcessOutput sets output', () => {
     processManager.registerExternalProcess('out-1', 'dev', 'step');
     processManager.setProcessOutput('out-1', 'output content');
@@ -59,6 +75,22 @@ describe('ProcessManager', () => {
     processManager.setProcessOutput('out-trunc', bigOutput);
     const proc = processManager.getProcess('out-trunc');
     expect(proc!.output.length).toBeLessThanOrEqual(200_000);
+  });
+
+  test('setProcessOutput does not retain a truncated ace-process tail fragment', () => {
+    processManager.registerExternalProcess('out-protocol-trunc', 'dev', 'step');
+    const largeToolOutput = [
+      '<ace-process>{"toolName":"read","title":"📖 读取文件","output":"',
+      'tUtils category: utility description: "Host app UIFont Category providing font creation from JSON config or naming conventions."\\n'.repeat(5000),
+      'framework_mapping: uikit: "UIFont+Utils.h (Category) [HOST-ONLY]" notes: "Use system font APIs directly in Pod code."',
+      '","exitCode":0,"kind":"tool-result","body":""}</ace-process>',
+    ].join('');
+
+    processManager.setProcessOutput('out-protocol-trunc', largeToolOutput);
+    const proc = processManager.getProcess('out-protocol-trunc');
+
+    expect(proc!.output).not.toContain('","exitCode":0,"kind":"tool-result","body":""}');
+    expect(proc!.output).not.toContain('UIFont+Utils.h (Category) [HOST-ONLY]" notes:');
   });
 
   test('setProcessError truncates at 50KB', () => {

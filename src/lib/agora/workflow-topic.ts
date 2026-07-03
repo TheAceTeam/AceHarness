@@ -231,8 +231,39 @@ function pickStableTemplate<T>(seed: string, templates: T[]): T {
   return templates[Math.abs(hash) % templates.length];
 }
 
+function extractStepConclusion(body: string): string {
+  const source = String(body || '');
+  const match = /<step-conclusion\b[^>]*>([\s\S]*?)<\/step-conclusion>/i.exec(source);
+  return match ? match[1] : source;
+}
+
+function normalizeWorkflowAgoraBodyMarkup(body: string): string {
+  return String(body || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/h[1-6]>/gi, '\n')
+    .replace(/<h[1-6][^>]*>/gi, '\n## ')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<\/?(ul|ol)[^>]*>/gi, '\n')
+    .replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, (_match, code) => `\`${String(code || '').trim()}\``)
+    .replace(/<\/?strong[^>]*>/gi, '**')
+    .replace(/<\/?b[^>]*>/gi, '**')
+    .replace(/<\/?em[^>]*>/gi, '*')
+    .replace(/<\/?i[^>]*>/gi, '*')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function cleanWorkflowEventBody(body: string, labels: string[]): string {
-  let text = String(body || '').trim();
+  let text = normalizeWorkflowAgoraBodyMarkup(String(body || '').trim());
   for (const label of labels) {
     text = text.replace(new RegExp(`^-\\s*${label}[:：]\\s*`, 'im'), '');
   }
@@ -304,7 +335,7 @@ function pickWorkflowSpeech(input: { type: string; title: string; body?: string;
     ]);
   }
   if (input.type === 'step-complete' && stepMatch) {
-    const conclusion = cleanWorkflowEventBody(body, ['结论']);
+    const conclusion = cleanWorkflowEventBody(extractStepConclusion(body), ['结论']);
     return conclusion
       ? pickStableTemplate(seed, [
         `「${stepMatch[2]}」这步做完了。${conclusion}`,

@@ -2,7 +2,8 @@ import { describe, expect, test } from 'vitest';
 
 import { buildFinalRawContent } from '@/contexts/ChatContext';
 import { parseActions } from '@/lib/chat/actions';
-import { formatAceFileChangesResult } from '@/lib/chat/ace-process-formatters';
+import { extractAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
+import { formatAceFileChangesResult, formatAceToolCall, formatAceToolResult } from '@/lib/chat/ace-process-formatters';
 
 describe('chat stream assembly', () => {
   test('completes a trailing ACP result chunk from done when delta stops mid-json', () => {
@@ -56,6 +57,42 @@ describe('chat stream assembly', () => {
     });
 
     expect(streamedProcessBlock).toContain('"kind":"tool-result"');
+  });
+
+  test('omits oversized tool result text while keeping a completed tool-result block', () => {
+    const raw = formatAceToolResult({
+      toolName: 'read',
+      title: '📖 读取文件',
+      rawOutput: {
+        filePath: 'C:\\Users\\Shawn\\Desktop\\App\\specs\\FEATURE-RIDER-ORDER-HALL.yaml',
+        content: 'UC-10-OPEN-RECEIVING-SETTINGS -> entry/src/test/cangjie/RiderOrderHallSpecTest.cj\n'.repeat(5000),
+      },
+    });
+    const parsed = extractAceProcessBlocks(raw);
+
+    expect(parsed.blocks).toHaveLength(1);
+    expect(parsed.blocks[0].kind).toBe('tool-result');
+    expect(raw).toContain('结果过大，已省略');
+    expect(raw).toContain('FEATURE-RIDER-ORDER-HALL.yaml');
+    expect(raw).not.toContain('UC-10-OPEN-RECEIVING-SETTINGS');
+    expect(raw.length).toBeLessThan(5000);
+  });
+
+  test('serializes object-array tool call content without leaking object Object text', () => {
+    const raw = formatAceToolCall({
+      toolName: 'write',
+      rawInput: {
+        filePath: 'notes.md',
+        content: [
+          { type: 'text', text: '第一段' },
+          { type: 'text', text: '第二段' },
+        ],
+      },
+    });
+
+    expect(raw).not.toContain('[object Object]');
+    expect(raw).toContain('第一段');
+    expect(raw).toContain('第二段');
   });
 
   test('reproduces malformed nested ace-process leakage when final assistant text replays a broken file-change block', () => {

@@ -19,10 +19,35 @@ const MAX_STREAM_CONTENT_CHARS = 200_000;
 const MAX_OUTPUT_CHARS = 200_000;
 const MAX_ERROR_CHARS = 50_000;
 const MAX_LOG_LINES = 200;
+const ACE_PROCESS_OPEN_TAG = '<ace-process>';
+const ACE_PROCESS_CLOSE_TAG = '</ace-process>';
 
 function trimToTail(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   return value.slice(-maxChars);
+}
+
+function trimStreamContentToTail(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+
+  const cutIndex = value.length - maxChars;
+  const trimmed = value.slice(cutIndex);
+  const lastOpenBeforeCut = value.lastIndexOf(ACE_PROCESS_OPEN_TAG, cutIndex - 1);
+  const lastCloseBeforeCut = value.lastIndexOf(ACE_PROCESS_CLOSE_TAG, cutIndex - 1);
+
+  if (lastOpenBeforeCut > lastCloseBeforeCut) {
+    const closeInTrimmed = trimmed.indexOf(ACE_PROCESS_CLOSE_TAG);
+    if (closeInTrimmed < 0) return '';
+    return trimmed.slice(closeInTrimmed + ACE_PROCESS_CLOSE_TAG.length).replace(/^\s+/, '');
+  }
+
+  const firstClose = trimmed.indexOf(ACE_PROCESS_CLOSE_TAG);
+  const firstOpen = trimmed.indexOf(ACE_PROCESS_OPEN_TAG);
+  if (firstClose >= 0 && (firstOpen < 0 || firstClose < firstOpen)) {
+    return trimmed.slice(firstClose + ACE_PROCESS_CLOSE_TAG.length).replace(/^\s+/, '');
+  }
+
+  return trimmed;
 }
 
 function ts(): string { return new Date().toISOString(); }
@@ -128,14 +153,14 @@ class ProcessManager extends EventEmitter {
   appendStreamContent(id: string, chunk: string): string {
     const proc = this.processes.get(id);
     if (!proc) return '';
-    proc.streamContent = trimToTail(proc.streamContent + chunk, MAX_STREAM_CONTENT_CHARS);
+    proc.streamContent = trimStreamContentToTail(proc.streamContent + chunk, MAX_STREAM_CONTENT_CHARS);
     return proc.streamContent;
   }
 
   setProcessOutput(id: string, output: string): void {
     const proc = this.processes.get(id);
     if (!proc) return;
-    proc.output = trimToTail(output, MAX_OUTPUT_CHARS);
+    proc.output = trimStreamContentToTail(output, MAX_OUTPUT_CHARS);
   }
 
   setProcessError(id: string, error: string): void {

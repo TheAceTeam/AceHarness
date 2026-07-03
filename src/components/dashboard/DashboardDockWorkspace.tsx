@@ -94,6 +94,7 @@ export type DashboardDockOpenOptions = {
 type DashboardDockWorkspaceProps = {
   className?: string;
   renderOverview: () => ReactNode;
+  initialTab?: DashboardDockTab;
   onFallbackChatOpen?: () => void;
   onActiveTabChange?: (tab: DashboardDockTab | null) => void;
   onToggleChatSecondarySidebar?: () => void;
@@ -529,6 +530,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
   function DashboardDockWorkspace({
     className,
     renderOverview,
+    initialTab,
     onFallbackChatOpen,
     onActiveTabChange,
     onToggleChatSecondarySidebar,
@@ -539,6 +541,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
   }, ref) {
     const apiRef = useRef<DockviewApi | null>(null);
     const renderOverviewRef = useRef(renderOverview);
+    const initialTabRef = useRef(initialTab);
     const toggleChatSecondarySidebarRef = useRef(onToggleChatSecondarySidebar);
     const chatSecondarySidebarPinnedRef = useRef(chatSecondarySidebarPinned);
     const showChatSecondarySidebarRef = useRef(showChatSecondarySidebar);
@@ -557,6 +560,10 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
     useEffect(() => {
       renderOverviewRef.current = renderOverview;
     }, [renderOverview]);
+
+    useEffect(() => {
+      initialTabRef.current = initialTab;
+    }, [initialTab]);
 
     useEffect(() => {
       singlePanelModeRef.current = singlePanelMode;
@@ -696,7 +703,23 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
           renderChatSecondarySidebar: () => renderChatSecondarySidebarRef.current?.(),
         },
       });
-      const panel = openFallbackChatPanel();
+      const initial = initialTabRef.current;
+      const panel = initial
+        ? event.api.addPanel<WorkspacePanelParams>({
+            id: initial.id,
+            title: initial.title,
+            component: 'workspace',
+            renderer: shouldAlwaysRenderTab(initial) ? 'always' : undefined,
+            params: {
+              ...initial,
+              renderOverview: () => renderOverviewRef.current(),
+              onToggleChatSecondarySidebar: () => toggleChatSecondarySidebarRef.current?.(),
+              chatSecondarySidebarPinned: chatSecondarySidebarPinnedRef.current,
+              showChatSecondarySidebar: showChatSecondarySidebarRef.current,
+              renderChatSecondarySidebar: () => renderChatSecondarySidebarRef.current?.(),
+            },
+          })
+        : openFallbackChatPanel();
       shellHeader?.setActiveScopeId(panel.id);
       onActiveTabChange?.(panel.params as WorkspacePanelParams);
       const activePanelDisposable = event.api.onDidActivePanelChange(({ panel: activePanel }) => {

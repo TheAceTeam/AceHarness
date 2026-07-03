@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, type DragEvent, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type DragEvent, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
@@ -535,6 +535,21 @@ export default function DashboardPage() {
     };
     return routeTabMap[basePath] || null;
   }, [t]);
+
+  const initialDockTab = useMemo<DashboardDockTab>(() => {
+    if (activeEmbeddedRoute) {
+      const tab = buildDockTabForRoute(activeEmbeddedRoute);
+      if (tab) return tab;
+    }
+    const tabMap: Record<DashboardPanel, DashboardDockTab> = {
+      chat: { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' },
+      overview: { id: 'overview', title: t('dashboard.overviewTitle'), kind: 'overview' },
+      agents: { id: 'agents', title: t('dashboard.quickActions.manageAgents'), kind: 'agents' },
+      skills: { id: 'skills', title: t('dashboard.quickActions.skills'), kind: 'skills' },
+      settings: { id: 'settings', title: t('dashboard.quickActions.envVars'), kind: 'settings' },
+    };
+    return tabMap[activePanel];
+  }, [activeEmbeddedRoute, activePanel, buildDockTabForRoute, t]);
 
   const handleActiveDockTabChange = useCallback((tab: DashboardDockTab | null) => {
     const nextTab = tab || { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' };
@@ -1473,6 +1488,7 @@ export default function DashboardPage() {
             <DashboardDockWorkspace
               ref={workspaceRef}
               className="min-w-0 flex-1"
+              initialTab={initialDockTab}
               onActiveTabChange={handleActiveDockTabChange}
               onFallbackChatOpen={handleFallbackChatOpen}
               onToggleChatSecondarySidebar={handleToggleChatSecondarySidebar}

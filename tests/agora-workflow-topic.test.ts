@@ -159,4 +159,45 @@ describe('workflow agora topic helpers', () => {
     expect(session.messages.map((message: any) => message.cards?.[0]?.actionLabel)).toEqual(['工作流', '工作流']);
     expect(persistenceMocks.saveChatSession).toHaveBeenCalledTimes(2);
   });
+
+  test('step complete messages use only step-conclusion content and normalize html', async () => {
+    const session: any = {
+      id: 'chat-1',
+      title: '示例工作流',
+      messages: [],
+      sessionWorkbenchState: createWorkflowAgoraWorkbenchState({
+        title: '示例工作流 · 协作议题',
+        participants: createWorkflowParticipants(['Supervisor', '工程师']),
+      }),
+      createdAt: 100,
+      updatedAt: 100,
+    };
+    persistenceMocks.loadChatSession.mockResolvedValue(session);
+
+    await appendWorkflowAgoraMessage({
+      sessionId: 'chat-1',
+      type: 'step-complete',
+      title: '步骤完成：PRD到SpecLang覆盖审查 / write-only与表面审查',
+      body: [
+        '这里是完整工具输出，不应该进群聊。',
+        '<step-conclusion>',
+        '## 结果 / 裁决',
+        '- 未发现 write-only 契约缺口。',
+        '<h2>下一步所需上下文</h2>',
+        '<ul><li>SpecLang：<code>specs/FEATURE.yaml</code></li></ul>',
+        '</step-conclusion>',
+      ].join('\n'),
+      speakerName: '工程师',
+      dedupeKey: 'step-conclusion-1',
+      createdAt: 200,
+    });
+
+    const content = session.sessionWorkbenchState.collaborationRoom.messages[0].content;
+    expect(content).toContain('未发现 write-only 契约缺口');
+    expect(content).toContain('下一步所需上下文');
+    expect(content).toContain('`specs/FEATURE.yaml`');
+    expect(content).not.toContain('这里是完整工具输出');
+    expect(content).not.toContain('<h2>');
+    expect(content).not.toContain('<li>');
+  });
 });

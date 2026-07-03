@@ -33,9 +33,25 @@ const KNOWN_TOOLS = new Set([
   'multiedit',
   'patch',
 ]);
+const MAX_INLINE_TOOL_RESULT_CHARS = 60_000;
+const OVERSIZED_TOOL_RESULT_MESSAGE = '结果过大，已省略。工具已完成，详细内容未写入对话。';
 
 function normalizeToolText(value: string): string {
   return repairWindowsMojibake(value);
+}
+
+function isOversizedToolResult(text: string): boolean {
+  return String(text || '').length > MAX_INLINE_TOOL_RESULT_CHARS;
+}
+
+function oversizedToolResultOutput(text: string): string {
+  const chars = String(text || '').length;
+  return `${OVERSIZED_TOOL_RESULT_MESSAGE}${chars ? ` 原始长度 ${chars} 字符。` : ''}`;
+}
+
+function safeToolResultText(text: string): string {
+  const normalized = normalizeToolText(text);
+  return isOversizedToolResult(normalized) ? oversizedToolResultOutput(normalized) : normalized;
 }
 
 export function getAceToolTitle(toolName: string): string {
@@ -125,6 +141,14 @@ export function stringifyStructured(value: unknown): string {
   } catch {
     return normalizeToolText(String(value));
   }
+}
+
+function inputText(value: unknown, fallback = ''): string {
+  if (value == null || value === '') return fallback;
+  const extracted = extractTextFromUnknown(value).trim();
+  if (extracted) return safeToolResultText(extracted);
+  if (typeof value === 'object') return safeToolResultText(stringifyStructured(value));
+  return safeToolResultText(String(value));
 }
 
 export function formatAceReasoning(text: string): string {
@@ -429,7 +453,7 @@ export function formatAceFileChangesResult(params: {
     toolName: primary?.toolName || params.fallbackToolName || 'edit',
     title: primary?.title || params.fallbackTitle || getAceToolTitle(params.fallbackToolName || 'edit'),
     changes: normalized,
-    output: params.output || '',
+    output: params.output ? safeToolResultText(params.output) : '',
     ...(normalized.length === 1 ? primary : {}),
   }, '');
 }
@@ -449,25 +473,25 @@ export function formatAceToolCall(params: {
   switch (toolName) {
     case 'task':
       block = formatAceSubtaskStart({
-        title: String(rawInput.description || title || ''),
-        description: String(rawInput.description || title || ''),
-        agent: String(rawInput.subagent_type || rawInput.subagentType || rawInput.agent || ''),
-        prompt: String(rawInput.prompt || ''),
+        title: inputText(rawInput.description, title),
+        description: inputText(rawInput.description, title),
+        agent: inputText(rawInput.subagent_type ?? rawInput.subagentType ?? rawInput.agent),
+        prompt: inputText(rawInput.prompt),
         toolId: params.toolId,
-        sessionId: String(rawInput.sessionId || ''),
+        sessionId: inputText(rawInput.sessionId),
       });
       break;
     case 'bash':
     case 'cmd':
     case 'powershell':
-      block = wrapAceProcessBlock('tool-call', { toolName, title, command: String(rawInput.command || '') }, '');
+      block = wrapAceProcessBlock('tool-call', { toolName, title, command: inputText(rawInput.command) }, '');
       break;
     case 'write':
       block = wrapAceProcessBlock('tool-call', {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
-        content: String(rawInput.content || rawInput.text || rawInput.new_string || rawInput.newString || ''),
+        content: inputText(rawInput.content ?? rawInput.text ?? rawInput.new_string ?? rawInput.newString),
       }, '');
       break;
     case 'edit':
@@ -477,8 +501,8 @@ export function formatAceToolCall(params: {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
-        oldString: String(rawInput.old_string || rawInput.oldString || ''),
-        newString: String(rawInput.new_string || rawInput.newString || ''),
+        oldString: inputText(rawInput.old_string ?? rawInput.oldString),
+        newString: inputText(rawInput.new_string ?? rawInput.newString),
       }, '');
       break;
     case 'read':
@@ -494,9 +518,9 @@ export function formatAceToolCall(params: {
       block = wrapAceProcessBlock('tool-call', {
         toolName,
         title,
-        pattern: String(rawInput.pattern || ''),
-        path: String(rawInput.path || rawInput.filePath || rawInput.file_path || ''),
-        include: String(rawInput.include || ''),
+        pattern: inputText(rawInput.pattern),
+        path: inputText(rawInput.path ?? rawInput.filePath ?? rawInput.file_path),
+        include: inputText(rawInput.include),
         command: typeof rawInput.command === 'string' ? rawInput.command : undefined,
       }, '');
       break;
@@ -504,7 +528,7 @@ export function formatAceToolCall(params: {
       block = wrapAceProcessBlock('tool-call', {
         toolName,
         title,
-        path: String(rawInput.path || '.'),
+        path: inputText(rawInput.path, '.'),
         command: typeof rawInput.command === 'string' ? rawInput.command : undefined,
       }, '');
       break;
@@ -520,16 +544,16 @@ export function formatAceToolCall(params: {
       }, '');
       break;
     case 'webfetch':
-      block = wrapAceProcessBlock('tool-call', { toolName, title, url: String(rawInput.url || '') }, '');
+      block = wrapAceProcessBlock('tool-call', { toolName, title, url: inputText(rawInput.url) }, '');
       break;
     case 'websearch':
-      block = wrapAceProcessBlock('tool-call', { toolName, title, query: String(rawInput.query || '') }, '');
+      block = wrapAceProcessBlock('tool-call', { toolName, title, query: inputText(rawInput.query) }, '');
       break;
     case 'skill':
       block = wrapAceProcessBlock('tool-call', {
         toolName,
         title,
-        name: skillReadInfo?.name || String(rawInput.name || rawInput.skill || rawInput.id || ''),
+        name: skillReadInfo?.name || inputText(rawInput.name ?? rawInput.skill ?? rawInput.id),
         filePath: skillReadInfo?.filePath || undefined,
         input: rawInput,
       }, '');
@@ -563,7 +587,7 @@ export function formatAceToolResult(params: {
           ?? obj.task_id
           ?? '',
       ).trim();
-      const resultText = extractTextFromUnknown(
+      const resultText = safeToolResultText(extractTextFromUnknown(
         obj.resultText
           ?? obj.result_text
           ?? obj.result
@@ -571,12 +595,12 @@ export function formatAceToolResult(params: {
           ?? obj.message
           ?? obj.text
           ?? '',
-      ).trim();
+      ).trim());
       if (sessionId || resultText) {
         return formatAceSubtaskResult({ sessionId, resultText, toolId: params.toolId });
       }
     }
-    const text = extractTextFromUnknown(raw).trim();
+    const text = safeToolResultText(extractTextFromUnknown(raw).trim());
     if (!text) return '';
     return formatAceSubtaskResult({ resultText: text, toolId: params.toolId });
   }
@@ -616,7 +640,7 @@ export function formatAceToolResult(params: {
         title,
         name: skillReadInfo?.name || '',
         filePath: skillReadInfo?.filePath || normalizeFilePath(obj),
-        content: normalizeToolText(obj.content),
+        content: safeToolResultText(obj.content),
       }, ''), params.toolId);
     }
     if (typeof obj.content === 'string' && toolName === 'read') {
@@ -624,7 +648,7 @@ export function formatAceToolResult(params: {
         toolName,
         title,
         filePath: normalizeFilePath(obj),
-        content: normalizeToolText(obj.content),
+        content: safeToolResultText(obj.content),
       }, ''), params.toolId);
     }
     if (Array.isArray(obj.todos)) {
@@ -643,7 +667,7 @@ export function formatAceToolResult(params: {
     }
     if (toolName === 'skill') {
       const rawText = extractTextFromUnknown(obj.output ?? obj.result ?? obj.text ?? obj.message ?? '').trim();
-      const content = extractTaggedToolValue(rawText, 'content') || rawText;
+      const content = safeToolResultText(extractTaggedToolValue(rawText, 'content') || rawText);
       if (content) {
         return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
           toolName,
@@ -692,13 +716,13 @@ export function formatAceToolResult(params: {
     ) {
       const stdout = typeof obj.stdout === 'string' ? obj.stdout : '';
       const stderr = typeof obj.stderr === 'string' ? obj.stderr : '';
-      const output = normalizeToolText(typeof obj.output === 'string' ? obj.output : [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : ''));
+      const output = safeToolResultText(typeof obj.output === 'string' ? obj.output : [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : ''));
       const exitCode = extractExitCode(obj);
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', { toolName, title, output, exitCode }, ''), params.toolId);
     }
   }
 
-  const text = extractTextFromUnknown(raw).trim();
+  const text = safeToolResultText(extractTextFromUnknown(raw).trim());
   if (!text) return '';
   if (toolName === 'skill') {
     return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {

@@ -4798,11 +4798,17 @@ export default function WorkbenchPage({
       setFinalReview((status as any).finalReview || null);
       setQualityChecks((status as any).qualityChecks || []);
       setMemoryLayers((status as any).memoryLayers || null);
-      const nextPendingHumanQuestion = (status as any).pendingHumanQuestion || null;
+      const statusCurrentState = String((status as any).currentState || '');
+      const statusHasActiveHumanApproval = statusCurrentState === '__human_approval__' || Boolean((status as any).pendingCheckpoint);
+      const nextPendingHumanQuestion = statusHasActiveHumanApproval
+        ? ((status as any).pendingHumanQuestion || null)
+        : null;
       const shouldRestorePendingHumanQuestion = nextPendingHumanQuestion
         && nextPendingHumanQuestion.status === 'unanswered';
       if (shouldRestorePendingHumanQuestion) {
         setPendingHumanQuestionIfChanged(nextPendingHumanQuestion);
+      } else {
+        clearPendingHumanQuestion();
       }
 
       {
@@ -5295,6 +5301,9 @@ export default function WorkbenchPage({
   // Sync runId to URL
   useEffect(() => {
     const modeFromUrl = (effectiveSearchParams.get('mode') as ViewMode) || 'run';
+    if (modeFromUrl === 'history') {
+      return;
+    }
     if (initialHistoryRun || viewingHistoryRun) {
       const currentUrlRunId = effectiveSearchParams.get('runId');
       if (runId && runId !== currentUrlRunId) {
@@ -11856,7 +11865,7 @@ export default function WorkbenchPage({
                               <span className="material-symbols-outlined text-sm mr-1">visibility</span>
                               查看
                             </Button>
-                            {(run.status === 'failed' || run.status === 'stopped' || run.status === 'pending') && (
+                            {(run.status === 'failed' || run.status === 'stopped' || run.status === 'pending' || run.status === 'crashed') && (
                               <Button size="sm" variant="outline" className="text-green-600 hover:text-green-700" onClick={() => { setSelectedRun(run); resumeWorkflow(run.id); }}>
                                 <span className="material-symbols-outlined text-sm mr-1">refresh</span>
                                 恢复
