@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Globe } from 'lucide-react';
 import { AiModelSelectorField, type AiModelSelectorOption } from '@/components/AiModelSelectorField';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
 import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
+import { useEngineConfigQuery } from '@/client/query/engines';
+import { queryKeys } from '@/client/query/query-keys';
 
 interface EngineSelectProps {
   value: string;
@@ -16,21 +19,17 @@ interface EngineSelectProps {
 }
 
 export function EngineSelect({ value, onChange, className = '', allowGlobal = false }: EngineSelectProps) {
-  const [globalEngine, setGlobalEngine] = useState('');
-  const [globalDriver, setGlobalDriver] = useState('');
+  const queryClient = useQueryClient();
+  const engineConfigQuery = useEngineConfigQuery();
+  const globalEngine = typeof engineConfigQuery.data?.engine === 'string' ? engineConfigQuery.data.engine : '';
+  const globalDriver = typeof engineConfigQuery.data?.driver === 'string' ? engineConfigQuery.data.driver : '';
 
   useEffect(() => {
     if (!allowGlobal) return;
-    const refresh = () => {
-      fetch('/api/engine').then(r => r.json()).then(d => {
-        setGlobalEngine(typeof d.engine === 'string' ? d.engine : '');
-        setGlobalDriver(typeof d.driver === 'string' ? d.driver : '');
-      }).catch(() => {});
-    };
-    refresh();
-    const onEngineUpdated = () => refresh();
+    const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.engines() });
+    const onEngineUpdated = () => { void refresh(); };
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'engine-config-updated-at') refresh();
+      if (e.key === 'engine-config-updated-at') void refresh();
     };
     window.addEventListener('engine:updated', onEngineUpdated as EventListener);
     window.addEventListener('storage', onStorage);
@@ -38,7 +37,7 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
       window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
       window.removeEventListener('storage', onStorage);
     };
-  }, [allowGlobal]);
+  }, [allowGlobal, queryClient]);
 
   const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
   const globalLabel = getEngineMeta(effectiveGlobalEngine)?.name || getEngineMeta(globalEngine)?.name || globalEngine;
@@ -74,20 +73,16 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
 
 /** Hook to get the effective engine (per-chat override or global) */
 export function useCurrentEngine(override?: string): string {
-  const [globalEngine, setGlobalEngine] = useState('');
-  const [globalDriver, setGlobalDriver] = useState('');
+  const queryClient = useQueryClient();
+  const engineConfigQuery = useEngineConfigQuery();
+  const globalEngine = typeof engineConfigQuery.data?.engine === 'string' ? engineConfigQuery.data.engine : '';
+  const globalDriver = typeof engineConfigQuery.data?.driver === 'string' ? engineConfigQuery.data.driver : '';
 
   useEffect(() => {
-    const refresh = () => {
-      fetch('/api/engine').then(r => r.json()).then(d => {
-        setGlobalEngine(typeof d.engine === 'string' ? d.engine : '');
-        setGlobalDriver(typeof d.driver === 'string' ? d.driver : '');
-      }).catch(() => {});
-    };
-    refresh();
-    const onEngineUpdated = () => refresh();
+    const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.engines() });
+    const onEngineUpdated = () => { void refresh(); };
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'engine-config-updated-at') refresh();
+      if (e.key === 'engine-config-updated-at') void refresh();
     };
     window.addEventListener('engine:updated', onEngineUpdated as EventListener);
     window.addEventListener('storage', onStorage);
@@ -95,7 +90,7 @@ export function useCurrentEngine(override?: string): string {
       window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
       window.removeEventListener('storage', onStorage);
     };
-  }, []);
+  }, [queryClient]);
 
   return override || resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
 }

@@ -21,7 +21,7 @@ import { Queue, QueueList, QueueItem, QueueItemContent, QueueItemDescription, Qu
 import { Terminal, TerminalContent } from '@/components/ai-elements/terminal';
 import { Artifact, ArtifactActions, ArtifactContent, ArtifactCopyButton, ArtifactHeader, ArtifactTitle } from '@/components/ai-elements/artifact';
 import { CodeBlock } from '@/components/ai-elements/code-block';
-import { BookOpenIcon, ChevronDownIcon, Eye, MessageSquareQuote, WrenchIcon } from 'lucide-react';
+import { BookOpenIcon, ChevronDownIcon, Eye, Loader2, MessageSquareQuote, WrenchIcon } from 'lucide-react';
 import {
   extractAceProcessBlocks,
   getStreamingAceProcessReadyContent,
@@ -1822,7 +1822,7 @@ interface ChatMessageProps {
 export function ThinkingBot() {
   return (
     <div className="inline-flex items-center gap-2 px-1 py-1 text-muted-foreground">
-      <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
+      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
       <Shimmer as="span" className="text-[13px]">思考中...</Shimmer>
     </div>
   );
@@ -2040,7 +2040,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
         </div>
       )}
       <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
-        <div className={`relative overflow-hidden rounded-[28px] rounded-tl-[16px] border px-4 py-3 text-sm ${bubbleShellClass}`}>
+        <div className={`relative overflow-hidden rounded-xl rounded-tl-md border px-4 py-3 text-sm ${bubbleShellClass}`}>
           <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
           <span className="pointer-events-none absolute -left-1 top-8 h-4 w-4 rotate-45 border-b border-l border-current/10 bg-inherit" />
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -2203,7 +2203,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     toast(ok ? 'success' : 'error', ok ? '已复制消息内容' : '复制失败');
   };
   const actionBarClass = 'h-7 opacity-0 transition-opacity duration-150 flex items-center gap-0.5 group-hover:opacity-100 group-focus-within:opacity-100';
-  const actionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-background/80 hover:text-foreground';
+  const actionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground';
   const destructiveActionButtonClass = 'p-1 rounded-md text-destructive transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive';
 
   if (message.role === 'user') {
@@ -2293,8 +2293,8 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
               </span>
             </div>
           ) : null}
-          <div className="home-chat-bubble home-chat-bubble-user rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm text-primary-foreground">
-            <div className="[&_a]:text-white [&_a]:underline [&_a:hover]:text-blue-200 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-white/25 [&_img]:object-contain">
+          <div className="rounded-xl rounded-tr-sm border border-border bg-card px-4 py-2.5 text-sm text-foreground transition-colors duration-150 hover:border-[#8B5CF6]/30">
+            <div className="[&_a]:text-[#8B5CF6] [&_a]:underline [&_a:hover]:text-[#6D45D8] [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain">
               <Markdown>{message.content}</Markdown>
             </div>
           </div>
@@ -2423,7 +2423,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     return (
       <div className="group flex items-start gap-2">
         <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
-          <div className="home-chat-bubble home-chat-bubble-error rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-destructive">
+          <div className="rounded-xl rounded-tl-sm border border-destructive/20 bg-destructive/5 px-4 py-2.5 text-sm text-destructive">
             <span className="material-symbols-outlined text-sm mr-1 align-middle">{isTimeout ? 'schedule' : 'error'}</span>
             {message.content}
             {isTimeout && onContinue && (
@@ -2558,7 +2558,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
           </div>
         ) : null}
         {hasAssistantBubbleContent && (
-          <div className="home-chat-bubble home-chat-bubble-assistant rounded-2xl rounded-tl-sm px-4 py-2.5">
+          <div className="rounded-xl rounded-tl-sm border border-border bg-card px-4 py-2.5 transition-colors duration-150 hover:border-[#8B5CF6]/30">
             <div className="space-y-3">
               {processTimelineState.timelineItems.length ? (
                 <WrapperProcessBlocks content={processSource} isStreaming={isStreaming} />

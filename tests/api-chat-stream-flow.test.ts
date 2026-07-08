@@ -104,7 +104,7 @@ describe('chat stream flow', () => {
   });
 
   test('POST returns 400 for empty message', async () => {
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: { message: '' },
     }));
@@ -116,7 +116,7 @@ describe('chat stream flow', () => {
     const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
     (getOrCreateEngine as any).mockResolvedValue(null);
 
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello' },
     }));
@@ -131,7 +131,7 @@ describe('chat stream flow', () => {
     const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
     (getOrCreateEngine as any).mockResolvedValue(engine);
 
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello', mode: 'dashboard' },
     }));
@@ -148,7 +148,7 @@ describe('chat stream flow', () => {
     const { processManager } = await import('@/lib/core/process-manager');
     (getOrCreateEngine as any).mockResolvedValue(engine);
 
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: {
         message: 'Create workflow plan',
@@ -176,7 +176,7 @@ describe('chat stream flow', () => {
       model: '',
     });
 
-    const { GET } = await import('@/app/api/chat/stream/route');
+    const { GET } = await import('@/server/api-routes/chat/stream/route');
     const response = await GET(makeRequest('/api/chat/stream?checkActive=front-1&streamScope=workflow-planning'));
 
     expect(response.status).toBe(200);
@@ -212,7 +212,7 @@ describe('chat stream flow', () => {
       },
     });
 
-    const { GET } = await import('@/app/api/chat/stream/route');
+    const { GET } = await import('@/server/api-routes/chat/stream/route');
     const response = await GET(makeRequest('/api/chat/stream?checkActive=front-2'));
 
     expect(response.status).toBe(200);
@@ -236,7 +236,7 @@ describe('chat stream flow', () => {
     const { getEngineStream } = await import('@/lib/chat/stream-state');
     (getOrCreateEngine as any).mockResolvedValue(engine);
 
-    const { POST, GET } = await import('@/app/api/chat/stream/route');
+    const { POST, GET } = await import('@/server/api-routes/chat/stream/route');
     const createResponse = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello', mode: 'dashboard' },
     }));
@@ -267,7 +267,7 @@ describe('chat stream flow', () => {
     (getOrCreateEngine as any).mockResolvedValue(engine);
 
     // First create a chat to get a chatId
-    const { POST, DELETE } = await import('@/app/api/chat/stream/route');
+    const { POST, DELETE } = await import('@/server/api-routes/chat/stream/route');
     const createResponse = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello' },
     }));
@@ -284,7 +284,7 @@ describe('chat stream flow', () => {
   });
 
   test('GET returns 400 when id is missing', async () => {
-    const { GET } = await import('@/app/api/chat/stream/route');
+    const { GET } = await import('@/server/api-routes/chat/stream/route');
     const response = await GET(makeRequest('/api/chat/stream'));
 
     await assertErrorResponse(response, 400);

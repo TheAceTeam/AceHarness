@@ -105,17 +105,16 @@ describe('workflow start flow', () => {
 
   test('returns 401 when no auth token', async () => {
     const { requireAuth } = await import('@/lib/auth/middleware');
-    const { NextResponse } = await import('next/server');
     (requireAuth as any).mockResolvedValue(
-      NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+      Response.json({ error: 'unauthorized' }, { status: 401 })
     );
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       json: { configFile: 'test.yaml' },
     }));
 
-    // The route returns the NextResponse from requireAuth directly
+    // The route returns the Response from requireAuth directly
     const json = await responseJson(response);
     expect(response.status).toBe(401);
   });
@@ -124,7 +123,7 @@ describe('workflow start flow', () => {
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: {},
@@ -146,7 +145,7 @@ describe('workflow start flow', () => {
       cwd: '/tmp',
     });
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: { configFile: 'test.yaml' },
@@ -172,7 +171,7 @@ describe('workflow start flow', () => {
 
     const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: { configFile: 'test.yaml', skipPreflight: true },
@@ -197,7 +196,7 @@ describe('workflow start flow', () => {
       cwd: '/tmp',
     });
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: { configFile: 'test.yaml', rehearsal: true },
@@ -230,7 +229,7 @@ describe('workflow start flow', () => {
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: { configFile: 'test.yaml' },
@@ -261,7 +260,7 @@ describe('workflow start flow', () => {
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: { configFile: 'test.yaml', frontendSessionId: 'sess-1' },
@@ -318,7 +317,7 @@ describe('workflow start flow', () => {
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const first = POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: { configFile: 'test.yaml', frontendSessionId: 'sess-1' },
@@ -363,7 +362,7 @@ describe('workflow start flow', () => {
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
 
-    const { POST } = await import('@/app/api/workflow/start/route');
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
       token: 'valid-token',
       json: { configFile: 'test.yaml', frontendSessionId: 'sess-1' },

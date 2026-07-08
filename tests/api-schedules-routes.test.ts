@@ -32,7 +32,7 @@ describe('schedule API routes', () => {
   test('rejects unauthenticated schedule requests', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
-      const { GET, POST } = await import('@/app/api/schedules/route');
+      const { GET, POST } = await import('@/server/api-routes/schedules/route');
 
       await assertErrorResponse(await GET(makeRequest('/api/schedules')), 401);
       await assertErrorResponse(await POST(makeRequest('/api/schedules', { json: {} })), 401);
@@ -51,7 +51,7 @@ describe('schedule API routes', () => {
         '      name: Start',
       ].join('\n'));
 
-      const { POST, GET } = await import('@/app/api/schedules/route');
+      const { POST, GET } = await import('@/server/api-routes/schedules/route');
       const createResponse = await POST(makeRequest('/api/schedules', {
         token,
         json: {
@@ -82,7 +82,7 @@ describe('schedule API routes', () => {
       const { token } = await createAuthToken();
       await writeRuntimeConfig('not-workflow.yaml', 'name: Not Workflow\n');
 
-      const { POST } = await import('@/app/api/schedules/route');
+      const { POST } = await import('@/server/api-routes/schedules/route');
       const response = await POST(makeRequest('/api/schedules', {
         token,
         json: {

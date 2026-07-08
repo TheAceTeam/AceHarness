@@ -9,6 +9,7 @@
 import { EventEmitter } from 'events';
 import { accessSync, constants, existsSync } from 'fs';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 import {
   buildConfiguredProcessEnvSync,
   getConfiguredCliSearchPaths,
@@ -32,7 +33,7 @@ import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists'
 import { toClaudeSdkMcpServers } from '@/lib/mcp/registry';
 import { getRuntimePlatform, isLinux, isWindows } from '@/lib/core/runtime-platform';
 
-const requireFromHere = createRequire(__filename);
+const requireFromHere = createRequire(fileURLToPath(import.meta.url));
 
 // ============================================================================
 // Helpers

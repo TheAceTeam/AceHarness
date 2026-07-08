@@ -17,12 +17,12 @@ type WorkspaceTreeJson = {
 
 async function loadWorkspaceRoutes() {
   const [tree, file, manage, download, upload, workspaceStatic] = await Promise.all([
-    import('@/app/api/workspace/tree/route'),
-    import('@/app/api/workspace/file/route'),
-    import('@/app/api/workspace/manage/route'),
-    import('@/app/api/workspace/download/route'),
-    import('@/app/api/workspace/upload/route'),
-    import('@/app/api/workspace/static/[workspaceToken]/[...filePath]/route'),
+    import('@/server/api-routes/workspace/tree/route'),
+    import('@/server/api-routes/workspace/file/route'),
+    import('@/server/api-routes/workspace/manage/route'),
+    import('@/server/api-routes/workspace/download/route'),
+    import('@/server/api-routes/workspace/upload/route'),
+    import('@/server/api-routes/workspace/static/[workspaceToken]/[...filePath]/route'),
   ]);
   return { tree, file, manage, download, upload, workspaceStatic };
 }
@@ -148,6 +148,23 @@ describe('workspace API routes', () => {
         await file.GET(makeRequest(`/api/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent('docs/secret-link.txt')}`)),
         403
       );
+    });
+  });
+
+  test('workspace file route returns the actual byte size when text preview is too large', async () => {
+    await withTempWorkspace(async ({ workspace }) => {
+      const largeText = 'a'.repeat(1024 * 1024 + 123);
+      await writeFile(path.join(workspace, 'large.txt'), largeText);
+
+      const { file } = await loadWorkspaceRoutes();
+      const response = await file.GET(makeRequest(`/api/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent('large.txt')}`));
+      expect(response.status).toBe(413);
+
+      const json = await responseJson<{ error: string; size: number; limit: number; path: string }>(response);
+      expect(json.error).toContain('1MB');
+      expect(json.size).toBe(Buffer.byteLength(largeText, 'utf8'));
+      expect(json.limit).toBe(1024 * 1024);
+      expect(json.path).toBe('large.txt');
     });
   });
 

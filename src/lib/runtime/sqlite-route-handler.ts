@@ -1,18 +1,18 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { requireRuntimeDatabaseGrant, type RuntimeDatabaseGrant } from '@/lib/runtime/database-capabilities';
 import { appendRuntimeDatabaseAudit } from '@/lib/runtime/database-audit';
-import { RuntimeSqliteError } from '@/lib/runtime/sqlite-capability';
+import { jsonError, jsonOk } from '@/server/api-route-runtime/request-utils';
+import { readRuntimeJsonBody, runtimeSqliteError } from '@/server/api-route-runtime/runtime-database-route';
 
 export async function handleRuntimeSqlitePost<T>(
-  request: NextRequest,
+  request: Request,
   operation: string,
   action: (grant: RuntimeDatabaseGrant, body: any) => Promise<T>,
 ) {
   const auth = await requireRuntimeDatabaseGrant(request);
-  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if ('error' in auth) return jsonError(auth.error, auth.status);
   const startedAt = Date.now();
   const skillName = request.headers.get('x-aceharness-skill-name') || undefined;
-  const body = await request.json().catch(() => ({}));
+  const body = await readRuntimeJsonBody(request);
   const target = typeof body?.database === 'string' ? body.database : '';
   try {
     const result = await action(auth.grant, body);
@@ -31,7 +31,7 @@ export async function handleRuntimeSqlitePost<T>(
       },
       outputSummary: result && typeof result === 'object' ? result as Record<string, unknown> : {},
     });
-    return NextResponse.json(result);
+    return jsonOk(result);
   } catch (error) {
     await appendRuntimeDatabaseAudit({
       grant: auth.grant,
@@ -43,7 +43,6 @@ export async function handleRuntimeSqlitePost<T>(
       durationMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
     }).catch(() => null);
-    if (error instanceof RuntimeSqliteError) return NextResponse.json({ error: error.code }, { status: error.status });
-    return NextResponse.json({ error: 'SQLITE_QUERY_FAILED' }, { status: 500 });
+    return runtimeSqliteError(error);
   }
 }

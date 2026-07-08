@@ -32,6 +32,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { withBasePath } from '@/client/base-url';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
@@ -51,6 +52,7 @@ import { cn } from '@/lib/core/utils';
 import { EngineIcon } from '@/components/EngineIcon';
 import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
+import { useModelProbeRows, useSyncModelProbesToDb } from '@/client/db/collections';
 import type { ModelProbeListResponse, ModelProbeRuntimeStatus, ModelProbeSummary } from '@/lib/models/probe-types';
 
 interface ManagedModelReference {
@@ -144,8 +146,8 @@ async function authFetch(input: string, init?: RequestInit): Promise<Response> {
     localStorage.removeItem('auth-token');
     localStorage.removeItem('auth-user');
     window.dispatchEvent(new CustomEvent('auth:expired'));
-    if (window.location.pathname !== '/login') {
-      window.location.replace('/login');
+    if (window.location.pathname !== withBasePath('/login')) {
+      window.location.replace(withBasePath('/login'));
     }
   }
   return response;
@@ -206,7 +208,7 @@ function ProbeEndpointBadge({ endpoint, iconOnly = false }: { endpoint?: string;
       variant="secondary"
       title={label}
       className={cn(
-        'h-7 rounded-full border border-border/70 bg-background/80 px-2 text-muted-foreground shadow-sm',
+        'h-7 rounded-md border border-border/70 bg-background/80 px-2 text-muted-foreground shadow-sm',
         iconOnly ? 'w-7 justify-center px-0' : showText ? 'gap-1.5 px-2.5' : 'px-2.5'
       )}
     >
@@ -229,7 +231,7 @@ function ProbeEngineBadge({ engine, compact = false }: { engine: string; compact
       variant="outline"
       title={label}
       className={cn(
-        'rounded-full border-border/70 bg-background/80 text-foreground shadow-sm',
+        'rounded-md border-border/70 bg-background/80 text-foreground shadow-sm',
         compact ? 'h-7 gap-1.5 px-2.5' : 'gap-1.5 px-2.5 py-1'
       )}
     >
@@ -432,6 +434,8 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
   const [currentUser, setCurrentUser] = useState<AuthViewer | null>(() => readStoredAuthUser());
   const [nowMs, setNowMs] = useState(() => Date.now());
   const isAdmin = currentUser?.role === 'admin';
+  useSyncModelProbesToDb(data);
+  const probeRows = useModelProbeRows();
 
   const engineOptions = useMemo(() => PROBE_ENGINES.map((engine) => ({
     value: engine,
@@ -481,7 +485,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
 
   const groupedProbes = useMemo(() => {
     const grouped = new Map<string, ModelProbeSummary[]>();
-    for (const probe of data?.probes || []) {
+    for (const probe of probeRows) {
       const bucket = grouped.get(probe.groupId) || [];
       bucket.push(probe);
       grouped.set(probe.groupId, bucket);
@@ -499,7 +503,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
 
     groups.sort(groupOrder(sortMode, windowDays));
     return groups;
-  }, [data?.probes, sortMode, windowDays]);
+  }, [probeRows, sortMode, windowDays]);
 
   useEffect(() => {
     setCurrentUser(readStoredAuthUser());
@@ -808,7 +812,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '仅管理员可拆分分组');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     if (selected.length === 0) {
       toast('warning', '请先选择要拆分的模型');
       return;
@@ -819,7 +823,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       return;
     }
     setGroupActionDialog(createGroupActionState('split', `${selected[0].groupName} - Split`));
-  }, [data?.probes, isAdmin, selectedProbeIds, toast]);
+  }, [isAdmin, probeRows, selectedProbeIds, toast]);
 
   const splitSelectedProbes = useCallback(async () => {
     const nextGroupName = groupActionDialog?.groupName.trim();
@@ -827,7 +831,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '请输入新分组名称');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     try {
       setRefreshing(true);
       await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName);
@@ -840,14 +844,14 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
+  }, [groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, probeRows, selectedProbeIds, toast]);
 
   const openMergeSelectedProbes = useCallback(() => {
     if (!isAdmin) {
       toast('warning', '仅管理员可合并分组');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     if (selected.length < 2) {
       toast('warning', '请至少选择两个模型');
       return;
@@ -858,7 +862,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       return;
     }
     setGroupActionDialog(createGroupActionState('merge', 'Merged Group'));
-  }, [data?.probes, isAdmin, selectedProbeIds, toast]);
+  }, [isAdmin, probeRows, selectedProbeIds, toast]);
 
   const mergeSelectedProbes = useCallback(async () => {
     const nextGroupName = groupActionDialog?.groupName.trim();
@@ -866,7 +870,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '请输入合并后的分组名称');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     try {
       setRefreshing(true);
       await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName);
@@ -879,14 +883,14 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
+  }, [groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, probeRows, selectedProbeIds, toast]);
 
   const deleteSelectedProbes = useCallback(async () => {
     if (!isAdmin) {
       toast('warning', '仅管理员可删除探针');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     if (selected.length === 0) {
       toast('warning', '请先选择要删除的探针');
       return;
@@ -910,15 +914,15 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, isAdmin, loadProbes, selectedProbeIds, toast]);
+  }, [isAdmin, loadProbes, probeRows, selectedProbeIds, toast]);
 
   const selectedProbes = useMemo(
-    () => (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id)),
-    [data?.probes, selectedProbeIds]
+    () => probeRows.filter((probe) => selectedProbeIds.has(probe.id)),
+    [probeRows, selectedProbeIds]
   );
   const allProbeIds = useMemo(
-    () => (data?.probes || []).map((probe) => probe.id),
-    [data?.probes]
+    () => probeRows.map((probe) => probe.id),
+    [probeRows]
   );
   const allSelected = allProbeIds.length > 0 && selectedProbeIds.size === allProbeIds.length;
   const hasPartialProbeSelection = selectedProbeIds.size > 0 && !allSelected;
@@ -1116,7 +1120,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                                 />
                               ) : <div />}
                               <div className="flex flex-wrap items-center justify-end gap-1.5">
-                                <Badge className={cn('rounded-full border px-4 py-1 text-sm font-medium', meta.badgeClassName)}>
+                                <Badge className={cn('rounded-md border px-3 py-1 text-sm font-medium', meta.badgeClassName)}>
                                   <StatusIcon className="mr-1.5 inline h-4 w-4" />
                                   {meta.label}
                                 </Badge>
@@ -1141,7 +1145,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <h4 className="break-words text-xl font-semibold">{probe.name}</h4>
-                                  <Badge variant="secondary" className="rounded-full px-2.5 py-1 text-xs text-muted-foreground">
+                                  <Badge variant="secondary" className="rounded-md px-2.5 py-1 text-xs text-muted-foreground">
                                     {driverLabel(probe.driver)}
                                   </Badge>
                                 </div>
@@ -1423,7 +1427,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                 <div className="flex items-center justify-between rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
                   <div>
                     <div className="text-sm font-medium">启用探针</div>
-                    <div className="text-xs text-muted-foreground">关闭后会保留历史，但不会继续自动探测。</div>
+                    <div className="text-xs text-muted-foreground">关闭后会保留历史，并暂停后续自动探测。</div>
                   </div>
                   <Switch
                     checked={singleForm.enabled}

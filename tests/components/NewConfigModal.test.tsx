@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
-import { renderWithProviders, defaultChatContextMock } from '../helpers/component-wrapper';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { defaultChatContextMock } from '../helpers/component-wrapper';
 import { cleanup, fireEvent, render, waitFor, screen } from '@testing-library/react';
 
 const chatContextMock = {
@@ -196,6 +197,20 @@ function createJsonResponse(data: any, ok = true, status = 200): Response {
   } as Response;
 }
 
+function renderNewConfigModal(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>
+  );
+}
+
 describe('NewConfigModal backend draft isolation', () => {
   const fetchCalls: FetchCall[] = [];
 
@@ -294,7 +309,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -369,7 +384,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -477,7 +492,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -619,7 +634,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -715,7 +730,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -833,7 +848,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -945,7 +960,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -1048,7 +1063,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -1144,7 +1159,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -1220,7 +1235,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}

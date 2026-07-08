@@ -62,7 +62,7 @@ describe('spec merge flow', () => {
   });
 
   test('returns 400 when action is missing', async () => {
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { runId: 'run-123' },
     }));
@@ -71,7 +71,7 @@ describe('spec merge flow', () => {
   });
 
   test('returns 400 when runId is missing', async () => {
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'preview' },
     }));
@@ -80,7 +80,7 @@ describe('spec merge flow', () => {
   });
 
   test('returns 400 for unsupported action', async () => {
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'invalid', runId: 'run-123' },
     }));
@@ -104,7 +104,7 @@ describe('spec merge flow', () => {
     });
     (buildStructuralMergedMasterSpec as any).mockResolvedValue('# Merged\nContent');
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'preview', runId: 'run-123' },
     }));
@@ -130,7 +130,7 @@ describe('spec merge flow', () => {
     (createEngine as any).mockResolvedValue(null); // AI unavailable
     (buildStructuralMergedMasterSpec as any).mockResolvedValue('# Structural Merge');
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'preview', runId: 'run-123' },
     }));
@@ -153,7 +153,7 @@ describe('spec merge flow', () => {
       },
     }));
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'apply', runId: 'run-123', mergedHash: 'wrong-hash' },
     }));
@@ -187,7 +187,7 @@ describe('spec merge flow', () => {
       return modifiedMaster; // master was modified
     });
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'apply', runId: 'run-123', mergedHash },
     }));

@@ -18,7 +18,7 @@ async function projectPathExists(relativePath: string): Promise<boolean> {
 describe('package contract', () => {
   test('package exposes the intended global install entrypoints', async () => {
     expect(packageJson.name).toBe('@cangjielang/aceharness');
-    expect(packageJson.main).toBe('server.js');
+    expect(packageJson.main).toBe('scripts/start-tanstack-start.mjs');
     expect(packageJson.bin?.ace).toBe('bin/ace.js');
 
     await expect(projectPathExists(packageJson.main)).resolves.toBe(true);
@@ -30,7 +30,7 @@ describe('package contract', () => {
     const requiredRuntimeEntries = [
       'bin',
       'dist',
-      'server.js',
+      'scripts/start-tanstack-start.mjs',
       'public',
       'skills',
       'configs',
@@ -44,7 +44,7 @@ describe('package contract', () => {
 
   test('package files do not publish local mutable runtime state', () => {
     const files = new Set(packageJson.files);
-    const forbiddenEntries = ['node_modules', 'data', 'runs', 'logs', 'cache'];
+    const forbiddenEntries = ['node_modules', 'data', 'runs', 'logs', 'cache', 'server.js'];
 
     for (const entry of forbiddenEntries) {
       expect(files.has(entry), `package files must not include ${entry}`).toBe(false);
@@ -54,19 +54,24 @@ describe('package contract', () => {
   test('.npmignore excludes build caches and local runtime state from publish output', () => {
     const ignored = new Set(npmIgnore.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
     const requiredIgnores = [
-      '.next/cache',
-      '.next/dev',
-      '.next/trace',
-      '.next/diagnostics',
-      '.next/types',
       'data',
       'runs',
       'logs',
       'cache',
     ];
+    const forbiddenIgnores = [
+      '.next/cache',
+      '.next/dev',
+      '.next/trace',
+      '.next/diagnostics',
+      '.next/types',
+    ];
 
     for (const entry of requiredIgnores) {
       expect(ignored.has(entry), `.npmignore must exclude ${entry}`).toBe(true);
+    }
+    for (const entry of forbiddenIgnores) {
+      expect(ignored.has(entry), `.npmignore must not retain legacy Next ignore ${entry}`).toBe(false);
     }
   });
 });

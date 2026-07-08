@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import Markdown from '@/components/Markdown';
-import styles from '@/app/workbench/[config]/page.module.css';
+import { VirtualList } from '@/client/virtual/VirtualList';
+import styles from '@/client/pages/workbench/page.module.css';
 import { copyText } from '@/lib/core/clipboard';
 
 interface TokenUsage {
@@ -262,15 +263,23 @@ export default function AgentPanel({
           <span className="text-xs text-muted-foreground uppercase">执行日志</span>
           <Button variant="ghost" size="sm" className="h-6 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onClearLogs(agent.name)}>清空</Button>
         </div>
-        <div className="bg-muted rounded-md p-2 max-h-48 overflow-y-auto font-mono text-xs space-y-0.5" ref={logsContainerRef}>
-          {agentLogs.map((log, index) => (
-            <div key={index} className={`flex gap-2 ${log.level === 'error' ? 'text-red-400' : log.level === 'warn' ? 'text-yellow-400' : 'text-muted-foreground'}`}>
-              <span className="opacity-60 shrink-0">{log.time}</span>
+        <VirtualList
+          items={agentLogs}
+          estimateSize={22}
+          height={192}
+          className="rounded-md bg-muted p-2 font-mono text-xs"
+          testId="agent-log-virtual-list"
+          maxRenderedItems={80}
+          scrollRef={logsContainerRef}
+          emptyState={<div className="py-4 text-center text-muted-foreground">暂无日志</div>}
+          getKey={(log, index) => `${log.time}:${log.level}:${index}`}
+          renderItem={(log) => (
+            <div className={`flex gap-2 ${log.level === 'error' ? 'text-red-400' : log.level === 'warn' ? 'text-yellow-400' : 'text-muted-foreground'}`}>
+              <span className="shrink-0 opacity-60">{log.time}</span>
               <span>{log.message}</span>
             </div>
-          ))}
-          {agentLogs.length === 0 && <div className="text-muted-foreground text-center py-4">暂无日志</div>}
-        </div>
+          )}
+        />
       </div>
 
       <div>
@@ -280,15 +289,27 @@ export default function AgentPanel({
             {relevantPersistedLogs.length}
           </Badge>
         </div>
-        <div className="space-y-2">
-          {relevantPersistedLogs.map((log) => {
+        {relevantPersistedLogs.length === 0 ? (
+          <div className="rounded-md bg-muted p-3 text-center text-xs text-muted-foreground">
+            暂无持久化记录
+          </div>
+        ) : (
+          <VirtualList
+            items={relevantPersistedLogs}
+            estimateSize={150}
+            height={Math.min(480, Math.max(160, relevantPersistedLogs.length * 150))}
+            className="min-h-0"
+            testId="agent-persisted-step-log-virtual-list"
+            maxRenderedItems={30}
+            getKey={(log) => log.id || `${log.stepName}-${log.timestamp}`}
+            renderItem={(log) => {
             const preview = log.status === 'failed'
               ? log.error
               : log.output.length > 240
                 ? `${log.output.slice(0, 240)}...`
                 : log.output;
             return (
-              <div key={log.id || `${log.stepName}-${log.timestamp}`} className="rounded-md border bg-muted/40 p-2.5">
+              <div className="mb-2 rounded-md border bg-muted/40 p-2.5">
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-xs font-medium">{log.stepName}</div>
@@ -329,13 +350,9 @@ export default function AgentPanel({
                 </div>
               </div>
             );
-          })}
-          {relevantPersistedLogs.length === 0 && (
-            <div className="rounded-md bg-muted p-3 text-center text-xs text-muted-foreground">
-              暂无持久化记录
-            </div>
-          )}
-        </div>
+          }}
+        />
+        )}
       </div>
 
       {agent.output && (

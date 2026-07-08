@@ -1225,7 +1225,7 @@ function normalizeWorkflowTransitions(input: {
   const nextState = input.outline[input.stateIndex + 1]?.name || finalState || input.stateName;
   const defaultTargets: Record<WorkflowTransitionVerdict, string> = {
     pass: nextState,
-    conditional_pass: input.stateName,
+    conditional_pass: nextState,
     fail: input.stateName,
   };
   const grouped: Record<WorkflowTransitionVerdict, any[]> = {

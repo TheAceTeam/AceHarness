@@ -1,4 +1,3 @@
-import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { canAccessRunState } from '@/lib/workflow/run-access';
 
@@ -47,7 +46,7 @@ vi.mock('yaml', () => ({
 }));
 
 function postRequest(body: any) {
-  return new NextRequest('http://localhost/api/workflow/force-transition', {
+  return new Request('http://localhost/api/workflow/force-transition', {
     method: 'POST',
     body: JSON.stringify(body),
     headers: { 'content-type': 'application/json' },
@@ -81,7 +80,7 @@ describe('workflow run access control', () => {
       runOwnerId: 'owner',
       mode: 'state-machine',
     });
-    const { POST } = await import('@/app/api/workflow/force-transition/route');
+    const { POST } = await import('@/server/api-routes/workflow/force-transition/route');
 
     const response = await POST(postRequest({ runId: 'run-1', targetState: '实施' }));
     const body = await response.json();
@@ -104,7 +103,7 @@ describe('workflow run access control', () => {
       forceTransition,
       getStatus: () => ({ status: 'running', runId: 'run-1', currentState: '设计' }),
     });
-    const { POST } = await import('@/app/api/workflow/force-transition/route');
+    const { POST } = await import('@/server/api-routes/workflow/force-transition/route');
 
     const response = await POST(postRequest({ runId: 'run-1', targetState: '实施', instruction: 'go' }));
 

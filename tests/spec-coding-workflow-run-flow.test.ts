@@ -105,7 +105,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         const configDraft = oneStepStateMachineConfig(workspace);
         const filename = `mock-spec-run-${Date.now()}.yaml`;
 
-        const sessionsRoute = await import('@/app/api/spec-coding/sessions/route');
+        const sessionsRoute = await import('@/server/api-routes/spec-coding/sessions/route');
         const sessionResponse = await sessionsRoute.POST(makeRequest('/api/spec-coding/sessions', {
           token,
           json: {
@@ -127,7 +127,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(boundTaskId).toBeTruthy();
         const boundConfigDraft = oneStepStateMachineConfig(workspace, boundTaskId);
 
-        const createConfigRoute = await import('@/app/api/configs/create/route');
+        const createConfigRoute = await import('@/server/api-routes/configs/create/route');
         const createResponse = await createConfigRoute.POST(makeRequest('/api/configs/create', {
           token,
           json: {
@@ -206,7 +206,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         const configDraft = oneStepStateMachineConfig(workspace);
         const filename = `mock-persisted-spec-run-${Date.now()}.yaml`;
 
-        const sessionsRoute = await import('@/app/api/spec-coding/sessions/route');
+        const sessionsRoute = await import('@/server/api-routes/spec-coding/sessions/route');
         const sessionResponse = await sessionsRoute.POST(makeRequest('/api/spec-coding/sessions', {
           token,
           json: {
@@ -231,7 +231,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(boundTaskId).toBeTruthy();
         const boundConfigDraft = oneStepStateMachineConfig(workspace, boundTaskId);
 
-        const createConfigRoute = await import('@/app/api/configs/create/route');
+        const createConfigRoute = await import('@/server/api-routes/configs/create/route');
         const createResponse = await createConfigRoute.POST(makeRequest('/api/configs/create', {
           token,
           json: {

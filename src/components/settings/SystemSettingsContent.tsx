@@ -3,15 +3,28 @@
 import type { ChangeEvent } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  DataCard,
+  DataCardActions,
+  DataCardDescription,
+  DataCardHeader,
+  DataCardMeta,
+  DataCardTitle,
+} from '@/components/ui/data-card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { FormField, FormSection } from '@/components/ui/form-section';
 import { Input } from '@/components/ui/input';
+import { PageToolbar } from '@/components/ui/page-toolbar';
+import { ConfirmModal, type ConfirmModalVariant } from '@/components/ui/confirm-modal';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { StatusPill } from '@/components/ui/status-pill';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
-import ConfirmDialog from '@/components/ConfirmDialog';
 import { EnvironmentVariables } from '@/components/ai-elements/environment-variables';
-import { useConfirmDialog } from '@/hooks/useConfirmDialog';
-import { Progress } from '@/components/ui/progress';                                                                                                 
+import { Progress } from '@/components/ui/progress';
 import { copyText } from '@/lib/core/clipboard';
+import { Download, RefreshCw, TerminalSquare } from 'lucide-react';
 import {
   cangjieSdkApi,
   envApi,
@@ -71,6 +84,25 @@ interface AgentMemoryForm {
   persistMode: 'manual' | 'review' | 'auto';
 }
 
+type SettingsSectionId = 'system' | 'runtime' | 'security' | 'advanced';
+
+type ConfirmRequest = {
+  open: boolean;
+  variant: ConfirmModalVariant;
+  title: string;
+  objectName?: string;
+  consequence: string;
+  confirmLabel: string;
+  onConfirm: () => void | Promise<void>;
+};
+
+const SETTINGS_SECTIONS: Array<{ id: SettingsSectionId; label: string; description: string }> = [
+  { id: 'system', label: 'System', description: 'Workspace defaults, notifications, and cache parameters.' },
+  { id: 'runtime', label: 'Runtime', description: 'Managed SDK and process environment.' },
+  { id: 'security', label: 'Security', description: 'Tokens and secret-bearing notification settings.' },
+  { id: 'advanced', label: 'Advanced', description: 'Reference material and lower-frequency controls.' },
+];
+
 function getManagedSourceLabel(source: SdkOverviewResponse['effective']['source']) {
   if (source === 'managed') return '托管 SDK';
   return '未启用';
@@ -101,6 +133,14 @@ function stripEnvVarRow(item: EnvVarRow): EnvVar {
     value: item.value,
     enabled: item.enabled,
   };
+}
+
+function normalizeEnvVarsForCompare(items: EnvVarRow[]) {
+  return JSON.stringify(items.map((item) => stripEnvVarRow({ ...item, key: item.key.trim() })));
+}
+
+function normalizeEmailFormForCompare(form: EmailNotificationForm) {
+  return JSON.stringify({ ...form, smtpPassword: '' });
 }
 
 function validateEnvVars(vars: EnvVar[]) {
@@ -145,9 +185,9 @@ function validateEnvVars(vars: EnvVar[]) {
 
 export default function SystemSettingsContent() {
   const { toast } = useToast();
-  const { confirm, dialogProps } = useConfirmDialog();
 
   const [vars, setVars] = useState<EnvVarRow[]>([]);
+  const [envBaseline, setEnvBaseline] = useState('');
   const [varErrors, setVarErrors] = useState<EnvVarError[]>([]);
   const [envLoading, setEnvLoading] = useState(true);
   const [envSaving, setEnvSaving] = useState(false);
@@ -162,6 +202,7 @@ export default function SystemSettingsContent() {
   const [gitcodeToken, setGitcodeToken] = useState('');
   const [gitcodeConfigured, setGitcodeConfigured] = useState(false);
   const [engineAvailabilityCacheMinutes, setEngineAvailabilityCacheMinutes] = useState('30');
+  const [engineAvailabilityCacheBaseline, setEngineAvailabilityCacheBaseline] = useState('30');
   const [tokenLoading, setTokenLoading] = useState(true);
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -179,6 +220,7 @@ export default function SystemSettingsContent() {
     ccEmails: '',
     subjectPrefix: '',
   });
+  const [emailBaseline, setEmailBaseline] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [workspaceExperienceForm, setWorkspaceExperienceForm] = useState<WorkspaceExperienceForm>({
@@ -190,8 +232,11 @@ export default function SystemSettingsContent() {
     runtimeEnabled: false,
     persistMode: 'review',
   });
+  const [experienceBaseline, setExperienceBaseline] = useState('');
   const [experienceSaving, setExperienceSaving] = useState(false);
   const [experienceError, setExperienceError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>('system');
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
 
   const managedHomeActive = sdkOverview?.effective.source === 'managed';
 
@@ -215,9 +260,22 @@ export default function SystemSettingsContent() {
     disableValueEdit: managedHomeActive && item.key.trim() === 'CANGJIE_HOME',
     keyError: varErrors[index]?.key,
     valueHint: managedHomeActive && item.key.trim() === 'CANGJIE_HOME'
-      ? '当前已启用托管 SDK，此处展示有效路径，原始环境变量回退值不会被覆盖。'
+      ? '当前已启用托管 SDK，此处展示有效路径，原始环境变量回退值保持可用。'
       : undefined,
   })), [displayVars, managedHomeActive, varErrors]);
+
+  const envDirty = envBaseline !== '' && normalizeEnvVarsForCompare(vars) !== envBaseline;
+  const tokenDirty = Boolean(gitcodeToken.trim());
+  const emailDirty = emailBaseline !== '' && (
+    normalizeEmailFormForCompare(emailForm) !== emailBaseline || Boolean(emailForm.smtpPassword.trim())
+  );
+  const experienceDirty = experienceBaseline !== '' && JSON.stringify({
+    workspaceExperience: workspaceExperienceForm,
+    agentMemory: agentMemoryForm,
+  }) !== experienceBaseline;
+  const engineCacheDirty = engineAvailabilityCacheMinutes !== engineAvailabilityCacheBaseline;
+  const systemDirty = envDirty || tokenDirty || emailDirty || experienceDirty || engineCacheDirty;
+  const systemSaving = envSaving || tokenSaving || emailSaving || experienceSaving || sdkActionKey !== null;
 
   const groupedCatalog = useMemo(() => {
     const groups: Record<SdkChannel, SdkCatalogEntry[]> = { nightly: [], sts: [], lts: [] };
@@ -252,6 +310,7 @@ export default function SystemSettingsContent() {
       const data = await envApi.get('system');
       const nextVars = (data.vars || []).map((item) => createEnvVarRow(item));
       setVars(nextVars);
+      setEnvBaseline(normalizeEnvVarsForCompare(nextVars));
       setVarErrors(nextVars.map(() => ({})));
     } catch (error: any) {
       const message = error?.message || '加载环境变量失败';
@@ -282,18 +341,16 @@ export default function SystemSettingsContent() {
     setTokenError(null);
     try {
       const settings = await systemSettingsApi.get();
-      setGitcodeConfigured(settings.gitcodeTokenConfigured);
-      setEngineAvailabilityCacheMinutes(String(settings.engineAvailabilityCacheMinutes || 30));
-      setWorkspaceExperienceForm({
+      const nextWorkspaceExperienceForm = {
         mode: settings.workspaceExperience?.mode === 'one-person-company' ? 'one-person-company' : 'engineer',
         defaultEntry: settings.workspaceExperience?.defaultEntry || (settings.workspaceExperience?.mode === 'one-person-company' ? 'office' : 'home'),
         onePersonCompanyOnboardingSeen: Boolean(settings.workspaceExperience?.onePersonCompanyOnboardingSeen),
-      });
-      setAgentMemoryForm({
+      } satisfies WorkspaceExperienceForm;
+      const nextAgentMemoryForm = {
         runtimeEnabled: Boolean(settings.agentMemory?.runtimeEnabled),
         persistMode: settings.agentMemory?.persistMode || 'review',
-      });
-      setEmailForm({
+      } satisfies AgentMemoryForm;
+      const nextEmailForm = {
         enabled: Boolean(settings.emailNotifications?.enabled),
         smtpHost: settings.emailNotifications?.smtpHost || '',
         smtpPort: String(settings.emailNotifications?.smtpPort || 465),
@@ -306,7 +363,15 @@ export default function SystemSettingsContent() {
         replyTo: settings.emailNotifications?.replyTo || '',
         ccEmails: settings.emailNotifications?.ccEmails || '',
         subjectPrefix: settings.emailNotifications?.subjectPrefix || '',
-      });
+      } satisfies EmailNotificationForm;
+      setGitcodeConfigured(settings.gitcodeTokenConfigured);
+      setEngineAvailabilityCacheMinutes(String(settings.engineAvailabilityCacheMinutes || 30));
+      setEngineAvailabilityCacheBaseline(String(settings.engineAvailabilityCacheMinutes || 30));
+      setWorkspaceExperienceForm(nextWorkspaceExperienceForm);
+      setAgentMemoryForm(nextAgentMemoryForm);
+      setExperienceBaseline(JSON.stringify({ workspaceExperience: nextWorkspaceExperienceForm, agentMemory: nextAgentMemoryForm }));
+      setEmailForm(nextEmailForm);
+      setEmailBaseline(normalizeEmailFormForCompare(nextEmailForm));
     } catch (error: any) {
       const message = error?.message || '加载 GitCode Token 状态失败';
       setTokenError(message);
@@ -360,6 +425,22 @@ export default function SystemSettingsContent() {
     setVarErrors((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
   };
 
+  const handleRemoveVar = (index: number) => {
+    const item = vars[index];
+    setConfirmRequest({
+      open: true,
+      variant: 'delete',
+      title: '删除环境变量',
+      objectName: item?.key.trim() || '这条环境变量',
+      consequence: '保存后将从系统运行时回退配置中移除。',
+      confirmLabel: '删除',
+      onConfirm: () => {
+        removeVar(index);
+        setConfirmRequest(null);
+      },
+    });
+  };
+
   const saveEnvVars = async () => {
     const normalizedVars = vars.map((item) => ({ ...item, key: item.key.trim() }));
     const validation = validateEnvVars(normalizedVars);
@@ -375,6 +456,7 @@ export default function SystemSettingsContent() {
     try {
       await envApi.save('system', normalizedVars.filter((item) => item.key).map(stripEnvVarRow));
       setVars(normalizedVars);
+      setEnvBaseline(normalizeEnvVarsForCompare(normalizedVars));
       toast('success', '环境变量保存成功');
     } catch (error: any) {
       const message = error?.message || '保存环境变量失败';
@@ -429,6 +511,7 @@ export default function SystemSettingsContent() {
       await systemSettingsApi.save({
         engineAvailabilityCacheMinutes: Math.round(minutes),
       });
+      setEngineAvailabilityCacheBaseline(String(Math.round(minutes)));
       toast('success', '引擎可用性缓存时长已保存');
       await loadTokenSettings();
     } catch (error: any) {
@@ -473,7 +556,9 @@ export default function SystemSettingsContent() {
           subjectPrefix: emailForm.subjectPrefix.trim(),
         },
       });
-      setEmailForm((prev) => ({ ...prev, smtpPassword: '', smtpPasswordConfigured: prev.smtpPasswordConfigured || Boolean(prev.smtpPassword.trim()) }));
+      const nextEmailForm = { ...emailForm, smtpPassword: '', smtpPasswordConfigured: emailForm.smtpPasswordConfigured || Boolean(emailForm.smtpPassword.trim()) };
+      setEmailForm(nextEmailForm);
+      setEmailBaseline(normalizeEmailFormForCompare(nextEmailForm));
       toast('success', emailForm.enabled ? '人工审查邮件推送已保存' : '邮件推送设置已更新');
       await loadTokenSettings();
     } catch (error: any) {
@@ -493,6 +578,7 @@ export default function SystemSettingsContent() {
         workspaceExperience: workspaceExperienceForm,
         agentMemory: agentMemoryForm,
       });
+      setExperienceBaseline(JSON.stringify({ workspaceExperience: workspaceExperienceForm, agentMemory: agentMemoryForm }));
       toast('success', '体验与记忆设置已保存');
       await loadTokenSettings();
     } catch (error: any) {
@@ -522,576 +608,637 @@ export default function SystemSettingsContent() {
     }
   };
 
-  const handleRemoveSdk = async (entry: SdkCatalogEntry) => {
-    const confirmed = await confirm({
+  const handleRemoveSdk = (entry: SdkCatalogEntry) => {
+    setConfirmRequest({
+      open: true,
+      variant: 'delete',
       title: '删除托管 SDK',
-      description: `确定要删除 ${entry.releaseName} (${entry.version}) 吗？`,
+      objectName: `${entry.releaseName} (${entry.version})`,
+      consequence: '删除后，该托管 SDK 版本将从本机托管目录移除。',
       confirmLabel: '删除',
-      cancelLabel: '取消',
-      variant: 'destructive',
+      onConfirm: async () => {
+        setConfirmRequest(null);
+        await runSdkAction(
+          `remove:${entry.channel}:${entry.version}`,
+          async () => { await cangjieSdkApi.remove(entry.version, entry.channel); },
+          'SDK 删除成功',
+        );
+      },
     });
-    if (!confirmed) return;
+  };
 
-    await runSdkAction(
-      `remove:${entry.channel}:${entry.version}`,
-      async () => { await cangjieSdkApi.remove(entry.version, entry.channel); },
-      'SDK 删除成功',
-    );
+  const handleInstallSdk = (entry: SdkCatalogEntry, actionKey: string) => {
+    setConfirmRequest({
+      open: true,
+      variant: 'default',
+      title: '安装托管 SDK',
+      objectName: `${entry.releaseName} (${entry.version})`,
+      consequence: '安装会下载并写入托管 SDK 目录。',
+      confirmLabel: '安装',
+      onConfirm: async () => {
+        setConfirmRequest(null);
+        await runSdkAction(
+          actionKey,
+          async () => {
+            await cangjieSdkApi.install(entry.version, entry.channel, (event) => {
+              if (event.phase === 'download') {
+                setInstallProgress({ phase: 'download', downloaded: event.downloaded ?? 0, total: event.total ?? 0 });
+              } else {
+                setInstallProgress({ phase: event.phase, downloaded: 0, total: 0 });
+              }
+            });
+          },
+          'SDK 安装成功',
+        );
+      },
+    });
+  };
+
+  const handleActivateSdk = (entry: SdkCatalogEntry, actionKey: string) => {
+    setConfirmRequest({
+      open: true,
+      variant: 'default',
+      title: '激活托管 SDK',
+      objectName: `${entry.releaseName} (${entry.version})`,
+      consequence: '激活后，系统运行时会优先使用该托管 CANGJIE_HOME。',
+      confirmLabel: '激活',
+      onConfirm: async () => {
+        setConfirmRequest(null);
+        await runSdkAction(
+          actionKey,
+          async () => { await cangjieSdkApi.activate(entry.version, entry.channel); },
+          'SDK 切换成功',
+        );
+      },
+    });
+  };
+
+  const handleDeactivateSdk = () => {
+    setConfirmRequest({
+      open: true,
+      variant: 'reset',
+      title: '取消激活托管 SDK',
+      consequence: '取消激活后，系统将回退到环境变量或宿主机解析到的 CANGJIE_HOME。',
+      confirmLabel: '取消激活',
+      onConfirm: async () => {
+        setConfirmRequest(null);
+        await runSdkAction(
+          'deactivate',
+          async () => { await cangjieSdkApi.deactivate(); },
+          '已取消激活',
+        );
+      },
+    });
   };
 
   const pageLoading = envLoading && sdkLoading && tokenLoading;
 
   return (
     <>
-      <div className="space-y-6">
-        {pageLoading ? (
-          <div className="rounded-xl border bg-card p-10 text-center text-sm text-muted-foreground">加载中...</div>
-        ) : null}
-
-        <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">GitCode Token</h2>
-              <p className="mt-1 text-sm text-muted-foreground">必须配置此 Token 才能检测和下载托管 SDK。空输入不会被解释为默认清空。</p>
-            </div>
-            <Button size="sm" onClick={saveGitcodeToken} disabled={tokenSaving || !gitcodeToken.trim()}>
-              {tokenSaving ? '保存中...' : '保存 Token'}
-            </Button>
-          </div>
-
-          {!gitcodeConfigured && !tokenLoading ? (
-            <div className="rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-600 dark:text-amber-400">
-              尚未配置 GitCode Token，SDK 检测和下载功能将不可用。
-            </div>
-          ) : null}
-
-          {tokenError ? (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{tokenError}</div>
-          ) : null}
-
-          <div className="space-y-2">
-            <Input
-              type="password"
-              value={gitcodeToken}
-              onChange={(event) => {
-                setGitcodeToken(event.target.value);
-                if (tokenError) setTokenError(null);
-              }}
-              disabled={tokenLoading || tokenSaving}
-              placeholder={gitcodeConfigured ? '已配置，输入新值可覆盖' : '请输入 GitCode Token'}
-            />
-            <div className="text-sm text-muted-foreground">当前状态：{tokenLoading ? '加载中...' : gitcodeConfigured ? '✓ 已配置' : '未配置'}</div>
-          </div>
-
-          <div className="border-t pt-4 space-y-2">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-sm font-medium">引擎可用性缓存时长</div>
-                <div className="mt-1 text-xs text-muted-foreground">所有模型/引擎选择框和引擎管理页都会复用这份可用性结果。默认 30 分钟；手动点击“刷新可用性”会强制重查。</div>
-              </div>
-              <Button size="sm" variant="outline" onClick={saveEngineAvailabilityCache} disabled={tokenSaving || tokenLoading}>
-                {tokenSaving ? '保存中...' : '保存时长'}
-              </Button>
-            </div>
-            <div className="flex items-center gap-3">
-              <Input
-                type="number"
-                min={1}
-                max={1440}
-                value={engineAvailabilityCacheMinutes}
-                onChange={(event) => {
-                  setEngineAvailabilityCacheMinutes(event.target.value);
-                  if (tokenError) setTokenError(null);
-                }}
-                disabled={tokenLoading || tokenSaving}
-                className="max-w-[160px]"
-              />
-              <span className="text-sm text-muted-foreground">分钟</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-xl border bg-card p-6 space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">体验与 Agent 记忆</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                控制默认进入的工作界面，以及新对话、会议室、办公室和工作流是否读取 Agent 长期记忆。
-              </p>
-            </div>
-            <Button size="sm" onClick={saveWorkspaceExperience} disabled={experienceSaving || tokenLoading}>
-              {experienceSaving ? '保存中...' : '保存设置'}
-            </Button>
-          </div>
-
-          {experienceError ? (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{experienceError}</div>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <div className="text-sm font-medium">默认界面</div>
-              <select
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={workspaceExperienceForm.mode}
-                onChange={(event) => {
-                  const mode = event.target.value === 'one-person-company' ? 'one-person-company' : 'engineer';
-                  setWorkspaceExperienceForm((prev) => ({
-                    ...prev,
-                    mode,
-                    defaultEntry: mode === 'one-person-company' && prev.defaultEntry === 'home' ? 'office' : prev.defaultEntry,
-                  }));
-                }}
-                disabled={experienceSaving}
-              >
-                <option value="engineer">开发工程师界面</option>
-                <option value="one-person-company">一人公司界面</option>
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-sm font-medium">默认入口</div>
-              <select
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={workspaceExperienceForm.defaultEntry}
-                onChange={(event) => setWorkspaceExperienceForm((prev) => ({ ...prev, defaultEntry: event.target.value as WorkspaceExperienceForm['defaultEntry'] }))}
-                disabled={experienceSaving}
-              >
-                <option value="home">首页</option>
-                <option value="meeting-room">会议室</option>
-                <option value="office">办公室</option>
-                <option value="workflows">工作流</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 p-4">
-              <div>
-                <div className="text-sm font-medium">Agent 记忆参与推理</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  关闭后保留已沉淀记忆，新运行会按无长期记忆上下文启动。
-                </div>
-              </div>
-              <Switch
-                checked={agentMemoryForm.runtimeEnabled}
-                onCheckedChange={(checked) => setAgentMemoryForm((prev) => ({ ...prev, runtimeEnabled: checked }))}
-                disabled={experienceSaving}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-sm font-medium">记忆沉淀模式</div>
-              <select
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={agentMemoryForm.persistMode}
-                onChange={(event) => setAgentMemoryForm((prev) => ({ ...prev, persistMode: event.target.value as AgentMemoryForm['persistMode'] }))}
-                disabled={experienceSaving}
-              >
-                <option value="manual">手动</option>
-                <option value="review">审核后写入</option>
-                <option value="auto">自动写入</option>
-              </select>
-              <div className="text-xs text-muted-foreground">当前版本优先支持手动编辑和审核式沉淀。</div>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-xl border bg-card p-6 space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">人工审查邮件推送</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                当工作流进入人工审查时，系统会自动给该次运行的发起人发送邮件；如有需要，也可以额外抄送团队邮箱。
-              </p>
-            </div>
-            <Button size="sm" onClick={saveEmailNotifications} disabled={emailSaving || tokenLoading}>
-              {emailSaving ? '保存中...' : '保存邮件配置'}
-            </Button>
-          </div>
-
-          <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm font-medium">启用邮件提醒</div>
-                <div className="mt-1 text-xs text-muted-foreground">默认发送给工作流发起人的登录邮箱，适合在微信之外补一条不易错过的提醒。</div>
-              </div>
-              <Switch
-                checked={emailForm.enabled}
-                onCheckedChange={(checked) => setEmailForm((prev) => ({ ...prev, enabled: checked }))}
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="text-xs text-muted-foreground">
-              当前状态：{emailForm.enabled ? '已启用' : '未启用'}
-              {emailForm.smtpPasswordConfigured ? ' · 已保存 SMTP 密码' : ' · 尚未保存 SMTP 密码'}
-            </div>
-          </div>
-
-          {emailError ? (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{emailError}</div>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <div className="text-sm font-medium">SMTP Host</div>
-              <Input
-                value={emailForm.smtpHost}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpHost: event.target.value }))}
-                placeholder="例如：smtp.qq.com"
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">SMTP Port</div>
-              <Input
-                value={emailForm.smtpPort}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpPort: event.target.value }))}
-                placeholder="465 或 587"
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">SMTP 用户名</div>
-              <Input
-                value={emailForm.smtpUsername}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpUsername: event.target.value }))}
-                placeholder="通常是邮箱地址"
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">SMTP 密码 / 授权码</div>
-              <Input
-                type="password"
-                value={emailForm.smtpPassword}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpPassword: event.target.value }))}
-                placeholder={emailForm.smtpPasswordConfigured ? '已保存，输入新值可覆盖' : '请输入 SMTP 密码或授权码'}
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">发件人邮箱</div>
-              <Input
-                value={emailForm.fromEmail}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, fromEmail: event.target.value }))}
-                placeholder="例如：notify@example.com"
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">发件人名称</div>
-              <Input
-                value={emailForm.fromName}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, fromName: event.target.value }))}
-                placeholder="例如：ACEHarness"
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">Reply-To</div>
-              <Input
-                value={emailForm.replyTo}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, replyTo: event.target.value }))}
-                placeholder="可选：回复邮箱"
-                disabled={emailSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">主题前缀</div>
-              <Input
-                value={emailForm.subjectPrefix}
-                onChange={(event) => setEmailForm((prev) => ({ ...prev, subjectPrefix: event.target.value }))}
-                placeholder="可选：例如 [ACEHarness]"
-                disabled={emailSaving}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <Switch
-                checked={emailForm.smtpSecure}
-                onCheckedChange={(checked) => setEmailForm((prev) => ({ ...prev, smtpSecure: checked }))}
-                disabled={emailSaving}
-              />
-              <div>
-                <div className="text-sm font-medium">使用 SSL / TLS</div>
-                <div className="text-xs text-muted-foreground">常见情况下，465 建议开启；587 可以关闭后走 STARTTLS。</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="text-sm font-medium">抄送邮箱</div>
-            <Textarea
-              value={emailForm.ccEmails}
-              onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setEmailForm((prev) => ({ ...prev, ccEmails: event.target.value }))}
-              placeholder="可选，多个邮箱用逗号、分号或换行分隔"
-              rows={3}
-              disabled={emailSaving}
-            />
-            <div className="text-xs text-muted-foreground">不填写时，只发给当前工作流运行的发起人邮箱。</div>
-          </div>
-        </section>
-
-        <section className="rounded-xl border bg-card p-6 space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">托管 Cangjie SDK</h2>
-              <p className="mt-1 text-sm text-muted-foreground">独立管理托管 SDK，失败时不会阻塞其他系统设置分区。</p>
-            </div>
-            <div className="flex gap-2">
-              {sdkOverview?.active && (
+      <div className="space-y-5">
+        <PageToolbar
+          className="rounded-xl border border-border bg-card px-4"
+          filters={
+            <div className="flex flex-wrap items-center gap-2">
+              {SETTINGS_SECTIONS.map((section) => (
                 <Button
-                  variant="outline"
+                  key={section.id}
+                  type="button"
+                  variant={activeSection === section.id ? 'secondary' : 'ghost'}
                   size="sm"
-                  onClick={() => runSdkAction(
-                    'deactivate',
-                    async () => { await cangjieSdkApi.deactivate(); },
-                    '已取消激活',
-                  )}
-                  disabled={sdkLoading || sdkActionKey !== null}
+                  onClick={() => setActiveSection(section.id)}
+                  className="h-8"
+                  title={section.description}
                 >
-                  {sdkActionKey === 'deactivate' ? '取消中...' : '取消激活'}
+                  {section.label}
                 </Button>
-              )}
-              <Button variant="outline" size="sm" onClick={loadSdkOverview} disabled={sdkLoading || sdkActionKey !== null}>
-                {sdkLoading ? '加载中...' : '刷新'}
-              </Button>
-            </div>
-          </div>
-
-          {sdkError && !sdkOverview ? (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm space-y-3">
-              <div className="text-destructive">{sdkError}</div>
-              <Button variant="outline" size="sm" onClick={loadSdkOverview} disabled={sdkLoading}>重试</Button>
-            </div>
-          ) : null}
-
-          <div className="grid gap-3 md:grid-cols-2 text-sm">
-            <div className="rounded-lg bg-muted/40 p-3">
-              <div className="text-muted-foreground">当前服务器</div>
-              <div className="mt-1 font-medium">{sdkOverview ? `${sdkOverview.host.os} / ${sdkOverview.host.arch}` : '-'}</div>
-            </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <div className="text-muted-foreground">当前来源</div>
-              <div className="mt-1 font-medium">{getManagedSourceLabel(sdkOverview?.effective.source || 'none')}</div>
-            </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <div className="text-muted-foreground">当前激活版本</div>
-              <div className="mt-1 font-medium">
-                {sdkOverview?.active ? `${getChannelLabel(sdkOverview.active.channel)} · ${sdkOverview.active.version}` : '未激活'}
-              </div>
-            </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <div className="text-muted-foreground">有效 CANGJIE_HOME</div>
-              <div className="mt-1 font-mono text-xs break-all">{sdkOverview?.effective.cangjieHome || '未解析到'}</div>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-dashed p-3 text-sm space-y-2">
-            <div>
-              <span className="text-muted-foreground">diagnostics：</span>
-              <span>{sdkOverview?.effective.diagnostics?.length ? sdkOverview.effective.diagnostics.join('；') : '无'}</span>
-            </div>
-          </div>
-
-          {sdkError && sdkOverview ? (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{sdkError}</div>
-          ) : null}
-
-          {sdkLoading && !sdkOverview ? (
-            <div className="py-6 text-center text-sm text-muted-foreground">托管 SDK 信息加载中...</div>
-          ) : null}
-
-          {!sdkLoading && sdkOverview ? (
-            <div className="space-y-4">
-              {(['nightly', 'sts', 'lts'] as SdkChannel[]).map((channel) => (
-                <div key={channel} className="space-y-2">
-                  <div className="text-sm font-medium text-muted-foreground">{getChannelLabel(channel)}</div>
-                  {(groupedCatalog[channel] || []).length === 0 ? (
-                    <div className="rounded-md bg-muted/30 p-3 text-sm text-muted-foreground">暂无可用版本</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {groupedCatalog[channel].map((entry) => {
-                        const matched = getMatchingPackage(entry);
-                        const installed = getInstalledRecord(entry);
-                        const isActive = sdkOverview.active?.version === entry.version && sdkOverview.active?.channel === entry.channel;
-                        const installKey = `install:${entry.channel}:${entry.version}`;
-                        const activateKey = `activate:${entry.channel}:${entry.version}`;
-                        const removeKey = `remove:${entry.channel}:${entry.version}`;
-                        return (
-                          <div key={`${entry.channel}-${entry.version}`} className="rounded-lg border p-4 space-y-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-medium break-all">{entry.releaseName}</div>
-                                <div className="text-xs text-muted-foreground break-all">{entry.version}</div>
-                              </div>
-                              {isActive ? (
-                                <span className="rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">当前激活</span>
-                              ) : null}
-                            </div>
-                            <div className="text-sm text-muted-foreground">
-                              当前平台包：{matched ? matched.name : '当前平台不可安装'}
-                            </div>
-                            <div className="text-sm text-muted-foreground">
-                              安装状态：{installed ? `已安装 · ${installed.installDir}` : '未安装'}
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={!matched || sdkActionKey !== null}
-                                onClick={() => runSdkAction(
-                                  installKey,
-                                  async () => {
-                                    await cangjieSdkApi.install(entry.version, entry.channel, (event) => {
-                                      if (event.phase === 'download') {
-                                        setInstallProgress({ phase: 'download', downloaded: event.downloaded ?? 0, total: event.total ?? 0 });
-                                      } else {
-                                        setInstallProgress({ phase: event.phase, downloaded: 0, total: 0 });
-                                      }
-                                    });
-                                  },
-                                  'SDK 安装成功',
-                                )}
-                              >
-                                {sdkActionKey === installKey ? (
-                                  installProgress?.phase === 'download' && installProgress.total > 0
-                                    ? `下载中 ${Math.round(installProgress.downloaded / installProgress.total * 100)}%`
-                                    : installProgress?.phase === 'extract' ? '解压中...'
-                                    : installProgress?.phase === 'finalize' ? '整理中...'
-                                    : '安装中...'
-                                ) : installed ? '重新安装' : '安装'}
-                              </Button>
-                              <Button
-                                size="sm"
-                                disabled={!installed || isActive || sdkActionKey !== null}
-                                onClick={() => runSdkAction(
-                                  activateKey,
-                                  async () => { await cangjieSdkApi.activate(entry.version, entry.channel); },
-                                  'SDK 切换成功',
-                                )}
-                              >
-                                {sdkActionKey === activateKey ? '切换中...' : '激活'}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                                disabled={!installed || isActive || sdkActionKey !== null}
-                                onClick={() => handleRemoveSdk(entry)}
-                              >
-                                {sdkActionKey === removeKey ? '删除中...' : '删除'}
-                              </Button>
-                            </div>
-                            {sdkActionKey === installKey && installProgress ? (
-                              <div className="space-y-1">
-                                <div className="text-xs text-muted-foreground">
-                                  {installProgress.phase === 'download'
-                                    ? installProgress.total > 0
-                                      ? `下载中 ${Math.round(installProgress.downloaded / 1024 / 1024)}MB / ${Math.round(installProgress.total / 1024 / 1024)}MB`
-                                      : `下载中 ${Math.round(installProgress.downloaded / 1024 / 1024)}MB`
-                                    : installProgress.phase === 'extract' ? '解压中...'
-                                    : '整理文件...'}
-                                </div>
-                                {installProgress.phase === 'download' && installProgress.total > 0 ? (
-                                  <Progress value={Math.min(100, Math.round(installProgress.downloaded / installProgress.total * 100))} className="h-1.5" />
-                                ) : (
-                                  <Progress value={null} className="h-1.5 [&>[data-slot=progress-indicator]]:animate-pulse [&>[data-slot=progress-indicator]]:w-1/3" />
-                                )}
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               ))}
             </div>
-          ) : null}
-        </section>
-
-        {/* TODO: Not sure the modification */}
-        <section className="rounded-xl border bg-card p-6 space-y-4">
-          <div>
-            <h2 className="text-lg font-semibold">环境变量说明</h2>
-            <p className="mt-1 text-sm text-muted-foreground">这些变量会影响 Claude、Codex 与 OpenAI/Anthropic 兼容网关调用。</p>
-          </div>
-          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm text-muted-foreground">
-            {AI_ENV_PRESETS.map((preset) => (
-              <Fragment key={preset.key}>
-                <code className="font-mono text-primary">{preset.key}</code>
-                <span>{preset.description}</span>
-              </Fragment>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-xl border bg-card p-6 space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">环境变量</h2>
-              <p className="mt-1 text-sm text-muted-foreground">系统级环境变量会作为运行时回退配置参与解析。</p>
+          }
+          activeFilters={
+            <div className="flex flex-wrap gap-2">
+              <StatusPill tone={systemDirty ? 'warning' : 'neutral'}>{systemDirty ? '有未保存更改' : '无未保存更改'}</StatusPill>
+              <StatusPill tone="neutral" dot={false}>
+                {SETTINGS_SECTIONS.find((section) => section.id === activeSection)?.description}
+              </StatusPill>
             </div>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={saveEnvVars} disabled={envSaving || envLoading}>
-                {envSaving ? '保存中...' : '保存'}
-              </Button>
-            </div>
-          </div>
+          }
+        />
 
-          {envError && !envLoading ? (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{envError}</div>
-          ) : null}
+        {pageLoading ? (
+          <EmptyState
+            icon={<RefreshCw className="h-5 w-5" />}
+            title="正在加载系统设置"
+            description="环境变量、托管 SDK 和系统参数会并行读取。"
+          />
+        ) : null}
 
-          {envLoading ? (
-            <div className="py-6 text-center text-sm text-muted-foreground">环境变量加载中...</div>
-          ) : (
-            <div className="space-y-4">
-              <div className="rounded-md border bg-muted/20 px-3 py-2">
-                <div className="mb-2 text-xs font-medium text-muted-foreground">常用 AI 凭据</div>
-                <div className="flex flex-wrap gap-2">
-                  {AI_ENV_PRESETS.map((preset) => {
-                    const exists = displayVars.some((item) => item.key.trim() === preset.key);
-                    return (
-                      <Button
-                        key={preset.key}
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 font-mono text-xs"
-                        onClick={() => addPresetEnvVar(preset.key)}
-                        disabled={envSaving || exists}
-                        title={preset.description}
-                      >
-                        {preset.key}
-                      </Button>
-                    );
-                  })}
-                </div>
+        {activeSection === 'system' ? (
+          <DataCard className="p-0">
+            <FormSection
+              className="px-5"
+              title="系统工作区与 Agent 记忆"
+              description="这些是系统级默认值，会影响新会话、会议室、办公室和工作流运行时行为，不属于个人账号资料。"
+              actions={(
+                <Button size="sm" onClick={saveWorkspaceExperience} disabled={experienceSaving || tokenLoading}>
+                  {experienceSaving ? '保存中...' : '保存设置'}
+                </Button>
+              )}
+            >
+              {experienceError ? (
+                <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{experienceError}</div>
+              ) : null}
+              <div className="grid gap-4 md:grid-cols-2">
+                <FormField
+                  label="默认界面"
+                  description="系统启动后默认进入的产品模式。"
+                  control={(
+                    <Select
+                      value={workspaceExperienceForm.mode}
+                      onValueChange={(value) => {
+                        const mode = value === 'one-person-company' ? 'one-person-company' : 'engineer';
+                        setWorkspaceExperienceForm((prev) => ({
+                          ...prev,
+                          mode,
+                          defaultEntry: mode === 'one-person-company' && prev.defaultEntry === 'home' ? 'office' : prev.defaultEntry,
+                        }));
+                      }}
+                      disabled={experienceSaving}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="engineer">开发工程师界面</SelectItem>
+                        <SelectItem value="one-person-company">一人公司界面</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                <FormField
+                  label="默认入口"
+                  description="用于系统级启动入口，不覆盖个人资料。"
+                  control={(
+                    <Select
+                      value={workspaceExperienceForm.defaultEntry}
+                      onValueChange={(value) => setWorkspaceExperienceForm((prev) => ({ ...prev, defaultEntry: value as WorkspaceExperienceForm['defaultEntry'] }))}
+                      disabled={experienceSaving}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="home">首页</SelectItem>
+                        <SelectItem value="meeting-room">会议室</SelectItem>
+                        <SelectItem value="office">办公室</SelectItem>
+                        <SelectItem value="workflows">工作流</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
               </div>
-              <EnvironmentVariables
-                items={environmentVariableItems}
-                disabled={envSaving}
-                onAdd={addRow}
-                onRemove={removeVar}
-                onChange={(index, patch) => updateVar(index, {
-                  ...(patch.key !== undefined ? { key: patch.key } : {}),
-                  ...(patch.value !== undefined ? { value: patch.value } : {}),
-                  ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-                })}
-                onCopy={copyEnvVar}
-                emptyMessage="暂无环境变量"
+              <div className="grid gap-4 md:grid-cols-2">
+                <FormField
+                  label="Agent 记忆参与推理"
+                  description="关闭后保留已沉淀记忆，新运行会按无长期记忆上下文启动。"
+                  control={(
+                    <div className="flex h-10 items-center">
+                      <Switch
+                        checked={agentMemoryForm.runtimeEnabled}
+                        onCheckedChange={(checked) => setAgentMemoryForm((prev) => ({ ...prev, runtimeEnabled: checked }))}
+                        disabled={experienceSaving}
+                      />
+                    </div>
+                  )}
+                />
+                <FormField
+                  label="记忆沉淀模式"
+                  description="当前版本优先支持手动编辑和审核式沉淀。"
+                  control={(
+                    <Select
+                      value={agentMemoryForm.persistMode}
+                      onValueChange={(value) => setAgentMemoryForm((prev) => ({ ...prev, persistMode: value as AgentMemoryForm['persistMode'] }))}
+                      disabled={experienceSaving}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="manual">手动</SelectItem>
+                        <SelectItem value="review">审核后写入</SelectItem>
+                        <SelectItem value="auto">自动写入</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+            </FormSection>
+
+            <FormSection
+              className="px-5"
+              title="运行参数缓存"
+              description="模型/引擎选择框和引擎管理页会复用这份可用性结果；手动刷新会强制重查。"
+              actions={(
+                <Button size="sm" variant="outline" onClick={saveEngineAvailabilityCache} disabled={tokenSaving || tokenLoading}>
+                  {tokenSaving ? '保存中...' : '保存时长'}
+                </Button>
+              )}
+            >
+              {tokenError ? (
+                <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{tokenError}</div>
+              ) : null}
+              <FormField
+                label="引擎可用性缓存"
+                description="范围 1 到 1440 分钟，默认 30 分钟。"
+                control={(
+                  <div className="flex items-center gap-3">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={engineAvailabilityCacheMinutes}
+                      onChange={(event) => {
+                        setEngineAvailabilityCacheMinutes(event.target.value);
+                        if (tokenError) setTokenError(null);
+                      }}
+                      disabled={tokenLoading || tokenSaving}
+                      className="max-w-[160px]"
+                    />
+                    <span className="text-sm text-muted-foreground">分钟</span>
+                  </div>
+                )}
               />
-            </div>
-          )}
-        </section>
+            </FormSection>
+          </DataCard>
+        ) : null}
+
+        {activeSection === 'runtime' ? (
+          <div className="space-y-5">
+            <DataCard className="p-0">
+              <FormSection
+                className="px-5"
+                title="托管 Cangjie SDK"
+                description="托管 SDK 独立于账号资料。安装、激活和删除会影响系统运行时解析到的 CANGJIE_HOME。"
+                actions={(
+                  <div className="flex flex-wrap gap-2">
+                    {sdkOverview?.active ? (
+                      <Button variant="outline" size="sm" onClick={handleDeactivateSdk} disabled={sdkLoading || sdkActionKey !== null}>
+                        {sdkActionKey === 'deactivate' ? '取消中...' : '取消激活'}
+                      </Button>
+                    ) : null}
+                    <Button variant="outline" size="sm" onClick={loadSdkOverview} disabled={sdkLoading || sdkActionKey !== null}>
+                      {sdkLoading ? '加载中...' : '刷新'}
+                    </Button>
+                  </div>
+                )}
+              >
+                {sdkError && !sdkOverview ? (
+                  <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm space-y-3">
+                    <div className="text-destructive">{sdkError}</div>
+                    <Button variant="outline" size="sm" onClick={loadSdkOverview} disabled={sdkLoading}>重试</Button>
+                  </div>
+                ) : null}
+                <div className="grid gap-3 md:grid-cols-2">
+                  <DataCard>
+                    <DataCardTitle>当前服务器</DataCardTitle>
+                    <DataCardDescription className="font-medium text-foreground">{sdkOverview ? `${sdkOverview.host.os} / ${sdkOverview.host.arch}` : '-'}</DataCardDescription>
+                  </DataCard>
+                  <DataCard>
+                    <DataCardHeader>
+                      <DataCardTitle>当前来源</DataCardTitle>
+                      <StatusPill tone={managedHomeActive ? 'success' : 'neutral'}>{getManagedSourceLabel(sdkOverview?.effective.source || 'none')}</StatusPill>
+                    </DataCardHeader>
+                    <DataCardDescription className="break-all">{sdkOverview?.effective.cangjieHome || '未解析到 CANGJIE_HOME'}</DataCardDescription>
+                  </DataCard>
+                  <DataCard>
+                    <DataCardTitle>当前激活版本</DataCardTitle>
+                    <DataCardDescription className="font-medium text-foreground">
+                      {sdkOverview?.active ? `${getChannelLabel(sdkOverview.active.channel)} · ${sdkOverview.active.version}` : '未激活'}
+                    </DataCardDescription>
+                  </DataCard>
+                  <DataCard>
+                    <DataCardTitle>Diagnostics</DataCardTitle>
+                    <DataCardDescription>{sdkOverview?.effective.diagnostics?.length ? sdkOverview.effective.diagnostics.join('；') : '无'}</DataCardDescription>
+                  </DataCard>
+                </div>
+                {sdkError && sdkOverview ? (
+                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{sdkError}</div>
+                ) : null}
+                {sdkLoading && !sdkOverview ? (
+                  <EmptyState icon={<Download className="h-5 w-5" />} title="托管 SDK 信息加载中" />
+                ) : null}
+                {!sdkLoading && sdkOverview ? (
+                  <div className="space-y-4">
+                    {(['nightly', 'sts', 'lts'] as SdkChannel[]).map((channel) => (
+                      <div key={channel} className="space-y-2">
+                        <div className="text-sm font-medium text-muted-foreground">{getChannelLabel(channel)}</div>
+                        {(groupedCatalog[channel] || []).length === 0 ? (
+                          <EmptyState className="min-h-[120px]" title="暂无可用版本" description={`${getChannelLabel(channel)} 通道没有匹配当前平台的版本。`} />
+                        ) : (
+                          <div className="grid gap-3 lg:grid-cols-2">
+                            {groupedCatalog[channel].map((entry) => {
+                              const matched = getMatchingPackage(entry);
+                              const installed = getInstalledRecord(entry);
+                              const isActive = sdkOverview.active?.version === entry.version && sdkOverview.active?.channel === entry.channel;
+                              const installKey = `install:${entry.channel}:${entry.version}`;
+                              const activateKey = `activate:${entry.channel}:${entry.version}`;
+                              const removeKey = `remove:${entry.channel}:${entry.version}`;
+                              return (
+                                <DataCard key={`${entry.channel}-${entry.version}`} selected={isActive}>
+                                  <DataCardHeader>
+                                    <div className="min-w-0">
+                                      <DataCardTitle className="break-all">{entry.releaseName}</DataCardTitle>
+                                      <DataCardDescription className="break-all font-mono text-xs">{entry.version}</DataCardDescription>
+                                    </div>
+                                    {isActive ? <StatusPill tone="success">当前激活</StatusPill> : <StatusPill tone={installed ? 'info' : 'neutral'}>{installed ? '已安装' : '未安装'}</StatusPill>}
+                                  </DataCardHeader>
+                                  <DataCardMeta>
+                                    <StatusPill tone={matched ? 'neutral' : 'warning'} dot={false}>{matched ? matched.name : '当前平台不可安装'}</StatusPill>
+                                  </DataCardMeta>
+                                  {installed ? <DataCardDescription className="break-all font-mono text-xs">{installed.installDir}</DataCardDescription> : null}
+                                  <DataCardActions className="justify-start">
+                                    <Button size="sm" variant="outline" disabled={!matched || sdkActionKey !== null} onClick={() => handleInstallSdk(entry, installKey)}>
+                                      {sdkActionKey === installKey ? (
+                                        installProgress?.phase === 'download' && installProgress.total > 0
+                                          ? `下载中 ${Math.round(installProgress.downloaded / installProgress.total * 100)}%`
+                                          : installProgress?.phase === 'extract' ? '解压中...'
+                                          : installProgress?.phase === 'finalize' ? '整理中...'
+                                          : '安装中...'
+                                      ) : installed ? '重新安装' : '安装'}
+                                    </Button>
+                                    <Button size="sm" disabled={!installed || isActive || sdkActionKey !== null} onClick={() => handleActivateSdk(entry, activateKey)}>
+                                      {sdkActionKey === activateKey ? '切换中...' : '激活'}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                      disabled={!installed || isActive || sdkActionKey !== null}
+                                      onClick={() => handleRemoveSdk(entry)}
+                                    >
+                                      {sdkActionKey === removeKey ? '删除中...' : '删除'}
+                                    </Button>
+                                  </DataCardActions>
+                                  {sdkActionKey === installKey && installProgress ? (
+                                    <div className="space-y-1">
+                                      <div className="text-xs text-muted-foreground">
+                                        {installProgress.phase === 'download'
+                                          ? installProgress.total > 0
+                                            ? `下载中 ${Math.round(installProgress.downloaded / 1024 / 1024)}MB / ${Math.round(installProgress.total / 1024 / 1024)}MB`
+                                            : `下载中 ${Math.round(installProgress.downloaded / 1024 / 1024)}MB`
+                                          : installProgress.phase === 'extract' ? '解压中...'
+                                          : '整理文件...'}
+                                      </div>
+                                      {installProgress.phase === 'download' && installProgress.total > 0 ? (
+                                        <Progress value={Math.min(100, Math.round(installProgress.downloaded / installProgress.total * 100))} className="h-1.5" />
+                                      ) : (
+                                        <Progress value={null} className="h-1.5 [&>[data-slot=progress-indicator]]:animate-pulse [&>[data-slot=progress-indicator]]:w-1/3" />
+                                      )}
+                                    </div>
+                                  ) : null}
+                                </DataCard>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </FormSection>
+            </DataCard>
+
+            <DataCard className="p-0">
+              <FormSection
+                className="px-5"
+                title="系统环境变量"
+                description="系统级环境变量会作为运行时回退配置参与解析，敏感命名会默认以密码模式展示。"
+                actions={(
+                  <Button size="sm" onClick={saveEnvVars} disabled={envSaving || envLoading}>
+                    {envSaving ? '保存中...' : '保存'}
+                  </Button>
+                )}
+              >
+                {envError && !envLoading ? (
+                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{envError}</div>
+                ) : null}
+                {envLoading ? (
+                  <EmptyState icon={<TerminalSquare className="h-5 w-5" />} title="环境变量加载中" />
+                ) : (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border bg-muted/20 px-3 py-3">
+                      <div className="mb-2 text-xs font-medium text-muted-foreground">常用 AI 凭据</div>
+                      <div className="flex flex-wrap gap-2">
+                        {AI_ENV_PRESETS.map((preset) => {
+                          const exists = displayVars.some((item) => item.key.trim() === preset.key);
+                          return (
+                            <Button
+                              key={preset.key}
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 font-mono text-xs"
+                              onClick={() => addPresetEnvVar(preset.key)}
+                              disabled={envSaving || exists}
+                              title={preset.description}
+                            >
+                              {preset.key}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <EnvironmentVariables
+                      items={environmentVariableItems}
+                      disabled={envSaving}
+                      onAdd={addRow}
+                      onRemove={(index) => void handleRemoveVar(index)}
+                      onChange={(index, patch) => updateVar(index, {
+                        ...(patch.key !== undefined ? { key: patch.key } : {}),
+                        ...(patch.value !== undefined ? { value: patch.value } : {}),
+                        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+                      })}
+                      onCopy={copyEnvVar}
+                      emptyMessage="暂无环境变量"
+                    />
+                  </div>
+                )}
+              </FormSection>
+            </DataCard>
+          </div>
+        ) : null}
+
+        {activeSection === 'security' ? (
+          <div className="space-y-5">
+            <DataCard className="p-0">
+              <FormSection
+                className="px-5"
+                title="GitCode Token"
+                description="配置此系统 Token 后即可检测和下载托管 SDK；留空会保留已保存值。"
+                actions={(
+                  <Button size="sm" onClick={saveGitcodeToken} disabled={tokenSaving || !gitcodeToken.trim()}>
+                    {tokenSaving ? '保存中...' : '保存 Token'}
+                  </Button>
+                )}
+              >
+                {!gitcodeConfigured && !tokenLoading ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                    尚未配置 GitCode Token，SDK 检测和下载功能将不可用。
+                  </div>
+                ) : null}
+                {tokenError ? (
+                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{tokenError}</div>
+                ) : null}
+                <FormField
+                  label="Token"
+                  description="输入新值会覆盖已保存 Token；已保存值以安全方式保管。"
+                  control={(
+                    <Input
+                      type="password"
+                      value={gitcodeToken}
+                      onChange={(event) => {
+                        setGitcodeToken(event.target.value);
+                        if (tokenError) setTokenError(null);
+                      }}
+                      disabled={tokenLoading || tokenSaving}
+                      placeholder={gitcodeConfigured ? '已配置，输入新值可覆盖' : '请输入 GitCode Token'}
+                    />
+                  )}
+                />
+                <StatusPill tone={tokenLoading ? 'info' : gitcodeConfigured ? 'success' : 'warning'}>
+                  {tokenLoading ? '加载中' : gitcodeConfigured ? '已配置' : '未配置'}
+                </StatusPill>
+              </FormSection>
+            </DataCard>
+
+            <DataCard className="p-0">
+              <FormSection
+                className="px-5"
+                title="人工审查邮件推送"
+                description="系统在工作流进入人工审查时发送邮件；SMTP 密码按敏感值安全保存。"
+                actions={(
+                  <Button size="sm" onClick={saveEmailNotifications} disabled={emailSaving || tokenLoading}>
+                    {emailSaving ? '保存中...' : '保存邮件配置'}
+                  </Button>
+                )}
+              >
+                {emailError ? (
+                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{emailError}</div>
+                ) : null}
+                <FormField
+                  label="启用邮件提醒"
+                  description="默认发送给工作流发起人的登录邮箱，可额外抄送团队邮箱。"
+                  control={(
+                    <div className="flex items-center gap-3">
+                      <Switch
+                        checked={emailForm.enabled}
+                        onCheckedChange={(checked) => setEmailForm((prev) => ({ ...prev, enabled: checked }))}
+                        disabled={emailSaving}
+                      />
+                      <StatusPill tone={emailForm.enabled ? 'success' : 'neutral'}>
+                        {emailForm.enabled ? '已启用' : '未启用'}
+                      </StatusPill>
+                      <StatusPill tone={emailForm.smtpPasswordConfigured ? 'success' : 'warning'} dot={false}>
+                        {emailForm.smtpPasswordConfigured ? '已保存 SMTP 密码' : '尚未保存 SMTP 密码'}
+                      </StatusPill>
+                    </div>
+                  )}
+                />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <FormField label="SMTP Host" control={<Input value={emailForm.smtpHost} onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpHost: event.target.value }))} placeholder="例如：smtp.qq.com" disabled={emailSaving} />} />
+                  <FormField label="SMTP Port" control={<Input value={emailForm.smtpPort} onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpPort: event.target.value }))} placeholder="465 或 587" disabled={emailSaving} />} />
+                  <FormField label="SMTP 用户名" control={<Input value={emailForm.smtpUsername} onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpUsername: event.target.value }))} placeholder="通常是邮箱地址" disabled={emailSaving} />} />
+                  <FormField label="SMTP 密码 / 授权码" description="输入新值可覆盖已保存值。" control={<Input type="password" value={emailForm.smtpPassword} onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpPassword: event.target.value }))} placeholder={emailForm.smtpPasswordConfigured ? '已保存，输入新值可覆盖' : '请输入 SMTP 密码或授权码'} disabled={emailSaving} />} />
+                  <FormField label="发件人邮箱" control={<Input value={emailForm.fromEmail} onChange={(event) => setEmailForm((prev) => ({ ...prev, fromEmail: event.target.value }))} placeholder="例如：notify@example.com" disabled={emailSaving} />} />
+                  <FormField label="发件人名称" control={<Input value={emailForm.fromName} onChange={(event) => setEmailForm((prev) => ({ ...prev, fromName: event.target.value }))} placeholder="例如：ACEHarness" disabled={emailSaving} />} />
+                  <FormField label="Reply-To" control={<Input value={emailForm.replyTo} onChange={(event) => setEmailForm((prev) => ({ ...prev, replyTo: event.target.value }))} placeholder="可选：回复邮箱" disabled={emailSaving} />} />
+                  <FormField label="主题前缀" control={<Input value={emailForm.subjectPrefix} onChange={(event) => setEmailForm((prev) => ({ ...prev, subjectPrefix: event.target.value }))} placeholder="可选：例如 [ACEHarness]" disabled={emailSaving} />} />
+                </div>
+                <FormField
+                  label="使用 SSL / TLS"
+                  description="常见情况下，465 建议开启；587 可以关闭后走 STARTTLS。"
+                  control={<Switch checked={emailForm.smtpSecure} onCheckedChange={(checked) => setEmailForm((prev) => ({ ...prev, smtpSecure: checked }))} disabled={emailSaving} />}
+                />
+                <FormField
+                  label="抄送邮箱"
+                  description="不填写时，只发给当前工作流运行的发起人邮箱。"
+                  control={(
+                    <Textarea
+                      value={emailForm.ccEmails}
+                      onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setEmailForm((prev) => ({ ...prev, ccEmails: event.target.value }))}
+                      placeholder="可选，多个邮箱用逗号、分号或换行分隔"
+                      rows={3}
+                      disabled={emailSaving}
+                    />
+                  )}
+                />
+              </FormSection>
+            </DataCard>
+          </div>
+        ) : null}
+
+        {activeSection === 'advanced' ? (
+          <div className="space-y-5">
+            <DataCard>
+              <DataCardHeader>
+                <div>
+                  <DataCardTitle>高级设置边界</DataCardTitle>
+                  <DataCardDescription>第一批实现保留原有功能，并把低频参考信息放在 Advanced，避免挤占常用 System/Runtime/Security 配置。</DataCardDescription>
+                </div>
+                <StatusPill tone="accent">Advanced</StatusPill>
+              </DataCardHeader>
+              <DataCardMeta>
+                <StatusPill tone="neutral" dot={false}>没有个人 Account 表单</StatusPill>
+                <StatusPill tone="neutral" dot={false}>不含 Channels 设置</StatusPill>
+                <StatusPill tone="warning" dot={false}>未新增 reset/test API</StatusPill>
+              </DataCardMeta>
+            </DataCard>
+            <DataCard className="p-0">
+              <FormSection
+                className="px-5"
+                title="环境变量说明"
+                description="这些系统运行时变量会影响 Claude、Codex 与 OpenAI/Anthropic 兼容网关调用。"
+              >
+                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm text-muted-foreground">
+                  {AI_ENV_PRESETS.map((preset) => (
+                    <Fragment key={preset.key}>
+                      <code className="font-mono text-primary">{preset.key}</code>
+                      <span>{preset.description}</span>
+                    </Fragment>
+                  ))}
+                </div>
+              </FormSection>
+            </DataCard>
+          </div>
+        ) : null}
+
+        <div className="sticky bottom-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-none">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill tone={systemDirty ? 'warning' : 'neutral'}>{systemDirty ? '有未保存更改' : '无未保存更改'}</StatusPill>
+            {envDirty ? <StatusPill tone="warning" dot={false}>环境变量</StatusPill> : null}
+            {experienceDirty ? <StatusPill tone="warning" dot={false}>体验/记忆</StatusPill> : null}
+            {engineCacheDirty ? <StatusPill tone="warning" dot={false}>缓存时长</StatusPill> : null}
+            {tokenDirty ? <StatusPill tone="warning" dot={false}>GitCode Token</StatusPill> : null}
+            {emailDirty ? <StatusPill tone="warning" dot={false}>邮件配置</StatusPill> : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={saveWorkspaceExperience} disabled={!experienceDirty || systemSaving || tokenLoading}>保存体验</Button>
+            <Button variant="outline" size="sm" onClick={saveEngineAvailabilityCache} disabled={!engineCacheDirty || systemSaving || tokenLoading}>保存缓存</Button>
+            <Button variant="outline" size="sm" onClick={saveEnvVars} disabled={!envDirty || systemSaving || envLoading}>保存环境变量</Button>
+            <Button variant="outline" size="sm" onClick={saveGitcodeToken} disabled={!tokenDirty || systemSaving || tokenLoading}>保存 Token</Button>
+            <Button size="sm" onClick={saveEmailNotifications} disabled={!emailDirty || systemSaving || tokenLoading}>保存邮件</Button>
+          </div>
+        </div>
       </div>
 
-      {dialogProps ? <ConfirmDialog {...dialogProps} /> : null}
+      <ConfirmModal
+        open={Boolean(confirmRequest?.open)}
+        variant={confirmRequest?.variant || 'default'}
+        title={confirmRequest?.title}
+        objectName={confirmRequest?.objectName}
+        consequence={confirmRequest?.consequence || ''}
+        confirmLabel={confirmRequest?.confirmLabel}
+        loading={sdkActionKey !== null}
+        onConfirm={() => void confirmRequest?.onConfirm()}
+        onCancel={() => setConfirmRequest(null)}
+        onOpenChange={(open) => {
+          if (!open) setConfirmRequest(null);
+        }}
+      />
     </>
   );
 }

@@ -75,7 +75,7 @@ describe('/api/chat route', () => {
       };
     });
 
-    const { POST } = await import('@/app/api/chat/route');
+    const { POST } = await import('@/server/api-routes/chat/route');
     const responsePromise = POST(makeRequest('/api/chat', {
       json: {
         message: '列出 bin 目录文件',
@@ -108,7 +108,7 @@ describe('/api/chat route', () => {
   test('hard fails when authentication fails', async () => {
     routeMocks.requireAuth.mockResolvedValue(new Response(JSON.stringify({ error: '未登录或登录已过期' }), { status: 401 }));
 
-    const { POST } = await import('@/app/api/chat/route');
+    const { POST } = await import('@/server/api-routes/chat/route');
     const response = await POST(makeRequest('/api/chat', {
       json: {
         message: 'hello',

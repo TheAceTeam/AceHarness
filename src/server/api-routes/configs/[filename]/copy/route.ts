@@ -1,0 +1,81 @@
+import { readFile, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
+import { parse, stringify } from 'yaml';
+import { requireAuth } from '@/lib/auth/middleware';
+import { canAccessConfigMeta, getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { loadUsers } from '@/lib/core/user-store';
+import { cloneCreationSessionForWorkflow, loadLatestCreationSessionByFilename, saveCreationSession } from '@/lib/spec/coding-store';
+import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
+
+function normalizeConfigFilename(filename: string): string {
+  const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.includes('..')) {
+    throw new Error('无效文件名');
+  }
+  return normalized;
+}
+
+export async function POST(
+  request: Request,
+  { params }: { params: { filename: string } | Promise<{ filename: string }> }
+) {
+  try {
+    const auth = await requireAuth(request);
+    if (auth instanceof Response) return auth;
+
+    const { newFilename, workflowName, visibility, sharedWithUserIds } = await readJsonBody<Record<string, any>>(request, {});
+    if (!newFilename || !/^[a-zA-Z0-9_-]+\.yaml$/.test(newFilename)) {
+      return jsonError('无效的文件名', 400);
+    }
+
+    const filename = (await params).filename;
+    const sourceMeta = await getConfigMeta(filename, 'workflow');
+    if (!canAccessConfigMeta(sourceMeta, auth.id, auth.role)) {
+      return jsonError('无权限访问该工作流', 403);
+    }
+
+    await ensureRuntimeConfigsSeeded();
+    const configsDir = await getRuntimeConfigsDirPath();
+    const sourcePath = resolve(configsDir, normalizeConfigFilename(filename));
+    const destPath = resolve(configsDir, newFilename);
+
+    if (existsSync(destPath)) {
+      return jsonError('目标文件已存在', 409);
+    }
+
+    const content = await readFile(sourcePath, 'utf-8');
+    const config = parse(content);
+    config.workflow.name = workflowName || (config.workflow.name + ' (副本)');
+    await writeFile(destPath, stringify(config), 'utf-8');
+    const sourceSession = await loadLatestCreationSessionByFilename(filename).catch(() => null);
+    let creationSessionId: string | undefined;
+    if (sourceSession?.specCoding) {
+      const clonedSession = cloneCreationSessionForWorkflow(sourceSession, {
+        filename: newFilename,
+        workflowName: config.workflow.name,
+        createdBy: auth.id,
+        config,
+      });
+      await saveCreationSession(clonedSession);
+      creationSessionId = clonedSession.id;
+    }
+    const users = await loadUsers();
+    const allowedUserIds = new Set(users.filter((user) => user.status === 'active').map((user) => user.id));
+    const normalizedVisibility = visibility === 'public' || visibility === 'shared' ? visibility : 'private';
+    const normalizedSharedWithUserIds = Array.isArray(sharedWithUserIds)
+      ? sharedWithUserIds.filter((item: unknown): item is string => typeof item === 'string' && allowedUserIds.has(item))
+      : [];
+    await setConfigMeta(newFilename, {
+      createdBy: auth.id,
+      visibility: normalizedVisibility,
+      sharedWithUserIds: normalizedVisibility === 'shared' ? normalizedSharedWithUserIds : [],
+      createdAt: Date.now(),
+    }, 'workflow');
+
+    return jsonOk({ success: true, filename: newFilename, creationSessionId });
+  } catch (error: any) {
+    return jsonError('复制配置失败', 500, errorMessage(error));
+  }
+}

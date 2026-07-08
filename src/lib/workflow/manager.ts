@@ -922,6 +922,7 @@ try {
 
     // Set up stream handler for the engine
     const streamHandler = (event: EngineStreamEvent) => {
+      if (event.type !== 'text') return;
       fullStreamContent += event.content;
       const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
       processManager.emit('stream', {
@@ -1242,7 +1243,7 @@ try {
     configFile: string,
     requirementsOrChecks?: string | PersistedQualityCheck[],
     maybePreflightChecks?: PersistedQualityCheck[],
-    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string> },
+    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string>; workingDirectory?: string },
     requestedRunId?: string,
   ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
@@ -1285,6 +1286,12 @@ try {
       const configPath = await getRuntimeWorkflowConfigPath(configFile);
       const content = await readFile(configPath, 'utf-8');
       const workflowConfig: WorkflowConfig = parse(content);
+      if (initialContexts?.workingDirectory) {
+        workflowConfig.context = {
+          ...(workflowConfig.context || {}),
+          projectRoot: initialContexts.workingDirectory,
+        };
+      }
 
       this.currentWorkflow = workflowConfig;
       // Resolve projectRoot to absolute path relative to user's personal dir

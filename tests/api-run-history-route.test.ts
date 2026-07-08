@@ -40,7 +40,7 @@ async function loadRouteWithMockedRuns(mockRuns: any[], configNameMap: Record<st
       readAccessibleConfigNameMap: vi.fn(async () => configNameMap),
     };
   });
-  return import('@/app/api/run-history/route');
+  return import('@/server/api-routes/run-history/route');
 }
 
 function sampleRun(overrides: Record<string, any>) {
@@ -75,7 +75,7 @@ describe('run history route', () => {
   test('rejects unauthenticated requests', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
-      const route = await import('@/app/api/run-history/route');
+      const route = await import('@/server/api-routes/run-history/route');
       await assertErrorResponse(await route.GET(makeRequest('/api/run-history')), 401);
     });
   });

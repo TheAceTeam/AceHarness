@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { scheduleApi, configApi } from '@/lib/core/api';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -14,21 +13,17 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useTranslations } from '@/hooks/useTranslations';
-
-interface ScheduleJob {
-  id: string;
-  name: string;
-  configFile: string;
-  enabled: boolean;
-  mode: 'simple' | 'cron';
-  interval?: { value: number; unit: 'hour' | 'day' | 'week' };
-  fixedTime?: { hour: number; minute: number; weekday?: number };
-  cronExpression?: string;
-  lastRunTime?: string;
-  lastRunStatus?: string;
-  nextRunTime?: string;
-  createdAt: string;
-}
+import { useConfigOptionsQuery } from '@/client/query/configs';
+import {
+  useCreateScheduleMutation,
+  useDeleteScheduleMutation,
+  useSchedulesQuery,
+  useToggleScheduleMutation,
+  useTriggerScheduleMutation,
+  useUpdateScheduleMutation,
+  type ScheduleJob,
+  type SchedulePayload,
+} from '@/client/query/schedules';
 
 function formatTime(iso?: string) {
   if (!iso) return '-';
@@ -40,9 +35,24 @@ export default function SchedulesPanel({ configFile }: { configFile?: string }) 
   const { t } = useTranslations();
   const { confirm, dialogProps } = useConfirmDialog();
   const WEEKDAYS = [0,1,2,3,4,5,6].map(i => t(`schedules.weekdays.${i}`));
-  const [jobs, setJobs] = useState<ScheduleJob[]>([]);
-  const [configs, setConfigs] = useState<{ filename: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(true);
+  const schedulesQuery = useSchedulesQuery();
+  const configOptionsQuery = useConfigOptionsQuery();
+  const createScheduleMutation = useCreateScheduleMutation();
+  const updateScheduleMutation = useUpdateScheduleMutation();
+  const deleteScheduleMutation = useDeleteScheduleMutation();
+  const toggleScheduleMutation = useToggleScheduleMutation();
+  const triggerScheduleMutation = useTriggerScheduleMutation();
+  const jobs = useMemo(() => {
+    const allJobs = schedulesQuery.data?.jobs || [];
+    return configFile ? allJobs.filter((job) => job.configFile === configFile) : allJobs;
+  }, [configFile, schedulesQuery.data?.jobs]);
+  const configs = useMemo(() => (
+    (configOptionsQuery.data?.configs || []).map((config) => ({
+      filename: config.filename,
+      name: config.name || config.filename,
+    }))
+  ), [configOptionsQuery.data?.configs]);
+  const loading = schedulesQuery.isLoading || configOptionsQuery.isLoading;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingJob, setEditingJob] = useState<ScheduleJob | null>(null);
 
@@ -57,35 +67,13 @@ export default function SchedulesPanel({ configFile }: { configFile?: string }) 
   const [formCron, setFormCron] = useState('0 0 * * *');
   const [formEnabled, setFormEnabled] = useState(true);
 
-  const loadJobs = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [schedResult, cfgResult] = await Promise.allSettled([scheduleApi.list(), configApi.listAllConfigs()]);
-
-      if (cfgResult.status === 'fulfilled') {
-        setConfigs((cfgResult.value.configs || []).map((c: any) => ({ filename: c.filename, name: c.name })));
-      } else {
-        setConfigs([]);
-      }
-
-      if (schedResult.status === 'fulfilled') {
-        let allJobs = schedResult.value.jobs || [];
-        if (configFile) allJobs = allJobs.filter(j => j.configFile === configFile);
-        setJobs(allJobs);
-      } else {
-        setJobs([]);
-      }
-
-      if (schedResult.status === 'rejected' || cfgResult.status === 'rejected') {
-        const error = schedResult.status === 'rejected' ? schedResult.reason : cfgResult.status === 'rejected' ? cfgResult.reason : null;
-        toast('error', error?.message || t('schedules.messages.loadFailed'));
-      }
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    if (schedulesQuery.isError) {
+      toast('error', (schedulesQuery.error as Error)?.message || t('schedules.messages.loadFailed'));
+    } else if (configOptionsQuery.isError) {
+      toast('error', (configOptionsQuery.error as Error)?.message || t('schedules.messages.loadFailed'));
     }
-  }, [configFile, t, toast]);
-
-  useEffect(() => { loadJobs(); }, [loadJobs]);
+  }, [configOptionsQuery.error, configOptionsQuery.isError, schedulesQuery.error, schedulesQuery.isError, t, toast]);
 
   const resetForm = (job?: ScheduleJob) => {
     if (job) {
@@ -106,7 +94,7 @@ export default function SchedulesPanel({ configFile }: { configFile?: string }) 
 
   const handleSave = async () => {
     if (!formName.trim() || !formConfig) { toast('error', t('schedules.messages.fillRequired')); return; }
-    const payload: any = { name: formName.trim(), configFile: formConfig, enabled: formEnabled, mode: formMode };
+    const payload: SchedulePayload = { name: formName.trim(), configFile: formConfig, enabled: formEnabled, mode: formMode };
     if (formMode === 'simple') {
       payload.interval = { value: formIntervalValue, unit: formIntervalUnit };
       if (formIntervalUnit !== 'hour') {
@@ -115,22 +103,22 @@ export default function SchedulesPanel({ configFile }: { configFile?: string }) 
       }
     } else { payload.cronExpression = formCron; }
     try {
-      if (editingJob) { await scheduleApi.update(editingJob.id, payload); toast('success', t('schedules.messages.updated')); }
-      else { await scheduleApi.create(payload); toast('success', t('schedules.messages.created')); }
-      setDialogOpen(false); loadJobs();
+      if (editingJob) { await updateScheduleMutation.mutateAsync({ id: editingJob.id, payload }); toast('success', t('schedules.messages.updated')); }
+      else { await createScheduleMutation.mutateAsync(payload); toast('success', t('schedules.messages.created')); }
+      setDialogOpen(false);
     } catch (e: any) { toast('error', e.message); }
   };
 
   const handleToggle = async (job: ScheduleJob) => {
-    try { await scheduleApi.toggle(job.id); loadJobs(); } catch { toast('error', t('schedules.messages.toggleFailed')); }
+    try { await toggleScheduleMutation.mutateAsync(job.id); } catch { toast('error', t('schedules.messages.toggleFailed')); }
   };
   const handleTrigger = async (job: ScheduleJob) => {
-    try { await scheduleApi.trigger(job.id); toast('success', `${t('schedules.messages.triggered')} "${job.name}"`); loadJobs(); } catch { toast('error', t('schedules.messages.triggerFailed')); }
+    try { await triggerScheduleMutation.mutateAsync(job.id); toast('success', `${t('schedules.messages.triggered')} "${job.name}"`); } catch { toast('error', t('schedules.messages.triggerFailed')); }
   };
   const handleDelete = async (job: ScheduleJob) => {
     const ok = await confirm({ title: t('schedules.messages.deleteTitle'), description: `${t('schedules.messages.deleteConfirm')} "${job.name}"?`, confirmLabel: t('common.delete'), variant: 'destructive' });
     if (!ok) return;
-    try { await scheduleApi.delete(job.id); toast('success', t('schedules.messages.deleted')); loadJobs(); } catch { toast('error', t('schedules.messages.deleteFailed')); }
+    try { await deleteScheduleMutation.mutateAsync(job.id); toast('success', t('schedules.messages.deleted')); } catch { toast('error', t('schedules.messages.deleteFailed')); }
   };
 
   const describeSchedule = (job: ScheduleJob): string => {

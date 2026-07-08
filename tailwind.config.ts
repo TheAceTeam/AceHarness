@@ -4,10 +4,13 @@ import tailwindcssAnimate from 'tailwindcss-animate'
 export default {
   darkMode: ['class'],
   content: [
-    './src/app/**/*.{ts,tsx}',
+    './src/client/**/*.{ts,tsx}',
     './src/components/**/*.{ts,tsx}',
+    './src/contexts/**/*.{ts,tsx}',
+    './src/hooks/**/*.{ts,tsx}',
+    './src/lib/**/*.{ts,tsx,json}',
     './src/plugins/**/*.{ts,tsx}',
-    './src/lib/**/*.json',
+    './src/routes/**/*.{ts,tsx}',
   ],
   theme: {
     container: {
@@ -52,6 +55,15 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        surface: {
+          DEFAULT: 'hsl(var(--surface))',
+          muted: 'hsl(var(--surface-muted))',
+          subtle: 'hsl(var(--surface-subtle))',
+        },
+        emphasis: {
+          DEFAULT: 'hsl(var(--emphasis))',
+          muted: 'hsl(var(--emphasis-muted))',
+        },
         sidebar: {
           DEFAULT: 'hsl(var(--sidebar-background))',
           foreground: 'hsl(var(--sidebar-foreground))',
@@ -67,6 +79,10 @@ export default {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+      },
+      transitionDuration: {
+        240: '240ms',
+        280: '280ms',
       },
       keyframes: {
         'accordion-down': {

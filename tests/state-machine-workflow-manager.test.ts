@@ -1316,8 +1316,8 @@ describe('state machine live feedback', () => {
 
     expect(context).toContain('全局工作流路线与当前职责边界');
     expect(context).toContain('不能把当前步骤的核心交付留给后续步骤');
-    expect(context).toContain('当前状态 verdict 转移规则');
-    expect(context).toContain('下一步都以本状态 transitions 的真实配置为准');
+    expect(context).not.toContain('当前状态 verdict 转移规则');
+    expect(context).toContain('它们是路由标签，真实流向完全由当前状态 transitions 决定');
     expect(context).toContain('conditional_pass 可能自迭代，也可能前进');
     expect(context).toContain('状态: 设计');
     expect(context).toContain('状态: 实施');
@@ -1326,6 +1326,7 @@ describe('state machine live feedback', () => {
     expect(context).toContain('当前状态 verdict 实际流向');
     expect(context).toContain('- pass: 进入 "完成"');
     expect(context).toContain('- fail: 进入 "设计"');
+    expect(context).not.toContain('# 可选的下一状态');
   });
 
   test('injects current state verdict transitions even when roadmap memo is reused', async () => {
@@ -1349,10 +1350,12 @@ describe('state machine live feedback', () => {
       'Build a feature',
     );
 
-    expect(context).toContain('当前状态 verdict 转移规则');
+    expect(context).not.toContain('当前状态 verdict 转移规则');
+    expect(context).toContain('当前状态 verdict 实际流向');
     expect(context).toContain('- pass: 进入 "完成"');
     expect(context).toContain('- fail: 进入 "设计"');
-    expect(context).toContain('下一步都以本状态 transitions 的真实配置为准');
+    expect(context).toContain('它们是路由标签，真实流向完全由当前状态 transitions 决定');
+    expect(context).not.toContain('# 可选的下一状态');
   });
 
   test('injects verdict transition rules only for the final step in a state', async () => {
@@ -1392,7 +1395,6 @@ describe('state machine live feedback', () => {
       'Build a feature',
     );
 
-    expect(firstStepContext).not.toContain('当前状态 verdict 转移规则');
     expect(firstStepContext).not.toContain('当前状态 verdict 实际流向');
     expect(firstStepContext).not.toContain('verdict 流向:');
     expect(firstStepContext).not.toContain('"verdict": "pass | conditional_pass | fail"');
@@ -1407,7 +1409,7 @@ describe('state machine live feedback', () => {
       'Build a feature',
     );
 
-    expect(finalStepContext).toContain('当前状态 verdict 转移规则');
+    expect(finalStepContext).not.toContain('当前状态 verdict 转移规则');
     expect(finalStepContext).toContain('当前状态 verdict 实际流向');
     expect(finalStepContext).toContain('- pass: 进入 "完成"');
     expect(finalStepContext).toContain('- conditional_pass: 进入 "需求拆解"');

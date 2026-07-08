@@ -18,7 +18,9 @@ import { Badge } from '@/components/ui/badge';
 import { SingleCombobox, MultiCombobox, ComboboxPortalProvider } from '@/components/ui/combobox';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
-import { configApi } from '@/lib/core/api';
+import { useAgentsQuery } from '@/client/query/agents';
+import { useConfigOptionsQuery } from '@/client/query/configs';
+import { useSkillsQuery } from '@/client/query/skills';
 
 const phaseSchema = z.object({
   name: z.string().min(1, '阶段名称不能为空'),
@@ -265,9 +267,14 @@ export default function EditNodeModal({
   const isPhase = type === 'phase';
   const schema = isPhase ? phaseSchema : stepSchema;
   const [showAdvancedBindings, setShowAdvancedBindings] = useState(initialSection === 'spec');
-  const [workflowOptions, setWorkflowOptions] = useState<WorkflowOption[]>([]);
-  const [workflowOptionsLoading, setWorkflowOptionsLoading] = useState(false);
-  const [workflowOptionsError, setWorkflowOptionsError] = useState('');
+  const agentsQuery = useAgentsQuery();
+  const skillsQuery = useSkillsQuery({ enabled: isOpen && !isPhase });
+  const workflowOptionsQuery = useConfigOptionsQuery({ mode: 'state-machine', sortKey: 'name', sortDirection: 'asc' });
+  const queryRoles = (agentsQuery.data?.agents || []) as RoleOption[];
+  const effectiveRoles = roles.length > 0 ? roles : queryRoles;
+  const querySkills = (skillsQuery.data?.skills || []) as SkillOption[];
+  const effectiveSkills = availableSkills.length > 0 ? availableSkills : querySkills;
+  const initialAgent = effectiveRoles.find((role) => role.name === data?.agent);
 
   const {
     register,
@@ -308,14 +315,14 @@ export default function EditNodeModal({
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           preCommands: Array.isArray(data?.preCommands) ? data.preCommands.join('\n') : '',
           enableReviewPanel: data?.enableReviewPanel || false,
-          skills: Array.isArray(roles.find((role) => role.name === data?.agent)?.skills)
-            ? roles.find((role) => role.name === data?.agent)?.skills
+          skills: Array.isArray(initialAgent?.skills)
+            ? initialAgent?.skills
             : (Array.isArray(data?.skills) ? data.skills : []),
-          mcpServers: Array.isArray(roles.find((role) => role.name === data?.agent)?.mcpServers)
-            ? roles.find((role) => role.name === data?.agent)?.mcpServers
+          mcpServers: Array.isArray(initialAgent?.mcpServers)
+            ? initialAgent?.mcpServers
             : (Array.isArray(data?.mcpServers) ? data.mcpServers : []),
-          ragKnowledgeBases: Array.isArray(roles.find((role) => role.name === data?.agent)?.ragKnowledgeBases)
-            ? roles.find((role) => role.name === data?.agent)?.ragKnowledgeBases
+          ragKnowledgeBases: Array.isArray(initialAgent?.ragKnowledgeBases)
+            ? initialAgent?.ragKnowledgeBases
             : (Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : []),
           specTaskId: [
             ...((data?.specTaskBinding?.taskIds || []) as string[]),
@@ -330,7 +337,13 @@ export default function EditNodeModal({
   const iterationEnabled = watch('iterationEnabled');
   const stepType = (watch('type') || 'agent') as 'agent' | 'subworkflow';
   const selectedAgentName = (watch('agent') || data?.agent || '') as string;
-  const selectedAgent = roles.find((role) => role.name === selectedAgentName);
+  const workflowOptions = useMemo(
+    () => ((workflowOptionsQuery.data?.configs || []) as WorkflowOption[]),
+    [workflowOptionsQuery.data?.configs]
+  );
+  const workflowOptionsLoading = workflowOptionsQuery.isFetching;
+  const workflowOptionsError = workflowOptionsQuery.error instanceof Error ? workflowOptionsQuery.error.message : '';
+  const selectedAgent = effectiveRoles.find((role) => role.name === selectedAgentName);
   const selectedSkillNames = Array.isArray(watch('skills')) ? watch('skills') as string[] : [];
   const selectedMcpServers = Array.isArray(watch('mcpServers')) ? watch('mcpServers') as string[] : [];
   const selectedRagKnowledgeBases = Array.isArray(watch('ragKnowledgeBases')) ? watch('ragKnowledgeBases') as string[] : [];
@@ -345,7 +358,7 @@ export default function EditNodeModal({
     () => specTasks.filter((task) => selectedSpecTaskIds.includes(task.id)),
     [specTasks, selectedSpecTaskIds]
   );
-  const agentOptions = roles.map((role) => {
+  const agentOptions = effectiveRoles.map((role) => {
     const meta = [role.category, role.team, ...(role.tags || []).slice(0, 2)].filter(Boolean);
     const tone = getAgentTeamTone(role.team);
     return {
@@ -356,30 +369,6 @@ export default function EditNodeModal({
     };
   });
 
-  useEffect(() => {
-    if (isPhase || !isOpen) return;
-    let cancelled = false;
-    const loadWorkflows = async () => {
-      setWorkflowOptionsLoading(true);
-      setWorkflowOptionsError('');
-      try {
-        const json = await configApi.listAllConfigs({ mode: 'state-machine', sortKey: 'name', sortDirection: 'asc' });
-        if (!cancelled) setWorkflowOptions(Array.isArray(json?.configs) ? json.configs : []);
-      } catch (error: any) {
-        if (!cancelled) {
-          setWorkflowOptions([]);
-          setWorkflowOptionsError(error?.message || '加载子工作流配置失败');
-        }
-      } finally {
-        if (!cancelled) setWorkflowOptionsLoading(false);
-      }
-    };
-    void loadWorkflows();
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, isPhase]);
-
   const specTaskOptions = specTasks.map((task) => ({
     value: task.id,
     label: task.id,
@@ -387,7 +376,7 @@ export default function EditNodeModal({
   }));
   const skillOptions = useMemo(() => {
     const byName = new Map<string, SkillOption>();
-    for (const skill of availableSkills) {
+    for (const skill of effectiveSkills) {
       byName.set(skill.name, skill);
     }
     for (const skillName of selectedSkillNames) {
@@ -396,7 +385,7 @@ export default function EditNodeModal({
       }
     }
     return Array.from(byName.values());
-  }, [availableSkills, selectedSkillNames]);
+  }, [effectiveSkills, selectedSkillNames]);
 
   useEffect(() => {
     if (isPhase || !selectedAgentName) return;
@@ -430,7 +419,7 @@ export default function EditNodeModal({
     } else {
       const source = existingSteps.find((s: any) => s.name === sourceName);
       if (!source) return;
-      const sourceRole = roles.find((role) => role.name === source.agent);
+      const sourceRole = effectiveRoles.find((role) => role.name === source.agent);
       reset({
         type: source.type === 'subworkflow' ? 'subworkflow' : 'agent',
         name: source.name + ' (副本)',
@@ -731,12 +720,12 @@ export default function EditNodeModal({
                           triggerClassName={errors.agent ? 'border-destructive' : ''}
                           renderSelected={(option) => (
                             <AgentSelectedContent
-                              role={roles.find((role) => role.name === option?.value)}
+                              role={effectiveRoles.find((role) => role.name === option?.value)}
                               fallbackName={option?.label || selectedAgentName}
                             />
                           )}
                           renderOption={(option) => (
-                            <AgentOptionContent role={roles.find((role) => role.name === option.value)} />
+                            <AgentOptionContent role={effectiveRoles.find((role) => role.name === option.value)} />
                           )}
                         />
                         {errors.agent && (

@@ -3,9 +3,24 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AgentEditModal from '@/components/AgentEditModal';
 
 const mockToast = vi.fn();
+
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>,
+  );
+}
 
 vi.mock('@/components/SpriteAvatar', () => ({
   default: () => <div data-testid="sprite-avatar" />,
@@ -88,6 +103,12 @@ describe('AgentEditModal suggestions', () => {
           json: async () => ({ skills: [] }),
         } as Response;
       }
+      if (url.includes('/api/rag/knowledge-bases')) {
+        return {
+          ok: true,
+          json: async () => ({ knowledgeBases: [] }),
+        } as Response;
+      }
       return {
         ok: false,
         json: async () => ({}),
@@ -104,7 +125,7 @@ describe('AgentEditModal suggestions', () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
 
-    render(
+    renderWithQueryClient(
       <AgentEditModal
         isNew
         onClose={vi.fn()}

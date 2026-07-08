@@ -73,6 +73,7 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/core/utils';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
+import { syncModelDiagnosticsResultToDb, useModelDiagnosticsRows } from '@/client/db/collections';
 import type {
   DiagnosticDriver,
   DiagnosticLogEntry,
@@ -869,6 +870,8 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
   const streamAbortControllerRef = useRef<AbortController | null>(null);
   const restoredRunRef = useRef(false);
   const streamToastIdRef = useRef<number | null>(null);
+  const diagnosticsRows = useModelDiagnosticsRows();
+  const latestDiagnosticsRow = diagnosticsRows[0] || null;
 
   const engineOptions = useMemo(() => ENGINE_OPTIONS.map((id) => ({
     value: id,
@@ -942,6 +945,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
         savedAt?: string;
       };
       if (stored.result) {
+        syncModelDiagnosticsResultToDb(stored.result, stored.savedAt || stored.result.finishedAt || new Date().toISOString());
         setResult(stored.result);
         setLogs(stored.logs || stored.result.logs || []);
         setSavedAt(stored.savedAt || stored.result.finishedAt || null);
@@ -950,6 +954,13 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       localStorage.removeItem(LOCAL_RESULT_STORAGE_KEY);
     }
   }, []);
+
+  useEffect(() => {
+    if (running || result || !latestDiagnosticsRow) return;
+    setResult(latestDiagnosticsRow.result);
+    setLogs(latestDiagnosticsRow.result.logs || []);
+    setSavedAt(latestDiagnosticsRow.savedAt || latestDiagnosticsRow.result.finishedAt || null);
+  }, [latestDiagnosticsRow, result, running]);
 
   useEffect(() => () => {
     if (logScrollResetTimerRef.current !== null) {
@@ -980,6 +991,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
         logs: storedResult.logs || [],
         savedAt: nextSavedAt,
       }));
+      syncModelDiagnosticsResultToDb(storedResult, nextSavedAt);
       setSavedAt(nextSavedAt);
     } catch {
       toast('warning', '诊断结果较大，本地保存失败');
@@ -1114,10 +1126,12 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
               return [...prev, payload.log];
             });
           } else if (payload.type === 'progress') {
+            syncModelDiagnosticsResultToDb(payload.result);
             setResult(payload.result);
             if (payload.result.logs?.length) setLogs(payload.result.logs);
           } else if (payload.type === 'result') {
             finalResult = payload.result;
+            syncModelDiagnosticsResultToDb(payload.result);
             setResult(payload.result);
             if (payload.result.logs?.length) setLogs(payload.result.logs);
             clearActiveDiagnosticRun(payload.runId || streamRunId);

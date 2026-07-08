@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type React from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ModelSelect } from '@/components/ModelSelect';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
@@ -47,6 +49,9 @@ describe('ModelSelect', () => {
   beforeEach(() => {
     toastSpy.mockReset();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
       json: async () => ({
         models: [
           {
@@ -65,7 +70,7 @@ describe('ModelSelect', () => {
 
   test('suppresses change toast when showChangeToast is false', async () => {
     const onChange = vi.fn();
-    render(<ModelSelect value="" onChange={onChange} showChangeToast={false} />);
+    renderWithQuery(<ModelSelect value="" onChange={onChange} showChangeToast={false} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'GPT-5' }));
 
@@ -75,7 +80,7 @@ describe('ModelSelect', () => {
 
   test('shows a change toast by default', async () => {
     const onChange = vi.fn();
-    render(<ModelSelect value="" onChange={onChange} />);
+    renderWithQuery(<ModelSelect value="" onChange={onChange} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'GPT-5' }));
 
@@ -88,6 +93,9 @@ describe('ModelSelect', () => {
       const url = String(input);
       if (url.includes('/api/models')) {
         return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
           json: async () => ({
             models: [
               {
@@ -108,20 +116,29 @@ describe('ModelSelect', () => {
       }
       if (url.includes('/api/engine/availability')) {
         return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
           json: async () => ({ available: true, cacheTtlMs: 300000 }),
         } as Response;
       }
       if (url.includes('/api/engine')) {
         return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
           json: async () => ({ engine: 'nga', driver: 'stdio', defaultModel: '' }),
         } as Response;
       }
       return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'Content-Type': 'application/json' }),
         json: async () => ({}),
       } as Response;
     }));
 
-    render(
+    renderWithQuery(
       <EngineModelSelect
         engine="nga"
         model=""
@@ -139,6 +156,9 @@ describe('ModelSelect', () => {
       const url = String(input);
       if (url.includes('/api/models')) {
         return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
           json: async () => ({
             models: [
               {
@@ -153,21 +173,30 @@ describe('ModelSelect', () => {
       }
       if (url.includes('/api/engine/availability')) {
         return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
           json: async () => ({ available: true, cacheTtlMs: 300000 }),
         } as Response;
       }
       if (url.includes('/api/engine')) {
         return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
           json: async () => ({ engine: 'nga', driver: 'stdio', defaultModel: '' }),
         } as Response;
       }
       return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'Content-Type': 'application/json' }),
         json: async () => ({}),
       } as Response;
     }));
 
     const onModelChange = vi.fn();
-    render(
+    renderWithQuery(
       <EngineModelSelect
         engine="nga"
         model="opencode-only"
@@ -179,3 +208,17 @@ describe('ModelSelect', () => {
     await waitFor(() => expect(onModelChange).toHaveBeenCalledWith(''));
   });
 });
+
+function renderWithQuery(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>,
+  );
+}

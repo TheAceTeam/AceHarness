@@ -10,8 +10,11 @@ import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assem
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
 import { isRunningWorkflowConversation } from '@/lib/workflow/run-status';
 import { resolveConversationMode, type HomeConversationMode } from '@/lib/chat/conversation-mode';
+import { storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
+import { agentMessagesCollection } from '@/client/db/collections';
 
 // --- Types ---
 
@@ -187,6 +190,33 @@ function hasReadableSessionMessages(session: Pick<ChatSession, 'messages'> | nul
   )));
 }
 
+function countReadableSessionMessages(session: Pick<ChatSession, 'messages'> | null | undefined): number {
+  return session?.messages.reduce((count, message) => (
+    String(message.content || message.rawContent || '').trim()
+    || (message.actions?.length ?? 0) > 0
+    || (message.cards?.length ?? 0) > 0
+      ? count + 1
+      : count
+  ), 0) || 0;
+}
+
+function isSessionMoreCompleteForRestore(
+  candidate: Pick<ChatSession, 'updatedAt' | 'messages'>,
+  baseline: Pick<ChatSession, 'updatedAt' | 'messages'>,
+): boolean {
+  const candidateReadableCount = countReadableSessionMessages(candidate);
+  const baselineReadableCount = countReadableSessionMessages(baseline);
+  if (candidateReadableCount !== baselineReadableCount) {
+    if (candidateReadableCount === 0) return false;
+    if (baselineReadableCount === 0) return true;
+    return candidateReadableCount > baselineReadableCount;
+  }
+  if (candidate.messages.length !== baseline.messages.length) {
+    return candidate.messages.length > baseline.messages.length;
+  }
+  return isSessionAhead(candidate, baseline);
+}
+
 function chooseLoadedSessionSnapshot(input: {
   liveSession: ChatSession | null;
   persistedSession: ChatSession | null;
@@ -206,12 +236,12 @@ function chooseLoadedSessionSnapshot(input: {
   const effectiveCandidates = nonEmptyCandidates.length > 0 ? nonEmptyCandidates : candidates;
   if ((input.summaryMessageCount || 0) > 0 && nonEmptyCandidates.length > 0) {
     return nonEmptyCandidates.reduce((best, candidate) => (
-      isSessionAhead(candidate, best) ? candidate : best
+      isSessionMoreCompleteForRestore(candidate, best) ? candidate : best
     ));
   }
 
   return effectiveCandidates.reduce((best, candidate) => (
-    isSessionAhead(candidate, best) ? candidate : best
+    isSessionMoreCompleteForRestore(candidate, best) ? candidate : best
   ));
 }
 
@@ -698,12 +728,32 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     apiListSessions().then(list => {
       if (cancelled) return;
-      setSessions(list);
+      const mergedList = [...list];
+      const addLocalSession = (session: ChatSession | null | undefined) => {
+        if (!session || mergedList.some((item) => item.id === session.id)) return;
+        mergedList.unshift({
+          id: session.id,
+          title: session.title,
+          model: session.model,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messageCount: session.messages.length,
+          lastMessage: extractLastMessagePreview(session.messages),
+          conversationMode: session.conversationMode,
+          creationSession: session.creationSession,
+          workflowBinding: session.workflowBinding,
+          agentBinding: session.agentBinding,
+          sessionWorkbenchState: session.sessionWorkbenchState,
+        });
+      };
+      addLocalSession(activeSessionRef.current);
+      Object.values(sessionCacheRef.current).forEach(addLocalSession);
+      setSessions(mergedList);
 
       const storedActiveSessionId = readStoredActiveSessionId();
       if (!storedActiveSessionId) return;
 
-      const storedSessionExists = list.some((session) => session.id === storedActiveSessionId);
+      const storedSessionExists = mergedList.some((session) => session.id === storedActiveSessionId);
       if (!storedSessionExists) {
         writeStoredActiveSessionId(null);
       }
@@ -954,7 +1004,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const recoveredSession = lastAssistantMessage
             ? nextSession
             : { ...nextSession, messages: [...nextSession.messages, recoveryMsg] };
-          const initialStreamContent = String(recoveryMsg.rawContent || streamState.streamContent || '');
+          const cachedAgentMessage = agentMessagesCollection.get(streamState.chatId);
+          const cachedAgentContent = cachedAgentMessage?.content || cachedAgentMessage?.chunks?.join('') || '';
+          const initialStreamContent = String(recoveryMsg.rawContent || cachedAgentContent || streamState.streamContent || '');
           const initialCleanText = recoveryMsg.content || normalizeAssistantDisplay(initialStreamContent, true).visibleText || parseActions(initialStreamContent).text;
           const hydratedSession = initialStreamContent
             ? {
@@ -980,6 +1032,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           let accumulatedRawStream = initialStreamContent;
           let initialSnapshotReplayPending = Boolean(initialStreamContent);
           let hasConnected = false;
+          let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined = initialStreamContent
+            ? { id: streamState.chatId, content: initialStreamContent, toolCalls: cachedAgentMessage?.toolCalls || [] }
+            : undefined;
 
           es.addEventListener('connected', () => {
             hasConnected = true;
@@ -987,7 +1042,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             if (initialSnapshotReplayPending && content === initialStreamContent) {
               initialSnapshotReplayPending = false;
               return;
@@ -995,6 +1050,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             initialSnapshotReplayPending = false;
             accumulated += content;
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('delta', { content }, {
+              chatId: streamState.chatId,
+              sessionId: recoveredSession.backendSessionId,
+              frontendSessionId: activeSessionId,
+              streamScope: 'chat-recovery',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: parsedText } = parseActions(accumulated);
             const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
             setActiveSession(prev => {
@@ -1007,7 +1069,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           });
 
           es.addEventListener('session', (e) => {
-            const data = JSON.parse(e.data || '{}');
+            const data = parseSseJsonEventData(e.data);
             if (!data?.sessionId) return;
             setActiveSession(prev => prev ? {
               ...prev,
@@ -1017,8 +1079,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
+              chatId: streamState.chatId,
+              sessionId: recoveredSession.backendSessionId,
+              frontendSessionId: activeSessionId,
+              streamScope: 'chat-recovery',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             setActiveSession(prev => {
               if (!prev) return prev;
               return {
@@ -1029,7 +1098,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           });
 
           es.addEventListener('done', (e) => {
-            const data = JSON.parse(e.data);
+            const data = parseSseJsonEventData(e.data);
             es.close();
             activeEventSourceRef.current = null;
             activeChatIdRef.current = null;
@@ -1039,6 +1108,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               setActiveSession(prev => prev ? { ...prev, backendSessionId: nextBackendSessionId } : prev);
             }
             const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+            const row = storeChatStreamSseEventAsAgentMessage(data.isError ? 'error' : 'done', {
+              ...data,
+              content: fullRawContent || data.result || accumulated,
+              isError: data.isError,
+            }, {
+              chatId: streamState.chatId,
+              sessionId: data.sessionId || recoveredSession.backendSessionId,
+              frontendSessionId: activeSessionId,
+              streamScope: 'chat-recovery',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
             const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
             setActiveSession(prev => {
@@ -1934,6 +2014,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           let accumulatedRawStream = '';
           let reconnectAttempts = 0;
           const MAX_RECONNECTS = 3;
+          let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
 
         const connectSSE = () => {
           const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
@@ -1946,9 +2027,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
-              const { content } = JSON.parse(e.data);
+              const content = String(parseSseJsonEventData(e.data).content || '');
               accumulated += content;
               accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+              const row = storeChatStreamSseEventAsAgentMessage('delta', { content }, {
+                chatId,
+                sessionId: getTargetSessionSnapshot()?.backendSessionId,
+                frontendSessionId: targetSessionId,
+                streamScope: 'chat-follow-up',
+              }, aiPrevious);
+              aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
               const { text: parsedText } = parseActions(accumulated);
               const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
               void applyToTargetSession(s => ({
@@ -1958,7 +2046,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             });
 
             es.addEventListener('done', (e) => {
-              const data = JSON.parse(e.data);
+              const data = parseSseJsonEventData(e.data);
               es.close();
               activeEventSourceRef.current = null;
               activeChatIdRef.current = null;
@@ -1968,6 +2056,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 void applyToTargetSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
               }
               const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+              const row = storeChatStreamSseEventAsAgentMessage(data.isError ? 'error' : 'done', {
+                ...data,
+                content: fullRawContent || data.result || accumulated,
+                isError: data.isError,
+              }, {
+                chatId,
+                sessionId: data.sessionId || getTargetSessionSnapshot()?.backendSessionId,
+                frontendSessionId: targetSessionId,
+                streamScope: 'chat-follow-up',
+              }, aiPrevious);
+              aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
               const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(fullRawContent);
               const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
               const newActionStates: ActionState[] = newActions.map(a => ({
@@ -2023,6 +2122,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                     .then(r => r.json())
                     .then(recData => {
                       if (recData.content) {
+                        const row = storeChatStreamSseEventAsAgentMessage('done', {
+                          ...recData,
+                          content: recData.content,
+                        }, {
+                          chatId,
+                          sessionId: backendSid,
+                          frontendSessionId: targetSessionId,
+                          streamScope: 'chat-follow-up',
+                        }, aiPrevious);
+                        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
                         const { text: cleanText, cards: newCards, sidebarHints } = parseActions(recData.content);
                         const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
                         void applyToTargetSession(s => ({
@@ -2418,6 +2527,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       attachedStreamingSessionIdRef.current = targetSessionId;
       await new Promise<void>((resolve, reject) => {
         let accumulated = '';
+        let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
         let reconnectAttempts = 0;
         const MAX_RECONNECTS = 3;
         const INACTIVITY_TIMEOUT = 1_200_000; // 20 minutes without any data
@@ -2451,9 +2561,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
             resetInactivityTimer();
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             accumulatedRawContent = appendStreamChunk(accumulatedRawContent, content);
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: getTargetSessionSnapshot()?.backendSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             void applyToTargetSession(s => ({
               ...s, messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, rawContent: accumulatedRawStream } : m),
             }));
@@ -2461,7 +2580,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('session', (e) => {
             resetInactivityTimer();
-            const data = JSON.parse(e.data || '{}');
+            const data = parseSseJsonEventData(e.data);
             if (!data?.sessionId) return;
             void applyToTargetSession(s => ({
               ...s,
@@ -2474,9 +2593,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
             resetInactivityTimer();
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             accumulated += content;
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('delta', { content }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: getTargetSessionSnapshot()?.backendSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: parsedText } = parseActions(accumulated);
             const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
             void applyToTargetSession(s => ({
@@ -2487,7 +2615,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('done', (e) => {
             if (inactivityTimer) clearTimeout(inactivityTimer);
-            const data = JSON.parse(e.data);
+            const data = parseSseJsonEventData(e.data);
             es.close();
             activeEventSourceRef.current = null;
             activeChatIdRef.current = null;
@@ -2503,6 +2631,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const partialContent = normalizeAssistantDisplay(partialRawContent, false).visibleText
                 || parseActions(partialRawContent).text
                 || String(data.result || accumulated || '');
+              const row = storeChatStreamSseEventAsAgentMessage('error', {
+                ...data,
+                content: partialRawContent || partialContent || message,
+                isError: true,
+              }, {
+                chatId,
+                provider: resolvedEngine,
+                model: currentModel,
+                sessionId: data.sessionId || getTargetSessionSnapshot()?.backendSessionId,
+                frontendSessionId: targetSessionId,
+                streamScope: 'chat-message',
+              }, aiPrevious);
+              aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
               void applyToTargetSession(s => ({
                 ...s,
                 backendSessionId: failedBackendSessionId || s.backendSessionId,
@@ -2519,6 +2660,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               return;
             }
             const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+            const row = storeChatStreamSseEventAsAgentMessage('done', {
+              ...data,
+              content: fullRawContent || data.result || accumulated,
+            }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: data.sessionId || getTargetSessionSnapshot()?.backendSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: cleanText, actions, cards, sidebarHints } = parseActions(fullRawContent);
             const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
             const actionStates: ActionState[] = actions.map(a => ({
@@ -2553,9 +2706,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('engine_error', (e) => {
             if (inactivityTimer) clearTimeout(inactivityTimer);
-            const data = JSON.parse(e.data || '{}');
+            const data = parseSseJsonEventData(e.data);
             const message = String(data?.message || '执行失败，请稍后重试');
             const failedBackendSessionId = normalizeBackendSessionId(data?.sessionId);
+            const row = storeChatStreamSseEventAsAgentMessage('error', {
+              ...data,
+              content: accumulatedRawStream || accumulated || message,
+              isError: true,
+            }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: failedBackendSessionId || getTargetSessionSnapshot()?.backendSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             void applyToTargetSession(s => ({
               ...s,
               backendSessionId: failedBackendSessionId || s.backendSessionId,
@@ -2577,9 +2743,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('failed', (e) => {
             if (inactivityTimer) clearTimeout(inactivityTimer);
-            const data = JSON.parse(e.data || '{}');
+            const data = parseSseJsonEventData(e.data);
             const message = String(data?.message || '执行失败，请稍后重试');
             const failedBackendSessionId = normalizeBackendSessionId(data?.sessionId);
+            const row = storeChatStreamSseEventAsAgentMessage('error', {
+              ...data,
+              content: accumulatedRawStream || accumulated || message,
+              isError: true,
+            }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: failedBackendSessionId || getTargetSessionSnapshot()?.backendSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             void applyToTargetSession(s => ({
               ...s,
               backendSessionId: failedBackendSessionId || s.backendSessionId,
@@ -2614,6 +2793,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   .then(r => r.json())
                   .then(recData => {
                     if (recData.content) {
+                      const row = storeChatStreamSseEventAsAgentMessage('done', {
+                        ...recData,
+                        content: recData.content,
+                      }, {
+                        chatId,
+                        provider: resolvedEngine,
+                        model: currentModel,
+                        sessionId: backendSid,
+                        frontendSessionId: targetSessionId,
+                        streamScope: 'chat-message',
+                      }, aiPrevious);
+                      aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
                       const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(recData.content);
                       const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
                       const newActionStates: ActionState[] = newActions.map(a => ({

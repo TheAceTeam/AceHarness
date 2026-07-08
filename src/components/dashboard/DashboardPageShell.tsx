@@ -1,14 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef, type DragEvent, type ReactNode } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { motion } from 'framer-motion';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
-import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, FileText, History, NotebookTabs, Layers3, Trophy, Loader2, BarChart3, PanelLeftClose, PanelLeftOpen, MessageSquareText, Microchip, ServerCog, Grid2X2, Zap } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type DragEvent, type PointerEvent, type ReactNode } from 'react';
+import { usePathname, useRouter, useSearchParams } from '@/lib/navigation/client';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, FileText, History, NotebookTabs, Layers3, Loader2, BarChart3, PanelLeftClose, PanelLeftOpen, MessageSquareText, Microchip, ServerCog, Grid2X2, Zap } from 'lucide-react';
 
 import { useTranslations } from '@/hooks/useTranslations';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { DataCard, DataCardDescription, DataCardHeader, DataCardMeta, DataCardTitle } from '@/components/ui/data-card';
+import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/ui/page-header';
+import { PageToolbar } from '@/components/ui/page-toolbar';
+import { StatusPill } from '@/components/ui/status-pill';
 import {
   Sidebar,
   SidebarContent,
@@ -70,32 +74,15 @@ interface TokenRankingItem {
   cost: number;
 }
 
-interface RunTokenUsageItem {
-  id: string;
-  configFile: string;
-  configName: string;
-  status: string;
-  startTime: string;
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheReadInputTokens: number;
-  cost: number;
-}
-
 const WORKFLOW_TOKEN_RANKING_HREF = '/run-history?view=token-ranking&dimension=workflow&sortKey=totalTokens&sortDirection=desc&page=1';
 const DASHBOARD_CACHE_KEY = 'dashboard-cache';
 const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
 const SIDEBAR_COOKIE_NAME = 'sidebar:state';
 const DASHBOARD_NAVIGATION_MODE_STORAGE_KEY = 'aceharness:dashboard:navigation-mode';
-const CHART_SERIES_COLORS = ['#38bdf8', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
-const TOKEN_STACK_COLORS = {
-  inputTokens: '#38bdf8',
-  outputTokens: '#8b5cf6',
-  cacheTokens: '#f59e0b',
-};
-
+const DASHBOARD_SIDEBAR_WIDTH_STORAGE_KEY = 'aceharness:dashboard:sidebar-width';
+const DASHBOARD_SIDEBAR_WIDTH_DEFAULT = 288;
+const DASHBOARD_SIDEBAR_WIDTH_MIN = 224;
+const DASHBOARD_SIDEBAR_WIDTH_MAX = 360;
 type DashboardPanel = 'chat' | 'overview' | 'agents' | 'skills' | 'settings';
 type DashboardDragTab = DashboardDockTab;
 type DashboardNavigationMode = 'modern' | 'classic';
@@ -207,10 +194,13 @@ const WORKBENCH_OUTER_QUERY_KEYS = [
   'workspaceLine',
   'workspaceColumn',
   'changes',
+  'tab',
   'history',
   'designTab',
   'focus',
   'questionId',
+  'section',
+  'autoStart',
 ];
 
 function DashboardSidebarFooter({ onUseClassicMode }: { onUseClassicMode: () => void }) {
@@ -299,6 +289,22 @@ function formatStateName(name: string): string {
   return name;
 }
 
+function getRunStatusTone(status: string): 'neutral' | 'success' | 'warning' | 'info' | 'danger' | 'accent' {
+  if (status === 'completed') return 'success';
+  if (status === 'failed' || status === 'crashed') return 'danger';
+  if (status === 'running') return 'info';
+  if (status === 'stopped') return 'warning';
+  return 'neutral';
+}
+
+function getRunStatusIcon(status: string) {
+  if (status === 'completed') return CheckCircle2;
+  if (status === 'failed' || status === 'crashed') return XCircle;
+  if (status === 'running') return Play;
+  if (status === 'stopped') return AlertCircle;
+  return Clock;
+}
+
 function readStoredSidebarOpen(): boolean {
   if (typeof document === 'undefined') return true;
   const match = document.cookie
@@ -311,6 +317,33 @@ function readStoredSidebarOpen(): boolean {
 function readStoredNavigationMode(): DashboardNavigationMode {
   if (typeof window === 'undefined') return 'modern';
   return window.localStorage.getItem(DASHBOARD_NAVIGATION_MODE_STORAGE_KEY) === 'classic' ? 'classic' : 'modern';
+}
+
+function clampDashboardSidebarWidth(width: number): number {
+  return Math.min(DASHBOARD_SIDEBAR_WIDTH_MAX, Math.max(DASHBOARD_SIDEBAR_WIDTH_MIN, Math.round(width)));
+}
+
+function readStoredDashboardSidebarWidth(): number {
+  if (typeof window === 'undefined') return DASHBOARD_SIDEBAR_WIDTH_DEFAULT;
+  try {
+    const stored = Number(window.localStorage.getItem(DASHBOARD_SIDEBAR_WIDTH_STORAGE_KEY));
+    return Number.isFinite(stored) ? clampDashboardSidebarWidth(stored) : DASHBOARD_SIDEBAR_WIDTH_DEFAULT;
+  } catch {
+    return DASHBOARD_SIDEBAR_WIDTH_DEFAULT;
+  }
+}
+
+function getDashboardRouteOwner(tab: DashboardDockTab | null): string | null {
+  if (!tab) return null;
+  if (tab.kind === 'workbench' || tab.kind === 'workflows') return '/workflows';
+  if (tab.kind === 'knowledge' || tab.kind === 'knowledge-library' || tab.kind === 'notebook') return '/knowledge';
+  if (tab.kind === 'run-history') return '/run-history';
+  if (tab.kind === 'models') return '/models';
+  if (tab.kind === 'engines') return '/engines';
+  if (tab.kind === 'schedules') return '/schedules';
+  if (tab.kind === 'api-docs') return '/api-docs';
+  if (tab.kind === 'office') return '/office';
+  return null;
 }
 
 export default function DashboardPage() {
@@ -333,21 +366,25 @@ export default function DashboardPage() {
   const [recentRuns, setRecentRuns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewModal, setShowNewModal] = useState(false);
-  const [agentUsageData, setAgentUsageData] = useState<any[]>([]);
   const [activityData, setActivityData] = useState<any[]>([]);
   const [runningRuns, setRunningRuns] = useState<any[]>([]);
-  const [tokenRankingByUser, setTokenRankingByUser] = useState<TokenRankingItem[]>([]);
   const [tokenRankingByWorkflow, setTokenRankingByWorkflow] = useState<TokenRankingItem[]>([]);
-  const [runTokenUsageRanking, setRunTokenUsageRanking] = useState<RunTokenUsageItem[]>([]);
   const [tokenActivityData, setTokenActivityData] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<DashboardUser | null>(null);
   const [conversationView, setConversationView] = useState<SessionDirectoryView>('conversation');
   const [secondarySidebarOpen, setSecondarySidebarOpen] = useState(true);
   const [mainSidebarOpen, setMainSidebarOpen] = useState(readStoredSidebarOpen);
+  const [dashboardSidebarWidth, setDashboardSidebarWidth] = useState(DASHBOARD_SIDEBAR_WIDTH_DEFAULT);
+  const [dashboardSidebarResizing, setDashboardSidebarResizing] = useState(false);
   const [navigationMode, setNavigationModeState] = useState<DashboardNavigationMode>(readStoredNavigationMode);
   const [activeDockTab, setActiveDockTab] = useState<DashboardDockTab | null>({ id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' });
   const workspaceRef = useRef<DashboardDockWorkspaceHandle | null>(null);
   const suppressSidebarClickRef = useRef(false);
+  const sidebarResizeFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setDashboardSidebarWidth(readStoredDashboardSidebarWidth());
+  }, []);
 
   const panelParam = searchParams.get('panel');
   const activeEmbeddedRoute = normalizeEmbeddedRoute(searchParams.get('route'));
@@ -401,7 +438,9 @@ export default function DashboardPage() {
       users: '/users',
     };
     let route = routeByKind[tab.kind] || '';
-    if (tab.kind === 'notebook') {
+    if (tab.kind === 'run-history') {
+      route = `/run-history${tab.search ? `?${tab.search}` : ''}`;
+    } else if (tab.kind === 'notebook') {
       route = `/notebook${tab.search ? `?${tab.search}` : ''}`;
     } else if (tab.kind === 'account') {
       route = `/account${tab.search ? `?${tab.search}` : ''}`;
@@ -476,6 +515,13 @@ export default function DashboardPage() {
     if (basePath.startsWith('/workbench/')) {
       const config = decodeURIComponent(path.replace('/workbench/', ''));
       const params = new URLSearchParams(queryString);
+      WORKBENCH_OUTER_QUERY_KEYS.forEach((key) => {
+        const outerValue = searchParams.get(key);
+        if (outerValue !== null && !params.has(key)) {
+          params.set(key, outerValue);
+        }
+      });
+      const mergedSearch = params.toString();
       return {
         id: `workbench:${config}`,
         title: config,
@@ -483,7 +529,7 @@ export default function DashboardPage() {
         config,
         mode: params.get('mode') || 'run',
         runId: params.get('runId') || params.get('run'),
-        search: queryString,
+        search: mergedSearch,
       };
     }
 
@@ -511,6 +557,15 @@ export default function DashboardPage() {
       return { id: 'users', title: '用户管理', kind: 'users' };
     }
 
+    if (basePath === '/run-history') {
+      return {
+        id: 'run-history',
+        title: t('dashboard.quickActions.runHistory'),
+        kind: 'run-history',
+        search: queryString,
+      };
+    }
+
     if (basePath === '/account') {
       return {
         id: 'account',
@@ -534,7 +589,7 @@ export default function DashboardPage() {
       '/users': { id: 'users', title: '用户管理', kind: 'users' },
     };
     return routeTabMap[basePath] || null;
-  }, [t]);
+  }, [searchParams, t]);
 
   const initialDockTab = useMemo<DashboardDockTab>(() => {
     if (activeEmbeddedRoute) {
@@ -552,14 +607,33 @@ export default function DashboardPage() {
   }, [activeEmbeddedRoute, activePanel, buildDockTabForRoute, t]);
 
   const handleActiveDockTabChange = useCallback((tab: DashboardDockTab | null) => {
-    const nextTab = tab || { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' };
+    let nextTab = tab || { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' };
+    const currentSearch = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : searchParams.toString();
+    if (nextTab.kind === 'workbench') {
+      const currentParams = new URLSearchParams(currentSearch);
+      const currentRoute = normalizeEmbeddedRoute(currentParams.get('route'));
+      if (currentRoute) {
+        const [currentRoutePath, currentRouteQuery = ''] = currentRoute.split('?');
+        const currentConfig = currentRoutePath.startsWith('/workbench/')
+          ? decodeURIComponent(currentRoutePath.replace('/workbench/', ''))
+          : '';
+        if (currentConfig === nextTab.config) {
+          const currentWorkbenchParams = new URLSearchParams(currentRouteQuery);
+          nextTab = {
+            ...nextTab,
+            search: currentWorkbenchParams.toString(),
+            mode: currentWorkbenchParams.get('mode') || nextTab.mode || 'run',
+            runId: currentWorkbenchParams.get('runId') || currentWorkbenchParams.get('run') || null,
+          };
+        }
+      }
+    }
     setActiveDockTab(nextTab);
     if (nextTab.kind === 'chat') {
       setSecondarySidebarOpen(true);
     } else {
       setSecondarySidebarOpen(false);
     }
-    const currentSearch = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : searchParams.toString();
     const nextUrl = buildShellUrlForDockTab(nextTab, currentSearch);
     const currentUrl = `${pathname}${currentSearch ? `?${currentSearch}` : ''}`;
     if (nextUrl !== currentUrl) {
@@ -627,6 +701,80 @@ export default function DashboardPage() {
     return true;
   }, []);
 
+  const handleDashboardSidebarResizeStart = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || !mainSidebarOpen) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    suppressSidebarClickRef.current = true;
+    setDashboardSidebarResizing(true);
+  }, [mainSidebarOpen]);
+
+  const handleDashboardSidebarResizeMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    if (!dashboardSidebarResizing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextWidth = clampDashboardSidebarWidth(event.clientX);
+    if (sidebarResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(sidebarResizeFrameRef.current);
+    }
+    sidebarResizeFrameRef.current = window.requestAnimationFrame(() => {
+      setDashboardSidebarWidth(nextWidth);
+      sidebarResizeFrameRef.current = null;
+    });
+  }, [dashboardSidebarResizing]);
+
+  const handleDashboardSidebarResizeEnd = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    if (!dashboardSidebarResizing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {}
+    const nextWidth = clampDashboardSidebarWidth(event.clientX);
+    setDashboardSidebarWidth(nextWidth);
+    setDashboardSidebarResizing(false);
+    try {
+      window.localStorage.setItem(DASHBOARD_SIDEBAR_WIDTH_STORAGE_KEY, String(nextWidth));
+    } catch {}
+    window.setTimeout(() => {
+      suppressSidebarClickRef.current = false;
+    }, 120);
+  }, [dashboardSidebarResizing]);
+
+  const handleDashboardSidebarResizeCancel = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    if (!dashboardSidebarResizing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {}
+    setDashboardSidebarResizing(false);
+    window.setTimeout(() => {
+      suppressSidebarClickRef.current = false;
+    }, 120);
+  }, [dashboardSidebarResizing]);
+
+  useEffect(() => {
+    return () => {
+      if (sidebarResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(sidebarResizeFrameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dashboardSidebarResizing) return;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+  }, [dashboardSidebarResizing]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (activeEmbeddedRoute) {
@@ -679,10 +827,7 @@ export default function DashboardPage() {
       setConfigs(data.configs || []);
       setRecentRuns(data.recentRuns || []);
       setRunningRuns(data.runningRuns || []);
-      setAgentUsageData(data.agentUsageData || []);
-      setTokenRankingByUser(data.tokenRankingByUser || []);
       setTokenRankingByWorkflow(data.tokenRankingByWorkflow || []);
-      setRunTokenUsageRanking(data.runTokenUsageRanking || []);
       setTokenActivityData((data.tokenActivityData || []).map((d: any) => ({
         name: weekDays[d.dayOfWeek],
         totalTokens: d.totalTokens || 0,
@@ -701,10 +846,7 @@ export default function DashboardPage() {
           configs: data.configs || [],
           recentRuns: data.recentRuns || [],
           runningRuns: data.runningRuns || [],
-          agentUsageData: data.agentUsageData || [],
-          tokenRankingByUser: data.tokenRankingByUser || [],
           tokenRankingByWorkflow: data.tokenRankingByWorkflow || [],
-          runTokenUsageRanking: data.runTokenUsageRanking || [],
           tokenActivityData: (data.tokenActivityData || []).map((d: any) => ({
             name: weekDays[d.dayOfWeek],
             totalTokens: d.totalTokens || 0,
@@ -730,11 +872,8 @@ export default function DashboardPage() {
           setConfigs(cached.configs);
           setRecentRuns(cached.recentRuns);
           setRunningRuns(cached.runningRuns);
-          setAgentUsageData(cached.agentUsageData || []);
           setActivityData(cached.activityData || []);
-          setTokenRankingByUser(cached.tokenRankingByUser || []);
           setTokenRankingByWorkflow(cached.tokenRankingByWorkflow || []);
-          setRunTokenUsageRanking(cached.runTokenUsageRanking || []);
           setTokenActivityData(cached.tokenActivityData || []);
           setLoading(false);
         }
@@ -747,31 +886,19 @@ export default function DashboardPage() {
     workspaceRef.current?.refreshActiveTab();
   }, [navigationMode]);
 
-  const StatCard = ({ icon: Icon, label, value, trend, color }: any) => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.02, boxShadow: '0 0 30px rgba(59, 130, 246, 0.3)' }}
-      className="relative bg-gradient-to-br from-card/80 to-card/40 backdrop-blur-xl border border-border/50 rounded-xl p-6 overflow-hidden group"
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-      <div className="relative z-10">
-        <div className="flex items-center justify-between mb-4">
-          <div className={`p-3 rounded-lg bg-gradient-to-br ${color}`}>
-            <Icon className="w-6 h-6 text-white" />
-          </div>
-          {trend && (
-            <Badge variant="secondary" className="text-xs">
-              <TrendingUp className="w-3 h-3 mr-1" />
-              {trend}
-            </Badge>
-          )}
+  const StatCard = ({ icon: Icon, label, value, meta }: any) => (
+    <DataCard className="min-h-[132px]">
+      <DataCardHeader>
+        <div className="min-w-0">
+          <DataCardTitle className="text-sm font-medium text-muted-foreground">{label}</DataCardTitle>
+          <div className="mt-4 text-3xl font-semibold tracking-normal text-foreground">{value}</div>
         </div>
-        <div className="text-3xl font-bold mb-1">{value}</div>
-        <div className="text-sm text-muted-foreground">{label}</div>
-      </div>
-      <div className="absolute -right-8 -bottom-8 w-32 h-32 bg-primary/5 rounded-full blur-2xl" />
-    </motion.div>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-accent text-accent-foreground">
+          <Icon className="h-5 w-5" />
+        </div>
+      </DataCardHeader>
+      {meta ? <DataCardMeta>{meta}</DataCardMeta> : null}
+    </DataCard>
   );
 
   const TokenRankingList = ({
@@ -794,7 +921,7 @@ export default function DashboardPage() {
           type="button"
           variant="ghost"
           size="sm"
-          className="h-8 rounded-full px-3 text-xs"
+          className="h-8 px-3 text-xs"
           onClick={() => setActiveRoute(actionHref)}
         >
           {actionLabel}
@@ -810,10 +937,10 @@ export default function DashboardPage() {
             const cacheTokens = (item.cacheCreationInputTokens || 0) + (item.cacheReadInputTokens || 0);
             const maxTokens = Math.max(...items.map((entry) => entry.totalTokens || 0), 1);
             return (
-              <div key={`${item.configFile || item.name}-${index}`} className="rounded-xl border border-border/40 bg-background/55 p-3.5 shadow-sm">
+              <DataCard key={`${item.configFile || item.name}-${index}`} className="p-3.5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-accent text-xs font-semibold text-accent-foreground">
                       {index + 1}
                     </div>
                     <div className="min-w-0">
@@ -830,7 +957,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted/70">
                   <div
-                    className="h-full rounded-full bg-[linear-gradient(90deg,#38bdf8,#8b5cf6,#f59e0b)]"
+                    className="h-full rounded-full bg-primary/70"
                     style={{ width: `${Math.max(12, Math.round((item.totalTokens / maxTokens) * 100))}%` }}
                   />
                 </div>
@@ -840,7 +967,7 @@ export default function DashboardPage() {
                     .replace('{output}', formatTokens(item.outputTokens))
                     .replace('{cache}', formatTokens(cacheTokens))}
                 </div>
-              </div>
+              </DataCard>
             );
           })}
         </div>
@@ -850,61 +977,7 @@ export default function DashboardPage() {
     </ChartShell>
   );
 
-  const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
-
-  const workflowComparisonData = tokenRankingByWorkflow.slice(0, 6).map((item) => ({
-    name: item.name || item.configFile || '-',
-    inputTokens: item.inputTokens || 0,
-    outputTokens: item.outputTokens || 0,
-    cacheTokens: (item.cacheCreationInputTokens || 0) + (item.cacheReadInputTokens || 0),
-    totalTokens: item.totalTokens || 0,
-  }));
-
-  const runRankingChartData = runTokenUsageRanking.slice(0, 8).map((item) => ({
-    name: item.configName || item.configFile || '-',
-    totalTokens: item.totalTokens || 0,
-    status: item.status,
-    cost: item.cost,
-  }));
-
-  const recentTokenTrendData = recentRuns
-    .slice()
-    .reverse()
-    .map((run: any, index: number) => ({
-      name: `#${index + 1}`,
-      workflow: run.configName || run.configFile || '-',
-      totalTokens: Number(run.totalTokens || 0),
-      status: run.status,
-      startTime: run.startTime,
-    }));
-
-  const tokenCompositionData = [
-    {
-      name: t('dashboard.charts.inputTokens'),
-      value: workflowComparisonData.reduce((sum, row) => sum + Number(row.inputTokens || 0), 0),
-      color: TOKEN_STACK_COLORS.inputTokens,
-    },
-    {
-      name: t('dashboard.charts.outputTokens'),
-      value: workflowComparisonData.reduce((sum, row) => sum + Number(row.outputTokens || 0), 0),
-      color: TOKEN_STACK_COLORS.outputTokens,
-    },
-    {
-      name: t('dashboard.charts.cacheTokens'),
-      value: workflowComparisonData.reduce((sum, row) => sum + Number(row.cacheTokens || 0), 0),
-      color: TOKEN_STACK_COLORS.cacheTokens,
-    },
-  ].filter((item) => item.value > 0);
-
-  const activityChartData = activityData.map((item, index) => ({
-    ...item,
-    fill: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
-  }));
-
-  const agentCallsChartData = agentUsageData.map((item, index) => ({
-    ...item,
-    fill: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
-  }));
+  const activityChartData = activityData;
 
   const primaryActions: Array<{
     id: DashboardPanel;
@@ -1010,13 +1083,12 @@ export default function DashboardPage() {
     action?: ReactNode;
     className?: string;
   }) => (
-    <div className={`relative overflow-hidden rounded-2xl border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.02))] p-6 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl ${className || ''}`}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.12),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_30%)]" />
-      <div className="relative mb-5 flex items-start justify-between gap-4">
+    <div className={`rounded-xl border border-border bg-card p-5 shadow-none ${className || ''}`}>
+      <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h3 className="flex items-center gap-2 text-lg font-semibold">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
-              <Icon className="h-4.5 w-4.5" />
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-primary/15 bg-accent text-accent-foreground">
+              <Icon className="h-4 w-4" />
             </span>
             {title}
           </h3>
@@ -1024,7 +1096,7 @@ export default function DashboardPage() {
         </div>
         {action}
       </div>
-      <div className="relative">{children}</div>
+      <div>{children}</div>
     </div>
   );
 
@@ -1060,6 +1132,91 @@ export default function DashboardPage() {
     </div>
   );
 
+  const runningRunColumns = useMemo<DataTableColumn<any>[]>(() => [
+    {
+      id: 'workflow',
+      header: '工作流',
+      render: (run) => {
+        const config = configs.find((item) => item.filename === run.configFile);
+        const configName = config?.name || run.configName || run.configFile;
+        return (
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">{configName}</div>
+            <div className="mt-1 truncate text-xs text-muted-foreground">{formatStateName(run.currentPhase || '') || t('dashboard.status.starting')}</div>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'progress',
+      header: '进度',
+      align: 'right',
+      width: 96,
+      render: (run) => <StatusPill tone="info">{run.completedSteps || 0}/{run.totalSteps || 0}</StatusPill>,
+    },
+  ], [configs, t]);
+
+  const recentRunColumns = useMemo<DataTableColumn<any>[]>(() => [
+    {
+      id: 'run',
+      header: '运行',
+      render: (run) => {
+        const StatusIcon = getRunStatusIcon(run.status);
+        return (
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40 text-muted-foreground">
+              <StatusIcon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{run.configName || run.configFile}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>{formatStateName(run.currentPhase || '') || t('dashboard.status.starting')}</span>
+                <span className="h-1 w-1 rounded-full bg-border" />
+                <span>{new Date(run.startTime).toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'tokens',
+      header: 'Token',
+      align: 'right',
+      width: 96,
+      hideBelow: 'md',
+      render: (run) => (typeof run.totalTokens === 'number' ? formatTokens(run.totalTokens) : '-'),
+      className: 'text-xs text-muted-foreground',
+    },
+    {
+      id: 'status',
+      header: '状态',
+      align: 'right',
+      width: 112,
+      render: (run) => <StatusPill tone={getRunStatusTone(run.status)}>{t(`dashboard.status.${run.status}`)}</StatusPill>,
+    },
+  ], [t]);
+
+  const exceptionRunColumns = useMemo<DataTableColumn<any>[]>(() => [
+    {
+      id: 'run',
+      header: '运行',
+      render: (run) => (
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">{run.configName || run.configFile}</div>
+          <div className="mt-1 truncate text-xs text-muted-foreground">{formatStateName(run.currentPhase || '') || t('dashboard.status.starting')}</div>
+        </div>
+      ),
+    },
+    {
+      id: 'status',
+      header: '状态',
+      align: 'right',
+      width: 112,
+      render: (run) => <StatusPill tone={getRunStatusTone(run.status)}>{t(`dashboard.status.${run.status}`)}</StatusPill>,
+    },
+  ], [t]);
+
   const SectionShell = ({
     title,
     icon: Icon,
@@ -1071,18 +1228,17 @@ export default function DashboardPage() {
     description?: string;
     children: ReactNode;
   }) => (
-    <section className="relative overflow-hidden rounded-[28px] border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.025))] px-6 py-6 shadow-[0_24px_70px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.10),transparent_28%),radial-gradient(circle_at_20%_80%,rgba(139,92,246,0.10),transparent_26%)]" />
-      <div className="relative mb-5 flex items-start gap-4">
-        <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+    <section className="rounded-xl border border-border bg-card px-5 py-5 shadow-none">
+      <div className="mb-5 flex items-start gap-3">
+        <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-accent text-accent-foreground">
           <Icon className="h-5 w-5" />
         </div>
         <div className="min-w-0">
-          <h2 className="text-xl font-semibold">{title}</h2>
+          <h2 className="text-lg font-semibold">{title}</h2>
           {description ? <p className="mt-1.5 text-sm text-muted-foreground">{description}</p> : null}
         </div>
       </div>
-      <div className="relative">{children}</div>
+      <div>{children}</div>
     </section>
   );
 
@@ -1099,7 +1255,6 @@ export default function DashboardPage() {
             label: t('dashboard.quickActions.newWorkflow'),
             desc: t('dashboard.quickActions.newWorkflowDesc'),
             icon: Play,
-            color: 'from-blue-500 to-blue-600',
             onClick: () => setShowNewModal(true),
           },
           {
@@ -1107,7 +1262,6 @@ export default function DashboardPage() {
             label: t('dashboard.quickActions.chatMode'),
             desc: t('dashboard.headers.chatSubtitle'),
             icon: MessageSquareText,
-            color: 'from-slate-500 to-slate-600',
             onClick: () => {
               setSecondarySidebarOpen(true);
               setActivePanel('chat');
@@ -1120,11 +1274,6 @@ export default function DashboardPage() {
               label: action.label,
               desc: action.desc,
               icon: action.icon,
-              color: action.id === 'agents'
-                ? 'from-purple-500 to-purple-600'
-                : action.id === 'skills'
-                  ? 'from-pink-500 to-pink-600'
-                  : 'from-amber-500 to-amber-600',
               onClick: () => {
                 setSecondarySidebarOpen(false);
                 setActivePanel(action.id);
@@ -1135,21 +1284,6 @@ export default function DashboardPage() {
             label: action.label,
             desc: action.desc,
             icon: action.icon,
-            color: action.href === '/workflows'
-              ? 'from-cyan-500 to-cyan-600'
-              : action.href === '/models'
-                ? 'from-orange-500 to-orange-600'
-                : action.href === '/engines'
-                  ? 'from-indigo-500 to-indigo-600'
-                  : action.href === '/schedules'
-                    ? 'from-teal-500 to-teal-600'
-                    : action.href === '/knowledge'
-                      ? 'from-emerald-500 to-emerald-600'
-                      : action.href === '/api-docs'
-                        ? 'from-green-500 to-green-600'
-                        : action.href === '/office'
-                          ? 'from-violet-500 to-violet-600'
-                          : 'from-sky-500 to-sky-600',
             onClick: () => {
               setSecondarySidebarOpen(false);
               if (action.external) {
@@ -1165,15 +1299,15 @@ export default function DashboardPage() {
             <button
               key={action.key}
               type="button"
-              className="group relative overflow-hidden rounded-xl border border-border/60 bg-card px-4 py-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-card/80 hover:shadow-[0_12px_30px_-8px_rgba(0,0,0,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="group relative overflow-hidden rounded-lg border border-border bg-card px-4 py-4 text-left transition-colors hover:border-border/80 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={action.onClick}
             >
               <div className="flex items-center gap-3.5">
-                <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${action.color} shadow-sm`}>
-                  <Icon className="h-5 w-5 text-white" />
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-accent text-accent-foreground">
+                  <Icon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  <div className="truncate text-[13px] font-semibold text-foreground transition-colors group-hover:text-primary">{action.label}</div>
+                  <div className="truncate text-[13px] font-semibold text-foreground">{action.label}</div>
                   <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{action.desc}</div>
                 </div>
               </div>
@@ -1201,7 +1335,7 @@ export default function DashboardPage() {
           {payload.map((entry, index) => (
             <div key={`${entry.name}-${index}`} className="flex items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2 text-muted-foreground">
-                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.color || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length] }} />
+                <span className="h-2.5 w-2.5 rounded-full bg-[#8B5CF6]" style={entry.color ? { backgroundColor: entry.color } : undefined} />
                 <span>{entry.name}</span>
               </div>
               <span className="font-medium text-foreground">{formatTokens(Number(entry.value || 0))}</span>
@@ -1212,71 +1346,67 @@ export default function DashboardPage() {
     );
   };
 
-  const UserTokenPieChart = ({ title, items }: { title: string; items: TokenRankingItem[] }) => {
-    const pieData = items.map((item) => ({
-      name: item.name || item.configFile || '-',
-      value: item.totalTokens,
-      cost: item.cost,
-      runs: item.runs,
-    }));
-    const total = pieData.reduce((sum, d) => sum + d.value, 0);
+  const runningOverviewRuns = runningRuns.slice(0, 5);
+  const recentOverviewRuns = recentRuns.slice(0, 6);
+  const exceptionRuns = recentRuns
+    .filter((run: any) => ['failed', 'crashed', 'stopped'].includes(run.status))
+    .slice(0, 4);
+  const latestRunnableRun = recentRuns.find((run: any) => run.configFile);
+  const topWorkflowTokenItem = tokenRankingByWorkflow[0];
 
-    return (
-      <ChartShell
-        title={title}
-        icon={Cpu}
-        description={t('dashboard.tokenRanking.userSubtitle')}
-        className="h-full"
-      >
-        {loading ? (
-          <ChartState loading height={180} />
-        ) : items.length > 0 ? (
-          <div className="flex items-center gap-4">
-            <div className="w-[180px] h-[180px] shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={45}
-                    outerRadius={80}
-                    dataKey="value"
-                    stroke="none"
-                  >
-                    {pieData.map((_, i) => (
-                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    content={<ModernTooltip />}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex-1 min-w-0 space-y-1.5">
-              {pieData.map((d, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs">
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                  <span className="truncate flex-1">{d.name}</span>
-                  <span className="shrink-0 font-medium">{formatTokens(d.value)}</span>
-                  <span className="shrink-0 text-muted-foreground">{total > 0 ? Math.round((d.value / total) * 100) : 0}%</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <ChartState loading={false} empty height={180} />
-        )}
-      </ChartShell>
-    );
-  };
+  const taskShortcuts = [
+    {
+      key: 'start',
+      label: t('dashboard.quickActions.newWorkflow'),
+      desc: t('dashboard.quickActions.newWorkflowDesc'),
+      icon: Play,
+      onClick: () => setShowNewModal(true),
+    },
+    {
+      key: 'resume',
+      label: '继续运行中工作',
+      desc: runningOverviewRuns.length > 0 ? `${runningOverviewRuns.length} 个运行中任务` : t('dashboard.sections.noActiveWorkflows'),
+      icon: Workflow,
+      onClick: () => {
+        const run = runningOverviewRuns[0];
+        if (run?.configFile) {
+          setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`);
+        } else {
+          setActiveRoute('/workflows');
+        }
+      },
+    },
+    {
+      key: 'inspect',
+      label: '检查最近运行',
+      desc: t('dashboard.quickActions.runHistoryDesc'),
+      icon: History,
+      onClick: () => setActiveRoute('/run-history'),
+    },
+    {
+      key: 'workbench',
+      label: '打开最近工作台',
+      desc: latestRunnableRun?.configName || latestRunnableRun?.configFile || t('dashboard.quickActions.workflowsDesc'),
+      icon: Layers3,
+      onClick: () => {
+        if (latestRunnableRun?.configFile) {
+          setActiveRoute(`/workbench/${encodeURIComponent(latestRunnableRun.configFile)}?mode=run&runId=${latestRunnableRun.id}&history=1`);
+        } else {
+          setActiveRoute('/workflows');
+        }
+      },
+    },
+  ];
 
   const activeDockTabKind = activeDockTab?.kind || 'chat';
   const isChatWorkspaceActive = activeDockTabKind === 'chat';
   const secondarySidebarVisible = isChatWorkspaceActive && secondarySidebarOpen;
   const isClassicDashboard = navigationMode === 'classic';
   const MainContainer = isClassicDashboard ? 'main' : SidebarInset;
+  const dashboardSidebarStyle = useMemo(() => ({
+    '--sidebar-width': `${dashboardSidebarWidth}px`,
+    '--sidebar-width-icon': '3.5rem',
+  }) as CSSProperties, [dashboardSidebarWidth]);
   const renderChatSecondarySidebar = useCallback(() => (
     <aside
       className="ace-dashboard-chat-secondary-sidebar flex h-full w-full min-w-0 flex-col overflow-hidden bg-background/95 backdrop-blur-xl"
@@ -1294,28 +1424,9 @@ export default function DashboardPage() {
     <SidebarProvider
       open={mainSidebarOpen}
       onOpenChange={handleMainSidebarOpenChange}
-      className="min-h-screen bg-background"
-      style={{
-        '--sidebar-width': '18rem',
-        '--sidebar-width-icon': '3.5rem',
-      } as React.CSSProperties}
+      className="min-h-screen bg-[#F4F4F1] dark:bg-[#0D0E14]"
+      style={dashboardSidebarStyle}
     >
-      {/* Animated background */}
-      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-background to-background" />
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse delay-1000" />
-        <div className="absolute top-1/2 left-1/2 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse delay-2000" />
-      </div>
-
-      {/* Grid overlay */}
-      <div className="pointer-events-none fixed inset-0 z-0 opacity-20">
-        <div className="absolute inset-0" style={{
-          backgroundImage: 'linear-gradient(hsl(var(--primary) / 0.1) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--primary) / 0.1) 1px, transparent 1px)',
-          backgroundSize: '50px 50px',
-        }} />
-      </div>
-
       {!isClassicDashboard && (
       <Sidebar
         variant="inset"
@@ -1430,7 +1541,7 @@ export default function DashboardPage() {
                     '/office': { id: 'office', title: t('dashboard.quickActions.office'), kind: 'office' },
                   };
                   const draggableTab = routeTabMap[basePath];
-                  const isActive = Boolean(draggableTab && activeDockTab?.id === draggableTab.id);
+                  const isActive = getDashboardRouteOwner(activeDockTab) === basePath;
                   return (
                     <SidebarMenuItem key={action.href}>
                       <SidebarMenuButton
@@ -1467,6 +1578,26 @@ export default function DashboardPage() {
           setSecondarySidebarOpen(false);
           setActivePanel('overview');
         }} />
+        <button
+          type="button"
+          aria-label="Resize sidebar"
+          tabIndex={-1}
+          className={cn(
+            "absolute inset-y-0 -right-1 z-30 hidden w-2 cursor-col-resize touch-none select-none md:block",
+            "after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-sidebar-border/70 after:transition-colors",
+            "hover:after:bg-violet-400/70 dark:hover:after:bg-violet-300/60",
+            "group-data-[collapsible=icon]:hidden",
+            dashboardSidebarResizing && "after:bg-violet-400/80 dark:after:bg-violet-300/70"
+          )}
+          onPointerDown={handleDashboardSidebarResizeStart}
+          onPointerMove={handleDashboardSidebarResizeMove}
+          onPointerUp={handleDashboardSidebarResizeEnd}
+          onPointerCancel={handleDashboardSidebarResizeCancel}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        />
         <SidebarRail />
       </Sidebar>
       )}
@@ -1497,455 +1628,204 @@ export default function DashboardPage() {
               renderChatSecondarySidebar={renderChatSecondarySidebar}
               singlePanelMode={isClassicDashboard}
               renderOverview={() => (
-            <div className="min-h-full">
-              <div className="mx-auto w-full max-w-[1680px] space-y-8 px-6 py-8">
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4" data-tour-step-id="dashboard-stats">
-                  <StatCard icon={Workflow} label={t('dashboard.stats.activeWorkflows')} value={stats.activeWorkflows} color="from-blue-500 to-blue-600" />
-                  <StatCard icon={Activity} label={t('dashboard.stats.weeklyRuns')} value={stats.weeklyRuns} color="from-green-500 to-green-600" />
-                  <StatCard icon={Cpu} label={t('dashboard.stats.tokenConsumption')} value={formatTokens(stats.totalTokenUsage)} color="from-purple-500 to-purple-600" />
-                  <StatCard icon={TrendingUp} label={t('dashboard.stats.weeklyTokenConsumption')} value={formatTokens(stats.weeklyTokenUsage)} color="from-orange-500 to-orange-600" />
-                </div>
-                {isClassicDashboard ? <ClassicQuickActions /> : null}
-                <SectionShell
-                  title={t('dashboard.charts.runtimeSectionTitle')}
-                  icon={Activity}
-                  description={t('dashboard.charts.runtimeSectionDesc')}
-                >
-                  <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-                    <div className="xl:col-span-5">
-                      <ChartShell
-                        title={t('dashboard.charts.agentUsage')}
-                        icon={Bot}
-                        description={t('dashboard.charts.agentUsageDesc')}
-                        className="h-full"
-                      >
-                        {loading ? (
-                          <ChartState loading height={280} />
-                        ) : agentCallsChartData.length > 0 ? (
-                          <ResponsiveContainer width="100%" height={280}>
-                            <BarChart data={agentCallsChartData} layout="vertical" margin={{ left: 20 }}>
-                              <CartesianGrid horizontal strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
-                              <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                              <YAxis type="category" dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} width={100} tickLine={false} axisLine={false} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
-                              <Tooltip content={<ModernTooltip />} />
-                              <Bar dataKey="calls" name={t('dashboard.charts.calls')} radius={[0, 10, 10, 0]}>
-                                {agentCallsChartData.map((entry, index) => (
-                                  <Cell key={`${entry.name}-${index}`} fill={entry.fill || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
-                                ))}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                        ) : (
-                          <ChartState loading={false} empty height={280} />
-                        )}
-                      </ChartShell>
-                    </div>
-                    <div className="xl:col-span-7">
-                      <ChartShell
-                        title={t('dashboard.charts.weeklyActivity')}
-                        icon={Activity}
-                        description={t('dashboard.charts.weeklyActivityDesc')}
-                        className="h-full"
-                      >
-                        {loading ? (
-                          <ChartState loading height={280} />
-                        ) : activityChartData.length > 0 ? (
-                          <ResponsiveContainer width="100%" height={280}>
-                            <BarChart data={activityChartData}>
-                              <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
-                              <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
-                              <Tooltip content={<ModernTooltip />} />
-                              <Bar dataKey="runs" name={t('dashboard.charts.runs')} radius={[10, 10, 0, 0]}>
-                                {activityChartData.map((entry, index) => (
-                                  <Cell key={`${entry.name}-${index}`} fill={entry.fill || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
-                                ))}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                        ) : (
-                          <ChartState loading={false} empty height={280} />
-                        )}
-                      </ChartShell>
-                    </div>
-                  </div>
-                </SectionShell>
-
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-                  <div className="xl:col-span-5">
-                    <ChartShell
-                      title={t('dashboard.sections.activeWorkflows')}
-                      icon={Workflow}
-                      description={t('dashboard.sections.activeWorkflowsDesc')}
-                      className="h-full"
-                    >
-                      <div className="space-y-3">
-                        {runningRuns.slice(0, 5).map((run, i) => {
-                          const config = configs.find(c => c.filename === run.configFile);
-                          const configName = config?.name || run.configName || run.configFile;
-
-                          return (
-                            <motion.div
-                              key={run.id}
-                              initial={{ opacity: 0, x: -20 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              transition={{ delay: 0.35 + i * 0.06 }}
-                              whileHover={{ x: 4 }}
-                              className="group flex cursor-pointer items-center justify-between rounded-2xl border border-border/50 bg-background/55 p-3.5 shadow-sm transition-all hover:border-primary/35 hover:bg-background/72"
-                              onClick={() => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`)}
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500 ring-1 ring-emerald-500/15">
-                                  <Play className="h-4 w-4" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <span className="font-medium">{configName}</span>
-                                  <span className="text-xs text-muted-foreground">{formatStateName(run.currentPhase || '') || t('dashboard.status.starting')}</span>
-                                </div>
-                              </div>
-                              <Badge variant="secondary" className="rounded-full px-3 py-1">{run.completedSteps || 0}/{run.totalSteps || 0}</Badge>
-                            </motion.div>
-                          );
-                        })}
-                        {runningRuns.length === 0 && (
-                          <div className="rounded-2xl border border-dashed border-border/60 py-10 text-center text-muted-foreground">
-                            {t('dashboard.sections.noActiveWorkflows')}
-                          </div>
-                        )}
-                      </div>
-                    </ChartShell>
-                  </div>
-
-                  <div className="xl:col-span-7">
-                    <ChartShell
-                      title={t('dashboard.sections.recentRuns')}
-                      icon={History}
-                      description={t('dashboard.sections.recentRunsDesc')}
-                      action={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 rounded-full px-3 text-xs"
-                          onClick={() => setActiveRoute('/run-history')}
-                        >
-                          查看全部
+                <div className="min-h-full bg-[#F7F7F4] dark:bg-[#0D0E14]">
+                  <PageHeader
+                    title={t('dashboard.headers.defaultTitle')}
+                    subtitle={t('dashboard.headers.overviewSubtitle')}
+                    status={<StatusPill tone={runningOverviewRuns.length > 0 ? 'info' : 'neutral'}>{runningOverviewRuns.length} 个运行中</StatusPill>}
+                    primaryAction={(
+                      <Button type="button" onClick={() => setShowNewModal(true)}>
+                        <Play className="mr-2 h-4 w-4" />
+                        {t('dashboard.quickActions.newWorkflow')}
+                      </Button>
+                    )}
+                    secondaryActions={(
+                      <>
+                        <Button type="button" variant="outline" onClick={() => setActiveRoute('/run-history')}>
+                          <History className="mr-2 h-4 w-4" />
+                          {t('dashboard.quickActions.runHistory')}
                         </Button>
-                      }
-                      className="h-full"
-                    >
-                      <div className="mb-4 flex items-center justify-between gap-3">
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-2 text-lg font-semibold transition-colors hover:text-primary"
-                          onClick={() => setActiveRoute('/run-history')}
-                        >
-                          <History className="w-5 h-5 text-primary" />
-                          <span>{t('dashboard.sections.recentRuns')}</span>
+                        <Button type="button" variant="outline" onClick={loadDashboardData} disabled={loading}>
+                          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
+                          刷新
+                        </Button>
+                      </>
+                    )}
+                  />
+                  <PageToolbar
+                    actions={(
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/workflows')}>{t('dashboard.quickActions.workflows')}</Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/models')}>{t('dashboard.quickActions.models')}</Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/schedules')}>{t('dashboard.quickActions.schedules')}</Button>
+                      </div>
+                    )}
+                    activeFilters={(
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>操作概览：优先开始、继续、检查。</span>
+                        <span className="h-1 w-1 rounded-full bg-border" />
+                        <button type="button" className="font-medium text-foreground hover:text-primary" onClick={() => setActivePanel('agents')}>
+                          {t('dashboard.quickActions.manageAgents')}
                         </button>
-                        <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">{recentRuns.length}</Badge>
+                        <span className="h-1 w-1 rounded-full bg-border" />
+                        <button type="button" className="font-medium text-foreground hover:text-primary" onClick={() => setActiveRoute('/account/system-settings')}>
+                          {t('dashboard.quickActions.envVars')}
+                        </button>
                       </div>
-                      <div className="space-y-3">
-                        {recentRuns.map((run, i) => (
-                          <motion.div
-                            key={run.id}
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.4 + i * 0.06 }}
-                            onClick={() => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`)}
-                            className="group flex cursor-pointer items-center justify-between rounded-2xl border border-border/50 bg-background/55 p-3.5 shadow-sm transition-all hover:border-primary/35 hover:bg-background/72"
-                          >
-                            <div className="flex min-w-0 items-center gap-3">
-                              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
-                                {run.status === 'completed' ? (
-                                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                                ) : run.status === 'failed' ? (
-                                  <XCircle className="h-4 w-4 text-red-500" />
-                                ) : run.status === 'running' ? (
-                                  <Play className="h-4 w-4 text-blue-500" />
-                                ) : run.status === 'stopped' ? (
-                                  <AlertCircle className="h-4 w-4 text-gray-500" />
-                                ) : run.status === 'crashed' ? (
-                                  <XCircle className="h-4 w-4 text-orange-500" />
-                                ) : (
-                                  <Clock className="h-4 w-4 text-yellow-500" />
-                                )}
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium">{run.configName || run.configFile}</div>
-                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                                  <span>{formatStateName(run.currentPhase || '') || t('dashboard.starting')}</span>
-                                  <span className="h-1 w-1 rounded-full bg-border" />
-                                  <span>{new Date(run.startTime).toLocaleString()}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {typeof run.totalTokens === 'number' ? (
-                                <div className="hidden text-right md:block">
-                                  <div className="text-sm font-semibold">{formatTokens(run.totalTokens)}</div>
-                                  <div className="text-[11px] text-muted-foreground">{t('dashboard.tokenRanking.totalTokens')}</div>
-                                </div>
-                              ) : null}
-                              <Badge variant={run.status === 'completed' ? 'default' : 'secondary'} className="rounded-full px-3 py-1">
-                                {t(`dashboard.status.${run.status}`)}
-                              </Badge>
-                            </div>
-                          </motion.div>
-                        ))}
-                      </div>
-                    </ChartShell>
-                  </div>
-                </div>
+                    )}
+                  />
+                  <div className="mx-auto w-full max-w-[1500px] space-y-6 px-6 py-6">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4" data-tour-step-id="dashboard-stats">
+                      <StatCard icon={Workflow} label={t('dashboard.stats.activeWorkflows')} value={stats.activeWorkflows} meta={`${stats.runningProcesses} 个进程`} />
+                      <StatCard icon={Activity} label={t('dashboard.stats.weeklyRuns')} value={stats.weeklyRuns} meta={`${stats.successRate}% 成功率`} />
+                      <StatCard icon={Cpu} label={t('dashboard.stats.tokenConsumption')} value={formatTokens(stats.totalTokenUsage)} meta={formatMoney(topWorkflowTokenItem?.cost || 0)} />
+                      <StatCard icon={TrendingUp} label={t('dashboard.stats.weeklyTokenConsumption')} value={formatTokens(stats.weeklyTokenUsage)} meta="近 7 天" />
+                    </div>
 
-                <SectionShell
-                  title={t('dashboard.tokenRanking.title')}
-                  icon={TrendingUp}
-                  description={t('dashboard.tokenRanking.sectionSubtitle')}
-                >
-                  <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-                    <div className="xl:col-span-8">
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-4" data-tour-step-id="dashboard-quick-actions">
+                      {taskShortcuts.map((action) => {
+                        const Icon = action.icon;
+                        return (
+                          <button
+                            key={action.key}
+                            type="button"
+                            className="group text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            onClick={action.onClick}
+                          >
+                            <DataCard className="h-full cursor-pointer">
+                              <DataCardHeader>
+                                <div className="min-w-0">
+                                  <DataCardTitle>{action.label}</DataCardTitle>
+                                  <DataCardDescription className="line-clamp-2">{action.desc}</DataCardDescription>
+                                </div>
+                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-primary/15 bg-accent text-accent-foreground">
+                                  <Icon className="h-4 w-4" />
+                                </div>
+                              </DataCardHeader>
+                            </DataCard>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+                      <ChartShell title={t('dashboard.sections.activeWorkflows')} icon={Workflow} description={t('dashboard.sections.activeWorkflowsDesc')} className="xl:col-span-5">
+                        <DataTable
+                          columns={runningRunColumns}
+                          rows={runningOverviewRuns}
+                          rowKey="id"
+                          density="compact"
+                          loading={loading}
+                          loadingRowCount={4}
+                          onRowClick={(run) => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`)}
+                          emptyState={(
+                            <EmptyState
+                            icon={<Workflow className="h-5 w-5" />}
+                            title={t('dashboard.sections.noActiveWorkflows')}
+                            description={t('dashboard.quickActions.workflowsDesc')}
+                            primaryAction={<Button type="button" onClick={() => setActiveRoute('/workflows')}>{t('dashboard.quickActions.workflows')}</Button>}
+                            className="min-h-[240px]"
+                            />
+                          )}
+                          aria-label="运行中的工作流"
+                        />
+                      </ChartShell>
+
                       <ChartShell
-                        title={t('dashboard.charts.workflowTokenComparison')}
-                        icon={Layers3}
-                        description={t('dashboard.charts.workflowTokenComparisonDesc')}
-                        action={
-                          <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
-                            Top {workflowComparisonData.length || 0}
-                          </Badge>
-                        }
-                        className="h-full"
+                        title={t('dashboard.sections.recentRuns')}
+                        icon={History}
+                        description={t('dashboard.sections.recentRunsDesc')}
+                        action={<Button type="button" variant="ghost" size="sm" className="h-8 px-3 text-xs" onClick={() => setActiveRoute('/run-history')}>查看全部</Button>}
+                        className="xl:col-span-7"
                       >
-                        {loading ? (
-                          <ChartState loading height={396} />
-                        ) : workflowComparisonData.length > 0 ? (
-                          <div className="grid grid-cols-1 gap-4">
-                            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_220px] 2xl:items-end">
-                              <ResponsiveContainer width="100%" height={252}>
-                                <BarChart data={workflowComparisonData} barGap={10} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.25} />
-                                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} interval={0} height={52} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
-                                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatTokens(Number(value))} />
-                                  <Tooltip content={<ModernTooltip />} />
-                                  <Bar dataKey="inputTokens" name={t('dashboard.charts.inputTokens')} stackId="tokens" fill={TOKEN_STACK_COLORS.inputTokens} radius={[8, 8, 0, 0]} />
-                                  <Bar dataKey="outputTokens" name={t('dashboard.charts.outputTokens')} stackId="tokens" fill={TOKEN_STACK_COLORS.outputTokens} radius={[0, 0, 0, 0]} />
-                                  <Bar dataKey="cacheTokens" name={t('dashboard.charts.cacheTokens')} stackId="tokens" fill={TOKEN_STACK_COLORS.cacheTokens} radius={[8, 8, 0, 0]} />
-                                </BarChart>
-                              </ResponsiveContainer>
-                              <div className="grid content-end gap-2">
-                                {[
-                                  { label: t('dashboard.charts.inputTokens'), color: TOKEN_STACK_COLORS.inputTokens },
-                                  { label: t('dashboard.charts.outputTokens'), color: TOKEN_STACK_COLORS.outputTokens },
-                                  { label: t('dashboard.charts.cacheTokens'), color: TOKEN_STACK_COLORS.cacheTokens },
-                                ].map((item) => (
-                                  <div key={item.label} className="inline-flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-                                    <div className="inline-flex items-center gap-2">
-                                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                                      {item.label}
-                                    </div>
-                                    <span className="text-[11px] text-foreground/70">
-                                      {formatTokens(
-                                        workflowComparisonData.reduce((sum, row) => sum + Number(
-                                          item.label === t('dashboard.charts.inputTokens')
-                                            ? row.inputTokens
-                                            : item.label === t('dashboard.charts.outputTokens')
-                                              ? row.outputTokens
-                                              : row.cacheTokens
-                                        ), 0)
-                                      )}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-1 gap-4">
-                              <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
-                                <div className="mb-3 flex items-center justify-between gap-3">
-                                  <div>
-                                    <div className="text-sm font-medium text-foreground">{t('dashboard.charts.recentTokenTrend')}</div>
-                                    <div className="mt-1 text-xs text-muted-foreground">{t('dashboard.charts.recentTokenTrendDesc')}</div>
-                                  </div>
-                                  <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
-                                    {recentTokenTrendData.length} runs
-                                  </Badge>
-                                </div>
-                                {recentTokenTrendData.length > 0 ? (
-                                  <ResponsiveContainer width="100%" height={120}>
-                                    <AreaChart data={recentTokenTrendData} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
-                                      <defs>
-                                        <linearGradient id="recentTokenTrendFill" x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.38} />
-                                          <stop offset="100%" stopColor="#38bdf8" stopOpacity={0.04} />
-                                        </linearGradient>
-                                      </defs>
-                                      <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.18} />
-                                      <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
-                                      <YAxis hide />
-                                      <Tooltip content={<ModernTooltip />} />
-                                      <Area
-                                        type="monotone"
-                                        dataKey="totalTokens"
-                                        name={t('dashboard.tokenRanking.totalTokens')}
-                                        stroke="#38bdf8"
-                                        strokeWidth={2}
-                                        fill="url(#recentTokenTrendFill)"
-                                      />
-                                    </AreaChart>
-                                  </ResponsiveContainer>
-                                ) : (
-                                  <ChartState loading={false} empty height={120} />
-                                )}
-                              </div>
-                              <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
-                                <div className="mb-3 flex items-center justify-between gap-3">
-                                  <div>
-                                    <div className="text-sm font-medium text-foreground">{t('dashboard.charts.weeklyTokenTrend')}</div>
-                                    <div className="mt-1 text-xs text-muted-foreground">{t('dashboard.charts.weeklyTokenTrendDesc')}</div>
-                                  </div>
-                                  <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">7d</Badge>
-                                </div>
-                                {tokenActivityData.length > 0 ? (
-                                  <ResponsiveContainer width="100%" height={120}>
-                                    <AreaChart data={tokenActivityData} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
-                                      <defs>
-                                        <linearGradient id="weeklyTokenTrendFill" x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.34} />
-                                          <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.05} />
-                                        </linearGradient>
-                                      </defs>
-                                      <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.18} />
-                                      <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
-                                      <YAxis hide />
-                                      <Tooltip content={<ModernTooltip />} />
-                                      <Area
-                                        type="monotone"
-                                        dataKey="totalTokens"
-                                        name={t('dashboard.charts.weeklyTokenTrend')}
-                                        stroke="#8b5cf6"
-                                        strokeWidth={2}
-                                        fill="url(#weeklyTokenTrendFill)"
-                                      />
-                                    </AreaChart>
-                                  </ResponsiveContainer>
-                                ) : (
-                                  <ChartState loading={false} empty height={120} />
-                                )}
-                              </div>
-                              <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
-                                <div className="mb-3 flex items-center justify-between gap-3">
-                                  <div>
-                                    <div className="text-sm font-medium text-foreground">{t('dashboard.charts.tokenComposition')}</div>
-                                    <div className="mt-1 text-xs text-muted-foreground">{t('dashboard.charts.tokenCompositionDesc')}</div>
-                                  </div>
-                                  <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
-                                    {formatTokens(tokenCompositionData.reduce((sum, item) => sum + item.value, 0))}
-                                  </Badge>
-                                </div>
-                                {tokenCompositionData.length > 0 ? (
-                                  <div className="grid grid-cols-1 gap-3 md:grid-cols-[180px_minmax(0,1fr)] md:items-center">
-                                    <div className="mx-auto h-[150px] w-[150px]">
-                                      <ResponsiveContainer width="100%" height="100%">
-                                        <PieChart>
-                                          <Pie
-                                            data={tokenCompositionData}
-                                            cx="50%"
-                                            cy="50%"
-                                            innerRadius={40}
-                                            outerRadius={62}
-                                            paddingAngle={2}
-                                            dataKey="value"
-                                            stroke="none"
-                                          >
-                                            {tokenCompositionData.map((entry, index) => (
-                                              <Cell key={`${entry.name}-${index}`} fill={entry.color} />
-                                            ))}
-                                          </Pie>
-                                          <Tooltip content={<ModernTooltip />} />
-                                        </PieChart>
-                                      </ResponsiveContainer>
-                                    </div>
-                                    <div className="space-y-2">
-                                      {tokenCompositionData.map((item) => {
-                                        const total = tokenCompositionData.reduce((sum, entry) => sum + entry.value, 0) || 1;
-                                        const percent = Math.round((item.value / total) * 100);
-                                        return (
-                                          <div key={item.name} className="rounded-xl border border-border/50 bg-background/55 px-3 py-2.5">
-                                            <div className="flex items-center justify-between gap-3 text-xs">
-                                              <div className="inline-flex items-center gap-2 text-muted-foreground">
-                                                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                                                <span>{item.name}</span>
-                                              </div>
-                                              <span className="font-medium text-foreground">{percent}%</span>
-                                            </div>
-                                            <div className="mt-1.5 text-sm font-semibold">{formatTokens(item.value)}</div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <ChartState loading={false} empty height={150} />
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <ChartState loading={false} empty height={396} />
-                        )}
+                        <DataTable
+                          columns={recentRunColumns}
+                          rows={recentOverviewRuns}
+                          rowKey="id"
+                          density="compact"
+                          loading={loading}
+                          loadingRowCount={5}
+                          onRowClick={(run) => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`)}
+                          emptyState={(
+                            <EmptyState
+                            icon={<History className="h-5 w-5" />}
+                            title={t('common.noData')}
+                            description={t('dashboard.sections.recentRunsDesc')}
+                            primaryAction={<Button type="button" onClick={() => setActiveRoute('/run-history')}>{t('dashboard.quickActions.runHistory')}</Button>}
+                            className="min-h-[240px]"
+                            />
+                          )}
+                          aria-label="最近运行"
+                        />
                       </ChartShell>
                     </div>
-                    <div className="grid gap-6 xl:col-span-4">
-                      <div className="grid grid-cols-1 gap-6">
-                        <UserTokenPieChart title={t('dashboard.tokenRanking.byUser')} items={tokenRankingByUser} />
-                        <ChartShell
-                          title={t('dashboard.charts.runTokenRanking')}
-                          icon={Trophy}
-                          description={t('dashboard.charts.runTokenRankingDesc')}
-                          action={
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 rounded-full px-3 text-xs"
-                              onClick={() => setActiveRoute('/run-history')}
-                            >
-                              {t('dashboard.quickActions.runHistory')}
-                            </Button>
-                          }
-                          className="h-full"
-                        >
+
+                    <SectionShell title={t('dashboard.tokenRanking.title')} icon={TrendingUp} description={t('dashboard.tokenRanking.sectionSubtitle')}>
+                      <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+                        <div className="xl:col-span-5">
+                          <TokenRankingList
+                            title={t('dashboard.tokenRanking.byWorkflow')}
+                            items={tokenRankingByWorkflow.slice(0, 5)}
+                            actionHref={WORKFLOW_TOKEN_RANKING_HREF}
+                            actionLabel={t('dashboard.tokenRanking.viewAll')}
+                          />
+                        </div>
+
+                        <ChartShell title={t('dashboard.charts.weeklyTokenTrend')} icon={BarChart3} description={t('dashboard.charts.weeklyTokenTrendDesc')} className="xl:col-span-7">
                           {loading ? (
                             <ChartState loading height={220} />
-                          ) : runRankingChartData.length > 0 ? (
+                          ) : tokenActivityData.length > 0 ? (
                             <ResponsiveContainer width="100%" height={220}>
-                              <BarChart data={runRankingChartData} layout="vertical" margin={{ top: 8, right: 12, left: 16, bottom: 0 }} barCategoryGap={14}>
-                                <CartesianGrid horizontal strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
-                                <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatTokens(Number(value))} />
-                                <YAxis type="category" dataKey="name" width={110} stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                              <AreaChart data={tokenActivityData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                                <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.18} />
+                                <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+                                <YAxis hide />
                                 <Tooltip content={<ModernTooltip />} />
-                                <Bar dataKey="totalTokens" name={t('dashboard.tokenRanking.totalTokens')} radius={[0, 10, 10, 0]}>
-                                  {runRankingChartData.map((entry, index) => (
-                                    <Cell key={`${entry.name}-${index}`} fill={CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
-                                  ))}
-                                </Bar>
-                              </BarChart>
+                                <Area type="monotone" dataKey="totalTokens" name={t('dashboard.charts.weeklyTokenTrend')} stroke="#8B5CF6" strokeWidth={2} fill="#EEE7FF" />
+                              </AreaChart>
                             </ResponsiveContainer>
                           ) : (
                             <ChartState loading={false} empty height={220} />
                           )}
                         </ChartShell>
                       </div>
-                      <TokenRankingList
-                        title={t('dashboard.tokenRanking.byWorkflow')}
-                        items={tokenRankingByWorkflow}
-                        actionHref={WORKFLOW_TOKEN_RANKING_HREF}
-                        actionLabel={t('dashboard.tokenRanking.viewAll')}
-                      />
+                    </SectionShell>
+
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+                      <ChartShell title="异常和建议" icon={AlertCircle} description="失败、停止或需要检查的高信号运行。" className="xl:col-span-7">
+                        <DataTable
+                          columns={exceptionRunColumns}
+                          rows={exceptionRuns}
+                          rowKey="id"
+                          density="compact"
+                          loading={loading}
+                          loadingRowCount={4}
+                          onRowClick={(run) => setActiveRoute(`/workbench/${encodeURIComponent(run.configFile)}?mode=run&runId=${run.id}&history=1`)}
+                          emptyState={<EmptyState icon={<CheckCircle2 className="h-5 w-5" />} title="最近运行没有异常" description="最近运行未出现失败、崩溃或停止状态。" className="min-h-[220px]" />}
+                          aria-label="异常和建议"
+                        />
+                      </ChartShell>
+
+                      <ChartShell title={t('dashboard.charts.weeklyActivity')} icon={Activity} description={t('dashboard.charts.weeklyActivityDesc')} className="xl:col-span-5">
+                        {loading ? (
+                          <ChartState loading height={220} />
+                        ) : activityChartData.length > 0 ? (
+                          <ResponsiveContainer width="100%" height={220}>
+                            <BarChart data={activityChartData}>
+                              <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.18} />
+                              <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
+                              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
+                              <Tooltip content={<ModernTooltip />} />
+                              <Bar dataKey="runs" name={t('dashboard.charts.runs')} fill="#8B5CF6" radius={[8, 8, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <ChartState loading={false} empty height={220} />
+                        )}
+                      </ChartShell>
                     </div>
                   </div>
-                </SectionShell>
-              </div>
-            </div>
+                </div>
               )}
             />
           </div>

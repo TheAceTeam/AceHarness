@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter } from '@/lib/navigation/client';
 import { TourProvider, useTour, type TooltipPosition, type TourStep } from 'modern-tour';
 
 type Role = 'admin' | 'user';

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type Ref } from 'react';
-import dynamic from 'next/dynamic';
+import dynamic from '@/lib/navigation/dynamic';
 import { Loader2 } from 'lucide-react';
 import { useForm, type FieldErrors } from 'react-hook-form';
 import { useTheme } from 'next-themes';
@@ -33,6 +33,7 @@ import Markdown from './Markdown';
 import ChatMessage from './chat/ChatMessage';
 import { MessageHistoryCollapse } from './chat/MessageHistoryCollapse';
 import { parseActions } from '@/lib/chat/actions';
+import { withBasePath } from '@/client/base-url';
 import {
   type ClarificationAnswerValue,
   type ClarificationFormResult,
@@ -72,6 +73,8 @@ import { agentApi } from '@/lib/core/api';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { cn } from '@/lib/core/utils';
+import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
+import { useCreateConfigMutation, useValidateConfigMutation } from '@/client/query/workflow-mutations';
 
 const MonacoEditor = dynamic(
   async () => {
@@ -772,8 +775,8 @@ async function modalAuthFetch(url: string, init?: RequestInit): Promise<Response
     localStorage.removeItem('auth-token');
     localStorage.removeItem('auth-user');
     window.dispatchEvent(new CustomEvent('auth:expired'));
-    if (window.location.pathname !== '/login') {
-      window.location.replace('/login');
+    if (window.location.pathname !== withBasePath('/login')) {
+      window.location.replace(withBasePath('/login'));
     }
   }
   return response;
@@ -2674,6 +2677,8 @@ export default function NewConfigModal({
   const { toast } = useToast();
   const { appendSessionMessage, updateSessionCreationBinding, appendVisibleSessionTag } = useChat();
   const { resolvedTheme } = useTheme();
+  const validateConfigMutation = useValidateConfigMutation();
+  const createConfigMutation = useCreateConfigMutation();
   const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>(initialMode || 'phase-based');
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
   const [formStep, setFormStep] = useState<1 | 2 | 3 | 4 | 5>(1);
@@ -3491,10 +3496,7 @@ export default function NewConfigModal({
   };
 
   const validateWorkflowDraftConfig = useCallback(async (config: any) => {
-    const data = await modalAuthJsonFetch<any>('/api/configs/validate', {
-      method: 'POST',
-      body: JSON.stringify({ config }),
-    });
+    const data = await validateConfigMutation.mutateAsync({ config }) as any;
     const baseValidation = data.validation || data;
     const requireExplicitBindings = workflowMode === 'ai-guided' && specPlanningEnabled;
     if (!requireExplicitBindings) {
@@ -3505,7 +3507,7 @@ export default function NewConfigModal({
       requireExplicit: true,
     });
     return mergeWorkflowDraftValidation(baseValidation, bindingCompilation.validation);
-  }, [previewSession?.specCoding, specPlanningEnabled, workflowMode]);
+  }, [previewSession?.specCoding, specPlanningEnabled, validateConfigMutation, workflowMode]);
 
   const checkExistingWorkflowFile = useCallback(async (filename: string) => {
     try {
@@ -3562,14 +3564,6 @@ export default function NewConfigModal({
   }, [draftCreationSessionId, getValues, previewSession, updateSessionCreationBinding]);
 
   const createPlanningChatSession = useCallback(async () => {
-    if (frontendSessionId) {
-      setPlanningFrontendSessionId(frontendSessionId);
-      restoredPlanningSessionRef.current = null;
-      reconnectingPlanningChatIdRef.current = null;
-      await bindCurrentDraftToChatSession(frontendSessionId).catch(() => {});
-      return frontendSessionId;
-    }
-
     const data = await modalSessionJsonFetch<any>('/api/chat/sessions', {
       method: 'POST',
       body: JSON.stringify({
@@ -3587,7 +3581,7 @@ export default function NewConfigModal({
     reconnectingPlanningChatIdRef.current = null;
     await bindCurrentDraftToChatSession(data.session.id).catch(() => {});
     return data.session.id as string;
-  }, [bindCurrentDraftToChatSession, frontendSessionId, getValues]);
+  }, [bindCurrentDraftToChatSession, getValues]);
 
   const persistStageSessionBinding = useCallback(async (
     stage: CreationStageKey,
@@ -3645,17 +3639,11 @@ export default function NewConfigModal({
   }, [bindCurrentDraftToChatSession, draftCreationSessionId, previewSession?.id]);
 
   const ensurePlanningChatSession = useCallback(async (forceFresh = false) => {
-    if (frontendSessionId) {
-      if (!planningFrontendSessionId) {
-        setPlanningFrontendSessionId(frontendSessionId);
-      }
-      return frontendSessionId;
-    }
     if (!forceFresh && planningFrontendSessionId) return planningFrontendSessionId;
     const sessionId = await createPlanningChatSession();
     await persistPlanningSessionBinding(sessionId);
     return sessionId;
-  }, [createPlanningChatSession, frontendSessionId, persistPlanningSessionBinding, planningFrontendSessionId]);
+  }, [createPlanningChatSession, persistPlanningSessionBinding, planningFrontendSessionId]);
 
   const restartPlanningConversation = useCallback(async () => {
     interruptPlanningRun();
@@ -4275,11 +4263,22 @@ export default function NewConfigModal({
         eventSourceRef.current = es;
         let accumulated = '';
         let thinkingAccumulated = '';
+        let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
 
         es.addEventListener('delta', (event) => {
           try {
-            const data = JSON.parse(event.data);
+            const data = parseAceSseEventData(event.data);
             accumulated += data.content || '';
+            const row = storeChatStreamSseEventAsAgentMessage('delta', data, {
+              chatId,
+              stepKey: input.step.name,
+              provider: aiEngineRef.current,
+              model: aiModelRef.current,
+              sessionId: activeBackendSessionId || undefined,
+              frontendSessionId: input.frontendSessionId,
+              streamScope: PLANNING_STREAM_SCOPE,
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             setCurrentStream(accumulated);
           } catch (error) {
             es.close();
@@ -4296,8 +4295,18 @@ export default function NewConfigModal({
 
         es.addEventListener('thinking', (event) => {
           try {
-            const data = JSON.parse(event.data);
+            const data = parseAceSseEventData(event.data);
             thinkingAccumulated += data.content || '';
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', data, {
+              chatId,
+              stepKey: input.step.name,
+              provider: aiEngineRef.current,
+              model: aiModelRef.current,
+              sessionId: activeBackendSessionId || undefined,
+              frontendSessionId: input.frontendSessionId,
+              streamScope: PLANNING_STREAM_SCOPE,
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             setCurrentThinking(thinkingAccumulated);
           } catch (error) {
             es.close();
@@ -4314,12 +4323,25 @@ export default function NewConfigModal({
 
         es.addEventListener('done', async (event) => {
           try {
-            const data = JSON.parse(event.data);
+            const data = parseAceSseEventData(event.data);
             es.close();
             eventSourceRef.current = null;
             chatIdRef.current = null;
 
             const finalContent = data.result || accumulated;
+            const row = storeChatStreamSseEventAsAgentMessage('done', {
+              ...data,
+              content: finalContent,
+            }, {
+              chatId,
+              stepKey: input.step.name,
+              provider: aiEngineRef.current,
+              model: aiModelRef.current,
+              sessionId: data.sessionId || activeBackendSessionId || undefined,
+              frontendSessionId: input.frontendSessionId,
+              streamScope: PLANNING_STREAM_SCOPE,
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             if (hasOwnKey(data, 'sessionId')) {
               activeBackendSessionId = normalizeBackendSessionId(data.sessionId);
               setBackendSessionId(activeBackendSessionId);
@@ -4865,28 +4887,64 @@ export default function NewConfigModal({
       eventSourceRef.current = es;
       let accumulated = checkData.streamContent || '';
       let thinkingAccumulated = '';
+      let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined = accumulated
+        ? { id: checkData.chatId, content: accumulated, toolCalls: [] }
+        : undefined;
 
       es.addEventListener('delta', (event) => {
-        const data = JSON.parse(event.data);
+        const data = parseAceSseEventData(event.data);
         accumulated += data.content || '';
+        const row = storeChatStreamSseEventAsAgentMessage('delta', data, {
+          chatId: checkData.chatId,
+          stepKey: stageKey,
+          provider: aiEngineRef.current,
+          model: aiModelRef.current,
+          sessionId: checkData.backendSessionId || undefined,
+          frontendSessionId: planningFrontendSessionId,
+          streamScope: PLANNING_STREAM_SCOPE,
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         setCurrentStream(accumulated);
       });
 
       es.addEventListener('thinking', (event) => {
-        const data = JSON.parse(event.data);
+        const data = parseAceSseEventData(event.data);
         thinkingAccumulated += data.content || '';
+        const row = storeChatStreamSseEventAsAgentMessage('thinking', data, {
+          chatId: checkData.chatId,
+          stepKey: stageKey,
+          provider: aiEngineRef.current,
+          model: aiModelRef.current,
+          sessionId: checkData.backendSessionId || undefined,
+          frontendSessionId: planningFrontendSessionId,
+          streamScope: PLANNING_STREAM_SCOPE,
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         setCurrentThinking(thinkingAccumulated);
       });
 
       es.addEventListener('done', async (event) => {
         try {
-          const data = JSON.parse(event.data);
+          const data = parseAceSseEventData(event.data);
           es.close();
           eventSourceRef.current = null;
           chatIdRef.current = null;
           reconnectingPlanningChatIdRef.current = null;
 
           const finalContent = data.result || accumulated || '';
+          const row = storeChatStreamSseEventAsAgentMessage('done', {
+            ...data,
+            content: finalContent,
+          }, {
+            chatId: checkData.chatId,
+            stepKey: stageKey,
+            provider: aiEngineRef.current,
+            model: aiModelRef.current,
+            sessionId: data.sessionId || checkData.backendSessionId || undefined,
+            frontendSessionId: planningFrontendSessionId,
+            streamScope: PLANNING_STREAM_SCOPE,
+          }, aiPrevious);
+          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
           setAiMessages((prev) => {
             const next = [...prev];
             if (thinkingAccumulated) next.push({ role: 'thinking', content: thinkingAccumulated });
@@ -5654,52 +5712,14 @@ export default function NewConfigModal({
 
     setIsSavingWorkflowDraft(true);
     try {
-      const response = await modalAuthFetch('/api/configs/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ...values,
-          mode: workflowMode,
-          frontendSessionId: planningFrontendSessionId || frontendSessionId,
-          creationSessionId: specPlanningEnabled ? previewSession?.id : undefined,
-          skipSpecCoding: !specPlanningEnabled,
-          configDraft: validation.normalized || draftConfigToSave,
-        }),
+      const result = await createConfigMutation.mutateAsync({
+        ...values,
+        mode: workflowMode,
+        frontendSessionId: planningFrontendSessionId || frontendSessionId,
+        creationSessionId: specPlanningEnabled ? previewSession?.id : undefined,
+        skipSpecCoding: !specPlanningEnabled,
+        configDraft: validation.normalized || draftConfigToSave,
       });
-      const result = await response.json().catch(() => null);
-      if (!response.ok) {
-        const details = Array.isArray(result?.details?.issues)
-          ? result.details.issues
-          : Array.isArray(result?.details)
-            ? result.details
-            : [];
-        const message = details.length
-          ? details.map((issue: any) => `${issue.path?.join('.') || '(root)'}: ${issue.message}`).join('\n')
-          : result?.message || result?.error || '保存 workflow 草案失败';
-        const retryExisting = await checkExistingWorkflowFile(filename);
-        if (retryExisting.ok) {
-          toast('success', '系统已确认配置文件存在且校验通过');
-          completeAiWorkflowCreation(filename);
-          return true;
-        }
-        const bindingErrors = Array.isArray(result?.bindingValidation?.errors)
-          ? result.bindingValidation.errors
-          : [];
-        throw Object.assign(new Error(message), {
-          validation: bindingErrors.length > 0
-            ? {
-                ok: false,
-                issues: bindingErrors.map((bindingError: string) => ({
-                  severity: 'error',
-                  path: ['workflow', 'steps', 'specTaskBinding'],
-                  message: bindingError,
-                })),
-              }
-            : undefined,
-        });
-      }
 
       const createdFilename = result?.filename || filename;
       if (result?.creationSession) {
@@ -5712,17 +5732,45 @@ export default function NewConfigModal({
       completeAiWorkflowCreation(createdFilename, result?.creationSession);
       return true;
     } catch (error: any) {
+      const payload = error?.payload;
+      const details = Array.isArray(payload?.details?.issues)
+        ? payload.details.issues
+        : Array.isArray(payload?.details)
+          ? payload.details
+          : [];
+      const retryExisting = await checkExistingWorkflowFile(filename);
+      if (retryExisting.ok) {
+        toast('success', '系统已确认配置文件存在且校验通过');
+        completeAiWorkflowCreation(filename);
+        return true;
+      }
+      const bindingErrors = Array.isArray(payload?.bindingValidation?.errors)
+        ? payload.bindingValidation.errors
+        : [];
+      const errorValidation = bindingErrors.length > 0
+        ? {
+            ok: false,
+            issues: bindingErrors.map((bindingError: string) => ({
+              severity: 'error',
+              path: ['workflow', 'steps', 'specTaskBinding'],
+              message: bindingError,
+            })),
+          }
+        : undefined;
       const errorMsg = error?.message || '保存 workflow 草案失败';
-      if (error?.validation) {
-        setWorkflowDraftContinueReason(formatValidationIssuesForPrompt(error.validation));
+      const detailMessage = details.length
+        ? details.map((issue: any) => `${issue.path?.join('.') || '(root)'}: ${issue.message}`).join('\n')
+        : '';
+      if (errorValidation) {
+        setWorkflowDraftContinueReason(formatValidationIssuesForPrompt(errorValidation));
       } else {
-        setWorkflowDraftContinueReason(errorMsg);
+        setWorkflowDraftContinueReason(detailMessage || errorMsg);
       }
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        content: `创建失败：${errorMsg}\n请检查错误信息后重新生成草案。`,
+        content: `创建失败：${detailMessage || errorMsg}\n请检查错误信息后重新生成草案。`,
       }]);
-      toast('error', errorMsg);
+      toast('error', detailMessage || errorMsg);
       return true;
     } finally {
       setIsSavingWorkflowDraft(false);
@@ -5732,6 +5780,7 @@ export default function NewConfigModal({
     bindDraftCreationSessionToChat,
     checkExistingWorkflowFile,
     completeAiWorkflowCreation,
+    createConfigMutation,
     frontendSessionId,
     getValues,
     planningFrontendSessionId,
@@ -5784,38 +5833,12 @@ export default function NewConfigModal({
     }
 
     try {
-      const response = await modalAuthFetch('/api/configs/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ...values,
-          frontendSessionId: planningFrontendSessionId || frontendSessionId,
-          creationSessionId: specPlanningEnabled ? (previewSession?.id || draftCreationSessionId || undefined) : undefined,
-          skipSpecCoding: !specPlanningEnabled,
-        }),
+      const result = await createConfigMutation.mutateAsync({
+        ...values,
+        frontendSessionId: planningFrontendSessionId || frontendSessionId,
+        creationSessionId: specPlanningEnabled ? (previewSession?.id || draftCreationSessionId || undefined) : undefined,
+        skipSpecCoding: !specPlanningEnabled,
       });
-      const result = await response.json();
-      if (!response.ok) {
-        const details = Array.isArray(result.details)
-          ? result.details
-          : Array.isArray(result.details?.issues)
-            ? result.details.issues
-            : [];
-        if (details.length > 0) {
-          for (const issue of details) {
-            const field = issue?.path?.[0];
-            if (typeof field === 'string' && ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode', 'persistMode', 'specRoot'].includes(field)) {
-              setError(field as keyof NewConfigForm, { type: 'server', message: issue.message });
-            }
-          }
-          toast('error', '表单验证失败:\n' + details.map((e: any) => e?.message || '未知校验错误').join('\n'));
-        } else {
-          toast('error', result.message || result.error);
-        }
-        return;
-      }
       toast('success', result.message || '配置文件已创建');
       if (result.creationSession) {
         await bindDraftCreationSessionToChat(result.creationSession).catch(() => {});
@@ -5825,7 +5848,23 @@ export default function NewConfigModal({
       onSuccess(values.filename, { creationSession: result.creationSession });
       onClose();
     } catch (error: any) {
-      toast('error', '创建失败: ' + error.message);
+      const payload = error?.payload;
+      const details = Array.isArray(payload?.details)
+        ? payload.details
+        : Array.isArray(payload?.details?.issues)
+          ? payload.details.issues
+          : [];
+      if (details.length > 0) {
+        for (const issue of details) {
+          const field = issue?.path?.[0];
+          if (typeof field === 'string' && ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode', 'persistMode', 'specRoot'].includes(field)) {
+            setError(field as keyof NewConfigForm, { type: 'server', message: issue.message });
+          }
+        }
+        toast('error', '表单验证失败:\n' + details.map((e: any) => e?.message || '未知校验错误').join('\n'));
+      } else {
+        toast('error', '创建失败: ' + (payload?.message || payload?.error || error.message));
+      }
     }
   };
 
@@ -7052,7 +7091,7 @@ export default function NewConfigModal({
                                       language="markdown"
                                       value={draftValue}
                                       theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
-                                      onChange={(value) => setArtifactDrafts((prev) => ({ ...prev, [artifact.key]: value ?? '' }))}
+                                      onChange={(value: string | undefined) => setArtifactDrafts((prev) => ({ ...prev, [artifact.key]: value ?? '' }))}
                                       options={{
                                         minimap: { enabled: false },
                                         wordWrap: 'on',

@@ -21,6 +21,12 @@ function toPositiveInteger(value: string | undefined): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function shouldParseColonLocation(pathPart: string): boolean {
+  if (isWorkspaceAbsolutePath(pathPart)) return true;
+  const lastSegment = pathPart.split('/').filter(Boolean).pop() || pathPart;
+  return pathPart.includes('/') || /\.[^/.]+$/.test(lastSegment);
+}
+
 export function parseWorkspaceFileLocation(value: string | null | undefined): WorkspaceFileLocation {
   const normalized = normalizeWorkspacePathValue(value);
   if (!normalized) {
@@ -37,7 +43,7 @@ export function parseWorkspaceFileLocation(value: string | null | undefined): Wo
   }
 
   const colonMatch = normalized.match(/^(.+?):([1-9]\d*)(?::([1-9]\d*))?$/);
-  if (!colonMatch?.[1]) {
+  if (!colonMatch?.[1] || !shouldParseColonLocation(colonMatch[1])) {
     return { path: normalized, lineNumber: null, column: null };
   }
 

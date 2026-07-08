@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download, FolderUp, RefreshCw, LayoutGrid, List, Home } from "lucide-react"
 import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/core/api"
 import { Button } from "@/components/ui/button"
@@ -39,6 +40,8 @@ import { useToast } from "@/components/ui/toast"
 import { useConfirmDialog } from "@/hooks/useConfirmDialog"
 import ConfirmDialog from "@/components/ConfirmDialog"
 import NotebookSaveDialog, { type NotebookDirectoryOption } from "@/components/notebook/NotebookSaveDialog"
+import { queryKeys } from "@/client/query/query-keys"
+import { syncWorkspaceTreeToDb, useWorkspaceTreeRows } from "@/client/db/collections"
 
 export interface ClipboardItem {
   path: string
@@ -241,6 +244,22 @@ function normalizeTreePath(filePath: string | null | undefined): string | null {
   return filePath.replace(/\\/g, "/")
 }
 
+function workspaceTreeKeyParams(offset = 0, limit?: number) {
+  return {
+    depth: 0,
+    offset,
+    limit: limit ?? null,
+  }
+}
+
+function notebookTreeKeyParams(depth = 2, scope: NotebookScope = "personal", shareToken?: string) {
+  return {
+    depth,
+    scope,
+    shareToken: shareToken || "",
+  }
+}
+
 function buildWorkspaceAbsolutePath(workspacePath: string, relativePath: string): string {
   const root = workspacePath.trim()
   const normalizedRelative = (normalizeTreePath(relativePath) || "").replace(/^\/+/, "")
@@ -287,17 +306,6 @@ function dedupeTopLevelPaths<T extends { path: string }>(items: T[]): T[] {
     if (!covered) result.push(item as T)
   }
   return result
-}
-
-function appendUniqueTreeNodes(existing: TreeNode[], incoming: TreeNode[]): TreeNode[] {
-  const seen = new Set(existing.map((node) => node.path))
-  const next = [...existing]
-  for (const node of incoming) {
-    if (seen.has(node.path)) continue
-    seen.add(node.path)
-    next.push(node)
-  }
-  return next
 }
 
 function isBuiltinNotebookTreePath(filePath: string | null | undefined): boolean {
@@ -752,11 +760,26 @@ function TreeFileItem({
     autoRefreshIntervalMs,
     setAutoRefreshIntervalMs,
   } = useTreeCtx()
+  const queryClient = useQueryClient()
   const beforeIntent: DropIntent = { position: "before", targetPath: node.path }
   const afterIntent: DropIntent = { position: "after", targetPath: node.path }
   const isBeforeDropTarget = isDropIntentActive(dropIntent, beforeIntent)
   const isAfterDropTarget = isDropIntentActive(dropIntent, afterIntent)
   const nodeReadOnly = mode === "notebook" && isReadOnlyNotebookNode(node)
+  const invalidateDirectoryQueries = React.useCallback(async (...paths: Array<string | null | undefined>) => {
+    const normalizedPaths = Array.from(new Set(paths.map((path) => normalizeTreePath(path) || "").filter(Boolean)))
+    if (mode === "notebook") {
+      await queryClient.invalidateQueries({ queryKey: ["notebook", "tree"] })
+      await Promise.all(normalizedPaths.map((path) =>
+        queryClient.invalidateQueries({ queryKey: ["notebook", "subtree", path] })
+      ))
+      return
+    }
+    await queryClient.invalidateQueries({ queryKey: ["workspace", "tree", workspacePath] })
+    await Promise.all(normalizedPaths.map((path) =>
+      queryClient.invalidateQueries({ queryKey: ["workspace", "subtree", workspacePath, path] })
+    ))
+  }, [mode, notebookScope, notebookShareToken, queryClient, workspacePath])
 
   const handleDownload = async () => {
     await onDownload(node.path)
@@ -773,6 +796,7 @@ function TreeFileItem({
       } else {
         await workspaceApi.manage(workspacePath, "rename", { oldPath: node.path, newPath })
       }
+      await invalidateDirectoryQueries(parent, node.path, newPath)
       onRefresh()
     } catch (error) {
       toast("error", formatErrorMessage(error, "重命名失败"))
@@ -796,6 +820,7 @@ function TreeFileItem({
         await workspaceApi.manage(workspacePath, "delete", { path: node.path })
       }
       onDeletedPath?.(node.path)
+      await invalidateDirectoryQueries(getParentDir(node.path), node.path)
       onRefresh()
     } catch (error) {
       toast("error", formatErrorMessage(error, "删除失败"))
@@ -973,7 +998,22 @@ function DesktopRenameTile({
   node: TreeNode
 }) {
   const { mode, setRenamingPath, onSelectFile, notebookCanWrite, notebookScope, notebookShareToken, workspacePath, toast, onRefresh } = useTreeCtx()
+  const queryClient = useQueryClient()
   const defaultValue = node.type === "file" && mode === "notebook" ? stripNotebookSuffix(node.name) : node.name
+  const invalidateDirectoryQueries = React.useCallback(async (...paths: Array<string | null | undefined>) => {
+    const normalizedPaths = Array.from(new Set(paths.map((path) => normalizeTreePath(path) || "").filter(Boolean)))
+    if (mode === "notebook") {
+      await queryClient.invalidateQueries({ queryKey: ["notebook", "tree"] })
+      await Promise.all(normalizedPaths.map((path) =>
+        queryClient.invalidateQueries({ queryKey: ["notebook", "subtree", path] })
+      ))
+      return
+    }
+    await queryClient.invalidateQueries({ queryKey: ["workspace", "tree", workspacePath] })
+    await Promise.all(normalizedPaths.map((path) =>
+      queryClient.invalidateQueries({ queryKey: ["workspace", "subtree", workspacePath, path] })
+    ))
+  }, [mode, notebookScope, notebookShareToken, queryClient, workspacePath])
 
   const handleRename = async (newName: string) => {
     const normalizedName = mode === "notebook" && node.type === "file" ? ensureNotebookFileName(newName) : newName
@@ -986,6 +1026,7 @@ function DesktopRenameTile({
       } else {
         await workspaceApi.manage(workspacePath, "rename", { oldPath: node.path, newPath })
       }
+      await invalidateDirectoryQueries(parent, node.path, newPath)
       onRefresh()
     } catch (error) {
       toast("error", formatErrorMessage(error, "重命名失败"))
@@ -1532,6 +1573,7 @@ function TreeDirItem({
     autoRefreshIntervalMs,
     setAutoRefreshIntervalMs,
   } = useTreeCtx()
+  const queryClient = useQueryClient()
   const isCreatingHere = creatingIn?.dir === node.path
   const beforeIntent: DropIntent = { position: "before", targetPath: node.path }
   const insideIntent: DropIntent = { position: "inside", targetPath: node.path }
@@ -1540,19 +1582,46 @@ function TreeDirItem({
   const isInsideDropTarget = isDropIntentActive(dropIntent, insideIntent)
   const isAfterDropTarget = isDropIntentActive(dropIntent, afterIntent)
   const nodeReadOnly = mode === "notebook" && isReadOnlyNotebookNode(node)
-  const [children, setChildren] = React.useState<TreeNode[] | undefined>(node.children)
+  const [childrenLoaded, setChildrenLoaded] = React.useState(() => Array.isArray(node.children))
   const [loadingChildren, setLoadingChildren] = React.useState(false)
   const [pagination, setPagination] = React.useState<WorkspaceTreePagination>({ hasMore: false, nextOffset: null })
   const [loadingMore, setLoadingMore] = React.useState(false)
+  const treeSource = mode === "notebook" ? "notebook" : "workspace"
+  const treeSourceKey = mode === "notebook" ? `${notebookScope}:${notebookShareToken || ""}` : workspacePath
+  const dbChildren = useWorkspaceTreeRows({
+    source: treeSource,
+    sourceKey: treeSourceKey,
+    parentPath: node.path,
+  })
+  const children = dbChildren
   const shouldAutoOpen = Boolean(
     normalizedSelectedFile && (normalizedSelectedFile === normalizedNodePath || normalizedSelectedFile.startsWith(`${normalizedNodePath}/`))
   )
   const open = isCreatingHere || openDirectories.has(node.path)
+  const invalidateDirectoryQueries = React.useCallback(async (...paths: Array<string | null | undefined>) => {
+    const normalizedPaths = Array.from(new Set(paths.map((path) => normalizeTreePath(path) || "").filter(Boolean)))
+    if (mode === "notebook") {
+      await queryClient.invalidateQueries({ queryKey: ["notebook", "tree"] })
+      await Promise.all(normalizedPaths.map((path) =>
+        queryClient.invalidateQueries({ queryKey: ["notebook", "subtree", path] })
+      ))
+      return
+    }
+    await queryClient.invalidateQueries({ queryKey: ["workspace", "tree", workspacePath] })
+    await Promise.all(normalizedPaths.map((path) =>
+      queryClient.invalidateQueries({ queryKey: ["workspace", "subtree", workspacePath, path] })
+    ))
+  }, [mode, notebookScope, notebookShareToken, queryClient, workspacePath])
 
   React.useEffect(() => {
-    setChildren(node.children)
+    setChildrenLoaded(Array.isArray(node.children))
     setPagination({ hasMore: false, nextOffset: null })
   }, [node])
+  React.useEffect(() => {
+    if (dbChildren.length > 0) {
+      setChildrenLoaded(true)
+    }
+  }, [dbChildren])
   React.useEffect(() => {
     if (isCreatingHere || shouldAutoOpen) setDirectoryOpen(node.path, true)
   }, [isCreatingHere, node.path, setDirectoryOpen, shouldAutoOpen])
@@ -1562,11 +1631,36 @@ function TreeDirItem({
     setLoadingChildren(true)
     try {
       if (mode === "notebook") {
-        const data = await workspaceApi.getNotebookSubTree(node.path, 2, { scope: notebookScope, shareToken: notebookShareToken })
-        setChildren(data.tree || [])
+        const params = notebookTreeKeyParams(2, notebookScope, notebookShareToken)
+        const data = await queryClient.fetchQuery({
+          queryKey: queryKeys.notebook.subtree(node.path, params),
+          queryFn: () => workspaceApi.getNotebookSubTree(node.path, 2, { scope: notebookScope, shareToken: notebookShareToken }),
+          staleTime: 30_000,
+        })
+        syncWorkspaceTreeToDb({
+          source: "notebook",
+          sourceKey: treeSourceKey,
+          rootPath: node.path,
+          tree: data.tree || [],
+          replaceParents: true,
+        })
+        setChildrenLoaded(true)
       } else {
-        const data = await workspaceApi.getSubTree(workspacePath, node.path, { depth: 0 })
-        setChildren(data.tree || [])
+        const params = workspaceTreeKeyParams(0)
+        const data = await queryClient.fetchQuery({
+          queryKey: queryKeys.workspace.subtree(workspacePath, node.path, params),
+          queryFn: () => workspaceApi.getSubTree(workspacePath, node.path, { depth: 0 }),
+          staleTime: 30_000,
+        })
+        syncWorkspaceTreeToDb({
+          source: "workspace",
+          sourceKey: treeSourceKey,
+          rootPath: node.path,
+          tree: data.tree || [],
+          orderOffset: data.offset || 0,
+          replaceParents: (data.offset || 0) === 0,
+        })
+        setChildrenLoaded(true)
         setPagination({
           hasMore: Boolean(data.hasMore),
           nextOffset: data.nextOffset ?? null,
@@ -1578,21 +1672,21 @@ function TreeDirItem({
     } finally {
       setLoadingChildren(false)
     }
-  }, [loadingChildren, mode, node.name, node.path, notebookScope, notebookShareToken, toast, workspacePath])
+  }, [loadingChildren, mode, node.name, node.path, notebookScope, notebookShareToken, queryClient, toast, treeSourceKey, workspacePath])
 
   const handleOpenChange = React.useCallback(async (nextOpen: boolean) => {
     setDirectoryOpen(node.path, nextOpen)
-    if (nextOpen && children === undefined) {
+    if (nextOpen && !childrenLoaded) {
       await refreshDirectoryChildren()
     }
-  }, [children, node.path, refreshDirectoryChildren, setDirectoryOpen])
+  }, [childrenLoaded, node.path, refreshDirectoryChildren, setDirectoryOpen])
   React.useEffect(() => {
-    if (!open || children !== undefined || loadingChildren) return
+    if (!open || childrenLoaded || loadingChildren) return
     void handleOpenChange(true)
-  }, [children, handleOpenChange, loadingChildren, open])
+  }, [childrenLoaded, handleOpenChange, loadingChildren, open])
 
   React.useEffect(() => {
-    if (refreshToken === 0 || children === undefined) return
+    if (refreshToken === 0 || !childrenLoaded) return
     void refreshDirectoryChildren()
     // Only directories that have been expanded/loaded respond to timed refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1663,6 +1757,7 @@ function TreeDirItem({
         }
         setClipboard(null)
       }
+      await invalidateDirectoryQueries(node.path, getParentDir(clipboard.path), destPath)
       onRefresh()
     } catch (error) {
       toast("error", formatErrorMessage(error, "粘贴失败"))
@@ -1677,11 +1772,27 @@ function TreeDirItem({
     if (mode === "notebook" || !pagination.hasMore || pagination.nextOffset == null || loadingMore) return
     setLoadingMore(true)
     try {
-      const data = await workspaceApi.getSubTree(workspacePath, node.path, {
+      const params = {
         depth: 0,
         offset: pagination.nextOffset,
+        limit: null,
+      }
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.workspace.subtree(workspacePath, node.path, params),
+        queryFn: () => workspaceApi.getSubTree(workspacePath, node.path, {
+          depth: 0,
+          offset: pagination.nextOffset ?? 0,
+        }),
+        staleTime: 30_000,
       })
-      setChildren((prev) => appendUniqueTreeNodes(prev || [], data.tree || []))
+      syncWorkspaceTreeToDb({
+        source: "workspace",
+        sourceKey: treeSourceKey,
+        rootPath: node.path,
+        tree: data.tree || [],
+        orderOffset: pagination.nextOffset ?? 0,
+      })
+      setChildrenLoaded(true)
       setPagination({
         hasMore: Boolean(data.hasMore),
         nextOffset: data.nextOffset ?? null,
@@ -1692,7 +1803,7 @@ function TreeDirItem({
     } finally {
       setLoadingMore(false)
     }
-  }, [loadingMore, mode, node.name, node.path, pagination.hasMore, pagination.nextOffset, toast, workspacePath])
+  }, [loadingMore, mode, node.name, node.path, pagination.hasMore, pagination.nextOffset, queryClient, toast, treeSourceKey, workspacePath])
 
   const handleCreateConfirm = async (name: string) => {
     if (!creatingIn) return
@@ -1705,6 +1816,7 @@ function TreeDirItem({
       } else {
         await workspaceApi.manage(workspacePath, creatingIn.type === "file" ? "create-file" : "create-folder", { path: newPath })
       }
+      await invalidateDirectoryQueries(creatingIn.dir, newPath)
       onRefresh()
     } catch (error) {
       toast("error", formatErrorMessage(error, `创建${creatingIn.type === "file" ? "文件" : "文件夹"}失败`))
@@ -1961,6 +2073,7 @@ export function FileTreeSidebar({
   notebookView = "list",
   onNotebookViewChange,
 }: FileTreeSidebarProps) {
+  const queryClient = useQueryClient()
   const { toast } = useToast()
   const { confirm, dialogProps } = useConfirmDialog()
   const notebookCanWrite = mode !== 'notebook' || notebookPermission === 'write'
@@ -2008,6 +2121,21 @@ export function FileTreeSidebar({
     })
   }, [])
 
+  const invalidateTreeQueries = React.useCallback(async (...paths: Array<string | null | undefined>) => {
+    const normalizedPaths = Array.from(new Set(paths.map((path) => normalizeTreePath(path) || "").filter(Boolean)))
+    if (mode === "notebook") {
+      await queryClient.invalidateQueries({ queryKey: ["notebook", "tree"] })
+      await Promise.all(normalizedPaths.map((path) =>
+        queryClient.invalidateQueries({ queryKey: ["notebook", "subtree", path] })
+      ))
+      return
+    }
+    await queryClient.invalidateQueries({ queryKey: ["workspace", "tree", workspacePath] })
+    await Promise.all(normalizedPaths.map((path) =>
+      queryClient.invalidateQueries({ queryKey: ["workspace", "subtree", workspacePath, path] })
+    ))
+  }, [mode, notebookScope, notebookShareToken, queryClient, workspacePath])
+
   const refreshLoadedTree = React.useCallback(() => {
     if (loading) return
     onRefresh()
@@ -2034,6 +2162,7 @@ export function FileTreeSidebar({
       )
       const result = await workspaceApi.upload(workspacePath, pendingUploadTargetRef.current, files, { relativePaths })
       toast("success", `已上传 ${result.count} 个文件`)
+      await invalidateTreeQueries(pendingUploadTargetRef.current)
       refreshLoadedTree()
     } catch (error) {
       const message = formatErrorMessage(error, "上传失败")
@@ -2042,7 +2171,7 @@ export function FileTreeSidebar({
     } finally {
       setUploading(false)
     }
-  }, [refreshLoadedTree, toast, workspacePath])
+  }, [invalidateTreeQueries, refreshLoadedTree, toast, workspacePath])
 
   const requestUpload = React.useCallback((targetPath: string, directory: boolean) => {
     if (mode !== "default") return
@@ -2122,11 +2251,12 @@ export function FileTreeSidebar({
     if (mode !== "notebook" || !notebookCanWrite) return
     try {
       await workspaceApi.manageNotebook("set-icon", { path, icon: "" }, { scope: notebookScope, shareToken: notebookShareToken })
+      await invalidateTreeQueries(path, getParentDir(path))
       refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "清除目录图标失败"))
     }
-  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, toast])
+  }, [invalidateTreeQueries, mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, toast])
 
   const handleConfirmCopyBetween = React.useCallback(async () => {
     if (!copyBetweenSource || mode !== "notebook") return
@@ -2149,13 +2279,14 @@ export function FileTreeSidebar({
       toast("success", `已复制到${copyBetweenScope === "global" ? "团队" : "个人"}空间：${destPath}`)
       setCopyBetweenDialogOpen(false)
       setCopyBetweenSource(null)
+      await invalidateTreeQueries(destPath, getParentDir(destPath))
       refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "跨空间复制失败"))
     } finally {
       setCopyBetweenSaving(false)
     }
-  }, [copyBetweenDirectory, copyBetweenScope, copyBetweenSource, mode, notebookScope, notebookShareToken, refreshLoadedTree, toast])
+  }, [copyBetweenDirectory, copyBetweenScope, copyBetweenSource, invalidateTreeQueries, mode, notebookScope, notebookShareToken, refreshLoadedTree, toast])
 
   const handleConfirmDirectoryIcon = React.useCallback(async () => {
     if (!iconTargetPath || mode !== "notebook" || !notebookCanWrite) return
@@ -2164,13 +2295,14 @@ export function FileTreeSidebar({
       await workspaceApi.manageNotebook("set-icon", { path: iconTargetPath, icon: iconValue }, { scope: notebookScope, shareToken: notebookShareToken })
       setIconDialogOpen(false)
       setIconTargetPath(null)
+      await invalidateTreeQueries(iconTargetPath, getParentDir(iconTargetPath))
       refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "设置目录图标失败"))
     } finally {
       setIconSaving(false)
     }
-  }, [iconTargetPath, iconValue, mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, toast])
+  }, [iconTargetPath, iconValue, invalidateTreeQueries, mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, toast])
 
   const handleRootPaste = async () => {
     if (!clipboard) return
@@ -2195,6 +2327,7 @@ export function FileTreeSidebar({
         }
       }
       if (clipboard.action === "cut") setClipboard(null)
+      await invalidateTreeQueries("", ...entries.flatMap((entry) => [entry.path, getParentDir(entry.path)]))
       refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "粘贴失败"))
@@ -2211,6 +2344,7 @@ export function FileTreeSidebar({
       } else {
         await workspaceApi.manage(workspacePath, creatingIn.type === "file" ? "create-file" : "create-folder", { path: name })
       }
+      await invalidateTreeQueries("")
       refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, `创建${creatingIn.type === "file" ? "文件" : "文件夹"}失败`))
@@ -2243,11 +2377,12 @@ export function FileTreeSidebar({
         }
       }
       if (clipboard.action === "cut") setClipboard(null)
+      await invalidateTreeQueries(normalizedDir, ...entries.flatMap((entry) => [entry.path, getParentDir(entry.path)]))
       refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "粘贴失败"))
     }
-  }, [clipboard, mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, setClipboard, toast, workspacePath])
+  }, [clipboard, invalidateTreeQueries, mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, setClipboard, toast, workspacePath])
 
   const performMove = React.useCallback(async (
     srcPath: string,
@@ -2277,8 +2412,9 @@ export function FileTreeSidebar({
         : `${destPath}${selectedFile.slice(srcPath.length)}`
       onSelectFile(nextSelected)
     }
+    await invalidateTreeQueries(srcPath, destPath, getParentDir(srcPath), getParentDir(destPath), reorder?.targetPath)
     refreshLoadedTree()
-  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, onSelectFile, refreshLoadedTree, selectedFile, workspacePath])
+  }, [invalidateTreeQueries, mode, notebookCanWrite, notebookScope, notebookShareToken, onSelectFile, refreshLoadedTree, selectedFile, workspacePath])
 
   const performDelete = React.useCallback(async (targetPath: string) => {
     if (mode === "notebook") {
@@ -2287,7 +2423,8 @@ export function FileTreeSidebar({
     } else {
       await workspaceApi.manage(workspacePath, "delete", { path: targetPath })
     }
-  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, workspacePath])
+    await invalidateTreeQueries(targetPath, getParentDir(targetPath))
+  }, [invalidateTreeQueries, mode, notebookCanWrite, notebookScope, notebookShareToken, workspacePath])
 
   const moveTreeItem = React.useCallback(async (srcPath: string, destDir: string) => {
     const normalizedSrcPath = normalizeTreePath(srcPath) || ""
@@ -2404,6 +2541,7 @@ export function FileTreeSidebar({
             : `${normalizedSrcPath}${selectedFile.slice(normalizedSrcPath.length)}`
           onSelectFile(nextSelected)
         }
+        await invalidateTreeQueries(sourceParent, targetParent, normalizedSrcPath, intent.targetPath)
         refreshLoadedTree()
       } catch (error) {
         if (isSameDirectoryReorderError(error)) {
@@ -2412,6 +2550,7 @@ export function FileTreeSidebar({
             await moveTreeItem(normalizedSrcPath, fallbackDir)
             return
           }
+          await invalidateTreeQueries(sourceParent, targetParent, normalizedSrcPath, intent.targetPath)
           refreshLoadedTree()
           return
         }
@@ -2427,6 +2566,7 @@ export function FileTreeSidebar({
   }, [
     capabilities.canReorder,
     mode,
+    invalidateTreeQueries,
     moveTreeItem,
     notebookCanWrite,
     notebookScope,
@@ -2451,6 +2591,7 @@ export function FileTreeSidebar({
       if (dir) {
         setDirectoryOpen(dir, true)
       }
+      await invalidateTreeQueries(dir, createdPath)
       refreshLoadedTree()
       setRenamingPath(createdPath)
       if (type === "file") {
@@ -2459,7 +2600,7 @@ export function FileTreeSidebar({
     } catch (error) {
       toast("error", formatErrorMessage(error, `创建${type === "file" ? "文件" : "文件夹"}失败`))
     }
-  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, onSelectFile, refreshLoadedTree, setDirectoryOpen, toast, tree])
+  }, [invalidateTreeQueries, mode, notebookCanWrite, notebookScope, notebookShareToken, onSelectFile, refreshLoadedTree, setDirectoryOpen, toast, tree])
 
   const handleQuickCreateNotebook = React.useCallback(async (type: "file" | "folder") => {
     await createQuickNotebook(type, "")

@@ -1326,7 +1326,7 @@ export default function AIAgentCreatorModal({
                     <div>
                       <div className="text-sm font-medium text-foreground">{isReviseMode ? '修订引擎和模型' : '生成引擎和模型'}</div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {isReviseMode ? '只用于本次 AI 修订候选生成；确认应用前不会保存。' : '用于本次 AI 生成，也会写入创建出的 Agent 默认运行配置。'}
+                        {isReviseMode ? '只用于本次 AI 修订候选生成；确认应用后写入配置。' : '用于本次 AI 生成，也会写入创建出的 Agent 默认运行配置。'}
                       </div>
                     </div>
                     {!canUseSelectedRuntime ? (
@@ -1456,7 +1456,7 @@ export default function AIAgentCreatorModal({
                       <div>
                         <div className="text-sm font-medium">{draftResult ? '候选预览' : '当前基线预览'}</div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                          {draftResult ? '这是 AI 当前修订候选，确认应用前不会写入配置。' : '生成修订候选后，这里会切换为候选预览。'}
+                          {draftResult ? '这是 AI 当前修订候选，确认应用后写入配置。' : '生成修订候选后，这里会切换为候选预览。'}
                         </div>
                       </div>
                       {draftResult ? <Badge variant="secondary">候选</Badge> : <Badge variant="outline">基线</Badge>}

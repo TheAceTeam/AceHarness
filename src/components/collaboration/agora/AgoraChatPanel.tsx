@@ -118,6 +118,8 @@ const MODE_LABELS: Record<CollaborationChatroomMode, string> = {
 };
 
 const USER_LED_AGENT_REPLY_LIMIT = 2;
+const AGORA_INITIAL_VISIBLE_MESSAGES = 5;
+const AGORA_VISIBLE_MESSAGE_STEP = 10;
 const USER_LED_AGENT_REPLY_PER_PARTICIPANT = 1;
 
 const AGORA_NATURAL_CONVERSATION_GUIDE = [
@@ -799,7 +801,20 @@ export function AgoraChatPanel({
   const normalizedRoom = ensureRoom(room);
   const chatroom = normalizedRoom.chatroom || createInitialChatroomState();
   const messages = normalizedRoom.messages || [];
+  const [visibleMessageCount, setVisibleMessageCount] = useState(AGORA_INITIAL_VISIBLE_MESSAGES);
+  const visibleMessages = useMemo(
+    () => messages.length > visibleMessageCount ? messages.slice(-visibleMessageCount) : messages,
+    [messages, visibleMessageCount],
+  );
+  const hiddenMessageCount = Math.max(0, messages.length - visibleMessages.length);
   const roomTitle = chatroom.topic || normalizedRoom.topic || '议场消息';
+
+  useEffect(() => {
+    setVisibleMessageCount((count) => {
+      const next = Math.max(AGORA_INITIAL_VISIBLE_MESSAGES, Math.min(count, messages.length || AGORA_INITIAL_VISIBLE_MESSAGES));
+      return next === count ? count : next;
+    });
+  }, [messages.length]);
   const participantRoster = useMemo<CollaborationChatroomParticipant[]>(() => {
     const legacyTemporaryAgents = chatroom.temporaryAgents || [];
     if (chatroom.participantRoster?.length) return chatroom.participantRoster;
@@ -2333,7 +2348,7 @@ export function AgoraChatPanel({
       {shouldRenderRoomTranscript ? (
         <div className={cn(layout === 'workspace' && 'flex min-h-0 flex-1 flex-col')}>
           <CollaborationRoomSurface
-            messages={messages}
+            messages={visibleMessages}
             hideMessages={false}
             hideComposer={hideComposer}
             draft={draft}
@@ -2349,7 +2364,24 @@ export function AgoraChatPanel({
             emptyText=""
             helperText={layout === 'workspace' ? null : 'Ctrl/Cmd + Enter 发送。'}
             customControls={runtimeComposerControls}
-            inlineContent={inlineContent}
+            inlineContent={(
+              <>
+                {hiddenMessageCount > 0 ? (
+                  <div className="mb-3 flex justify-center">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 rounded-full px-3 text-xs"
+                      onClick={() => setVisibleMessageCount((count) => count + AGORA_VISIBLE_MESSAGE_STEP)}
+                    >
+                      加载更早的 {hiddenMessageCount} 条
+                    </Button>
+                  </div>
+                ) : null}
+                {inlineContent}
+              </>
+            )}
             inlineContentSpeakerName={inlineContentSpeakerName}
             onDeleteMessage={handleDeleteRoomMessage}
             onQuoteMessage={(value) => handleQuoteRoomMessage(value)}

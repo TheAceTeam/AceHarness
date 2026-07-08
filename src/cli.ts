@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname, join } from 'path';
+import { pathToFileURL } from 'url';
 import { totalmem } from 'os';
 import { spawn, ChildProcess } from 'child_process';
 import { commandExists } from '@/lib/core/command-exists';
@@ -1355,6 +1356,11 @@ function spawnCliProcess(args: string[], env: NodeJS.ProcessEnv, detached: boole
   });
 }
 
+async function startAceServerRuntime(): Promise<void> {
+  const startScript = join(getRepoRoot(), 'scripts', 'start-tanstack-start.mjs');
+  await import(pathToFileURL(startScript).href);
+}
+
 async function startServerProcess(settings: SystemSettings, serviceId: string): Promise<void> {
   await syncBrowserLocale(settings);
   Object.assign(process.env, buildChildEnv(settings));
@@ -1375,7 +1381,7 @@ async function startServerProcess(settings: SystemSettings, serviceId: string): 
   }, 1200);
   console.log(messages.startingServer(url));
   console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
-  require('../server.js');
+  await startAceServerRuntime();
 }
 
 async function runManagedServerChild(serviceId: string): Promise<void> {
@@ -1397,7 +1403,7 @@ async function runManagedServerChild(serviceId: string): Promise<void> {
   process.once('SIGTERM', cleanup);
   process.once('SIGINT', cleanup);
   process.once('exit', cleanup);
-  require('../server.js');
+  await startAceServerRuntime();
 }
 
 async function runDaemonSupervisor(serviceId: string): Promise<void> {

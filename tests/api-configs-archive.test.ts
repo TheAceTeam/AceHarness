@@ -144,7 +144,7 @@ describe('/api/configs/archive', () => {
         await writeFile(path.join(configsDir, 'alpha.yaml'), stringify(workflowConfig(workspace, 'Alpha')), 'utf8');
         await writeFile(path.join(configsDir, 'nested', 'beta.yaml'), stringify(workflowConfig(workspace, 'Beta')), 'utf8');
 
-        const { PUT } = await import('@/app/api/configs/archive/route');
+        const { PUT } = await import('@/server/api-routes/configs/archive/route');
         const response = await PUT(makeRequest('/api/configs/archive', {
           method: 'PUT',
           token,
@@ -167,7 +167,7 @@ describe('/api/configs/archive', () => {
   test('returns 404 when exporting a missing workflow', async () => {
     await withIsolatedAceHome(async () => {
       const { token } = await createAuthToken();
-      const { PUT } = await import('@/app/api/configs/archive/route');
+      const { PUT } = await import('@/server/api-routes/configs/archive/route');
       const response = await PUT(makeRequest('/api/configs/archive', {
         method: 'PUT',
         token,
@@ -191,7 +191,7 @@ describe('/api/configs/archive', () => {
         'utf8',
       );
 
-      const { PUT } = await import('@/app/api/configs/archive/route');
+      const { PUT } = await import('@/server/api-routes/configs/archive/route');
       const response = await PUT(makeRequest('/api/configs/archive', {
         method: 'PUT',
         token,
@@ -228,7 +228,7 @@ describe('/api/configs/archive', () => {
         session.specCoding.artifacts.requirements = '# Requirements\n\nPreserve this exported spec.';
         await saveCreationSession(session);
 
-        const { PUT } = await import('@/app/api/configs/archive/route');
+        const { PUT } = await import('@/server/api-routes/configs/archive/route');
         const response = await PUT(makeRequest('/api/configs/archive', {
           method: 'PUT',
           token,
@@ -258,7 +258,7 @@ describe('/api/configs/archive', () => {
       await writeFile(path.join(configsDir, 'parent.yaml'), stringify(stateMachineSubworkflowConfig('Parent', 'child.yaml')), 'utf8');
       await writeFile(path.join(configsDir, 'child.yaml'), stringify(stateMachineSubworkflowConfig('Child')), 'utf8');
 
-      const { PUT } = await import('@/app/api/configs/archive/route');
+      const { PUT } = await import('@/server/api-routes/configs/archive/route');
       const response = await PUT(makeRequest('/api/configs/archive', {
         method: 'PUT',
         token,
@@ -289,7 +289,7 @@ describe('/api/configs/archive', () => {
         const formData = new FormData();
         formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-        const { POST } = await import('@/app/api/configs/archive/route');
+        const { POST } = await import('@/server/api-routes/configs/archive/route');
         const response = await POST(makeRequest('/api/configs/archive', {
           method: 'POST',
           token,
@@ -319,7 +319,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,
@@ -341,7 +341,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,
@@ -394,7 +394,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,
@@ -448,7 +448,7 @@ describe('/api/configs/archive', () => {
         const formData = new FormData();
         formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-        const { POST } = await import('@/app/api/configs/archive/route');
+        const { POST } = await import('@/server/api-routes/configs/archive/route');
         const response = await POST(makeRequest('/api/configs/archive', {
           method: 'POST',
           token,
@@ -482,7 +482,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,

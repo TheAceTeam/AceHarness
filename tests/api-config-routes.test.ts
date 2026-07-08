@@ -12,10 +12,10 @@ interface AuthResult {
 
 async function loadConfigRoutes() {
   const [validate, create, recommendations, references] = await Promise.all([
-    import('@/app/api/configs/validate/route'),
-    import('@/app/api/configs/create/route'),
-    import('@/app/api/configs/recommendations/route'),
-    import('@/app/api/configs/references/route'),
+    import('@/server/api-routes/configs/validate/route'),
+    import('@/server/api-routes/configs/create/route'),
+    import('@/server/api-routes/configs/recommendations/route'),
+    import('@/server/api-routes/configs/references/route'),
   ]);
   return { validate, create, recommendations, references };
 }
@@ -142,7 +142,7 @@ describe('config API routes', () => {
           requirements: 'child workflow',
         },
       }), 'utf-8');
-      const route = await import('@/app/api/configs/route');
+      const route = await import('@/server/api-routes/configs/route');
 
       const response = await route.GET(makeRequest('/api/configs?mode=state-machine&pageSize=100', { token }));
       const json = await responseJson<any>(response);
@@ -287,7 +287,7 @@ describe('config API routes', () => {
     await withIsolatedAceHome(async () => {
       const { token } = await createAuthToken();
       const { getRuntimeConfigsDirPath } = await import('@/lib/run/runtime-configs');
-      const deleteRoute = await import('@/app/api/configs/[filename]/route');
+      const deleteRoute = await import('@/server/api-routes/configs/[filename]/route');
       const configsDir = await getRuntimeConfigsDirPath();
       await mkdir(configsDir, { recursive: true });
       await writeFile(path.join(configsDir, 'child.yaml'), stringify({
@@ -328,7 +328,7 @@ describe('config API routes', () => {
     await withIsolatedAceHome(async () => {
       const { token } = await createAuthToken();
       const { getRuntimeConfigsDirPath } = await import('@/lib/run/runtime-configs');
-      const route = await import('@/app/api/configs/[filename]/route');
+      const route = await import('@/server/api-routes/configs/[filename]/route');
       const configsDir = await getRuntimeConfigsDirPath();
       await mkdir(configsDir, { recursive: true });
       const childConfig = {
@@ -534,7 +534,7 @@ describe('config API routes', () => {
         sourceSession.specCoding.artifacts.design = '# Design\n\nKeep this copied design.';
         await saveCreationSession(sourceSession);
 
-        const { POST } = await import('@/app/api/configs/[filename]/copy/route');
+        const { POST } = await import('@/server/api-routes/configs/[filename]/copy/route');
         const response = await POST(makeRequest('/api/configs/copy-source.yaml/copy', {
           method: 'POST',
           token,

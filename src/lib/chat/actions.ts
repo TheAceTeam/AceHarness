@@ -3,7 +3,6 @@
  */
 
 import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from '@/lib/core/api';
-import { getWorkspaceSkillPath } from '@/lib/core/app-paths';
 import { extractJsonObject as extractResultJsonObject } from '@/lib/ai/result-channel';
 import { type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { extractAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
@@ -177,7 +176,8 @@ const VALID_ICONS: Set<string> = (() => {
   }
   try {
     const fs = require('fs');
-    const jsonPath = getWorkspaceSkillPath('aceharness-chat-card', 'scripts', 'material-icons.json');
+    const path = require('path');
+    const jsonPath = path.resolve(process.cwd(), 'skills', 'aceharness-chat-card', 'scripts', 'material-icons.json');
     const icons: string[] = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
     return new Set(icons);
   } catch {

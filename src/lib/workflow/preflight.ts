@@ -33,7 +33,7 @@ type PreflightCommand = {
   origin: 'workflow' | 'inferred';
 };
 
-export async function getWorkflowPreflightPlan(configFile: string, personalDir: string): Promise<{
+export async function getWorkflowPreflightPlan(configFile: string, personalDir: string, workingDirectory?: string): Promise<{
   cwd: string;
   commands: PreflightCommand[];
   policy: {
@@ -45,7 +45,7 @@ export async function getWorkflowPreflightPlan(configFile: string, personalDir: 
   const configPath = await getRuntimeWorkflowConfigPath(configFile);
   const raw = await readFile(configPath, 'utf-8');
   const config = parse(raw) as any;
-  const cwd = resolveProjectRoot(personalDir, config?.context?.projectRoot);
+  const cwd = resolveProjectRoot(personalDir, workingDirectory || config?.context?.projectRoot);
   const commands = await collectPreflightCommands(config, cwd);
   return {
     cwd,
@@ -127,7 +127,7 @@ async function collectPreflightCommands(config: any, cwd: string): Promise<Prefl
   return inferProjectPreflightCommands(cwd);
 }
 
-export async function runWorkflowPreflight(configFile: string, personalDir: string): Promise<{
+export async function runWorkflowPreflight(configFile: string, personalDir: string, workingDirectory?: string): Promise<{
   ok: boolean;
   cwd: string;
   checks: PersistedQualityCheck[];
@@ -139,7 +139,7 @@ export async function runWorkflowPreflight(configFile: string, personalDir: stri
     inferredCommandCount: number;
   };
 }> {
-  const { cwd, commands, policy } = await getWorkflowPreflightPlan(configFile, personalDir);
+  const { cwd, commands, policy } = await getWorkflowPreflightPlan(configFile, personalDir, workingDirectory);
 
   if (commands.length === 0) {
     return {

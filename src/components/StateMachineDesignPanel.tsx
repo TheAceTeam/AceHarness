@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
+import { ResizablePanelGroup, ResizablePanel } from '@/components/ui/resizable';
+import { useDefaultLayout } from 'react-resizable-panels';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
@@ -32,9 +32,9 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw } from 'lucide-react';
 import EditNodeModal from './EditNodeModal';
-import StateMachineDiagram from './StateMachineDiagram';
 import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
-import { configApi } from '@/lib/core/api';
+import { useWorkflowConfigQuery } from '@/client/query/configs';
+import { useSaveConfigMutation } from '@/client/query/workflow-mutations';
 
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
@@ -973,15 +973,11 @@ export default function StateMachineDesignPanel({
   const [editingStateInfo, setEditingStateInfo] = useState(false);
   const [editingStep, setEditingStep] = useState<{ index: number; isNew: boolean; focusSpec?: boolean } | null>(null);
   const [subworkflowDrilldown, setSubworkflowDrilldown] = useState<SubworkflowDrilldownState | null>(null);
+  const subworkflowConfigFile = subworkflowDrilldown?.configFile || '';
+  const subworkflowConfigQuery = useWorkflowConfigQuery(subworkflowConfigFile);
+  const saveSubworkflowConfigMutation = useSaveConfigMutation(subworkflowConfigFile);
 
-  // Resizable panel for editor ↔ diagram split
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'design-editor-diagram' });
-  const diagramPanelRef = usePanelRef();
-  const [diagramCollapsed, setDiagramCollapsed] = useState(false);
-
-  useEffect(() => {
-    setDiagramCollapsed(diagramPanelRef.current?.isCollapsed() ?? false);
-  }, [diagramPanelRef]);
+  const { onLayoutChanged } = useDefaultLayout({ id: 'design-editor' });
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -1004,23 +1000,6 @@ export default function StateMachineDesignPanel({
     () => (selectedState && !selectedState.isFinal ? buildVerdictTransitions(selectedState, states, selectedState.transitions) : []),
     [selectedState, states]
   );
-  const flowSummary = useMemo(() => {
-    const transitionCount = states.reduce((sum, state) => sum + (state.transitions?.length ?? 0), 0);
-    const stepCount = states.reduce((sum, state) => sum + (state.steps?.length ?? 0), 0);
-    const parallelGroupIds = new Set<string>();
-    states.forEach((state) => {
-      (state.steps || []).forEach((step) => {
-        const groupId = getStepParallelGroup(step);
-        if (groupId) parallelGroupIds.add(groupId);
-      });
-    });
-    return {
-      transitionCount,
-      stepCount,
-      parallelGroupCount: parallelGroupIds.size,
-    };
-  }, [states]);
-
   const updateState = useCallback((updated: StateMachineState) => {
     onStatesChange(states.map((s, i) => i === selectedStateIndex ? updated : s));
   }, [states, selectedStateIndex, onStatesChange]);
@@ -1036,21 +1015,33 @@ export default function StateMachineDesignPanel({
       saving: false,
       error: configFile ? undefined : '这个子工作流步骤还没有选择配置文件。',
     });
-    if (!configFile) return;
-    configApi.getConfig(configFile)
-      .then((data: any) => {
-        setSubworkflowDrilldown((prev) => {
-          if (!prev || prev.configFile !== configFile) return prev;
-          return { ...prev, loading: false, error: undefined, config: data?.config };
-        });
-      })
-      .catch((error: any) => {
-        setSubworkflowDrilldown((prev) => {
-          if (!prev || prev.configFile !== configFile) return prev;
-          return { ...prev, loading: false, error: error?.message || '加载子工作流配置失败' };
-        });
-      });
   }, []);
+
+  useEffect(() => {
+    if (!subworkflowDrilldown?.configFile) return;
+    if (subworkflowConfigQuery.data) {
+      setSubworkflowDrilldown((prev) => {
+        if (!prev || prev.configFile !== subworkflowConfigFile) return prev;
+        return { ...prev, loading: false, error: undefined, config: subworkflowConfigQuery.data.config };
+      });
+      return;
+    }
+    if (subworkflowConfigQuery.error && !subworkflowConfigQuery.isFetching) {
+      setSubworkflowDrilldown((prev) => {
+        if (!prev || prev.configFile !== subworkflowConfigFile) return prev;
+        const message = subworkflowConfigQuery.error instanceof Error
+          ? subworkflowConfigQuery.error.message
+          : '加载子工作流配置失败';
+        return { ...prev, loading: false, error: message };
+      });
+    }
+  }, [
+    subworkflowConfigFile,
+    subworkflowConfigQuery.data,
+    subworkflowConfigQuery.error,
+    subworkflowConfigQuery.isFetching,
+    subworkflowDrilldown?.configFile,
+  ]);
 
   // 步骤拖拽排序
   const handleDragEnd = (event: DragEndEvent) => {
@@ -1154,23 +1145,6 @@ export default function StateMachineDesignPanel({
     updateState({ ...selectedState, steps: (selectedState.steps || []).filter((_, i) => i !== index) });
     setEditingStep(null);
   };
-
-  const handleDiagramStepClick = useCallback((step: WorkflowStep) => {
-    for (const state of states) {
-      const index = (state.steps || []).findIndex((candidate) => candidate === step || (
-        candidate.name === step.name && candidate.agent === step.agent
-      ));
-      if (index >= 0) {
-        setSelectedStateName(state.name);
-        if (step.type === 'subworkflow') {
-          openSubworkflowDrilldown(step, { stateName: state.name, stepIndex: index });
-          return;
-        }
-        setEditingStep({ index, isNew: false });
-        return;
-      }
-    }
-  }, [openSubworkflowDrilldown, states]);
 
   const handleGroupSteps = (start: number, end: number, groupId?: string) => {
     if (!selectedState) return;
@@ -1354,12 +1328,12 @@ export default function StateMachineDesignPanel({
     if (!subworkflowDrilldown?.configFile || !subworkflowDrilldown.config) return;
     setSubworkflowDrilldown((prev) => prev ? { ...prev, saving: true, error: undefined } : prev);
     try {
-      await configApi.saveConfig(subworkflowDrilldown.configFile, subworkflowDrilldown.config);
+      await saveSubworkflowConfigMutation.mutateAsync(subworkflowDrilldown.config);
       setSubworkflowDrilldown((prev) => prev ? { ...prev, saving: false } : prev);
     } catch (error: any) {
       setSubworkflowDrilldown((prev) => prev ? { ...prev, saving: false, error: error?.message || '保存子工作流失败' } : prev);
     }
-  }, [subworkflowDrilldown?.config, subworkflowDrilldown?.configFile]);
+  }, [saveSubworkflowConfigMutation, subworkflowDrilldown?.config, subworkflowDrilldown?.configFile]);
 
   if (subworkflowDrilldown) {
     const workflow = subworkflowDrilldown.config?.workflow || {};
@@ -1476,15 +1450,14 @@ export default function StateMachineDesignPanel({
         </div>
       </div>
 
-      {/* 中间 + 右侧：可拖拽分栏 */}
+      {/* 主编辑区 */}
       <ResizablePanelGroup
-        id="design-editor-diagram"
+        id="design-editor"
         orientation="horizontal"
         className="flex-1 min-w-0"
-        defaultLayout={defaultLayout}
         onLayoutChanged={onLayoutChanged}
       >
-      <ResizablePanel id="design-editor" defaultSize={50} minSize={25}>
+      <ResizablePanel id="design-editor-main" defaultSize={100} minSize={50}>
       <div className="h-full flex flex-col">
 
       {selectedState ? (
@@ -1791,65 +1764,6 @@ export default function StateMachineDesignPanel({
       </div>
       </ResizablePanel>
 
-      <ResizableHandle
-        withHandle
-        collapsed={diagramCollapsed}
-        onClickHandle={() => {
-          const panel = diagramPanelRef.current;
-          if (!panel) return;
-          panel.isCollapsed() ? panel.expand() : panel.collapse();
-        }}
-        handleIcon={diagramCollapsed
-          ? <ChevronLeft className="h-2.5 w-2.5" />
-          : <ChevronRight className="h-2.5 w-2.5" />
-        }
-      />
-
-      <ResizablePanel
-        id="design-diagram"
-        panelRef={diagramPanelRef}
-        defaultSize={50}
-        minSize={20}
-        collapsible
-        collapsedSize={0}
-        onResize={() => setDiagramCollapsed(diagramPanelRef.current?.isCollapsed() ?? false)}
-      >
-        <div className="h-full flex flex-col bg-muted/10">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-            <span className="flex items-center gap-2 text-xs font-medium">
-              <span className="material-symbols-outlined text-primary" style={{ fontSize: 17 }}>account_tree</span>
-              整体流程图
-            </span>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className="text-[10px]">{states.length} 状态</Badge>
-              <Badge variant="outline" className="text-[10px]">{flowSummary.stepCount} 步骤</Badge>
-              <Badge variant="outline" className="text-[10px]">{flowSummary.transitionCount} 转移</Badge>
-              {flowSummary.parallelGroupCount > 0 ? (
-                <Badge variant="outline" className="text-[10px]">{flowSummary.parallelGroupCount} 并发组</Badge>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex-1 min-h-0 p-2">
-            {states.length > 0 ? (
-              <StateMachineDiagram
-                states={states}
-                agents={availableAgents}
-                focusedState={selectedStateName}
-                onStateClick={(stateName) => {
-                  if (states.some((state) => state.name === stateName)) {
-                    setSelectedStateName(stateName);
-                  }
-                }}
-                onStepClick={handleDiagramStepClick}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-                暂无状态，先从左侧添加状态。
-              </div>
-            )}
-          </div>
-        </div>
-      </ResizablePanel>
       </ResizablePanelGroup>
 
       {/* 步骤编辑弹窗（复用 EditNodeModal） */}

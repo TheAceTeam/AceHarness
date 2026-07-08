@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Markdown from '@/components/Markdown';
+import { useWorkspaceFileBlobQuery, useWorkspaceFileQuery } from '@/client/query/workspace';
 import { workspaceApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import {
@@ -69,9 +70,7 @@ function describeKind(ext: string): 'image' | 'markdown' | 'text' | 'binary' {
 
 export function FilePreviewDialog({ absolutePath, open, onOpenChange }: FilePreviewDialogProps) {
   const { toast } = useToast();
-  const [content, setContent] = useState('');
   const [imageUrl, setImageUrl] = useState('');
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const file = useMemo(() => fileNameOf(absolutePath), [absolutePath]);
@@ -79,53 +78,33 @@ export function FilePreviewDialog({ absolutePath, open, onOpenChange }: FilePrev
   const ext = useMemo(() => extOf(absolutePath), [absolutePath]);
   const kind = useMemo(() => describeKind(ext), [ext]);
   const language = useMemo(() => inferCodeLanguage(absolutePath), [absolutePath]);
+  const shouldLoadBlob = open && (kind === 'image' || kind === 'binary');
+  const shouldLoadText = open && !shouldLoadBlob;
+  const fileQuery = useWorkspaceFileQuery(workspace, file, { enabled: shouldLoadText });
+  const blobQuery = useWorkspaceFileBlobQuery(workspace, file, { enabled: shouldLoadBlob });
+  const content = fileQuery.data?.content || '';
+  const loading = shouldLoadBlob ? blobQuery.isLoading : fileQuery.isLoading;
+  const queryError = (shouldLoadBlob ? blobQuery.error : fileQuery.error);
+  const displayError = error || (queryError instanceof Error ? queryError.message : '');
 
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
-    setLoading(true);
     setError('');
-    setContent('');
     setImageUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return '';
     });
-
-    const task = kind === 'image' || kind === 'binary'
-      ? workspaceApi.getFileBlob(workspace, file)
-          .then((blob) => {
-            if (cancelled) return;
-            if (kind === 'image') {
-              setImageUrl(URL.createObjectURL(blob));
-            } else {
-              setError('');
-            }
-          })
-          .catch((err: any) => {
-            if (cancelled) return;
-            setError(err?.message || '读取文件失败');
-          })
-          .finally(() => {
-            if (!cancelled) setLoading(false);
-          })
-      : workspaceApi.getFile(workspace, file)
-          .then((data) => {
-            if (cancelled) return;
-            setContent(data.content || '');
-          })
-          .catch((err: any) => {
-            if (cancelled) return;
-            setError(err?.message || '读取文件失败');
-          })
-          .finally(() => {
-            if (!cancelled) setLoading(false);
-          });
-
-    return () => {
-      cancelled = true;
-      void task;
-    };
   }, [open, file, workspace, kind]);
+
+  useEffect(() => {
+    if (!open || kind !== 'image' || !blobQuery.data) return;
+    const url = URL.createObjectURL(blobQuery.data);
+    setImageUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
+    return () => URL.revokeObjectURL(url);
+  }, [blobQuery.data, kind, open]);
 
   useEffect(() => {
     return () => {
@@ -135,13 +114,7 @@ export function FilePreviewDialog({ absolutePath, open, onOpenChange }: FilePrev
 
   const handleDownload = async () => {
     try {
-      const blob = await workspaceApi.getFileBlob(workspace, file);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file;
-      a.click();
-      URL.revokeObjectURL(url);
+      await workspaceApi.download(workspace, file);
     } catch (err: any) {
       toast('error', err?.message || '下载失败');
     }
@@ -190,9 +163,9 @@ export function FilePreviewDialog({ absolutePath, open, onOpenChange }: FilePrev
               <Loader2 className="mr-2 size-4 animate-spin" />
               加载中...
             </div>
-          ) : error ? (
+          ) : displayError ? (
             <div className="flex h-full min-h-[200px] items-center justify-center text-sm text-destructive">
-              {error}
+              {displayError}
             </div>
           ) : kind === 'image' && imageUrl ? (
             <div className="flex h-full min-h-[200px] items-center justify-center">

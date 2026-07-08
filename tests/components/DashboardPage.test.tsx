@@ -11,7 +11,7 @@ vi.mock('next/navigation', () => ({
 
 // Mock the entire DashboardPage to avoid complex dependency chain
 // (recharts, framer-motion, lucide-react, many UI components)
-vi.mock('@/app/dashboard/page', () => {
+vi.mock('@/components/dashboard/DashboardPageShell', () => {
   return {
     default: function MockDashboardPage() {
       const [loading, setLoading] = React.useState(true);
@@ -67,7 +67,7 @@ vi.mock('@/app/dashboard/page', () => {
   };
 });
 
-import DashboardPage from '@/app/dashboard/page';
+import DashboardPage from '@/components/dashboard/DashboardPageShell';
 
 function mockFetchResponse(data: any, ok = true, status = 200) {
   return vi.spyOn(globalThis, 'fetch').mockResolvedValue({

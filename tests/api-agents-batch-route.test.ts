@@ -6,7 +6,7 @@ import { withIsolatedAceHome } from './helpers/module-helpers';
 import { makeRequest, responseJson } from './helpers/route-helpers';
 
 async function loadBatchRoute() {
-  return import('@/app/api/agents/batch/route');
+  return import('@/server/api-routes/agents/batch/route');
 }
 
 describe('agents batch route', () => {

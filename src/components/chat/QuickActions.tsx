@@ -266,12 +266,12 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
   const actionsGrouped = mergeGroupedActions(getActionsGrouped(), buildCodespecQuickActions(slashCommands));
 
   const handleActionClick = (action: HomePluginQuickAction) => {
-    if (action.prompt.startsWith('__HOME_ACTION__:')) {
-      onAction(action.prompt);
-      return;
-    }
     if (ACTION_GUIDES[action.label]) {
       setGuideAction(action);
+      return;
+    }
+    if (action.prompt.startsWith('__HOME_ACTION__:')) {
+      onAction(action.prompt);
       return;
     }
     onAction(action.prompt);
@@ -300,6 +300,7 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
             <div className="grid grid-cols-3 gap-2">
               {actions.map(a => (
                 <motion.button
+                  type="button"
                   key={a.id}
                   variants={itemVariants}
                   whileHover={{ scale: 1.04, y: -2 }}
@@ -419,6 +420,7 @@ export function QuickActionsBar({ onAction, skillSettings, slashCommands }: Quic
                   <div className="flex flex-wrap gap-1.5">
                     {actions.map(a => (
                       <motion.button
+                        type="button"
                         key={a.id}
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
@@ -458,6 +460,7 @@ export function QuickActionsBar({ onAction, skillSettings, slashCommands }: Quic
       </Suggestions>
       <div className="mb-0.5 flex items-center justify-between gap-3">
         <button
+          type="button"
           onClick={() => setExpanded(e => !e)}
           className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >

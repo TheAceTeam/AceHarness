@@ -2,7 +2,7 @@
 
 import { ActionState, RISK_MAP } from '@/lib/chat/actions';
 import { Button } from '@/components/ui/button';
-import { useRouter } from 'next/navigation';
+import { useRouter } from '@/lib/navigation/client';
 import ResultRenderer from './ResultRenderer';
 import {
   Tool,

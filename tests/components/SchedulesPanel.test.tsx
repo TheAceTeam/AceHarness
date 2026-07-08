@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 const apiMocks = vi.hoisted(() => ({
@@ -92,21 +93,54 @@ describe('SchedulesPanel', () => {
     apiMocks.listSchedules.mockReset();
     apiMocks.listAllConfigs.mockReset();
     toastMock.mockReset();
+    vi.unstubAllGlobals();
   });
 
   test('keeps workflow options available when schedule loading fails', async () => {
-    apiMocks.listSchedules.mockRejectedValue(new Error('scheduler route failed'));
-    apiMocks.listAllConfigs.mockResolvedValue({
-      configs: [{ filename: 'recovered.yaml', name: 'Recovered Workflow' }],
-    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/schedules')) {
+        return new Response(JSON.stringify({ error: 'scheduler route failed' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/configs')) {
+        return new Response(JSON.stringify({
+          configs: [{ filename: 'recovered.yaml', name: 'Recovered Workflow' }],
+          pagination: { total: 1, totalPages: 1, page: 1, pageSize: 500, unfilteredTotal: 1 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }));
 
     const { default: SchedulesPanel } = await import('@/components/SchedulesPanel');
-    render(<SchedulesPanel />);
+    renderWithQuery(<SchedulesPanel />);
 
-    await waitFor(() => expect(apiMocks.listAllConfigs).toHaveBeenCalled());
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/configs'), expect.any(Object)));
     fireEvent.click(screen.getByText('schedules.new'));
 
     expect(screen.getByText('Recovered Workflow (recovered.yaml)')).toBeInTheDocument();
     expect(toastMock).toHaveBeenCalledWith('error', 'scheduler route failed');
   });
 });
+
+function renderWithQuery(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>,
+  );
+}

@@ -33,7 +33,7 @@ describe('models API route', () => {
           );
 
           vi.resetModules();
-          const { POST } = await import('@/app/api/models/route');
+          const { POST } = await import('@/server/api-routes/models/route');
           const saveResponse = await POST(makeRequest('/api/models', {
             json: {
               models: [
@@ -57,7 +57,7 @@ describe('models API route', () => {
           expect(savedConfig.models?.map((model) => model.value)).toEqual(['bundled-a']);
 
           vi.resetModules();
-          const { GET } = await import('@/app/api/models/route');
+          const { GET } = await import('@/server/api-routes/models/route');
           const reloadResponse = await GET();
           expect(reloadResponse.status).toBe(200);
 
@@ -97,7 +97,7 @@ describe('models API route', () => {
           );
 
           vi.resetModules();
-          const { POST } = await import('@/app/api/models/route');
+          const { POST } = await import('@/server/api-routes/models/route');
           const saveResponse = await POST(makeRequest('/api/models', {
             json: {
               models: [
@@ -122,7 +122,7 @@ describe('models API route', () => {
           expect(savedConfig.models?.[0]?.engines).toEqual(['opencode']);
 
           vi.resetModules();
-          const { GET } = await import('@/app/api/models/route');
+          const { GET } = await import('@/server/api-routes/models/route');
           const reloadResponse = await GET();
           const reloadBody = await responseJson<{ models: Array<{ value: string; engines?: string[] }> }>(reloadResponse);
           expect(reloadBody.models.find((model) => model.value === 'shared-model')?.engines).toEqual(['opencode']);

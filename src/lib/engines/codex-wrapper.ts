@@ -8,6 +8,7 @@
 import { EventEmitter } from 'events';
 import { createRequire } from 'module';
 import { createHash } from 'crypto';
+import { fileURLToPath } from 'url';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
@@ -25,7 +26,7 @@ import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/li
 import { isWindows } from '@/lib/core/runtime-platform';
 import { toCodexMcpServers } from '@/lib/mcp/registry';
 
-const requireFromHere = createRequire(__filename);
+const requireFromHere = createRequire(fileURLToPath(import.meta.url));
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {

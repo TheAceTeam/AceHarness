@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useEffect, useMemo, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Loader2, RefreshCw } from 'lucide-react';
 import type { ModelOption } from '@/lib/core/models';
 import { AiModelSelectorField, type AiModelSelectorGroup } from '@/components/AiModelSelectorField';
@@ -10,6 +11,8 @@ import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
 import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
 import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
+import { useEngineAvailabilityQuery, useEngineConfigQuery, useModelsQuery } from '@/client/query/engines';
+import { queryKeys } from '@/client/query/query-keys';
 
 interface Props {
   engine: string;
@@ -19,63 +22,18 @@ interface Props {
   className?: string;
 }
 
-let sharedAvailabilityCache: { value: Record<string, boolean>; expiresAt: number } | null = null;
-let sharedAvailabilityPromise: Promise<Record<string, boolean>> | null = null;
-
-async function loadSharedEngineAvailability(forceRefresh = false): Promise<Record<string, boolean>> {
-  if (!forceRefresh && sharedAvailabilityCache && sharedAvailabilityCache.expiresAt > Date.now()) {
-    return sharedAvailabilityCache.value;
-  }
-  if (!forceRefresh && sharedAvailabilityPromise) {
-    return sharedAvailabilityPromise;
-  }
-
-  const promise = Promise.all(getConcreteEngines().map(async (eng) => {
-    try {
-      const response = await fetch(`/api/engine/availability?engine=${encodeURIComponent(eng.id)}`);
-      const data = await response.json();
-      return {
-        engineId: eng.id,
-        available: Boolean(data.available),
-        cacheTtlMs: Number.isFinite(Number(data.cacheTtlMs)) ? Number(data.cacheTtlMs) : undefined,
-      };
-    } catch {
-      return {
-        engineId: eng.id,
-        available: false,
-        cacheTtlMs: undefined,
-      };
-    }
-  }))
-    .then((entries) => {
-      const value = Object.fromEntries(entries.map((entry) => [entry.engineId, entry.available]));
-      const ttlMs = entries.reduce((min, entry) => (
-        typeof entry.cacheTtlMs === 'number' && entry.cacheTtlMs > 0
-          ? Math.min(min, entry.cacheTtlMs)
-          : min
-      ), Number.POSITIVE_INFINITY);
-      sharedAvailabilityCache = {
-        value,
-        expiresAt: Date.now() + (Number.isFinite(ttlMs) ? ttlMs : 30 * 60 * 1000),
-      };
-      return value;
-    })
-    .finally(() => {
-      sharedAvailabilityPromise = null;
-    });
-
-  sharedAvailabilityPromise = promise;
-  return promise;
-}
-
 export function EngineModelSelect({ engine, model, onEngineChange, onModelChange, className = '' }: Props) {
-  const [models, setModels] = useState<ModelOption[]>([]);
-  const [globalEngine, setGlobalEngine] = useState('');
-  const [globalDriver, setGlobalDriver] = useState('');
-  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
-  const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean>>({});
-  const [hasLoadedModels, setHasLoadedModels] = useState(false);
-  const [hasLoadedConfig, setHasLoadedConfig] = useState(false);
+  const queryClient = useQueryClient();
+  const modelsQuery = useModelsQuery();
+  const engineConfigQuery = useEngineConfigQuery();
+  const engineAvailabilityQuery = useEngineAvailabilityQuery();
+  const models = modelsQuery.data?.models || [];
+  const globalEngine = typeof engineConfigQuery.data?.engine === 'string' ? engineConfigQuery.data.engine : '';
+  const globalDriver = typeof engineConfigQuery.data?.driver === 'string' ? engineConfigQuery.data.driver : '';
+  const globalDefaultModel = typeof engineConfigQuery.data?.defaultModel === 'string' ? engineConfigQuery.data.defaultModel : '';
+  const engineAvailability = engineAvailabilityQuery.data || {};
+  const hasLoadedModels = !modelsQuery.isLoading;
+  const hasLoadedConfig = !engineConfigQuery.isLoading;
   const { toast } = useToast();
 
   const isModelCompatible = useMemo(() => {
@@ -85,74 +43,26 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      void fetch('/api/models')
-        .then((r) => r.json())
-        .then((d) => {
-          if (!cancelled) {
-            setModels(Array.isArray(d.models) ? d.models : []);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setModels([]);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setHasLoadedModels(true);
-          }
-        });
-
-      void fetch('/api/engine')
-        .then((r) => r.json())
-        .then((d) => {
-          if (!cancelled) {
-            setGlobalEngine(typeof d.engine === 'string' ? d.engine : '');
-            setGlobalDriver(typeof d.driver === 'string' ? d.driver : '');
-            setGlobalDefaultModel(typeof d.defaultModel === 'string' ? d.defaultModel : '');
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setGlobalEngine('');
-            setGlobalDriver('');
-            setGlobalDefaultModel('');
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setHasLoadedConfig(true);
-          }
-        });
-
-      const availability = await loadSharedEngineAvailability();
-      if (!cancelled) setEngineAvailability(availability);
+    const refresh = () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.models() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.engines() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.engineAvailability() });
     };
-    refresh();
     const onEngineUpdated = () => {
-      void loadSharedEngineAvailability(true).then((availability) => {
-        if (!cancelled) setEngineAvailability(availability);
-      });
-      void refresh();
+      refresh();
     };
     const onStorage = (e: StorageEvent) => {
       if (e.key === 'engine-config-updated-at') {
-        void loadSharedEngineAvailability(true).then((availability) => {
-          if (!cancelled) setEngineAvailability(availability);
-        });
-        void refresh();
+        refresh();
       }
     };
     window.addEventListener('engine:updated', onEngineUpdated as EventListener);
     window.addEventListener('storage', onStorage);
     return () => {
-      cancelled = true;
       window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
       window.removeEventListener('storage', onStorage);
     };
-  }, []);
+  }, [queryClient]);
 
   const isInitialLoading = !hasLoadedModels || !hasLoadedConfig;
   const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;

@@ -12,6 +12,7 @@ import StateMachineDiagram from './StateMachineDiagram';
 import AgentFormationDiagram from './AgentFormationDiagram';
 import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/core/schemas';
 import type { AgentAvatarConfig, AgentRoleType, AgentTeam } from '@/lib/agent/personas';
+import { VirtualList } from '@/client/virtual/VirtualList';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}秒`;
@@ -184,6 +185,17 @@ interface StateMachineExecutionViewProps {
       summary: string;
     } | null;
   } | null;
+  runtimeEvents?: Array<{
+    id: string;
+    seq?: number;
+    type: string;
+    timestamp?: string;
+    state?: string;
+    step?: string;
+    agent?: string;
+    message?: string;
+    payload?: Record<string, unknown>;
+  }>;
   overviewFooter?: ReactNode;
   supervisorInteractionPanel?: ReactNode;
   supervisorDirectPanel?: ReactNode;
@@ -241,6 +253,7 @@ export default function StateMachineExecutionView({
   supervisorFlow = [],
   agentFlow = [],
   tokenAnalytics,
+  runtimeEvents = [],
   overviewFooter,
   supervisorInteractionPanel,
   supervisorDirectPanel,
@@ -277,7 +290,7 @@ export default function StateMachineExecutionView({
     setActiveTabState(normalized);
     onActiveTabChange?.(normalized);
   }, [onActiveTabChange]);
-  const [flowKindFilter, setFlowKindFilter] = useState<'all' | 'supervisor' | 'agent' | 'state' | 'concurrency'>('all');
+  const [flowKindFilter, setFlowKindFilter] = useState<'all' | 'supervisor' | 'agent' | 'state' | 'concurrency' | 'event'>('all');
   const [supervisorTimelineOpen, setSupervisorTimelineOpen] = useState(false);
   const [supervisorPanelTab, setSupervisorPanelTab] = useState<'formation' | 'human' | 'timeline' | 'summary'>('human');
   const [formationFullscreenOpen, setFormationFullscreenOpen] = useState(false);
@@ -410,7 +423,7 @@ export default function StateMachineExecutionView({
     type FlowItem = {
       id: string;
       timestamp: string;
-      kind: 'supervisor' | 'agent' | 'state' | 'concurrency';
+      kind: 'supervisor' | 'agent' | 'state' | 'concurrency' | 'event';
       actor: string;
       target: string;
       title: string;
@@ -526,6 +539,22 @@ export default function StateMachineExecutionView({
       });
     });
 
+    runtimeEvents.slice(-80).forEach((event, index) => {
+      const actor = event.agent || event.state || event.step || 'runtime';
+      const target = event.step || event.state || event.type;
+      items.push({
+        id: `runtime-event-${event.id || index}`,
+        timestamp: event.timestamp || new Date().toISOString(),
+        kind: 'event',
+        actor,
+        target,
+        title: event.type,
+        body: event.message || undefined,
+        tags: [event.state || '', event.step || '', event.agent || ''].filter(Boolean),
+        eventTags: [event.type],
+      });
+    });
+
     // Sort by time and compute durations
     const sorted = items
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
@@ -548,7 +577,7 @@ export default function StateMachineExecutionView({
     }
 
     return sorted;
-  }, [activeConcurrencyGroups, agentFlow, stateHistory, supervisorFlow, status, endTime, nowTs]);
+  }, [activeConcurrencyGroups, agentFlow, runtimeEvents, stateHistory, supervisorFlow, status, endTime, nowTs]);
 
   const flowRoutes = useMemo(() => {
     const seen = new Set<string>();
@@ -639,44 +668,47 @@ export default function StateMachineExecutionView({
   }, [tokenAnalytics]);
 
   const supervisorWaitingForHuman = currentState === '__human_approval__' || status === 'waiting';
+  const isTabControlledExternally = Boolean(activeTabOverride);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="sticky top-0 z-10 -mx-4 mb-4 border-b border-border/60 bg-background/95 px-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="overview" className="flex items-center gap-2">
-              <Activity className="w-4 h-4" />
-              <span>总览</span>
-            </TabsTrigger>
-            <TabsTrigger value="trace" className="flex items-center gap-2">
-              <GitBranch className="w-4 h-4" />
-              <span>状态图</span>
-            </TabsTrigger>
-            <TabsTrigger value="history" className="flex items-center gap-2">
-              <GitBranch className="w-4 h-4" />
-              <span>流转历史</span>
-            </TabsTrigger>
-            <TabsTrigger
-              value="supervisor"
-              className={`flex items-center gap-2 ${
-                hasPendingHumanQuestion
-                  ? 'border border-amber-300 bg-amber-100 text-amber-900 shadow-sm data-[state=active]:bg-amber-500 data-[state=active]:text-black animate-pulse'
-                  : ''
-              }`}
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>{hasPendingHumanQuestion ? 'Supervisor 待处理' : 'Supervisor'}</span>
-              {hasPendingHumanQuestion && (
-                <span className="h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-amber-200" />
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="token" className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-base">toll</span>
-              <span>Token</span>
-            </TabsTrigger>
-          </TabsList>
-        </div>
+        {!isTabControlledExternally ? (
+          <div className="sticky top-0 z-10 -mx-4 mb-4 border-b border-border/60 bg-background/95 px-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <TabsList className="grid w-full grid-cols-5">
+              <TabsTrigger value="overview" className="flex items-center gap-2">
+                <Activity className="w-4 h-4" />
+                <span>总览</span>
+              </TabsTrigger>
+              <TabsTrigger value="trace" className="flex items-center gap-2">
+                <GitBranch className="w-4 h-4" />
+                <span>状态图</span>
+              </TabsTrigger>
+              <TabsTrigger value="history" className="flex items-center gap-2">
+                <GitBranch className="w-4 h-4" />
+                <span>流转历史</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="supervisor"
+                className={`flex items-center gap-2 ${
+                  hasPendingHumanQuestion
+                    ? 'border border-amber-300 bg-amber-100 text-amber-900 shadow-sm data-[state=active]:bg-amber-500 data-[state=active]:text-black animate-pulse'
+                    : ''
+                }`}
+              >
+                <MessageSquare className="w-4 h-4" />
+                <span>{hasPendingHumanQuestion ? 'Supervisor 待处理' : 'Supervisor'}</span>
+                {hasPendingHumanQuestion && (
+                  <span className="h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-amber-200" />
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="token" className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-base">toll</span>
+                <span>Token</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
+        ) : null}
 
         {/* 总览视图 */}
         <TabsContent value="overview" className="min-h-0 flex-1 overflow-auto">
@@ -870,8 +902,8 @@ export default function StateMachineExecutionView({
             </div>
 
             <div className="mb-4 flex flex-wrap gap-1.5">
-              {(['all', 'supervisor', 'agent', 'state', 'concurrency'] as const).map((kind) => {
-                const labels: Record<string, string> = { all: '全部', supervisor: 'Supervisor', agent: 'Agent', state: '状态机', concurrency: '并发' };
+              {(['all', 'supervisor', 'agent', 'state', 'concurrency', 'event'] as const).map((kind) => {
+                const labels: Record<string, string> = { all: '全部', supervisor: 'Supervisor', agent: 'Agent', state: '状态机', concurrency: '并发', event: '事件' };
                 return (
                   <button
                     key={kind}
@@ -899,10 +931,12 @@ export default function StateMachineExecutionView({
                         <span className={`h-2 w-2 shrink-0 rounded-full ${
                           route.kind === 'supervisor'
                             ? 'bg-purple-500'
-                            : route.kind === 'agent'
-                              ? 'bg-emerald-500'
-                              : route.kind === 'concurrency'
-                                ? 'bg-cyan-500'
+                          : route.kind === 'agent'
+                            ? 'bg-emerald-500'
+                            : route.kind === 'concurrency'
+                              ? 'bg-cyan-500'
+                              : route.kind === 'event'
+                                ? 'bg-amber-500'
                                 : 'bg-slate-400'
                         }`} />
                         <span className="min-w-0 flex-1 truncate font-medium">{route.actor}</span>
@@ -918,11 +952,19 @@ export default function StateMachineExecutionView({
                 )}
               </div>
 
-              <div className="space-y-2">
-                {filteredFlowHistory.length ? filteredFlowHistory.slice(-15).reverse().map((item) => (
+              <div className="min-h-0">
+                {filteredFlowHistory.length ? (
+                  <VirtualList
+                    items={[...filteredFlowHistory].reverse()}
+                    estimateSize={128}
+                    height={Math.min(620, Math.max(240, filteredFlowHistory.length * 128))}
+                    className="min-h-0"
+                    testId="state-machine-flow-history-virtual-list"
+                    maxRenderedItems={40}
+                    getKey={(item) => item.id}
+                    renderItem={(item) => (
                   <div
-                    key={item.id}
-                    className={`rounded-2xl border p-3 ${
+                    className={`mb-2 rounded-2xl border p-3 ${
                       item.isRollback
                         ? 'border-red-200 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20'
                         : item.hasIssues
@@ -939,7 +981,7 @@ export default function StateMachineExecutionView({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <Badge variant="outline" className="text-[10px]">
-                          {item.kind === 'supervisor' ? 'Supervisor' : item.kind === 'agent' ? 'Agent' : item.kind === 'concurrency' ? '并发' : '状态机'}
+                          {item.kind === 'supervisor' ? 'Supervisor' : item.kind === 'agent' ? 'Agent' : item.kind === 'concurrency' ? '并发' : item.kind === 'event' ? '事件' : '状态机'}
                         </Badge>
                         <span className="truncate text-sm font-medium">{item.title}</span>
                         <span className="text-xs text-muted-foreground">{item.actor} {'->'} {item.target}</span>
@@ -966,7 +1008,9 @@ export default function StateMachineExecutionView({
                       </div>
                     )}
                   </div>
-                )) : (
+                    )}
+                  />
+                ) : (
                   <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
                     暂无参与者流程数据
                   </div>

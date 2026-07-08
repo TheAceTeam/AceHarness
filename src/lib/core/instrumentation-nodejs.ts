@@ -56,8 +56,8 @@ export async function runNodejsInstrumentation() {
   }
 
   try {
-    const { scheduler } = await import('@/lib/core/scheduler');
-    await scheduler.init();
+    const { ensureSchedulerInitialized } = await import('@/server/api-route-runtime/scheduler-runtime');
+    await ensureSchedulerInitialized();
   } catch (error) {
     console.error('[ACEHarness] Scheduler restore failed:', error);
   }

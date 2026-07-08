@@ -7,9 +7,13 @@ import { agoraApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/co
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
+import { PageHeader } from '@/components/ui/page-header';
+import { StatusPill } from '@/components/ui/status-pill';
 import type { CheckedState } from '@radix-ui/react-checkbox';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { Textarea } from '@/components/ui/textarea';
@@ -1272,18 +1276,23 @@ function ChatSidebarComponent({
 
   const createButtonLabel = '新建';
   const createButtonTitle = '新建会话';
-  const handleCreateSession = () => createSession();
+  const handleCreateSession = () => {
+    const sessionId = createSession({ title: '新对话' });
+    setActiveSessionId(sessionId);
+    updateSessionView('conversation');
+    toast('success', '已新建对话');
+  };
 
   return (
-    <div className="w-full flex h-full flex-col bg-muted/30">
-      <div className={compact ? 'border-b bg-muted/20 p-2' : 'border-b bg-gradient-to-r from-primary/10 to-blue-500/10 p-3'}>
-        {!compact ? (
-          <div className="mb-3 flex items-center gap-2">
-            <RobotLogo size={28} />
-            <span className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-sm font-bold text-transparent">ACEHarness</span>
-          </div>
-        ) : null}
-        <div className="grid grid-cols-2 gap-2">
+    <div className="w-full flex h-full flex-col bg-[#EDEDE9] dark:bg-[#121218]">
+      <PageHeader
+        className={compact ? 'bg-[#EDEDE9] p-2 dark:bg-[#121218]' : 'bg-[#EDEDE9] p-3 dark:bg-[#121218]'}
+        title="会话中心"
+        subtitle={compact ? undefined : '对话、群聊与工作流入口'}
+        leading={!compact ? <RobotLogo size={28} /> : undefined}
+        status={<StatusPill tone="neutral">{groupedSessions.conversation.length}</StatusPill>}
+      >
+        <div className="mt-3 grid grid-cols-2 gap-2">
           <Button
             type="button"
             size="sm"
@@ -1318,26 +1327,26 @@ function ChatSidebarComponent({
             {manageMode ? '完成管理' : '批量管理'}
           </Button>
         </div>
-      </div>
+      </PageHeader>
 
       <div className="home-chat-scroll flex-1 overflow-y-auto">
         <div className="border-b border-border/40 px-3 py-2">
-          <div className="flex items-center justify-between rounded-md bg-muted px-3 py-2">
+          <div className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="material-symbols-outlined text-[18px] text-primary">forum</span>
+              <span className="material-symbols-outlined text-[18px] text-[#8B5CF6]">forum</span>
               <div className="min-w-0">
                 <div className="truncate text-xs font-medium text-foreground">对话</div>
                 <div className="truncate text-[10px] text-muted-foreground">群聊和工作流都会显示在这里</div>
               </div>
             </div>
-            <Badge variant="outline" className="shrink-0 text-[10px]">
+            <StatusPill tone="neutral" className="shrink-0 text-[10px]">
               {groupedSessions.conversation.length}
-            </Badge>
+            </StatusPill>
           </div>
         </div>
 
-        <div className="border-b border-border/40 px-3 py-2">
-          <div className="relative">
+        <div className="border-b border-border/40 bg-[#EDEDE9] px-3 py-2 dark:bg-[#121218]">
+          <div className="relative w-full">
             <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
               search
             </span>
@@ -1354,9 +1363,9 @@ function ChatSidebarComponent({
                 onClick={() => setSessionSearchByView((prev) => ({ ...prev, [currentSessionView]: '' }))}
                 aria-label="清空筛选"
               >
-                <span className="material-symbols-outlined text-sm">close</span>
-              </button>
-            ) : null}
+              <span className="material-symbols-outlined text-sm">close</span>
+            </button>
+          ) : null}
           </div>
         </div>
 
@@ -1393,11 +1402,10 @@ function ChatSidebarComponent({
             kind={currentSessionView}
             filtered={isFilteredEmpty}
             query={sessionSearch.trim()}
-            onCreate={!isFilteredEmpty ? () => createSession() : undefined}
           />
         )}
         {visibleSessions.length > 0 ? (
-          <div className="home-chat-sidebar-card mx-2 my-2 overflow-hidden rounded-2xl border border-border/45 bg-background/35">
+          <div className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
             {visibleSessions.map(session => (
               <SessionItem
                 key={session.id}
@@ -1454,21 +1462,14 @@ function ChatSidebarComponent({
           onClose={() => setSkillModalOpen(false)}
         />
       )}
-      <Dialog
+      <ConfirmModal
         open={Boolean(workspaceDeleteConfirm)}
-        onOpenChange={(open) => {
-          if (workspaceDeleting) return;
-          if (!open) setWorkspaceDeleteConfirm(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>确认删除对话</DialogTitle>
-            <DialogDescription>
-              删除「{workspaceDeleteConfirm?.session.title}」后无法恢复。
-            </DialogDescription>
-          </DialogHeader>
+        variant="delete"
+        title="确认删除对话"
+        objectName={workspaceDeleteConfirm?.session.title}
+        consequence={(
           <div className="space-y-3">
+            <p>删除后无法恢复。该会话还绑定了系统自动创建的工作目录，可一并清理。</p>
             <label className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
               <Checkbox
                 checked={deleteWorkspaceWithSession}
@@ -1487,26 +1488,17 @@ function ChatSidebarComponent({
               只会对 ACEHarness 默认创建并绑定到该会话的 agora workspace 生效；用户手动选择的目录不会出现这个选项。
             </p>
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setWorkspaceDeleteConfirm(null)}
-              disabled={workspaceDeleting}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => { void confirmDeleteSessionWithOptionalWorkspace(); }}
-              disabled={workspaceDeleting}
-            >
-              {workspaceDeleting ? '删除中...' : '删除'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        )}
+        confirmLabel="删除"
+        cancelLabel="取消"
+        loading={workspaceDeleting}
+        onCancel={() => setWorkspaceDeleteConfirm(null)}
+        onOpenChange={(open) => {
+          if (workspaceDeleting) return;
+          if (!open) setWorkspaceDeleteConfirm(null);
+        }}
+        onConfirm={confirmDeleteSessionWithOptionalWorkspace}
+      />
       {dialogProps ? <ConfirmDialog {...dialogProps} /> : null}
     </div>
   );
@@ -2394,16 +2386,16 @@ function AgoraDirectory({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.985 }}
             transition={{ duration: 0.24, ease: 'easeOut' }}
-            className="mb-4 overflow-hidden rounded-2xl border border-violet-200/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,244,255,0.96))] shadow-[0_16px_42px_rgba(88,28,135,0.08)] dark:border-violet-400/20 dark:bg-[linear-gradient(180deg,rgba(28,24,40,0.98),rgba(17,18,28,0.96))] dark:shadow-[0_18px_48px_rgba(2,6,23,0.36)]"
+            className="mb-4 overflow-hidden rounded-lg border border-border bg-card shadow-none"
           >
-            <div className="border-b border-violet-100/80 px-3 py-2.5 dark:border-violet-400/15">
+            <div className="border-b border-border px-3 py-2.5">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <Badge variant="outline" className="border-violet-200/80 bg-white/80 text-[10px] text-violet-700 dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-200">
+                  <Badge variant="outline" className="bg-background text-[10px]">
                     议场引导
                   </Badge>
-                  <div className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">先创建嘉宾，再打开第一场讨论</div>
-                  <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  <div className="mt-2 text-sm font-semibold text-foreground">先创建嘉宾，再打开第一场讨论</div>
+                  <div className="mt-1 text-xs leading-5 text-muted-foreground">
                     常驻嘉宾是可复用角色；议题用于承载一次具体讨论。
                   </div>
                 </div>
@@ -2411,7 +2403,7 @@ function AgoraDirectory({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 shrink-0 rounded-full text-slate-400 hover:bg-white/70 hover:text-slate-700 dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-200"
+                  className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => setGuideDismissed(true)}
                   title="关闭引导"
                   aria-label="关闭引导"
@@ -2438,23 +2430,23 @@ function AgoraDirectory({
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.05 + index * 0.07, duration: 0.2, ease: 'easeOut' }}
-                  className="flex items-start gap-3 rounded-xl border border-violet-100/80 bg-white/80 px-3 py-2.5 dark:border-violet-400/15 dark:bg-white/5"
+                  className="flex items-start gap-3 rounded-lg border border-border bg-background px-3 py-2.5"
                 >
-                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200">
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-primary/15 bg-accent text-accent-foreground">
                     <span className="material-symbols-outlined text-[15px]">{step.icon}</span>
                   </div>
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-slate-900 dark:text-slate-100">{index + 1}. {step.title}</div>
-                    <div className="mt-0.5 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{step.detail}</div>
+                    <div className="text-xs font-medium text-foreground">{index + 1}. {step.title}</div>
+                    <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground">{step.detail}</div>
                   </div>
                 </motion.div>
               ))}
             </div>
-            <div className="flex items-center gap-2 border-t border-violet-100/80 bg-white/60 px-3 py-3 dark:border-violet-400/15 dark:bg-white/5">
+            <div className="flex items-center gap-2 border-t border-border bg-muted/20 px-3 py-3">
               <Button
                 type="button"
                 size="sm"
-                className="h-8 rounded-full bg-slate-900 px-3 text-xs text-white hover:bg-slate-800 dark:bg-violet-500 dark:hover:bg-violet-400"
+                className="h-8 rounded-md px-3 text-xs"
                 onClick={() => {
                   setGuideDismissed(true);
                   onCreateGuest();
@@ -2466,7 +2458,7 @@ function AgoraDirectory({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-8 rounded-full px-3 text-xs"
+                className="h-8 rounded-md px-3 text-xs"
                 onClick={() => {
                   setGuideDismissed(true);
                   onCreate();
@@ -2932,12 +2924,10 @@ function EmptySessionState({
   kind,
   filtered,
   query,
-  onCreate,
 }: {
   kind: SessionDirectoryView;
   filtered: boolean;
   query: string;
-  onCreate?: () => void;
 }) {
   const title = filtered
     ? '没有匹配结果'
@@ -2951,59 +2941,12 @@ function EmptySessionState({
 
   return (
     <div className="px-3 py-6">
-      <div className="flex flex-col items-center justify-center rounded-xl border border-border/70 bg-background/80 px-4 py-6 text-center backdrop-blur-sm transition-transform hover:-translate-y-0.5">
-        <div className="mb-4 w-24 animate-[botBounce_2.5s_ease-in-out_infinite]">
-          <svg viewBox="0 0 100 110" fill="none" xmlns="http://www.w3.org/2000/svg" className="block h-auto w-full">
-            <defs>
-              <linearGradient id="emptyBodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#F8FAFC" />
-                <stop offset="100%" stopColor="#E2E8F0" />
-              </linearGradient>
-              <linearGradient id="emptyScreenGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor="#1E293B" />
-                <stop offset="100%" stopColor="#0F172A" />
-              </linearGradient>
-            </defs>
-            <line x1="50" y1="8" x2="45" y2="2" stroke="#94A3B8" strokeWidth="2.2" strokeLinecap="round" />
-            <line x1="50" y1="8" x2="55" y2="2" stroke="#94A3B8" strokeWidth="2.2" strokeLinecap="round" />
-            <circle cx="45" cy="2" r="2.2" fill="#F97316" />
-            <circle cx="55" cy="2" r="2.2" fill="#3B82F6" />
-            <rect x="25" y="12" width="50" height="38" rx="14" fill="#F8FAFC" stroke="#CBD5E1" strokeWidth="1.2" />
-            <ellipse cx="38" cy="28" rx="6.5" ry="7" fill="white" stroke="#475569" strokeWidth="1" />
-            <ellipse cx="62" cy="28" rx="6.5" ry="7" fill="white" stroke="#475569" strokeWidth="1" />
-            <circle cx="40" cy="30" r="2.5" fill="#1E293B" />
-            <circle cx="64" cy="30" r="2.5" fill="#1E293B" />
-            <circle cx="41.2" cy="28.8" r="1" fill="white" />
-            <circle cx="65.2" cy="28.8" r="1" fill="white" />
-            <path d="M44 39 Q50 35 56 39" stroke="#475569" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-            <rect x="27" y="54" width="46" height="38" rx="12" fill="url(#emptyBodyGrad)" stroke="#CBD5E1" strokeWidth="1" />
-            <rect x="32" y="62" width="36" height="20" rx="6" fill="url(#emptyScreenGrad)" stroke="#334155" strokeWidth="0.8" />
-            <rect x="34" y="64" width="32" height="16" rx="4" fill="#0F172A" opacity="0.9" />
-            <text x="50" y="77.5" fontFamily="'Courier New', monospace" fontSize="13" fontWeight="bold" fill="#60A5FA" textAnchor="middle" className="animate-pulse">
-              0
-            </text>
-            <circle cx="38" cy="59" r="2" fill="#F97316" stroke="#C2410C" strokeWidth="0.5" />
-            <circle cx="50" cy="59" r="2" fill="#34D399" stroke="#059669" strokeWidth="0.5" />
-            <circle cx="62" cy="59" r="2" fill="#60A5FA" stroke="#2563EB" strokeWidth="0.5" />
-          </svg>
-        </div>
-        <div className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-base font-semibold text-transparent">
-          {title}
-        </div>
-        <div className="mt-2 max-w-[220px] text-xs leading-relaxed text-muted-foreground">
-          {description}
-        </div>
-        <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-[10px] font-medium text-primary">
-          <span className="material-symbols-outlined text-xs">smart_toy</span>
-          {hint}
-        </div>
-        {onCreate ? (
-          <Button type="button" size="sm" className="mt-4 h-8 gap-1.5 text-xs" onClick={onCreate}>
-            <span className="material-symbols-outlined text-sm">add</span>
-            新建对话
-          </Button>
-        ) : null}
-      </div>
+      <EmptyState
+        className="min-h-[190px] rounded-lg bg-card px-4 py-6"
+        icon={<span className="material-symbols-outlined text-base">forum</span>}
+        title={title}
+        description={`${description} ${hint}`}
+      />
     </div>
   );
 }
@@ -3068,7 +3011,7 @@ function WorkflowBucket({
   }
 
   return (
-    <div className="home-chat-sidebar-card mb-3 rounded-xl border bg-background/70">
+    <div className="mb-3 rounded-lg border bg-background/70">
       <div className="flex w-full items-center gap-2 px-3 py-2 text-left">
         <button
           type="button"
@@ -3164,7 +3107,7 @@ function WorkflowGroup({
   }, [forceOpen, group.pendingCount, hasActiveSession]);
 
   return (
-    <div className={`home-chat-sidebar-card rounded-lg border ${group.pendingCount > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-muted/10'}`}>
+    <div className={`rounded-lg border ${group.pendingCount > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-muted/10'}`}>
       <div className="flex w-full items-center gap-2 px-2.5 py-2 text-left">
         <button
           type="button"
@@ -3442,13 +3385,13 @@ function SessionItem({
 
   const row = (
     <div
-      className={`home-chat-session-row group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-xl' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
+      className={`group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-lg' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
         active
-          ? 'border-l-[3px] border-primary bg-primary/10 px-3'
+          ? 'border-l-[3px] border-[#8B5CF6] bg-[#EEE7FF]/70 px-3 dark:bg-violet-500/12'
           : isWeChatBound
             ? 'border-l-[3px] border-[#1AAD19] bg-[#1AAD19]/[0.08] px-3 hover:bg-[#1AAD19]/[0.12]'
             : 'px-3 hover:bg-muted/55'
-      } ${isStreaming ? 'bg-primary/15 ring-1 ring-primary/20' : isLoadingSession ? 'bg-muted/45' : isRecentlyCompleted ? 'bg-emerald-500/10 ring-1 ring-emerald-500/20' : ''}`}
+      } ${isStreaming ? 'bg-[#EEE7FF]/80 ring-1 ring-[#8B5CF6]/20 dark:bg-violet-500/15' : isLoadingSession ? 'bg-muted/45' : isRecentlyCompleted ? 'bg-emerald-500/10 ring-1 ring-emerald-500/20' : ''}`}
       onClick={() => {
         if (selectable) {
           onSelectChange?.(!selected);

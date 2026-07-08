@@ -83,7 +83,7 @@ describe('runs detail route', () => {
         ],
       });
 
-      const { GET } = await import('@/app/api/runs/[id]/detail/route');
+      const { GET } = await import('@/server/api-routes/runs/[id]/detail/route');
       const response = await GET(
         makeRequest(`/api/runs/${state.runId}/detail`),
         { params: Promise.resolve({ id: state.runId }) },

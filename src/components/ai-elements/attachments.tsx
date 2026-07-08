@@ -60,7 +60,6 @@ export const AttachmentPreview = ({ data, className, ...props }: AttachmentPrevi
       {data.status === "uploading" ? (
         <Loader2Icon className="size-4 animate-spin" />
       ) : isImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
         <img src={data.url} alt={data.filename || "attachment"} className="size-full object-cover" />
       ) : data.mediaType?.startsWith("image/") ? (
         <ImageIcon className="size-4" />

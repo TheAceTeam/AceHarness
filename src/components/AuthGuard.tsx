@@ -1,7 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRouter } from '@/lib/navigation/client';
+import { clearAuthSession } from '@/client/query/api-client';
+import { useCurrentUserQuery } from '@/client/query/auth';
+import { queryKeys } from '@/client/query/query-keys';
 import BrandLoadingScreen from './BrandLoadingScreen';
 
 interface AuthGuardProps {
@@ -10,52 +14,47 @@ interface AuthGuardProps {
 
 export default function AuthGuard({ children }: AuthGuardProps) {
   const router = useRouter();
-  const [authChecked, setAuthChecked] = useState(false);
+  const queryClient = useQueryClient();
+  const currentUser = useCurrentUserQuery();
 
   useEffect(() => {
-    const token = localStorage.getItem('auth-token');
-    if (!token) {
+    const expireAuthSession = () => {
+      clearAuthSession({ emitEvent: false });
+      queryClient.removeQueries({ queryKey: queryKeys.auth.currentUser() });
       router.push('/login');
-      return;
-    }
+    };
 
-    fetch('/api/auth/me', {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-      .then(res => {
-        if (!res.ok) {
-          localStorage.removeItem('auth-token');
-          localStorage.removeItem('auth-user');
-          router.push('/login');
-        } else {
-          return res.json().then(data => {
-            if (data.user) {
-              localStorage.setItem('auth-user', JSON.stringify(data.user));
-            }
-            setAuthChecked(true);
-          });
-        }
-      })
-      .catch(() => {
-        localStorage.removeItem('auth-token');
-        localStorage.removeItem('auth-user');
-        router.push('/login');
-      });
-  }, [router]);
+    if (!currentUser.isError) return;
+    expireAuthSession();
+  }, [currentUser.isError, queryClient, router]);
+
+  useEffect(() => {
+    const expireAuthSession = () => {
+      clearAuthSession({ emitEvent: false });
+      queryClient.removeQueries({ queryKey: queryKeys.auth.currentUser() });
+      router.push('/login');
+    };
+
+    if (!currentUser.isSuccess || currentUser.data) return;
+    expireAuthSession();
+  }, [currentUser.data, currentUser.isSuccess, queryClient, router]);
 
   // Listen for auth:expired events from authFetch
   useEffect(() => {
     const handleExpired = () => {
-      localStorage.removeItem('auth-user');
+      clearAuthSession({ emitEvent: false });
+      queryClient.removeQueries({ queryKey: queryKeys.auth.currentUser() });
       router.push('/login');
     };
     window.addEventListener('auth:expired', handleExpired);
     return () => window.removeEventListener('auth:expired', handleExpired);
-  }, [router]);
+  }, [queryClient, router]);
 
-  if (!authChecked) {
+  if (currentUser.isPending) {
     return <BrandLoadingScreen />;
   }
+
+  if (!currentUser.data) return <BrandLoadingScreen />;
 
   return <>{children}</>;
 }

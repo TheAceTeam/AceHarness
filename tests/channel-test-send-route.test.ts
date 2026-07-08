@@ -22,7 +22,7 @@ describe('channel test-send route', () => {
     vi.resetModules();
     const userStore = await import('@/lib/core/user-store');
     const channelStore = await import('@/lib/channel/store');
-    const route = await import('../src/app/api/channels/integrations/[id]/test-send/route');
+    const route = await import('../src/server/api-routes/channels/integrations/[id]/test-send/route');
 
     await userStore.createUser({
       username: 'tester',

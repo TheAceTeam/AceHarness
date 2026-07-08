@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/core/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -12,9 +13,23 @@ import { Checkbox } from '@/components/ui/checkbox';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import Markdown from '@/components/Markdown';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
+import { VirtualList } from '@/client/virtual/VirtualList';
 import { useTranslations } from '@/hooks/useTranslations';
 import { useToast } from '@/components/ui/toast';
-import styles from '@/app/workbench/[config]/page.module.css';
+import styles from '@/client/pages/workbench/page.module.css';
+import {
+  useDeleteDocumentsMutation,
+  useDocumentContentQuery,
+  useRenameDocumentMutation,
+  useRunDocumentsQuery,
+} from '@/client/query/documents';
+import { queryKeys } from '@/client/query/query-keys';
+import {
+  syncDocumentsMetadataToDb,
+  useDocumentMetadataRows,
+  useSyncDocumentsMetadataToDb,
+  type DocumentMetadataRow,
+} from '@/client/db/collections';
 
 export interface DocFile {
   filename: string;
@@ -28,6 +43,7 @@ export interface DocFile {
   documentKind?: 'conclusion' | 'detail';
   groupKey?: string;
   groupLabel?: string;
+  detailCount?: number;
   sourceRunId?: string;
   sourceConfigFile?: string;
   sourceLabel?: string;
@@ -42,6 +58,7 @@ interface DocTreeGroup {
   name: string;
   summary: DocFile | null;
   details: DocFile[];
+  detailCount: number;
   latestTime: number;
 }
 
@@ -50,6 +67,15 @@ interface DocFolderGroup {
   label: string;
   files: DocFile[];
 }
+
+type DocTreeRow =
+  | { type: 'summary'; key: string; group: DocTreeGroup; file: DocFile }
+  | { type: 'group'; key: string; group: DocTreeGroup }
+  | { type: 'detail'; key: string; group: DocTreeGroup; file: DocFile };
+
+type CompactFolderRow =
+  | { type: 'folder'; key: string; group: DocFolderGroup }
+  | { type: 'file'; key: string; group: DocFolderGroup; file: DocFile };
 
 interface DocumentsPanelProps {
   runId: string | null;
@@ -162,14 +188,40 @@ function sortDocFiles(files: DocFile[], sortField: SortField, sortOrder: SortOrd
   return next;
 }
 
+function documentMetadataRowToDocFile(row: DocumentMetadataRow): DocFile {
+  const filename = row.filename || row.name;
+  return {
+    filename,
+    stepName: row.stepName || '',
+    baseName: row.baseName || filename,
+    logicalName: row.logicalName,
+    iteration: row.iteration ?? null,
+    agent: row.agent || '',
+    phaseName: row.phaseName || '',
+    role: row.role || '',
+    documentKind: row.documentKind === 'detail' || row.documentKind === 'conclusion' ? row.documentKind : undefined,
+    groupKey: row.groupKey,
+    groupLabel: row.groupLabel,
+    detailCount: row.detailCount,
+    sourceRunId: row.sourceRunId,
+    sourceConfigFile: row.sourceConfigFile,
+    sourceLabel: row.sourceLabel,
+    parentRunId: row.parentRunId,
+    rootRunId: row.rootRunId,
+    size: row.size || 0,
+    modifiedTime: row.modifiedTime || row.updatedAt || '',
+  };
+}
+
 function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: SortOrder): DocTreeGroup[] {
-  const map = new Map<string, { name: string; summary: DocFile | null; details: DocFile[] }>();
+  const map = new Map<string, { name: string; summary: DocFile | null; details: DocFile[]; detailCount: number }>();
 
   files.forEach((file) => {
     const key = getTreeGroupKey(file);
-    const existing = map.get(key) || { name: getTreeLinkName(file), summary: null, details: [] };
+    const existing = map.get(key) || { name: getTreeLinkName(file), summary: null, details: [], detailCount: 0 };
     existing.name ||= getTreeLinkName(file);
-    if (hasTimestamp(file.filename)) {
+    existing.detailCount = Math.max(existing.detailCount, file.detailCount || 0);
+    if (file.documentKind === 'detail' || hasTimestamp(file.filename)) {
       existing.details.push(file);
     } else if (!existing.summary) {
       existing.summary = file;
@@ -194,6 +246,7 @@ function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: Sort
         name: value.name,
         summary: value.summary,
         details: sortedDetails,
+        detailCount: Math.max(value.detailCount, sortedDetails.length),
         latestTime,
       };
     })
@@ -213,11 +266,14 @@ function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: Sort
 
 export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0, onOpenWorkspaceDirectory }: DocumentsPanelProps) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [files, setFiles] = useState<DocFile[]>([]);
   const [docPage, setDocPage] = useState(1);
-  const [docPagination, setDocPagination] = useState<{ total: number; totalPages: number; page: number; pageSize: number } | null>(null);
+  const [docPagination, setDocPagination] = useState<{ total: number; totalPages?: number; page?: number; pageSize?: number; offset?: number; limit?: number; nextOffset?: number | null } | null>(null);
   const [documentDirectory, setDocumentDirectory] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [manualLoading, setManualLoading] = useState(false);
+  const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
+  const [loadedGroups, setLoadedGroups] = useState<Set<string>>(new Set());
   const [modalOpen, setModalOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -235,7 +291,6 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   // Preview
   const [previewFile, setPreviewFile] = useState<DocFile | null>(null);
   const [previewContent, setPreviewContent] = useState('');
-  const [loadingPreview, setLoadingPreview] = useState(false);
 
   // Rename
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
@@ -271,6 +326,23 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const startX = useRef(0);
   const startWidth = useRef(0);
   const lastOpenLatestRequestRef = useRef(0);
+  const documentsQueryParams = useMemo(() => ({
+    page: docPage,
+    pageSize: 50,
+    sortDirection: 'asc' as const,
+    scope: 'root' as const,
+    summaryOnly: docFilter === 'all',
+    documentKind: docFilter === 'all' ? undefined : docFilter,
+  }), [docFilter, docPage]);
+  const documentsQuery = useRunDocumentsQuery(runId, documentsQueryParams);
+  useSyncDocumentsMetadataToDb(runId || undefined, documentsQuery.data?.files || []);
+  const dbDocumentRows = useDocumentMetadataRows(runId || undefined);
+  const dbFiles = useMemo(() => dbDocumentRows.map(documentMetadataRowToDocFile), [dbDocumentRows]);
+  const previewContentQuery = useDocumentContentQuery(runId, previewFile?.filename, previewFile?.sourceRunId);
+  const renameDocumentMutation = useRenameDocumentMutation(runId);
+  const deleteDocumentsMutation = useDeleteDocumentsMutation(runId);
+  const loading = manualLoading || documentsQuery.isLoading;
+  const loadingPreview = previewContentQuery.isLoading;
 
   const selectedRootFilenames = useMemo(() => {
     return files
@@ -339,22 +411,31 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
   const loadFiles = useCallback(async () => {
     if (!runId) return;
-    setLoading(true);
-    try {
-      const data = await runsApi.listDocuments(runId, { page: docPage, pageSize: 200, sortDirection: 'asc' });
-      setFiles(data.files || []);
-      setDocPagination(data.pagination || null);
-      setDocumentDirectory(data.documentDirectory || null);
-    } catch {
-      setFiles([]);
-      setDocPagination(null);
-      setDocumentDirectory(null);
-    }
-    setLoading(false);
-  }, [docPage, runId]);
+    await documentsQuery.refetch();
+  }, [documentsQuery, runId]);
 
-  useEffect(() => { loadFiles(); }, [loadFiles]);
-  useEffect(() => { setDocPage(1); }, [runId]);
+  useEffect(() => { setDocPage(1); }, [docFilter, runId]);
+
+  useEffect(() => {
+    const data = documentsQuery.data;
+    if (!data) return;
+    setDocPagination(data.pagination || null);
+    setDocumentDirectory(data.documentDirectory || null);
+    setLoadedGroups(new Set());
+  }, [documentsQuery.data]);
+
+  useEffect(() => {
+    if (!documentsQuery.data && dbFiles.length === 0) return;
+    setFiles(dbFiles);
+  }, [dbFiles, documentsQuery.data]);
+
+  useEffect(() => {
+    if (!documentsQuery.isError) return;
+    setFiles([]);
+    setDocPagination(null);
+    setDocumentDirectory(null);
+    setLoadedGroups(new Set());
+  }, [documentsQuery.isError]);
 
   // Filter files by doc type
   const tabFiles = useMemo(() => {
@@ -412,6 +493,34 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       .filter(Boolean) as DocTreeGroup[];
   }, [scopedFiles, searchQuery, sortField, sortOrder]);
 
+  const treeRows = useMemo<DocTreeRow[]>(() => {
+    const rows: DocTreeRow[] = [];
+    treeGroups.forEach((group) => {
+      if (group.summary) {
+        rows.push({ type: 'summary', key: `summary:${group.key}`, group, file: group.summary });
+      } else {
+        rows.push({ type: 'group', key: `group:${group.key}`, group });
+      }
+      if (expandedGroups.has(group.key)) {
+        group.details.forEach((file) => {
+          rows.push({ type: 'detail', key: `detail:${group.key}:${getDocKey(file)}`, group, file });
+        });
+      }
+    });
+    return rows;
+  }, [expandedGroups, treeGroups]);
+
+  const compactFolderRows = useMemo<CompactFolderRow[]>(() => {
+    const rows: CompactFolderRow[] = [];
+    folderGroups.forEach((group) => {
+      rows.push({ type: 'folder', key: `folder:${group.key}`, group });
+      group.files.forEach((file) => {
+        rows.push({ type: 'file', key: `file:${group.key}:${getDocKey(file)}`, group, file });
+      });
+    });
+    return rows;
+  }, [folderGroups]);
+
   const toggleSort = (field: SortField) => {
     if (sortField === field) setSortOrder(o => o === 'asc' ? 'desc' : 'asc');
     else { setSortField(field); setSortOrder('asc'); }
@@ -420,22 +529,66 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const selectFile = useCallback(async (file: DocFile) => {
     if (!runId) return;
     setPreviewFile(file);
-    setLoadingPreview(true);
-    try {
-      const { content } = await runsApi.getDocumentContent(runId, file.filename, { sourceRunId: file.sourceRunId });
-      setPreviewContent(content);
-    } catch { setPreviewContent('(无法加载)'); }
-    setLoadingPreview(false);
   }, [runId]);
+
+  useEffect(() => {
+    if (!previewFile) return;
+    if (previewContentQuery.isError) {
+      setPreviewContent('(无法加载)');
+      return;
+    }
+    if (previewContentQuery.data) {
+      setPreviewContent(previewContentQuery.data.content);
+    }
+  }, [previewContentQuery.data, previewContentQuery.isError, previewFile]);
+
+  const loadGroupDetails = useCallback(async (groupKey: string) => {
+    if (!runId || loadedGroups.has(groupKey) || loadingGroups.has(groupKey)) return;
+    setLoadingGroups((prev) => new Set(prev).add(groupKey));
+    try {
+      const params = {
+        scope: 'children',
+        groupKey,
+        documentKind: 'detail',
+        pageSize: 500,
+        sortDirection: sortOrder,
+      } as const;
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.documentGroupDetails(runId, groupKey, params),
+        queryFn: () => runsApi.listDocuments(runId, params),
+        staleTime: 30_000,
+      });
+      const detailFiles = data.files || [];
+      syncDocumentsMetadataToDb(runId, detailFiles);
+      setFiles((prev) => {
+        const existing = new Set(prev.map(getDocKey));
+        const additions = detailFiles.filter((file) => !existing.has(getDocKey(file)));
+        return additions.length > 0 ? [...prev, ...additions] : prev;
+      });
+      setLoadedGroups((prev) => new Set(prev).add(groupKey));
+    } catch {
+      toast('error', '加载文档详情失败');
+    } finally {
+      setLoadingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(groupKey);
+        return next;
+      });
+    }
+  }, [loadedGroups, loadingGroups, queryClient, runId, sortOrder, toast]);
 
   const toggleExpandedGroup = useCallback((groupKey: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(groupKey)) next.delete(groupKey);
-      else next.add(groupKey);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+        void loadGroupDetails(groupKey);
+      }
       return next;
     });
-  }, []);
+  }, [loadGroupDetails]);
 
   useEffect(() => {
     if (!previewFile) return;
@@ -444,21 +597,44 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       if (prev.has(key)) return prev;
       const next = new Set(prev);
       next.add(key);
+      void loadGroupDetails(key);
       return next;
     });
-  }, [previewFile]);
+  }, [loadGroupDetails, previewFile]);
 
   const openLatestTimestampedFile = useCallback(async () => {
     if (!runId) return;
-    setLoading(true);
+    setManualLoading(true);
     try {
-      const data = await runsApi.listDocuments(runId, { includeChildren: true, page: 1, pageSize: 500, sortDirection: 'desc' });
-      const nextFiles = data.files || [];
-      setFiles(nextFiles);
-      setDocPagination(data.pagination || null);
-      const latestFile = nextFiles
+      const rootParams = { page: 1, pageSize: 1, sortDirection: 'desc' as const, documentKind: 'detail' as const, scope: 'root' as const };
+      const rootData = await queryClient.fetchQuery({
+        queryKey: queryKeys.documentLatestDetail(runId, rootParams),
+        queryFn: () => runsApi.listDocuments(runId, rootParams),
+        staleTime: 30_000,
+      });
+      let nextFiles = rootData.files || [];
+      let nextPagination = rootData.pagination || null;
+      let latestFile = nextFiles
         .filter(file => hasTimestamp(file.filename))
         .sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime())[0];
+
+      if (!latestFile) {
+        const childParams = { scope: 'children' as const, page: 1, pageSize: 1, documentKind: 'detail' as const, sortDirection: 'desc' as const };
+        const childData = await queryClient.fetchQuery({
+          queryKey: queryKeys.documentLatestDetail(runId, childParams),
+          queryFn: () => runsApi.listDocuments(runId, childParams),
+          staleTime: 30_000,
+        });
+        nextFiles = childData.files || [];
+        nextPagination = childData.pagination || null;
+        latestFile = nextFiles
+          .filter(file => hasTimestamp(file.filename))
+          .sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime())[0];
+      }
+
+      syncDocumentsMetadataToDb(runId, nextFiles);
+      setFiles(nextFiles);
+      setDocPagination(nextPagination);
 
       if (!latestFile) {
         toast('error', '未找到 AI 最新结论文档');
@@ -470,9 +646,9 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     } catch {
       toast('error', '打开最新 AI 结论文档失败');
     } finally {
-      setLoading(false);
+      setManualLoading(false);
     }
-  }, [runId, selectFile, toast]);
+  }, [queryClient, runId, selectFile, toast]);
 
   useEffect(() => {
     if (!openLatestTimestampedRequest || openLatestTimestampedRequest === lastOpenLatestRequestRef.current) {
@@ -501,20 +677,20 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const handleRename = async (file: string) => {
     if (!runId || !renameValue.trim()) return;
     try {
-      await runsApi.renameDocument(runId, file, renameValue.trim());
+      await renameDocumentMutation.mutateAsync({ file, newName: renameValue.trim() });
       setRenamingFile(null);
-      loadFiles();
+      await loadFiles();
     } catch { /* toast? */ }
   };
 
   const handleDelete = async (filenames: string[]) => {
     if (!runId) return;
     try {
-      await runsApi.deleteDocuments(runId, filenames);
+      await deleteDocumentsMutation.mutateAsync(filenames);
       setDeleteTarget(null);
       setSelected(prev => { const n = new Set(prev); filenames.forEach(f => n.delete(f)); return n; });
       if (previewFile && filenames.includes(previewFile.filename) && isRootRunFile(previewFile, runId)) { setPreviewFile(null); setPreviewContent(''); }
-      loadFiles();
+      await loadFiles();
     } catch { /* toast? */ }
   };
 
@@ -692,25 +868,25 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         </div>
       )}
       <div className="flex-1" />
-      {!compact && docPagination && docPagination.totalPages > 1 && (
+      {!compact && docPagination && (docPagination.totalPages || 1) > 1 && (
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <Button
             variant="ghost"
             size="sm"
             className="h-7 w-7 p-0"
-            disabled={loading || docPagination.page <= 1}
+            disabled={loading || (docPagination.page || 1) <= 1}
             onClick={() => setDocPage((page) => Math.max(1, page - 1))}
             title="上一页"
           >
             <span className="material-symbols-outlined text-sm">chevron_left</span>
           </Button>
-          <span className="min-w-16 text-center">{docPagination.page}/{docPagination.totalPages}</span>
+          <span className="min-w-16 text-center">{docPagination.page || 1}/{docPagination.totalPages || 1}</span>
           <Button
             variant="ghost"
             size="sm"
             className="h-7 w-7 p-0"
-            disabled={loading || docPagination.page >= docPagination.totalPages}
-            onClick={() => setDocPage((page) => Math.min(docPagination.totalPages, page + 1))}
+            disabled={loading || (docPagination.page || 1) >= (docPagination.totalPages || 1)}
+            onClick={() => setDocPage((page) => Math.min(docPagination.totalPages || 1, page + 1))}
             title="下一页"
           >
             <span className="material-symbols-outlined text-sm">chevron_right</span>
@@ -869,7 +1045,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       title={expandedGroups.has(group.key) ? '收起详情' : '展开详情'}
     >
       <span className="material-symbols-outlined text-[12px]">
-        {expandedGroups.has(group.key) ? 'expand_more' : 'chevron_right'}
+        {loadingGroups.has(group.key) ? 'progress_activity' : expandedGroups.has(group.key) ? 'expand_more' : 'chevron_right'}
       </span>
     </button>
   );
@@ -904,34 +1080,40 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
             <span className="w-5" />
           </div>
         )}
-        {treeGroups.map((group) => {
-          const expanded = expandedGroups.has(group.key);
-          const summaryFile = group.summary;
-          return (
-            <div key={group.key}>
-              {summaryFile ? (
-                fileRow(summaryFile, compact, {
-                  prefix: group.details.length > 0 ? treeChevron(group) : <span className="w-4 shrink-0" />,
-                })
-              ) : (
-                <div
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border/30 bg-muted/20"
-                  style={compact ? undefined : { paddingLeft: '12px' }}
-                >
-                  {group.details.length > 0 ? treeChevron(group) : <span className="w-4 shrink-0" />}
-                  <span className="material-symbols-outlined text-sm text-amber-600 shrink-0">topic</span>
-                  <span className="flex-1 truncate font-medium">{group.name}</span>
-                  {!compact && <span className="text-[10px] text-muted-foreground shrink-0">{group.details.length} 条详情</span>}
-                </div>
-              )}
-              {expanded && group.details.map((file) => fileRow(file, compact, {
+        <VirtualList
+          items={treeRows}
+          estimateSize={34}
+          height="calc(100% - 29px)"
+          className="min-h-0"
+          testId="documents-tree-virtual-list"
+          maxRenderedItems={80}
+          getKey={(row) => row.key}
+          renderItem={(row) => {
+            if (row.type === 'summary') {
+              return fileRow(row.file, compact, {
+                prefix: row.group.detailCount > 0 ? treeChevron(row.group) : <span className="w-4 shrink-0" />,
+              });
+            }
+            if (row.type === 'detail') {
+              return fileRow(row.file, compact, {
                 indent: 22,
                 prefix: <span className="material-symbols-outlined text-[12px] text-muted-foreground shrink-0">subdirectory_arrow_right</span>,
                 muted: true,
-              }))}
-            </div>
-          );
-        })}
+              });
+            }
+            return (
+              <div
+                className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border/30 bg-muted/20"
+                style={compact ? undefined : { paddingLeft: '12px' }}
+              >
+                {row.group.detailCount > 0 ? treeChevron(row.group) : <span className="w-4 shrink-0" />}
+                <span className="material-symbols-outlined text-sm text-amber-600 shrink-0">topic</span>
+                <span className="flex-1 truncate font-medium">{row.group.name}</span>
+                {!compact && <span className="text-[10px] text-muted-foreground shrink-0">{row.group.detailCount} 条详情</span>}
+              </div>
+            );
+          }}
+        />
       </>
     );
   };
@@ -967,7 +1149,18 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           <span className="w-5" />
         </div>
       )}
-      {!loading && processedFiles.map(f => fileRow(f, compact))}
+      {!loading && processedFiles.length > 0 && (
+        <VirtualList
+          items={processedFiles}
+          estimateSize={34}
+          height={!compact ? 'calc(100% - 29px)' : '100%'}
+          className="min-h-0"
+          testId="documents-file-virtual-list"
+          maxRenderedItems={80}
+          getKey={(file) => getDocKey(file)}
+          renderItem={(file) => fileRow(file, compact)}
+        />
+      )}
         </>
       )}
     </div>
@@ -982,15 +1175,23 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       {!loading && files.length === 0 && (
         <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
       )}
-      {!loading && folderGroups.map(group => (
-        <div key={group.key}>
-          <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold text-muted-foreground bg-muted/30 border-b border-border/30 sticky top-0 z-10">
-            <span className="material-symbols-outlined text-xs">folder</span>
-            {group.label} ({group.files.length})
-          </div>
-          {group.files.map(f => fileRow(f, true))}
-        </div>
-      ))}
+      {!loading && compactFolderRows.length > 0 && (
+        <VirtualList
+          items={compactFolderRows}
+          estimateSize={34}
+          height="100%"
+          className="min-h-0"
+          testId="documents-compact-folder-virtual-list"
+          maxRenderedItems={80}
+          getKey={(row) => row.key}
+          renderItem={(row) => row.type === 'folder' ? (
+            <div className="flex items-center gap-1.5 border-b border-border/30 bg-muted/30 px-3 py-1 text-[10px] font-semibold text-muted-foreground">
+              <span className="material-symbols-outlined text-xs">folder</span>
+              {row.group.label} ({row.group.files.length})
+            </div>
+          ) : fileRow(row.file, true)}
+        />
+      )}
         </>
       )}
     </div>

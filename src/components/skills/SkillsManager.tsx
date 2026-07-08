@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
-import { motion } from 'framer-motion';
+import Link from '@/lib/navigation/client';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   ArrowDown,
   ArrowLeft,
@@ -20,13 +20,37 @@ import {
   Store,
   Trash2,
   Upload,
-  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import {
+  DataCard,
+  DataCardActions,
+  DataCardDescription,
+  DataCardHeader,
+  DataCardMeta,
+  DataCardTitle,
+} from '@/components/ui/data-card';
+import { ActionMenu, type ActionMenuGroup } from '@/components/ui/action-menu';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
+import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import {
+  DetailDrawer,
+  DetailDrawerBody,
+  DetailDrawerContent,
+  DetailDrawerDescription,
+  DetailDrawerFooter,
+  DetailDrawerHeader,
+  DetailDrawerTitle,
+} from '@/components/ui/detail-drawer';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/ui/page-header';
+import { PageToolbar } from '@/components/ui/page-toolbar';
+import { StatusPill } from '@/components/ui/status-pill';
+import { ObjectEditDrawer } from '@/components/ui/object-edit-drawer';
 import {
   Dialog,
   DialogContent,
@@ -39,8 +63,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useToast } from '@/components/ui/toast';
-import { useConfirmDialog } from '@/hooks/useConfirmDialog';
-import ConfirmDialog from '@/components/ConfirmDialog';
 import Markdown from '@/components/Markdown';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
@@ -51,37 +73,27 @@ import { cn } from '@/lib/core/utils';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import type { ReturnTarget } from '@/lib/navigation/return-target';
 import {
-  SkillCard,
   SkillSearch,
   InstallProgress,
-  SkillDetail,
 } from '@/components/marketplace';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import type { MarketplaceSkill, InstallProgress as InstallProgressType } from '@/types/marketplace';
-import type { ManagedMcpServer } from '@/lib/mcp/types';
+import type { ManagedMcpServer, McpTransportType } from '@/lib/mcp/types';
 import { DEFAULT_PAGE_SIZE } from '@/constants/marketplace';
-
-interface LocalSkill {
-  name: string;
-  path: string;
-  description: string;
-  descriptionZh?: string;
-  tags: string[];
-  platforms?: string[];
-  version?: string;
-  updatedAt?: string;
-  contributors?: string[];
-  detailedDescription?: string;
-  source?: string;
-  hasPromptMd?: boolean;
-}
+import { apiFetch } from '@/client/query/api-client';
+import { queryKeys } from '@/client/query/query-keys';
+import {
+  useDeleteSkillsMutation,
+  useExportSkillsMutation,
+  useSyncSkillsMutation,
+  useSkillsQuery,
+  useUploadSkillZipMutation,
+  type LocalSkill,
+} from '@/client/query/skills';
+import {
+  useMarketplaceCategoriesQuery,
+  useMarketplaceSearchQuery,
+} from '@/client/query/marketplace';
+import { useLocalSkillRows, useSyncLocalSkillsToDb } from '@/client/db/collections';
 
 interface SyncStatus {
   inInstall: boolean;
@@ -96,6 +108,7 @@ type SortDirection = 'asc' | 'desc';
 interface SkillsManagerProps {
   embedded?: boolean;
   returnTarget?: ReturnTarget;
+  initialTab?: TabType;
 }
 
 const LOCAL_VIEW_MODE_KEY = 'aceharness:skills:local-view-mode';
@@ -106,13 +119,6 @@ const ONLINE_PAGE_SIZE_KEY = 'aceharness:skills:online-page-size';
 const MCP_PAGE_SIZE_KEY = 'aceharness:skills:mcp-page-size';
 const ACTIVE_TAB_KEY = 'aceharness:skills:active-tab';
 const PAGE_SIZE_OPTIONS = [12, 24, 48, 96];
-
-const SOURCE_COLORS: Record<string, string> = {
-  'ace-custom': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-  anthropics: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-};
-
-const DEFAULT_SOURCE_COLOR = 'bg-slate-500/20 text-slate-300 border-slate-500/30';
 
 const SOURCE_LABELS: Record<string, string> = {
   'ace-custom': 'ACE 自定义',
@@ -127,6 +133,12 @@ function normalizeSkillSource(skill: Pick<LocalSkill, 'source'>): string {
 
 function getSourceLabel(source: string): string {
   return SOURCE_LABELS[source] || source;
+}
+
+function getSourceTone(source: string): React.ComponentProps<typeof StatusPill>['tone'] {
+  if (source === 'anthropics') return 'warning';
+  if (source === 'ace-custom') return 'accent';
+  return 'neutral';
 }
 
 function formatLocalUpdatedAt(value?: string): string | null {
@@ -164,6 +176,7 @@ function normalizeMarketplaceSkillKey(value?: string): string {
 function PluginsTab() {
   const { toast } = useToast();
   const [plugins, setPlugins] = useState<HomePlugin[]>([]);
+  const [deletePluginTarget, setDeletePluginTarget] = useState<HomePlugin | null>(null);
   const { disabledPluginIds, enabledPluginIds, loading, save, version } = useSidebarPluginPreferences();
 
   useEffect(() => {
@@ -204,17 +217,75 @@ function PluginsTab() {
     }
   };
 
-  const handleDelete = (pluginId: string) => {
-    const plugin = plugins.find((p) => p.id === pluginId);
+  const confirmDelete = () => {
+    const plugin = deletePluginTarget;
     if (!plugin) return;
-    unregisterPlugin(pluginId);
+    unregisterPlugin(plugin.id);
     const next = getAllPlugins({ includeDisabled: true });
     setPlugins(next);
     toast('success', `${plugin.name} 已删除`);
+    setDeletePluginTarget(null);
   };
+  const pluginColumns: DataTableColumn<HomePlugin>[] = [
+    {
+      id: 'name',
+      header: '插件',
+      width: '32%',
+      render: (plugin) => (
+        <div className="min-w-[180px]">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">{plugin.name}</span>
+            {plugin.version ? <StatusPill tone="neutral" className="text-xs">{plugin.version}</StatusPill> : null}
+            {plugin.enabled === false ? <StatusPill tone="neutral" className="text-xs">已禁用</StatusPill> : null}
+          </div>
+          {plugin.tab ? <div className="mt-1 text-xs text-muted-foreground">Tab: {plugin.tab.label}</div> : null}
+        </div>
+      ),
+    },
+    {
+      id: 'capabilities',
+      header: '能力',
+      render: (plugin) => (
+        <div className="flex flex-wrap gap-1.5">
+          {plugin.capabilities.map((cap) => (
+            <StatusPill key={cap} tone="neutral" dot={false} className="h-5 px-1.5 py-0 text-[10px]">{cap}</StatusPill>
+          ))}
+        </div>
+      ),
+      priority: 2,
+    },
+    {
+      id: 'actions',
+      header: '快捷操作',
+      accessor: (plugin) => plugin.actions?.items?.map((action) => action.label).join('、') || '-',
+      className: 'text-sm text-muted-foreground',
+      priority: 3,
+    },
+  ];
+  const getPluginActions = (plugin: HomePlugin): ActionMenuGroup[] => [
+    {
+      actions: [
+        {
+          id: 'toggle',
+          label: plugin.enabled !== false ? '禁用' : '启用',
+          primary: plugin.enabled === false,
+          inline: plugin.enabled === false,
+          disabled: loading,
+          onSelect: () => void handleToggle(plugin.id),
+        },
+        {
+          id: 'delete',
+          label: '删除',
+          icon: <Trash2 className="h-4 w-4" />,
+          destructive: true,
+          onSelect: () => setDeletePluginTarget(plugin),
+        },
+      ],
+    },
+  ];
 
   return (
-    <section className="rounded-[28px] border border-border/70 bg-card/90 p-6 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur supports-[backdrop-filter]:bg-card/80">
+    <section className="rounded-xl border border-border bg-card p-4 shadow-none">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-lg font-semibold">侧边栏插件</h3>
@@ -222,83 +293,51 @@ function PluginsTab() {
         </div>
       </div>
 
-      <div className="space-y-3">
-        {plugins.map((plugin) => (
-          <div
-            key={plugin.id}
-            className="flex items-center justify-between gap-4 rounded-xl border p-4 transition-colors hover:bg-muted/30"
-          >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-sm">{plugin.name}</span>
-                {plugin.version && (
-                  <Badge variant="outline" className="text-xs">{plugin.version}</Badge>
-                )}
-                {plugin.enabled === false && (
-                  <Badge variant="secondary" className="text-xs">已禁用</Badge>
-                )}
-              </div>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {plugin.capabilities.map((cap) => (
-                  <Badge key={cap} variant="outline" className="text-[10px] px-1.5 py-0">{cap}</Badge>
-                ))}
-              </div>
-              {plugin.actions?.items && plugin.actions.items.length > 0 && (
-                <div className="mt-1.5 text-xs text-muted-foreground">
-                  快捷操作：{plugin.actions.items.map((a) => a.label).join('、')}
-                </div>
-              )}
-              {plugin.tab && (
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  Tab：{plugin.tab.label}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <Button
-                size="sm"
-                variant={plugin.enabled !== false ? 'outline' : 'default'}
-                className="h-7 text-xs"
-                disabled={loading}
-                onClick={() => handleToggle(plugin.id)}
-              >
-                {plugin.enabled !== false ? '禁用' : '启用'}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => handleDelete(plugin.id)}
-                title="删除插件"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        ))}
+      <DataTable
+        aria-label="侧边栏插件列表"
+        columns={pluginColumns}
+        rows={plugins}
+        rowKey="id"
+        density="comfortable"
+        rowActions={(plugin) => getPluginActions(plugin)}
+        emptyState={{
+          icon: <Puzzle className="h-5 w-5" />,
+          title: '暂无已注册的侧边栏插件',
+          description: '侧边栏插件会在这里统一管理启用、禁用和删除。',
+        }}
+      />
 
-        {plugins.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground text-sm">
-            暂无已注册的侧边栏插件
-          </div>
-        )}
-      </div>
-
-      <div className="mt-6 rounded-xl border border-dashed p-4 text-xs text-muted-foreground leading-6">
+      <div className="mt-6 rounded-xl border border-dashed border-border bg-background p-4 text-xs text-muted-foreground leading-6">
         <p className="font-medium text-foreground mb-1">如何添加新插件</p>
         <p>1. 在 <code className="bg-muted px-1 rounded">src/plugins/</code> 下创建插件目录</p>
         <p>2. 使用 <code className="bg-muted px-1 rounded">definePlugin()</code> 定义插件配置</p>
         <p>3. 在 <code className="bg-muted px-1 rounded">src/lib/sidebar-plugins/registry.ts</code> 中注册</p>
         <p>4. 详见 <code className="bg-muted px-1 rounded">docs/sidebar-plugins/README.md</code></p>
       </div>
+      <ConfirmModal
+        open={Boolean(deletePluginTarget)}
+        variant="delete"
+        title="删除侧边栏插件"
+        objectName={deletePluginTarget?.name}
+        consequence="删除后该插件会从侧边栏注册表中移除。"
+        confirmLabel="删除"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeletePluginTarget(null)}
+        onOpenChange={(open) => {
+          if (!open) setDeletePluginTarget(null);
+        }}
+      />
     </section>
   );
 }
 
 type McpServerDraft = {
   name: string;
+  type: McpTransportType;
   command: string;
+  url: string;
   envText: string;
+  headersText: string;
 };
 
 type McpToolSummary = {
@@ -338,7 +377,9 @@ type McpDiscoverResponse = {
   mode: 'discover';
   server: {
     name: string;
-    command: string;
+    type?: McpTransportType;
+    command?: string;
+    url?: string;
   };
   workingDirectory: string;
   serverInfo?: {
@@ -358,6 +399,20 @@ type McpDiscoverResponse = {
   durationMs: number;
 };
 
+type McpTestErrorDetails = {
+  message?: string;
+  hint?: string;
+  phase?: string;
+  code?: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  cwd?: string;
+  stderr?: string;
+};
+
+type McpTestErrorState = string | McpTestErrorDetails;
+
 function formatMcpEnv(env?: Record<string, string>): string {
   return env && Object.keys(env).length > 0 ? JSON.stringify(env, null, 2) : '';
 }
@@ -365,27 +420,39 @@ function formatMcpEnv(env?: Record<string, string>): string {
 function toMcpDraft(server?: Partial<ManagedMcpServer>): McpServerDraft {
   return {
     name: server?.name || '',
+    type: server?.type || 'stdio',
     command: server?.command || '',
+    url: server?.url || '',
     envText: formatMcpEnv(server?.env),
+    headersText: formatMcpEnv(server?.headers),
   };
 }
 
 function normalizeMcpServer(server: McpServerDraft): ManagedMcpServer {
-  const env = parseMcpEnv(server.envText);
+  if (server.type === 'stdio') {
+    const env = parseMcpRecord(server.envText, 'ENV');
+    return {
+      name: server.name.trim(),
+      type: server.type,
+      command: server.command.trim(),
+      ...(env ? { env } : {}),
+    };
+  }
+  const headers = parseMcpRecord(server.headersText, '请求头');
   return {
     name: server.name.trim(),
-    type: 'stdio',
-    command: server.command.trim(),
-    ...(env ? { env } : {}),
+    type: server.type,
+    url: server.url.trim(),
+    ...(headers ? { headers } : {}),
   };
 }
 
-function parseMcpEnv(text: string): Record<string, string> | undefined {
+function parseMcpRecord(text: string, label: string): Record<string, string> | undefined {
   const trimmed = text.trim();
   if (!trimmed) return undefined;
   const parsed = JSON.parse(trimmed);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('ENV 必须是 JSON 对象');
+    throw new Error(`${label} 必须是 JSON 对象`);
   }
   return Object.fromEntries(
     Object.entries(parsed)
@@ -394,13 +461,23 @@ function parseMcpEnv(text: string): Record<string, string> | undefined {
   );
 }
 
-function getMcpEnvStatus(text: string): { count: number; valid: boolean } {
+function getMcpRecordStatus(text: string, label: string): { count: number; valid: boolean } {
   if (!text.trim()) return { count: 0, valid: true };
   try {
-    return { count: Object.keys(parseMcpEnv(text) || {}).length, valid: true };
+    return { count: Object.keys(parseMcpRecord(text, label) || {}).length, valid: true };
   } catch {
     return { count: 0, valid: false };
   }
+}
+
+function getMcpEndpoint(server: ManagedMcpServer): string {
+  return server.type === 'stdio' ? server.command || '' : server.url || '';
+}
+
+function getMcpTransportLabel(type?: McpTransportType): string {
+  if (type === 'streamable-http') return 'Streamable HTTP';
+  if (type === 'sse') return 'SSE';
+  return 'stdio';
 }
 
 function safeJsonStringify(value: unknown): string {
@@ -435,77 +512,108 @@ function McpServerEditorDialog({
   onDraftChange: (patch: Partial<McpServerDraft>) => void;
   onSubmit: () => void;
 }) {
-  const envStatus = getMcpEnvStatus(draft.envText);
+  const envStatus = getMcpRecordStatus(draft.envText, 'ENV');
+  const headersStatus = getMcpRecordStatus(draft.headersText, '请求头');
+  const isStdio = draft.type === 'stdio';
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => {
-      if (!saving) onOpenChange(nextOpen);
-    }}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{mode === 'create' ? '新增 MCP Server' : '编辑 MCP Server'}</DialogTitle>
-          <DialogDescription>
-            这里只维护 MCP 服务本身的定义。工作目录会在聊天、工作流或测试时按调用上下文提供。
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid gap-4 py-1">
-          <div className="grid gap-2">
-            <label className="text-sm font-medium">名称</label>
-            <Input
-              value={draft.name}
-              onChange={(event) => onDraftChange({ name: event.target.value })}
-              placeholder="filesystem"
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <label className="text-sm font-medium">启动命令</label>
-            <Input
-              value={draft.command}
-              onChange={(event) => onDraftChange({ command: event.target.value })}
-              placeholder="npx -y @modelcontextprotocol/server-filesystem ."
-              className="font-mono"
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <div className="flex items-center justify-between gap-3">
-              <label className="text-sm font-medium">ENV JSON</label>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                {envStatus.valid ? (
-                  <span className="text-muted-foreground">
-                    {envStatus.count > 0 ? `共 ${envStatus.count} 个变量` : '未设置环境变量'}
-                  </span>
-                ) : (
-                  <span className="text-destructive">JSON 格式无效</span>
-                )}
+    <ObjectEditDrawer
+      open={open}
+      mode={mode}
+      title={mode === 'create' ? '新增 MCP Server' : '编辑 MCP Server'}
+      subtitle="这里只维护 MCP 服务本身的定义。工作目录会在聊天、工作流或测试时按调用上下文提供。"
+      saving={saving}
+      onOpenChange={(nextOpen) => {
+        if (!saving) onOpenChange(nextOpen);
+      }}
+      cancelAction={{ label: '取消', onClick: () => onOpenChange(false), disabled: saving }}
+      saveAction={{
+        label: saving ? '保存中...' : mode === 'create' ? '创建' : '保存',
+        onClick: onSubmit,
+        disabled: saving,
+      }}
+      sections={[
+        {
+          id: 'identity',
+          title: '基础信息',
+          content: (
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">名称</label>
+                <Input value={draft.name} onChange={(event) => onDraftChange({ name: event.target.value })} placeholder="filesystem" />
               </div>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">连接类型</label>
+                <Select
+                  value={draft.type}
+                  onValueChange={(value) => onDraftChange({ type: value as McpTransportType })}
+                  disabled={saving}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="stdio">stdio 本地命令</SelectItem>
+                    <SelectItem value="streamable-http">Streamable HTTP</SelectItem>
+                    <SelectItem value="sse">SSE</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {isStdio ? (
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">启动命令</label>
+                  <Input
+                    value={draft.command}
+                    onChange={(event) => onDraftChange({ command: event.target.value })}
+                    placeholder="npx -y @modelcontextprotocol/server-filesystem ."
+                    className="font-mono"
+                  />
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">服务地址</label>
+                  <Input
+                    value={draft.url}
+                    onChange={(event) => onDraftChange({ url: event.target.value })}
+                    placeholder={draft.type === 'sse' ? 'http://localhost:3001/sse' : 'http://localhost:3001/mcp'}
+                    className="font-mono"
+                  />
+                </div>
+              )}
             </div>
+          ),
+        },
+        isStdio ? {
+          id: 'env',
+          title: '环境变量',
+          description: envStatus.valid
+            ? envStatus.count > 0 ? `共 ${envStatus.count} 个变量` : '未设置环境变量'
+            : 'JSON 格式无效',
+          content: (
             <Textarea
               value={draft.envText}
               onChange={(event) => onDraftChange({ envText: event.target.value })}
               placeholder='{"API_KEY":"..."}'
               className="min-h-32 font-mono text-xs"
             />
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            取消
-          </Button>
-          <Button onClick={onSubmit} disabled={saving}>
-            {saving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                保存中...
-              </>
-            ) : mode === 'create' ? '创建' : '保存'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          ),
+        } : {
+          id: 'headers',
+          title: '请求头',
+          description: headersStatus.valid
+            ? headersStatus.count > 0 ? `共 ${headersStatus.count} 个请求头` : '未设置请求头'
+            : 'JSON 格式无效',
+          content: (
+            <Textarea
+              value={draft.headersText}
+              onChange={(event) => onDraftChange({ headersText: event.target.value })}
+              placeholder='{"Authorization":"Bearer ..."}'
+              className="min-h-32 font-mono text-xs"
+            />
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -525,7 +633,7 @@ function McpServerTestDialog({
   workingDirectory: string;
   testing: boolean;
   result: McpDiscoverResponse | null;
-  error: string | null;
+  error: McpTestErrorState | null;
   onOpenChange: (open: boolean) => void;
   onWorkingDirectoryChange: (value: string) => void;
   onRunTest: () => void;
@@ -534,6 +642,9 @@ function McpServerTestDialog({
   const prompts = result?.prompts || [];
   const resources = result?.resources || [];
   const resourceTemplates = result?.resourceTemplates || [];
+  const errorDetails = error && typeof error === 'object' ? error : null;
+  const errorMessage = typeof error === 'string' ? error : errorDetails?.message;
+  const errorArgs = errorDetails?.args?.length ? errorDetails.args.join(' ') : null;
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => {
@@ -543,7 +654,7 @@ function McpServerTestDialog({
         <DialogHeader className="border-b px-6 py-5">
           <DialogTitle>测试 MCP Server</DialogTitle>
           <DialogDescription>
-            这里只做 MCP 进程连接、自检和能力发现，不会触发模型推理，也不会直接调用 AI API。
+            这里只做 MCP 连接、自检和能力发现，用于确认服务定义是否可用。
           </DialogDescription>
         </DialogHeader>
 
@@ -554,25 +665,27 @@ function McpServerTestDialog({
                 <div className="min-w-0">
                   <div className="text-sm font-semibold">{server?.name || '未选择 Server'}</div>
                   <div className="mt-2 break-all rounded-xl bg-background/80 px-3 py-2 font-mono text-xs text-muted-foreground">
-                    {server?.command || '-'}
+                    {server ? getMcpEndpoint(server) || '-' : '-'}
                   </div>
                 </div>
-                <Badge variant="outline" className="text-xs">stdio</Badge>
+                <Badge variant="outline" className="text-xs">{getMcpTransportLabel(server?.type)}</Badge>
               </div>
 
-              <div className="mt-4 grid gap-2">
-                <label className="text-sm font-medium">测试工作目录</label>
-                <Input
-                  value={workingDirectory}
-                  onChange={(event) => onWorkingDirectoryChange(event.target.value)}
-                  placeholder="留空则使用当前 workspace 根目录"
-                  className="font-mono"
-                  disabled={testing}
-                />
-                <p className="text-xs text-muted-foreground">
-                  这里模拟实际调用时的上下文目录。MCP 本身不再存项目目录配置。
-                </p>
-              </div>
+              {server?.type === 'stdio' ? (
+                <div className="mt-4 grid gap-2">
+                  <label className="text-sm font-medium">测试工作目录</label>
+                  <Input
+                    value={workingDirectory}
+                    onChange={(event) => onWorkingDirectoryChange(event.target.value)}
+                    placeholder="留空则使用当前 workspace 根目录"
+                    className="font-mono"
+                    disabled={testing}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    这里模拟实际调用时的上下文目录。MCP 本身不再存项目目录配置。
+                  </p>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -599,7 +712,70 @@ function McpServerTestDialog({
             {error ? (
               <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
                 <div className="font-medium">测试失败</div>
-                <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">{error}</pre>
+                {errorDetails ? (
+                  <div className="mt-3 grid gap-3 text-xs">
+                    <div>
+                      <div className="font-medium">消息</div>
+                      <div className="mt-1 whitespace-pre-wrap break-words text-destructive/90">
+                        {errorMessage || 'MCP 测试失败'}
+                      </div>
+                      {(errorDetails.phase || errorDetails.code) ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {errorDetails.phase ? <Badge variant="outline" className="text-[10px]">phase {errorDetails.phase}</Badge> : null}
+                          {errorDetails.code ? <Badge variant="outline" className="text-[10px]">code {errorDetails.code}</Badge> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    {errorDetails.hint ? (
+                      <div>
+                        <div className="font-medium">建议</div>
+                        <div className="mt-1 whitespace-pre-wrap break-words text-destructive/90">{errorDetails.hint}</div>
+                      </div>
+                    ) : null}
+                    {errorDetails.command ? (
+                      <div>
+                        <div className="font-medium">命令</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded-xl bg-background/80 p-3 font-mono text-[11px] text-foreground">
+                          {errorDetails.command}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {errorDetails.url ? (
+                      <div>
+                        <div className="font-medium">服务地址</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded-xl bg-background/80 p-3 font-mono text-[11px] text-foreground">
+                          {errorDetails.url}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {errorArgs ? (
+                      <div>
+                        <div className="font-medium">参数</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded-xl bg-background/80 p-3 font-mono text-[11px] text-foreground">
+                          {errorArgs}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {errorDetails.cwd ? (
+                      <div>
+                        <div className="font-medium">工作目录</div>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded-xl bg-background/80 p-3 font-mono text-[11px] text-foreground">
+                          {errorDetails.cwd}
+                        </pre>
+                      </div>
+                    ) : null}
+                    {errorDetails.stderr ? (
+                      <div>
+                        <div className="font-medium">stderr</div>
+                        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-background/80 p-3 font-mono text-[11px] text-foreground">
+                          {errorDetails.stderr}
+                        </pre>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">{errorMessage}</pre>
+                )}
               </div>
             ) : null}
 
@@ -776,7 +952,6 @@ function McpServerTestDialog({
 
 function McpServersTab() {
   const { toast } = useToast();
-  const { confirm, dialogProps } = useConfirmDialog();
   const [servers, setServers] = useState<ManagedMcpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -795,7 +970,10 @@ function McpServersTab() {
   const [lastTestWorkingDirectory, setLastTestWorkingDirectory] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<McpDiscoverResponse | null>(null);
-  const [testError, setTestError] = useState<string | null>(null);
+  const [testError, setTestError] = useState<McpTestErrorState | null>(null);
+  const [pendingEnvSave, setPendingEnvSave] = useState<ManagedMcpServer[] | null>(null);
+  const [pendingEnvSaveMessage, setPendingEnvSaveMessage] = useState('');
+  const [deleteServerTarget, setDeleteServerTarget] = useState<ManagedMcpServer | null>(null);
 
   useEffect(() => {
     try {
@@ -879,20 +1057,37 @@ function McpServersTab() {
   const handleEditorSubmit = async () => {
     const trimmedName = editorDraft.name.trim();
     const trimmedCommand = editorDraft.command.trim();
+    const trimmedUrl = editorDraft.url.trim();
     if (!trimmedName) {
       toast('error', '请先填写 MCP Server 名称');
       return;
     }
-    if (!trimmedCommand) {
+    if (editorDraft.type === 'stdio' && !trimmedCommand) {
       toast('error', '请先填写启动命令');
       return;
+    }
+    if (editorDraft.type !== 'stdio') {
+      if (!trimmedUrl) {
+        toast('error', '请先填写服务地址');
+        return;
+      }
+      try {
+        const parsedUrl = new URL(trimmedUrl);
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          toast('error', '服务地址需要使用 http:// 或 https://');
+          return;
+        }
+      } catch {
+        toast('error', '服务地址格式无效');
+        return;
+      }
     }
 
     let normalized: ManagedMcpServer;
     try {
       normalized = normalizeMcpServer(editorDraft);
     } catch (error: any) {
-      toast('error', error?.message || 'ENV 配置无效');
+      toast('error', error?.message || 'MCP 配置无效');
       return;
     }
 
@@ -902,11 +1097,18 @@ function McpServersTab() {
       return;
     }
 
+    const secretCount = Object.keys(normalized.env || normalized.headers || {}).length;
     const nextServers = editorMode === 'create'
       ? [...servers, normalized]
       : servers.some((server) => server.name === editingServerName)
         ? servers.map((server) => (server.name === editingServerName ? normalized : server))
         : [...servers, normalized];
+
+    if (secretCount > 0) {
+      setPendingEnvSave(nextServers);
+      setPendingEnvSaveMessage(editorMode === 'create' ? 'MCP Server 已添加' : 'MCP Server 已更新');
+      return;
+    }
 
     const success = await persistServers(
       nextServers,
@@ -917,20 +1119,13 @@ function McpServersTab() {
     }
   };
 
-  const handleDeleteServer = async (server: ManagedMcpServer) => {
-    const confirmed = await confirm({
-      title: '删除 MCP Server',
-      description: `确定要删除 MCP Server “${server.name}” 吗？`,
-      confirmLabel: '删除',
-      cancelLabel: '取消',
-      variant: 'destructive',
-    });
-    if (!confirmed) return;
-
+  const confirmDeleteServer = async () => {
+    if (!deleteServerTarget) return;
     await persistServers(
-      servers.filter((item) => item.name !== server.name),
+      servers.filter((item) => item.name !== deleteServerTarget.name),
       'MCP Server 已删除',
     );
+    setDeleteServerTarget(null);
   };
 
   const openTestDialog = (server: ManagedMcpServer) => {
@@ -957,9 +1152,39 @@ function McpServersTab() {
           ...(workingDirectory ? { workingDirectory } : {}),
         }),
       });
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: any = null;
+      if (responseText.trim()) {
+        try {
+          data = JSON.parse(responseText);
+        } catch {
+          const preview = responseText.trim().slice(0, 600);
+          setTestError({
+            message: `HTTP ${response.status} ${response.statusText || '响应解析失败'}`,
+            hint: '服务返回了文本响应，请查看摘要并检查开发服务器或 API 路由日志。',
+            phase: 'connect',
+            code: 'NON_JSON_RESPONSE',
+            stderr: preview,
+          });
+          return;
+        }
+      }
       if (!response.ok || data.error) {
-        setTestError(data.error || 'MCP 测试失败');
+        setTestError(data?.error || {
+          message: `HTTP ${response.status} ${response.statusText || 'MCP 测试失败'}`,
+          hint: '查看 API 路由日志，并确认 MCP Server 配置和测试工作目录。',
+          phase: 'connect',
+          code: 'HTTP_ERROR',
+        });
+        return;
+      }
+      if (!data) {
+        setTestError({
+          message: `HTTP ${response.status} 返回了空响应`,
+          hint: '查看 API 路由日志，并确认 MCP 测试接口完成后返回 JSON 结果。',
+          phase: 'connect',
+          code: 'EMPTY_RESPONSE',
+        });
         return;
       }
       setTestResult(data as McpDiscoverResponse);
@@ -982,8 +1207,10 @@ function McpServersTab() {
         if (!query) return true;
         return [
           server.name,
-          server.command,
+          server.type,
+          getMcpEndpoint(server),
           formatMcpEnv(server.env),
+          formatMcpEnv(server.headers),
         ].join(' ').toLowerCase().includes(query);
       });
   }, [searchQuery, servers]);
@@ -1012,11 +1239,58 @@ function McpServersTab() {
   const handleApplySearch = () => {
     setSearchQuery(searchDraft);
   };
+  const mcpTableColumns: DataTableColumn<{ server: ManagedMcpServer }>[] = [
+    {
+      id: 'name',
+      header: '名称',
+      width: '18%',
+      render: ({ server }) => <div className="font-medium">{server.name}</div>,
+    },
+    {
+      id: 'endpoint',
+      header: '连接信息',
+      width: '42%',
+      render: ({ server }) => <div className="break-all font-mono text-xs text-muted-foreground">{getMcpEndpoint(server)}</div>,
+    },
+    {
+      id: 'secrets',
+      header: 'ENV / 请求头',
+      priority: 2,
+      render: ({ server }) => {
+        const record = server.type === 'stdio' ? server.env : server.headers;
+        const recordCount = Object.keys(record || {}).length;
+        return (
+          <div className="space-y-2">
+            <StatusPill tone={recordCount > 0 ? 'warning' : 'neutral'} className="text-xs">
+              {recordCount > 0 ? `${server.type === 'stdio' ? 'ENV' : 'Headers'} ${recordCount}` : '未设置'}
+            </StatusPill>
+            <div className="text-xs text-muted-foreground">{getMcpEnvPreview(record)}</div>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'type',
+      header: '类型',
+      render: ({ server }) => <StatusPill tone="info" className="text-xs">{getMcpTransportLabel(server.type)}</StatusPill>,
+      priority: 3,
+    },
+  ];
+  const getMcpRowActions = (server: ManagedMcpServer): ActionMenuGroup[] => [
+    {
+      actions: [
+        { id: 'edit', label: '编辑', icon: <Pencil className="h-4 w-4" />, disabled: saving, onSelect: () => openEditDialog(server) },
+        { id: 'test', label: '测试', icon: <Play className="h-4 w-4" />, primary: true, disabled: saving, onSelect: () => openTestDialog(server) },
+        { id: 'delete', label: '删除', icon: <Trash2 className="h-4 w-4" />, destructive: true, disabled: saving, onSelect: () => setDeleteServerTarget(server) },
+      ],
+    },
+  ];
 
   return (
     <>
-      <section className="rounded-[28px] border border-border/70 bg-card/90 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90">
-        <div className="flex min-w-0 flex-wrap items-center gap-3 xl:flex-nowrap">
+      <PageToolbar
+        className="rounded-xl border border-border bg-card px-4"
+        search={(
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -1030,42 +1304,44 @@ function McpServersTab() {
                     handleApplySearch();
                   }
                 }}
-                className="h-11 w-full rounded-2xl border-border/70 bg-background/80 pl-10 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                className="h-10 w-full bg-background pl-10"
               />
             </div>
-            <Button size="sm" onClick={handleApplySearch} className="h-11 shrink-0">
+            <Button size="sm" onClick={handleApplySearch} className="h-10 shrink-0" variant="outline">
               <Search className="mr-1 h-4 w-4" />
               搜索
             </Button>
           </div>
-          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-            <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
+        )}
+        viewToggle={(
+          <div className="inline-flex rounded-lg border border-border bg-background p-1">
               <Button
                 size="sm"
-                variant={viewMode === 'gallery' ? 'default' : 'ghost'}
-                className="h-8 rounded-full px-3"
+                variant={viewMode === 'gallery' ? 'secondary' : 'ghost'}
+                className="h-8 px-3"
                 onClick={() => setViewMode('gallery')}
               >
                 <span className="material-symbols-outlined text-sm">grid_view</span>
               </Button>
               <Button
                 size="sm"
-                variant={viewMode === 'table' ? 'default' : 'ghost'}
-                className="h-8 rounded-full px-3"
+                variant={viewMode === 'table' ? 'secondary' : 'ghost'}
+                className="h-8 px-3"
                 onClick={() => setViewMode('table')}
               >
                 <span className="material-symbols-outlined text-sm">table_rows</span>
               </Button>
-            </div>
-            <Button size="sm" onClick={openCreateDialog} disabled={saving}>
+          </div>
+        )}
+        actions={(
+            <Button size="sm" onClick={openCreateDialog} disabled={saving} variant="outline">
               <Plus className="mr-1 h-4 w-4" />
               添加
             </Button>
-          </div>
-        </div>
-      </section>
+        )}
+      />
 
-      <section className="rounded-[28px] border border-border/60 bg-card/80 p-4 shadow-sm">
+      <section className="rounded-xl border border-border bg-card p-4 shadow-none">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-semibold">MCP Servers</h3>
@@ -1078,112 +1354,64 @@ function McpServersTab() {
         {loading ? (
           <div className="flex h-64 items-center justify-center text-muted-foreground">加载中...</div>
         ) : servers.length === 0 ? (
-          <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-[24px] border border-dashed text-sm text-muted-foreground">
-            <Server className="h-10 w-10" />
-            <div>暂无 MCP Server</div>
-            <Button size="sm" variant="outline" onClick={openCreateDialog}>添加 Server</Button>
-          </div>
+          <EmptyState
+            icon={<Server className="h-5 w-5" />}
+            title="暂无 MCP Server"
+            description="添加 stdio MCP Server 后，可在聊天、工作流或测试时按上下文调用。"
+            primaryAction={<Button size="sm" variant="outline" onClick={openCreateDialog}>添加 Server</Button>}
+          />
         ) : pagination.total === 0 ? (
-          <div className="flex h-64 flex-col items-center justify-center gap-3 text-muted-foreground">
-            <Server className="h-10 w-10" />
-            <div>没有匹配的 MCP Server</div>
-          </div>
+          <EmptyState icon={<Server className="h-5 w-5" />} title="没有匹配的 MCP Server" />
         ) : viewMode === 'table' ? (
-          <div className="overflow-hidden rounded-[24px] border border-border/70 bg-background/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[180px] min-w-[180px]">名称</TableHead>
-                    <TableHead className="w-[420px] min-w-[420px]">启动命令</TableHead>
-                    <TableHead className="w-[220px] min-w-[220px]">ENV</TableHead>
-                    <TableHead className="w-[120px] min-w-[120px]">类型</TableHead>
-                    <TableHead className="w-[220px] min-w-[220px]">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagination.items.map(({ server }) => {
-                    const envCount = Object.keys(server.env || {}).length;
-                    return (
-                      <TableRow key={server.name}>
-                        <TableCell className="align-top">
-                          <div className="font-medium">{server.name}</div>
-                        </TableCell>
-                        <TableCell className="align-top">
-                          <div className="break-all font-mono text-xs text-muted-foreground">{server.command}</div>
-                        </TableCell>
-                        <TableCell className="align-top">
-                          <div className="space-y-2">
-                            <Badge variant={envCount > 0 ? 'outline' : 'secondary'} className="text-xs">
-                              {envCount > 0 ? `ENV ${envCount}` : '未设置'}
-                            </Badge>
-                            <div className="text-xs text-muted-foreground">{getMcpEnvPreview(server.env)}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="align-top">
-                          <Badge variant="outline" className="text-xs">stdio</Badge>
-                        </TableCell>
-                        <TableCell className="align-top">
-                          <div className="flex flex-wrap gap-2">
-                            <Button size="sm" variant="outline" className="h-8" onClick={() => openEditDialog(server)} disabled={saving}>
-                              <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                              编辑
-                            </Button>
-                            <Button size="sm" variant="outline" className="h-8" onClick={() => openTestDialog(server)} disabled={saving}>
-                              <Play className="mr-1.5 h-3.5 w-3.5" />
-                              测试
-                            </Button>
-                            <Button size="sm" variant="ghost" className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => void handleDeleteServer(server)} disabled={saving}>
-                              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                              删除
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
+          <DataTable
+            aria-label="MCP Server 列表"
+            columns={mcpTableColumns}
+            rows={pagination.items}
+            rowKey={({ server }) => server.name}
+            density="comfortable"
+            onRowClick={({ server }) => openEditDialog(server)}
+            rowActions={({ server }) => getMcpRowActions(server)}
+          />
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
             {pagination.items.map(({ server }) => {
-              const envCount = Object.keys(server.env || {}).length;
+              const record = server.type === 'stdio' ? server.env : server.headers;
+              const recordCount = Object.keys(record || {}).length;
               return (
-                <motion.div
+                <DataCard
                   key={server.name}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="relative rounded-[24px] border border-border/70 bg-card/88 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)]"
                 >
-                  <div className="mb-4 flex items-start justify-between gap-3">
+                  <DataCardHeader className="mb-4">
                     <div className="flex min-w-0 items-start gap-2">
-                      <Server className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                      <Server className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0">
-                        <h4 className="truncate text-sm font-semibold">{server.name}</h4>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          <Badge variant="outline" className="text-xs">stdio</Badge>
-                          <Badge variant={envCount > 0 ? 'outline' : 'secondary'} className="text-xs">
-                            {envCount > 0 ? `ENV ${envCount}` : '无 ENV'}
-                          </Badge>
-                        </div>
+                        <DataCardTitle>{server.name}</DataCardTitle>
+                        <DataCardMeta className="mt-1">
+                          <StatusPill tone="info" className="text-xs">{getMcpTransportLabel(server.type)}</StatusPill>
+                          <StatusPill tone={recordCount > 0 ? 'warning' : 'neutral'} className="text-xs">
+                            {recordCount > 0 ? `${server.type === 'stdio' ? 'ENV' : 'Headers'} ${recordCount}` : '无凭据'}
+                          </StatusPill>
+                        </DataCardMeta>
                       </div>
                     </div>
-                    <Button size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => void handleDeleteServer(server)} title="删除" disabled={saving}>
+                    <Button size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDeleteServerTarget(server)} title="删除" disabled={saving}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
-                  </div>
+                  </DataCardHeader>
                   <div className="space-y-4">
-                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Command</div>
-                      <div className="mt-2 break-all font-mono text-xs text-muted-foreground">{server.command}</div>
+                    <div className="rounded-xl border border-border bg-background p-3">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {server.type === 'stdio' ? 'Command' : 'URL'}
+                      </div>
+                      <div className="mt-2 break-all font-mono text-xs text-muted-foreground">{getMcpEndpoint(server)}</div>
                     </div>
-                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">ENV</div>
-                      <div className="mt-2 text-xs text-muted-foreground">{getMcpEnvPreview(server.env)}</div>
+                    <div className="rounded-xl border border-border bg-background p-3">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {server.type === 'stdio' ? 'ENV' : 'Headers'}
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground">{getMcpEnvPreview(record)}</div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <DataCardActions className="justify-start">
                       <Button size="sm" variant="outline" className="h-8" onClick={() => openEditDialog(server)} disabled={saving}>
                         <Pencil className="mr-1.5 h-3.5 w-3.5" />
                         编辑
@@ -1192,9 +1420,9 @@ function McpServersTab() {
                         <Play className="mr-1.5 h-3.5 w-3.5" />
                         测试
                       </Button>
-                    </div>
+                    </DataCardActions>
                   </div>
-                </motion.div>
+                </DataCard>
               );
             })}
           </div>
@@ -1238,7 +1466,45 @@ function McpServersTab() {
         onRunTest={() => void runServerTest()}
       />
 
-      {dialogProps && <ConfirmDialog {...dialogProps} />}
+      <ConfirmModal
+        open={Boolean(pendingEnvSave)}
+        variant="credential"
+        title={editorDraft.type === 'stdio' ? '确认保存 MCP ENV' : '确认保存 MCP 请求头'}
+        objectName={editorDraft.name.trim()}
+        consequence={`该 MCP Server 将保存 ${
+          editorDraft.type === 'stdio'
+            ? getMcpRecordStatus(editorDraft.envText, 'ENV').count
+            : getMcpRecordStatus(editorDraft.headersText, '请求头').count
+        } 个${editorDraft.type === 'stdio' ? '环境变量' : '请求头'}。请确认其中包含的凭据只用于本机配置。`}
+        confirmLabel="确认保存"
+        loading={saving}
+        onConfirm={async () => {
+          if (!pendingEnvSave) return;
+          const success = await persistServers(pendingEnvSave, pendingEnvSaveMessage);
+          if (success) {
+            setEditorOpen(false);
+            setPendingEnvSave(null);
+          }
+        }}
+        onCancel={() => setPendingEnvSave(null)}
+        onOpenChange={(open) => {
+          if (!open) setPendingEnvSave(null);
+        }}
+      />
+      <ConfirmModal
+        open={Boolean(deleteServerTarget)}
+        variant="delete"
+        title="删除 MCP Server"
+        objectName={deleteServerTarget?.name}
+        consequence="删除后将移除该 MCP Server 配置，此操作无法撤销。"
+        confirmLabel="删除"
+        loading={saving}
+        onConfirm={confirmDeleteServer}
+        onCancel={() => setDeleteServerTarget(null)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteServerTarget(null);
+        }}
+      />
     </>
   );
 }
@@ -1246,16 +1512,14 @@ function McpServersTab() {
 export default function SkillsManager({
   embedded = false,
   returnTarget = { href: '/dashboard', label: '返回仪表盘' },
+  initialTab = 'local',
 }: SkillsManagerProps) {
   const { toast } = useToast();
-  const { confirm, dialogProps } = useConfirmDialog();
+  const queryClient = useQueryClient();
   useDocumentTitle(embedded ? null : 'Skills/MCP 管理');
 
-  const [activeTab, setActiveTab] = useState<TabType>('local');
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
 
-  const [skills, setSkills] = useState<LocalSkill[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [embeddedSearchDraft, setEmbeddedSearchDraft] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<LocalSkill | null>(null);
@@ -1264,8 +1528,6 @@ export default function SkillsManager({
   const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set());
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [runtimeSkillsDir, setRuntimeSkillsDir] = useState('');
-  const [installSkills, setInstallSkills] = useState<LocalSkill[]>([]);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [syncingAllBuiltin, setSyncingAllBuiltin] = useState(false);
   const [syncingSkillNames, setSyncingSkillNames] = useState<Set<string>>(new Set());
@@ -1294,9 +1556,50 @@ export default function SkillsManager({
     message: '',
   });
   const [selectedOnlineSkill, setSelectedOnlineSkill] = useState<MarketplaceSkill | null>(null);
+  const [deleteSkillNames, setDeleteSkillNames] = useState<string[]>([]);
+  const [installSkillName, setInstallSkillName] = useState<string | null>(null);
+  const skillsQuery = useSkillsQuery({ enabled: activeTab === 'local' || activeTab === 'online' });
+  const marketplaceSearchParams = useMemo(() => ({
+    keyword: searchKeyword,
+    category: selectedCategory,
+    pageNum: onlinePage,
+    pageSize: onlinePageSize,
+  }), [onlinePage, onlinePageSize, searchKeyword, selectedCategory]);
+  const marketplaceSearchQuery = useMarketplaceSearchQuery(marketplaceSearchParams, { enabled: activeTab === 'online' });
+  const marketplaceCategoriesQuery = useMarketplaceCategoriesQuery();
+  const uploadSkillZipMutation = useUploadSkillZipMutation();
+  const deleteSkillsMutation = useDeleteSkillsMutation();
+  const syncSkillsMutation = useSyncSkillsMutation();
+  const exportSkillsMutation = useExportSkillsMutation();
+  const queriedSkills = skillsQuery.data?.skills || [];
+  const installSkills = skillsQuery.data?.installSkills || [];
+  useSyncLocalSkillsToDb(queriedSkills);
+  const skills = useLocalSkillRows({
+    keyword: '',
+    source: 'all',
+    tags: [],
+    sortKey: 'name',
+    sortDirection: 'asc',
+  }) as LocalSkill[];
+  const sortedLocalSkills = useLocalSkillRows({
+    keyword: searchQuery,
+    source: selectedSource,
+    tags: selectedTags,
+    sortKey: localSortKey,
+    sortDirection: localSortDirection,
+  }) as LocalSkill[];
+  const runtimeSkillsDir = skillsQuery.data?.runtimeSkillsDir || '';
+  const loading = activeTab === 'local' && skillsQuery.isLoading;
+  const error = activeTab === 'local' && skillsQuery.error
+    ? (skillsQuery.error instanceof Error ? skillsQuery.error.message : '加载 skills 失败')
+    : null;
+  const refreshSkills = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.skills() });
+  }, [queryClient]);
+
   useEffect(() => {
     try {
-      const savedActiveTab = localStorage.getItem(ACTIVE_TAB_KEY);
+      const savedActiveTab = initialTab === 'local' ? localStorage.getItem(ACTIVE_TAB_KEY) : null;
       if (savedActiveTab === 'local' || savedActiveTab === 'online' || savedActiveTab === 'mcp' || savedActiveTab === 'plugins') {
         setActiveTab(savedActiveTab);
       }
@@ -1313,7 +1616,7 @@ export default function SkillsManager({
       const savedOnlinePageSize = Number(localStorage.getItem(ONLINE_PAGE_SIZE_KEY) || DEFAULT_PAGE_SIZE);
       if (PAGE_SIZE_OPTIONS.includes(savedOnlinePageSize)) setOnlinePageSize(savedOnlinePageSize);
     } catch {}
-  }, []);
+  }, [initialTab]);
 
   useEffect(() => {
     try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch {}
@@ -1344,135 +1647,70 @@ export default function SkillsManager({
   }, [searchKeyword, selectedCategory, onlinePageSize]);
 
   useEffect(() => {
-    if (activeTab === 'local') {
-      void loadSkills();
-      return;
+    if (activeTab !== 'online') return;
+    setOnlineLoading(marketplaceSearchQuery.isFetching);
+    if (marketplaceSearchQuery.data?.success) {
+      setOnlineSkills(marketplaceSearchQuery.data.data?.skills || []);
+      setTotalItems(marketplaceSearchQuery.data.data?.total || 0);
+      setOnlineError(null);
+    } else if (marketplaceSearchQuery.data && !marketplaceSearchQuery.data.success) {
+      setOnlineError(marketplaceSearchQuery.data.error || '加载应用市场失败');
+    } else if (marketplaceSearchQuery.isError) {
+      setOnlineError(marketplaceSearchQuery.error instanceof Error ? marketplaceSearchQuery.error.message : '加载应用市场失败');
     }
-    if (activeTab === 'online') {
-      void loadCategories();
-    }
-  }, [activeTab]);
+  }, [activeTab, marketplaceSearchQuery.data, marketplaceSearchQuery.error, marketplaceSearchQuery.isError, marketplaceSearchQuery.isFetching]);
 
   useEffect(() => {
-    if (activeTab !== 'online') return;
-
-    setOnlineLoading(true);
-    setOnlineError(null);
-
-    const fetchSkills = async () => {
-      try {
-        const response = await fetch('/api/marketplace/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            keyword: searchKeyword,
-            category: selectedCategory,
-            pageNum: onlinePage,
-            pageSize: onlinePageSize,
-          }),
-        });
-        const data = await response.json();
-        if (data.success) {
-          setOnlineSkills(data.data.skills || []);
-          setTotalItems(data.data.total || 0);
-        } else {
-          setOnlineError(data.error || '加载应用市场失败');
-        }
-      } catch {
-        setOnlineError('加载应用市场失败');
-      } finally {
-        setOnlineLoading(false);
-      }
-    };
-
-    void fetchSkills();
-  }, [activeTab, searchKeyword, selectedCategory, onlinePage, onlinePageSize]);
-
-  const loadSkills = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await fetch('/api/skills');
-      const data = await response.json();
-      if (data.error) {
-        setError(data.error);
-      } else {
-        setSkills(data.skills || []);
-        setInstallSkills(data.installSkills || []);
-        setRuntimeSkillsDir(data.runtimeSkillsDir || '');
-      }
-    } catch {
-      setError('加载 skills 失败');
-    } finally {
-      setLoading(false);
+    if (marketplaceCategoriesQuery.data?.success) {
+      setCategories(marketplaceCategoriesQuery.data.data?.categories || []);
     }
-  };
-
-  const loadCategories = async () => {
-    try {
-      const response = await fetch('/api/marketplace/categories');
-      const data = await response.json();
-      if (data.success) {
-        setCategories(data.data.categories || []);
-      }
-    } catch {}
-  };
+  }, [marketplaceCategoriesQuery.data]);
 
   const handleUploadZip = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const response = await fetch('/api/skills', { method: 'POST', body: formData });
-      const data = await response.json();
+      const data = await uploadSkillZipMutation.mutateAsync(file);
       if (data.success) {
         toast('success', data.message || '导入成功');
-        await loadSkills();
       } else {
         toast('error', data.error || '导入失败');
       }
-    } catch {
-      toast('error', '导入失败');
+    } catch (error: any) {
+      toast('error', error?.message || '导入失败');
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const handleDeleteSkills = async (skillNames: string[]) => {
+  const requestDeleteSkills = (skillNames: string[]) => {
     if (skillNames.length === 0) {
       toast('error', '请先选择要删除的 Skill');
       return;
     }
-    const confirmed = await confirm({
-      title: '确认删除',
-      description: `确定要删除 ${skillNames.length} 个 Skill 吗？此操作不可撤销。`,
-      confirmLabel: '删除',
-      variant: 'destructive',
-    });
-    if (!confirmed) return;
+    setDeleteSkillNames(skillNames);
+  };
+
+  const confirmDeleteSkills = async () => {
+    if (deleteSkillNames.length === 0) return;
     try {
-      const response = await fetch('/api/skills', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skills: skillNames }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
+      const data = await deleteSkillsMutation.mutateAsync(deleteSkillNames);
+      if (!data.success) {
         toast('error', data.error || '删除失败');
         return;
       }
       toast('success', data.message || `已删除 ${data.deleted?.length || 0} 个 Skill`);
       setSelectedForExport((prev) => {
         const next = new Set(prev);
-        skillNames.forEach((name) => next.delete(name));
+        deleteSkillNames.forEach((name) => next.delete(name));
         return next;
       });
-      await loadSkills();
-    } catch {
-      toast('error', '删除失败');
+      setSelectedSkill(null);
+      setDeleteSkillNames([]);
+    } catch (error: any) {
+      toast('error', error?.message || '删除失败');
     }
   };
 
@@ -1481,7 +1719,7 @@ export default function SkillsManager({
       toast('error', '请先选择要删除的 Skill');
       return;
     }
-    await handleDeleteSkills(Array.from(selectedForExport));
+    requestDeleteSkills(Array.from(selectedForExport));
   };
 
   const handleExport = async () => {
@@ -1491,17 +1729,7 @@ export default function SkillsManager({
     }
     setExporting(true);
     try {
-      const response = await fetch('/api/skills', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skills: Array.from(selectedForExport) }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        toast('error', data.error || '导出失败');
-        return;
-      }
-      const blob = await response.blob();
+      const blob = await exportSkillsMutation.mutateAsync(Array.from(selectedForExport));
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -1509,8 +1737,8 @@ export default function SkillsManager({
       a.click();
       URL.revokeObjectURL(url);
       toast('success', `已导出 ${selectedForExport.size} 个 Skill`);
-    } catch {
-      toast('error', '导出失败');
+    } catch (error: any) {
+      toast('error', error?.message || '导出失败');
     } finally {
       setExporting(false);
     }
@@ -1553,22 +1781,16 @@ export default function SkillsManager({
     });
 
     try {
-      const response = await fetch('/api/skills', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skills: names }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
+      const data = await syncSkillsMutation.mutateAsync(names);
+      if (!data.success) {
         toast('error', data.error || '同步失败');
         return false;
       }
 
       toast('success', successMessage || data.message || '同步成功');
-      await loadSkills();
       return true;
-    } catch {
-      toast('error', '同步失败');
+    } catch (error: any) {
+      toast('error', error?.message || '同步失败');
       return false;
     } finally {
       setSyncingSkillNames((prev) => {
@@ -1591,7 +1813,14 @@ export default function SkillsManager({
     }
   };
 
-  const handleInstall = async (skillName: string) => {
+  const requestInstall = (skillName: string) => {
+    setInstallSkillName(skillName);
+  };
+
+  const confirmInstall = async () => {
+    const skillName = installSkillName;
+    if (!skillName) return;
+    setInstallSkillName(null);
     setSelectedOnlineSkill(null);
     setInstalling(skillName);
     setInstallProgress({
@@ -1608,14 +1837,14 @@ export default function SkillsManager({
         message: '正在下载...',
       }));
 
-      const response = await fetch('/api/marketplace/install', {
+      const response = await apiFetch('/api/marketplace/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skillName }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
-      if (data.success) {
+      if (response.ok && data.success) {
         setInstallProgress({
           skillName,
           status: 'success',
@@ -1634,7 +1863,7 @@ export default function SkillsManager({
           return installName === skillName ? { ...prev, installed: true } : prev;
         });
         toast('success', `Skill "${skillName}" 已成功安装`);
-        await loadSkills();
+        await refreshSkills();
       } else {
         setInstallProgress({
           skillName,
@@ -1715,37 +1944,6 @@ export default function SkillsManager({
     [installSkills],
   );
 
-  const filteredLocalSkills = useMemo(() => {
-    return skills.filter((skill) => {
-      if (selectedSource !== 'all' && normalizeSkillSource(skill) !== selectedSource) return false;
-      if (selectedTags.length > 0 && !selectedTags.some((tag) => skill.tags?.includes(tag))) return false;
-      if (!searchQuery) return true;
-      const q = searchQuery.toLowerCase();
-      return (
-        skill.name.toLowerCase().includes(q) ||
-        skill.description.toLowerCase().includes(q) ||
-        (skill.descriptionZh || '').toLowerCase().includes(q) ||
-        skill.tags?.some((tag) => tag.toLowerCase().includes(q))
-      );
-    });
-  }, [skills, selectedSource, selectedTags, searchQuery]);
-
-  const sortedLocalSkills = useMemo(() => {
-    const items = [...filteredLocalSkills];
-    items.sort((a, b) => {
-      let value = 0;
-      if (localSortKey === 'name') {
-        value = a.name.localeCompare(b.name, 'zh-CN');
-      } else if (localSortKey === 'source') {
-        value = getSourceLabel(normalizeSkillSource(a)).localeCompare(getSourceLabel(normalizeSkillSource(b)), 'zh-CN');
-      } else {
-        value = (Date.parse(a.updatedAt || '') || 0) - (Date.parse(b.updatedAt || '') || 0);
-      }
-      return localSortDirection === 'asc' ? value : -value;
-    });
-    return items;
-  }, [filteredLocalSkills, localSortDirection, localSortKey]);
-
   const localPagination = useMemo(() => {
     const total = sortedLocalSkills.length;
     const totalPages = Math.max(1, Math.ceil(total / localPageSize));
@@ -1810,13 +2008,113 @@ export default function SkillsManager({
       : <ArrowDown className="h-3.5 w-3.5 text-primary" />;
   };
 
+  const localSkillColumns: DataTableColumn<LocalSkill>[] = [
+    {
+      id: 'name',
+      header: '名称',
+      sortable: true,
+      width: '40%',
+      render: (skill) => (
+        <div className="min-w-[220px] space-y-1">
+          <div className="truncate font-medium" title={skill.name}>{skill.name}</div>
+          <div className="line-clamp-2 text-xs leading-5 text-muted-foreground">{getDisplayDescription(skill)}</div>
+        </div>
+      ),
+    },
+    {
+      id: 'source',
+      header: '标签 / 来源',
+      sortable: true,
+      width: '28%',
+      render: (skill) => (
+        <div className="flex flex-wrap gap-1.5">
+          <StatusPill tone={getSourceTone(normalizeSkillSource(skill))} className="shrink-0 whitespace-nowrap">
+            {getSourceLabel(normalizeSkillSource(skill))}
+          </StatusPill>
+          {(skill.tags || []).slice(0, 4).map((tag) => (
+            <Badge key={tag} variant="outline" className="shrink-0 whitespace-nowrap text-xs">{tag}</Badge>
+          ))}
+        </div>
+      ),
+    },
+    {
+      id: 'status',
+      header: '状态',
+      priority: 2,
+      render: (skill) => (
+        <div className="flex flex-wrap gap-1">
+          {syncStatusByName[skill.name]?.aceharnessBuiltin ? <StatusPill tone="accent" className="text-xs">内置可同步</StatusPill> : null}
+          {skill.hasPromptMd ? <StatusPill tone="success" className="text-xs">PROMPT</StatusPill> : null}
+        </div>
+      ),
+    },
+  ];
+  const getLocalSkillActions = (skill: LocalSkill): ActionMenuGroup[] => [
+    {
+      actions: [
+        { id: 'detail', label: '详情', primary: true, onSelect: () => setSelectedSkill(skill) },
+        ...(syncStatusByName[skill.name]?.inInstall
+          ? [{ id: 'sync', label: '同步', inline: false, disabled: syncingSkillNames.has(skill.path), onSelect: () => void syncInstalledSkills([skill.path], `已同步 ${skill.name}`) }]
+          : []),
+        { id: 'delete', label: '删除', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => requestDeleteSkills([skill.name]) },
+      ],
+    },
+  ];
+  const marketplaceColumns: DataTableColumn<MarketplaceSkill>[] = [
+    {
+      id: 'name',
+      header: '名称',
+      width: '24%',
+      render: (skill) => (
+        <div className="min-w-[180px] space-y-1">
+          <div className="truncate font-medium">{skill.enName || skill.name}</div>
+          {skill.enName && skill.name !== skill.enName ? <div className="truncate text-xs text-muted-foreground">{skill.name}</div> : null}
+          <div className="line-clamp-2 text-xs text-muted-foreground">{skill.description}</div>
+        </div>
+      ),
+    },
+    { id: 'organization', header: '组织', accessor: (skill) => skill.organization || '-', priority: 2 },
+    { id: 'author', header: '作者', accessor: (skill) => skill.author || '-', priority: 3 },
+    { id: 'downloads', header: '下载量', accessor: (skill) => skill.downloads, priority: 3 },
+    { id: 'score', header: '评分', accessor: (skill) => skill.overallScore || '-', priority: 3 },
+    { id: 'updatedAt', header: '更新时间', accessor: (skill) => formatOnlineUpdatedAt(skill.updatedAt), priority: 3 },
+    {
+      id: 'tags',
+      header: '标签',
+      render: (skill) => (
+        <div className="flex gap-1 overflow-hidden whitespace-nowrap">
+          {skill.tags.slice(0, 4).map((tag) => <Badge key={tag} variant="outline" className="shrink-0 text-xs">{tag}</Badge>)}
+        </div>
+      ),
+      priority: 2,
+    },
+  ];
+  const getMarketplaceActions = (skill: MarketplaceSkill): ActionMenuGroup[] => {
+    const installName = skill.enName || skill.name;
+    return [{
+      actions: [
+        { id: 'detail', label: '详情', primary: skill.installed, onSelect: () => setSelectedOnlineSkill(skill) },
+        ...(skill.installed ? [{ id: 'installed', label: '已安装', disabled: true, disabledReason: '本地已安装同名 Skill' }] : []),
+        { id: 'install', label: skill.installed ? '重新安装' : '安装', primary: !skill.installed, inline: !skill.installed, onSelect: () => requestInstall(installName) },
+      ],
+    }];
+  };
+
+  const activeTabLabel = activeTab === 'local'
+    ? 'Installed Skills'
+    : activeTab === 'online'
+      ? 'Marketplace'
+      : activeTab === 'mcp'
+        ? 'MCP Servers'
+        : 'Plugins';
+
   const renderTabStrip = (className: string, ref?: any) => (
     <section ref={ref} className={className}>
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
-          variant={activeTab === 'local' ? 'default' : 'ghost'}
-          className="rounded-full"
+          variant={activeTab === 'local' ? 'secondary' : 'ghost'}
+          className="rounded-lg"
           onClick={() => setActiveTab('local')}
         >
           <Puzzle className="w-4 h-4 mr-2" />
@@ -1824,8 +2122,8 @@ export default function SkillsManager({
         </Button>
         <Button
           size="sm"
-          variant={activeTab === 'online' ? 'default' : 'ghost'}
-          className="rounded-full"
+          variant={activeTab === 'online' ? 'secondary' : 'ghost'}
+          className="rounded-lg"
           onClick={() => setActiveTab('online')}
         >
           <Store className="w-4 h-4 mr-2" />
@@ -1833,8 +2131,8 @@ export default function SkillsManager({
         </Button>
         <Button
           size="sm"
-          variant={activeTab === 'mcp' ? 'default' : 'ghost'}
-          className="rounded-full"
+          variant={activeTab === 'mcp' ? 'secondary' : 'ghost'}
+          className="rounded-lg"
           onClick={() => setActiveTab('mcp')}
         >
           <Server className="w-4 h-4 mr-2" />
@@ -1842,8 +2140,8 @@ export default function SkillsManager({
         </Button>
         <Button
           size="sm"
-          variant={activeTab === 'plugins' ? 'default' : 'ghost'}
-          className="rounded-full"
+          variant={activeTab === 'plugins' ? 'secondary' : 'ghost'}
+          className="rounded-lg"
           onClick={() => setActiveTab('plugins')}
         >
           <Puzzle className="w-4 h-4 mr-2" />
@@ -1854,7 +2152,7 @@ export default function SkillsManager({
   );
 
   const renderLocalToolbar = (className: string) => (
-    <section className={className}>
+    <PageToolbar className={className}>
       <input
         ref={fileInputRef}
         type="file"
@@ -1937,11 +2235,11 @@ export default function SkillsManager({
           ) : null}
         </div>
       </div>
-    </section>
+    </PageToolbar>
   );
 
   const renderOnlineToolbar = (className: string) => (
-    <section className={className}>
+    <PageToolbar className={className}>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-1 flex-col gap-3">
           <SkillSearch
@@ -1971,7 +2269,7 @@ export default function SkillsManager({
           </div>
         </div>
       </div>
-    </section>
+    </PageToolbar>
   );
   const { isDashboardShell } = useDashboardShellHeader({
     title: 'Skills/MCP 管理',
@@ -2007,46 +2305,50 @@ export default function SkillsManager({
       )}
     >
       {!embedded && !isDashboardShell ? (
-        <header
-          className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70"
-        >
-          <div className="flex items-center gap-4">
+        <PageHeader
+          className="sticky top-0 z-40 bg-card"
+          eyebrow="Resources"
+          title="Resources"
+          subtitle="统一管理 Installed Skills、MCP Servers、Marketplace 与运行时插件。"
+          status={<StatusPill tone="accent">{activeTabLabel}</StatusPill>}
+          leading={(
             <Button variant="ghost" size="sm" asChild>
               <Link href={returnTarget.href}>
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 {returnTarget.label}
               </Link>
             </Button>
-            <div className="h-6 w-px bg-border" />
-            <div>
-              <h1 className="text-2xl font-bold">Skills/MCP 管理</h1>
-              <p className="text-xs text-muted-foreground">统一管理本地 Skills、MCP 与应用市场安装</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {activeTab === 'local' ? (
-              <>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".zip"
-                  className="hidden"
-                  onChange={handleUploadZip}
-                />
-                <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                  <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
-                  {uploading ? '导入中...' : '上传 Skill'}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
-                  <FolderOpen className="w-4 h-4 mr-1" />
-                  工作目录
-                </Button>
-              </>
-            ) : null}
+          )}
+          secondaryActions={(
+            <>
+              {activeTab === 'local' ? (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".zip"
+                    className="hidden"
+                    onChange={handleUploadZip}
+                  />
+                  <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                    <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
+                    {uploading ? '导入中...' : '上传 Skill'}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
+                    <FolderOpen className="w-4 h-4 mr-1" />
+                    工作目录
+                  </Button>
+                </>
+              ) : null}
+            </>
+          )}
+          overflowActions={(
+            <>
             <LanguageToggle />
             <ThemeToggle />
-          </div>
-        </header>
+            </>
+          )}
+        />
       ) : null}
 
       <div
@@ -2059,9 +2361,9 @@ export default function SkillsManager({
         )}
       >
         {embedded ? (
-          renderTabStrip('rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/95')
+          renderTabStrip('rounded-xl border border-border bg-card p-3 shadow-none')
         ) : (
-          renderTabStrip('rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/95')
+          renderTabStrip('rounded-xl border border-border bg-card p-3 shadow-none')
         )}
 
         {!embedded && activeTab !== 'plugins' && activeTab !== 'mcp' ? (
@@ -2072,10 +2374,10 @@ export default function SkillsManager({
               <div>
                 <div
                   className={cn(
-                    'rounded-[28px] border border-border/70 bg-card/90 p-4 backdrop-blur supports-[backdrop-filter]:bg-card/90',
+                    'rounded-xl border border-border bg-card p-4 shadow-none',
                     activeTab === 'online'
-                      ? 'shadow-[0_18px_60px_rgba(15,23,42,0.08)]'
-                      : 'shadow-sm',
+                      ? ''
+                      : '',
                   )}
                 >
                   {activeTab === 'local'
@@ -2089,10 +2391,10 @@ export default function SkillsManager({
 
         {activeTab === 'local' ? (
           <>
-            {embedded ? renderLocalToolbar('sticky top-0 z-20 rounded-[28px] border border-border/70 bg-card/90 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90') : null}
+            {embedded ? renderLocalToolbar('sticky top-0 z-20 rounded-xl border border-border bg-card p-4 shadow-none') : null}
 
-            <section className="rounded-[28px] border border-border/70 bg-card/70 p-4 shadow-sm">
-              <div className="rounded-[24px] border border-border/60 bg-background/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+            <section className="rounded-xl border border-border bg-card p-4 shadow-none">
+              <div className="rounded-xl border border-border bg-background p-4">
                 <div className="flex flex-wrap items-center gap-2 overflow-x-hidden">
                   <span className="shrink-0 text-sm text-muted-foreground">标签筛选</span>
                   {allTags.length > 0 ? (
@@ -2126,95 +2428,44 @@ export default function SkillsManager({
               />
             ) : null}
 
-            <section className="rounded-[28px] border border-border/60 bg-card/80 p-4 shadow-sm">
+            <section className="rounded-xl border border-border bg-card p-4 shadow-none">
               {loading ? (
                 <div className="flex items-center justify-center h-64 text-muted-foreground">加载中...</div>
               ) : error ? (
                 <div className="flex flex-col items-center justify-center h-64 gap-4">
                   <p className="text-destructive">{error}</p>
-                  <Button onClick={() => void loadSkills()}>重试</Button>
+                  <Button onClick={() => void skillsQuery.refetch()}>重试</Button>
                 </div>
               ) : localPagination.total === 0 ? (
-                <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-                  <Puzzle className="w-12 h-12 mb-4" />
-                  <p>{searchQuery ? '没有匹配的 Skills' : '暂无 Skills'}</p>
-                </div>
+                <EmptyState
+                  icon={<Puzzle className="h-5 w-5" />}
+                  title={searchQuery ? '没有匹配的 Skills' : '暂无 Skills'}
+                  description="可通过上传 zip、同步内置 Skill 或从 Marketplace 安装来补充资源。"
+                />
               ) : localViewMode === 'table' ? (
-                <div className="overflow-hidden rounded-[24px] border border-border/70 bg-background/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>选择</TableHead>
-                        <TableHead className="w-[180px] min-w-[180px]">
-                          <button className="inline-flex items-center gap-2" onClick={() => handleLocalSort('name')}>
-                            名称
-                            <SortIcon active={localSortKey === 'name'} direction={localSortDirection} />
-                          </button>
-                        </TableHead>
-                        <TableHead className="w-[240px] min-w-[240px] whitespace-nowrap">
-                          <button className="inline-flex items-center gap-2" onClick={() => handleLocalSort('source')}>
-                            标签 / 来源
-                            <SortIcon active={localSortKey === 'source'} direction={localSortDirection} />
-                          </button>
-                        </TableHead>
-                        <TableHead>状态</TableHead>
-                        <TableHead className="w-[60px]">操作</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {localPagination.items.map((skill) => (
-                        <TableRow key={skill.name} className="cursor-pointer" onClick={() => setSelectedSkill(skill)}>
-                          <TableCell onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={selectedForExport.has(skill.name)}
-                              onChange={() => toggleExportSelection(skill.name)}
-                            />
-                          </TableCell>
-                          <TableCell className="w-[180px] min-w-[180px]">
-                            <div className="space-y-1">
-                              <div className="font-medium">{skill.name}</div>
-                              <div className="text-xs text-muted-foreground line-clamp-2">{getDisplayDescription(skill)}</div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="w-[240px] min-w-[240px] max-w-[240px]">
-                            <div className="flex flex-wrap gap-1.5">
-                              <Badge className={`shrink-0 whitespace-nowrap ${SOURCE_COLORS[normalizeSkillSource(skill)] || DEFAULT_SOURCE_COLOR}`}>
-                                {getSourceLabel(normalizeSkillSource(skill))}
-                              </Badge>
-                              {(skill.tags || []).slice(0, 4).map((tag) => (
-                                <Badge key={tag} variant="outline" className="shrink-0 whitespace-nowrap text-xs">{tag}</Badge>
-                              ))}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex flex-wrap gap-1">
-                              {syncStatusByName[skill.name]?.aceharnessBuiltin ? (
-                                <Badge variant="outline" className="text-xs border-primary/40 text-primary">内置可同步</Badge>
-                              ) : null}
-                              {skill.hasPromptMd ? (
-                                <Badge variant="outline" className="text-xs border-green-500/40 text-green-600 dark:text-green-400">PROMPT</Badge>
-                              ) : null}
-                            </div>
-                          </TableCell>
-                          <TableCell onClick={(e) => e.stopPropagation()}>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                              onClick={() => handleDeleteSkills([skill.name])}
-                              title="删除"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-                </div>
+                <DataTable
+                  aria-label="本地 Skill 列表"
+                  columns={localSkillColumns}
+                  rows={localPagination.items}
+                  rowKey="name"
+                  density="comfortable"
+                  onRowClick={setSelectedSkill}
+                  rowActions={(skill) => getLocalSkillActions(skill)}
+                  selection={{
+                    selectedKeys: Array.from(selectedForExport),
+                    onSelectedKeysChange: (keys) => setSelectedForExport(new Set(keys.map(String))),
+                  }}
+                  sort={{
+                    columnId: localSortKey,
+                    direction: localSortDirection,
+                    onSortChange: ({ columnId, direction }) => {
+                      if (columnId === 'name' || columnId === 'source') {
+                        setLocalSortKey(columnId);
+                        setLocalSortDirection(direction);
+                      }
+                    },
+                  }}
+                />
               ) : (
                 <>
                 {localPagination.items.length > 0 && (
@@ -2251,19 +2502,16 @@ export default function SkillsManager({
                     const syncStatus = syncStatusByName[skill.name];
                     const isSyncing = syncingSkillNames.has(skill.path);
                     return (
-                      <motion.div
+                      <DataCard
                         key={skill.name}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className={`relative rounded-[24px] border border-border/70 bg-card/88 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)] cursor-pointer ${
-                          selectedForExport.has(skill.name) ? 'ring-2 ring-primary' : ''
-                        }`}
+                        selected={selectedForExport.has(skill.name)}
+                        className="relative cursor-pointer"
                         onClick={() => setSelectedSkill(skill)}
                       >
                         <div className="absolute top-3 right-3 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                           <button
                             className="w-5 h-5 rounded flex items-center justify-center text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive"
-                            onClick={() => handleDeleteSkills([skill.name])}
+                            onClick={() => requestDeleteSkills([skill.name])}
                             title="删除"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -2274,28 +2522,30 @@ export default function SkillsManager({
                             {selectedForExport.has(skill.name) ? <span className="text-white text-xs">✓</span> : null}
                           </div>
                         </div>
-                        <div className="pr-8">
-                          <h3 className="font-semibold text-sm">{skill.name}</h3>
-                          <p className="mt-2 text-xs leading-6 text-muted-foreground line-clamp-3">{getDisplayDescription(skill)}</p>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-1.5">
-                          <Badge className={SOURCE_COLORS[normalizeSkillSource(skill)] || DEFAULT_SOURCE_COLOR}>
+                        <DataCardHeader className="pr-8">
+                          <div className="min-w-0">
+                            <DataCardTitle>{skill.name}</DataCardTitle>
+                            <DataCardDescription className="line-clamp-3 text-xs">{getDisplayDescription(skill)}</DataCardDescription>
+                          </div>
+                        </DataCardHeader>
+                        <DataCardMeta>
+                          <StatusPill tone={getSourceTone(normalizeSkillSource(skill))}>
                             {getSourceLabel(normalizeSkillSource(skill))}
-                          </Badge>
+                          </StatusPill>
                           {syncStatusByName[skill.name]?.aceharnessBuiltin ? (
-                            <Badge variant="outline" className="text-xs border-primary/40 text-primary">内置可同步</Badge>
+                            <StatusPill tone="accent" className="text-xs">内置可同步</StatusPill>
                           ) : null}
                           {skill.hasPromptMd ? (
-                            <Badge variant="outline" className="text-xs border-green-500/40 text-green-600 dark:text-green-400">PROMPT</Badge>
+                            <StatusPill tone="success" className="text-xs">PROMPT</StatusPill>
                           ) : null}
-                        </div>
+                        </DataCardMeta>
                         <div className="mt-4 flex min-h-12 flex-wrap gap-1.5">
                           {(skill.tags || []).slice(0, 4).map((tag) => (
                             <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
                           ))}
                         </div>
                         <div
-                          className="mt-4 flex items-center justify-between gap-3 rounded-[18px] border border-border/60 bg-background/75 px-3 py-2 text-xs text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                          className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2 text-xs text-muted-foreground"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <span className="min-w-0 truncate">
@@ -2323,7 +2573,7 @@ export default function SkillsManager({
                             </Button>
                           </div>
                         </div>
-                      </motion.div>
+                      </DataCard>
                     );
                   })}
                 </div>
@@ -2346,149 +2596,125 @@ export default function SkillsManager({
               />
             ) : null}
 
-            {selectedSkill ? (
-              <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setSelectedSkill(null)}>
-                <div className="bg-card rounded-lg border w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-                  <div className="p-6 border-b flex items-center justify-between flex-shrink-0">
-                    <div>
-                      <h2 className="text-xl font-semibold">{selectedSkill.name}</h2>
-                      <div className="flex gap-2 mt-1">
-                        <Badge className={SOURCE_COLORS[normalizeSkillSource(selectedSkill)] || DEFAULT_SOURCE_COLOR}>
+            <DetailDrawer open={Boolean(selectedSkill)} onOpenChange={(open) => !open && setSelectedSkill(null)}>
+              <DetailDrawerContent widthClassName="w-[min(520px,calc(100vw-1rem))]">
+                {selectedSkill ? (
+                  <>
+                    <DetailDrawerHeader>
+                      <DetailDrawerTitle>{selectedSkill.name}</DetailDrawerTitle>
+                      <DetailDrawerDescription>{getDisplayDescription(selectedSkill)}</DetailDrawerDescription>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <StatusPill tone={getSourceTone(normalizeSkillSource(selectedSkill))}>
                           {getSourceLabel(normalizeSkillSource(selectedSkill))}
-                        </Badge>
+                        </StatusPill>
                         {selectedSkill.hasPromptMd ? (
-                          <Badge variant="outline" className="border-green-500/40 text-green-600 dark:text-green-400">PROMPT.md</Badge>
+                          <StatusPill tone="success">PROMPT.md</StatusPill>
                         ) : null}
                       </div>
-                    </div>
-                    <Button variant="ghost" size="icon" onClick={() => setSelectedSkill(null)}>
-                      <X className="w-4 h-4" />
-                    </Button>
-                  </div>
-                  <div className="flex-1 overflow-auto p-6 space-y-6">
-                    <div>
-                      <p className="text-sm text-muted-foreground">{getDisplayDescription(selectedSkill)}</p>
-                    </div>
-                    {selectedSkill.tags?.length ? (
-                      <div>
-                        <h4 className="text-sm font-medium mb-2">标签</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {selectedSkill.tags.map((tag) => (
-                            <span key={tag} className="text-xs px-3 py-1 bg-secondary rounded-full">{tag}</span>
-                          ))}
+                    </DetailDrawerHeader>
+                    <DetailDrawerBody className="space-y-6">
+                      {selectedSkill.tags?.length ? (
+                        <div>
+                          <h4 className="mb-2 text-sm font-medium">标签</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {selectedSkill.tags.map((tag) => (
+                              <StatusPill key={tag} tone="neutral" dot={false}>{tag}</StatusPill>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ) : null}
-                    {selectedSkill.detailedDescription ? (
-                      <div>
-                        <h4 className="text-sm font-medium mb-2">详细说明</h4>
-                        <div className="p-4 bg-muted rounded-lg text-sm">
-                          <Markdown>{selectedSkill.detailedDescription}</Markdown>
+                      ) : null}
+                      {selectedSkill.detailedDescription ? (
+                        <div>
+                          <h4 className="mb-2 text-sm font-medium">详细说明</h4>
+                          <div className="rounded-xl border border-border bg-background p-4 text-sm">
+                            <Markdown>{selectedSkill.detailedDescription}</Markdown>
+                          </div>
                         </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ) : null}
+                      ) : null}
+                    </DetailDrawerBody>
+                    <DetailDrawerFooter>
+                      {syncStatusByName[selectedSkill.name]?.inInstall ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={syncingSkillNames.has(selectedSkill.path)}
+                          onClick={() => syncInstalledSkills([selectedSkill.path], `已同步 ${selectedSkill.name}`)}
+                        >
+                          {syncingSkillNames.has(selectedSkill.path) ? '同步中...' : '同步'}
+                        </Button>
+                      ) : null}
+                      <Button size="sm" variant="destructive" onClick={() => requestDeleteSkills([selectedSkill.name])}>
+                        删除
+                      </Button>
+                    </DetailDrawerFooter>
+                  </>
+                ) : null}
+              </DetailDrawerContent>
+            </DetailDrawer>
           </>
         ) : activeTab === 'online' ? (
           <>
-            {embedded ? renderOnlineToolbar('sticky top-0 z-20 rounded-[28px] border border-border/70 bg-card/90 p-4 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur supports-[backdrop-filter]:bg-card/90') : null}
+            {embedded ? renderOnlineToolbar('sticky top-0 z-20 rounded-xl border border-border bg-card p-4 shadow-none') : null}
 
-            <section className="rounded-[28px] border border-border/70 bg-card/82 p-5 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur">
+            <section className="rounded-xl border border-border bg-card p-4 shadow-none">
               {onlineError ? (
                 <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg text-destructive">
                   {onlineError}
                 </div>
               ) : onlineLoading ? (
-                <div className="flex justify-center items-center py-12">
-                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
+                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  加载中...
                 </div>
               ) : sortedOnlineSkills.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  {searchKeyword ? '没有找到匹配的 skill' : '暂无 skill'}
-                </div>
+                <EmptyState
+                  icon={<Store className="h-5 w-5" />}
+                  title={searchKeyword ? '没有找到匹配的 Skill' : '暂无 Skill'}
+                  description="调整搜索关键词或分类后重试。"
+                />
               ) : onlineViewMode === 'table' ? (
-                <div className="overflow-hidden rounded-[24px] border border-border/70 bg-background/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[148px] min-w-[148px]">名称</TableHead>
-                        <TableHead className="w-[116px] min-w-[116px]">组织</TableHead>
-                        <TableHead className="w-[108px] min-w-[108px]">作者</TableHead>
-                        <TableHead className="w-[84px] min-w-[84px]">下载量</TableHead>
-                        <TableHead className="w-[72px] min-w-[72px]">评分</TableHead>
-                        <TableHead className="w-[108px] min-w-[108px]">更新时间</TableHead>
-                        <TableHead className="w-[148px] min-w-[148px]">标签</TableHead>
-                        <TableHead className="w-[168px] min-w-[168px] text-right">操作</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {sortedOnlineSkills.map((skill) => {
-                        const installName = skill.enName || skill.name;
-                        return (
-                          <TableRow key={skill.id}>
-                            <TableCell className="w-[148px] min-w-[148px] max-w-[148px]">
-                              <div className="space-y-1">
-                                <div className="truncate font-medium">{skill.enName || skill.name}</div>
-                                {skill.enName && skill.name !== skill.enName ? (
-                                  <div className="truncate text-xs text-muted-foreground">{skill.name}</div>
-                                ) : null}
-                                <div className="text-xs text-muted-foreground line-clamp-2">{skill.description}</div>
-                              </div>
-                            </TableCell>
-                            <TableCell className="w-[116px] min-w-[116px] max-w-[116px] truncate">{skill.organization || '-'}</TableCell>
-                            <TableCell className="w-[108px] min-w-[108px] max-w-[108px] truncate">{skill.author}</TableCell>
-                            <TableCell>{skill.downloads}</TableCell>
-                            <TableCell>{skill.overallScore || '-'}</TableCell>
-                            <TableCell>{formatOnlineUpdatedAt(skill.updatedAt)}</TableCell>
-                            <TableCell className="w-[148px] min-w-[148px] max-w-[148px]">
-                              <div className="flex gap-1 overflow-hidden whitespace-nowrap">
-                                {skill.tags.slice(0, 4).map((tag) => (
-                                  <Badge key={tag} variant="outline" className="shrink-0 text-xs">{tag}</Badge>
-                                ))}
-                              </div>
-                            </TableCell>
-                            <TableCell className="w-[168px] min-w-[168px] text-right">
-                              <div className="flex justify-end gap-2">
-                                <Button size="sm" variant="outline" onClick={() => setSelectedOnlineSkill(skill)}>
-                                  详情
-                                </Button>
-                                {skill.installed ? (
-                                  <>
-                                    <Button size="sm" variant="secondary" disabled>
-                                      已安装
-                                    </Button>
-                                    <Button size="sm" onClick={() => handleInstall(installName)}>
-                                      重新安装
-                                    </Button>
-                                  </>
-                                ) : (
-                                  <Button size="sm" onClick={() => handleInstall(installName)}>
-                                    安装
-                                  </Button>
-                                )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-                </div>
+                <DataTable
+                  aria-label="Marketplace Skill 列表"
+                  columns={marketplaceColumns}
+                  rows={sortedOnlineSkills}
+                  rowKey="id"
+                  density="comfortable"
+                  onRowClick={setSelectedOnlineSkill}
+                  rowActions={(skill) => getMarketplaceActions(skill)}
+                />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {sortedOnlineSkills.map((skill) => (
-                    <SkillCard
-                      key={skill.id}
-                      skill={skill}
-                      onInstall={handleInstall}
-                      onViewDetail={setSelectedOnlineSkill}
-                    />
-                  ))}
+                  {sortedOnlineSkills.map((skill) => {
+                    const displayName = skill.enName || skill.name;
+                    const installName = skill.enName || skill.name;
+                    return (
+                      <DataCard key={skill.id} className="cursor-pointer" onClick={() => setSelectedOnlineSkill(skill)}>
+                        <DataCardHeader>
+                          <div className="min-w-0">
+                            <DataCardTitle>{displayName}</DataCardTitle>
+                            {skill.enName && skill.name !== skill.enName ? (
+                              <DataCardDescription className="truncate text-xs">{skill.name}</DataCardDescription>
+                            ) : null}
+                          </div>
+                          {skill.installed ? <StatusPill tone="success">已安装</StatusPill> : <StatusPill tone="neutral">未安装</StatusPill>}
+                        </DataCardHeader>
+                        <DataCardDescription className="line-clamp-3">{skill.description}</DataCardDescription>
+                        <DataCardMeta>
+                          {skill.organization ? <StatusPill tone="info">{skill.organization}</StatusPill> : null}
+                          <span>下载 {skill.downloads}</span>
+                          <span>评分 {skill.overallScore || 'N/A'}</span>
+                        </DataCardMeta>
+                        <DataCardActions onClick={(event) => event.stopPropagation()}>
+                          <Button size="sm" variant="outline" onClick={() => setSelectedOnlineSkill(skill)}>
+                            详情
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => requestInstall(installName)}>
+                            {skill.installed ? '重新安装' : '安装'}
+                          </Button>
+                        </DataCardActions>
+                      </DataCard>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -2515,13 +2741,61 @@ export default function SkillsManager({
               />
             ) : null}
 
-            {selectedOnlineSkill ? (
-              <SkillDetail
-                skill={selectedOnlineSkill}
-                onClose={() => setSelectedOnlineSkill(null)}
-                onInstall={handleInstall}
-              />
-            ) : null}
+            <DetailDrawer open={Boolean(selectedOnlineSkill)} onOpenChange={(open) => !open && setSelectedOnlineSkill(null)}>
+              <DetailDrawerContent widthClassName="w-[min(520px,calc(100vw-1rem))]">
+                {selectedOnlineSkill ? (
+                  <>
+                    <DetailDrawerHeader>
+                      <DetailDrawerTitle>{selectedOnlineSkill.enName || selectedOnlineSkill.name}</DetailDrawerTitle>
+                      <DetailDrawerDescription>{selectedOnlineSkill.description}</DetailDrawerDescription>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedOnlineSkill.installed ? <StatusPill tone="success">已安装</StatusPill> : <StatusPill tone="neutral">未安装</StatusPill>}
+                        {selectedOnlineSkill.organization ? <StatusPill tone="info">{selectedOnlineSkill.organization}</StatusPill> : null}
+                      </div>
+                    </DetailDrawerHeader>
+                    <DetailDrawerBody className="space-y-6">
+                      <div className="grid grid-cols-2 gap-3">
+                        <DataCard>
+                          <DataCardTitle>综合评分</DataCardTitle>
+                          <DataCardDescription>{selectedOnlineSkill.overallScore || 'N/A'}</DataCardDescription>
+                        </DataCard>
+                        <DataCard>
+                          <DataCardTitle>下载量</DataCardTitle>
+                          <DataCardDescription>{selectedOnlineSkill.downloads}</DataCardDescription>
+                        </DataCard>
+                        <DataCard>
+                          <DataCardTitle>作者</DataCardTitle>
+                          <DataCardDescription>{selectedOnlineSkill.author || '-'}</DataCardDescription>
+                        </DataCard>
+                        <DataCard>
+                          <DataCardTitle>更新时间</DataCardTitle>
+                          <DataCardDescription>{formatOnlineUpdatedAt(selectedOnlineSkill.updatedAt)}</DataCardDescription>
+                        </DataCard>
+                      </div>
+                      {selectedOnlineSkill.tags?.length ? (
+                        <div>
+                          <h4 className="mb-2 text-sm font-medium">标签</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {selectedOnlineSkill.tags.map((tag) => (
+                              <StatusPill key={tag} tone="neutral" dot={false}>{tag}</StatusPill>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </DetailDrawerBody>
+                    <DetailDrawerFooter>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => requestInstall(selectedOnlineSkill.enName || selectedOnlineSkill.name)}
+                      >
+                        {selectedOnlineSkill.installed ? '重新安装' : '安装'}
+                      </Button>
+                    </DetailDrawerFooter>
+                  </>
+                ) : null}
+              </DetailDrawerContent>
+            </DetailDrawer>
           </>
         ) : activeTab === 'mcp' ? (
           <McpServersTab />
@@ -2579,7 +2853,33 @@ export default function SkillsManager({
           </div>
         </div>
       ) : null}
-      {dialogProps && <ConfirmDialog {...dialogProps} />}
+      <ConfirmModal
+        open={deleteSkillNames.length > 0}
+        variant="delete"
+        title="删除 Skill"
+        objectName={`${deleteSkillNames.length} 个 Skill`}
+        consequence="删除后将移除所选 Skill，本地文件可能无法恢复。"
+        confirmLabel={`删除 ${deleteSkillNames.length} 个`}
+        loading={deleteSkillsMutation.isPending}
+        affectedItems={deleteSkillNames.map((name) => ({ id: name, label: name }))}
+        onConfirm={confirmDeleteSkills}
+        onCancel={() => setDeleteSkillNames([])}
+        onOpenChange={(open) => {
+          if (!open) setDeleteSkillNames([]);
+        }}
+      />
+      <ConfirmModal
+        open={Boolean(installSkillName)}
+        title="确认安装 Skill"
+        objectName={installSkillName}
+        consequence="将从 Marketplace 下载并安装该 Skill。如果本地已有同名 Skill，安装过程可能覆盖或更新相关文件。"
+        confirmLabel="安装"
+        onConfirm={confirmInstall}
+        onCancel={() => setInstallSkillName(null)}
+        onOpenChange={(open) => {
+          if (!open) setInstallSkillName(null);
+        }}
+      />
     </div>
   );
 }

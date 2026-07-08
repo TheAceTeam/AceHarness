@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from '@/lib/navigation/client';
 import { ModernOnboardingTour, type ModernOnboardingProgress } from '@/components/onboarding/ModernOnboardingTour';
 import { Button } from '@/components/ui/button';
 

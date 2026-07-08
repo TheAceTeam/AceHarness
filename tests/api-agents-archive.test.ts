@@ -58,7 +58,7 @@ async function readZipEntry(buffer: Buffer, entryPath: string): Promise<string> 
 
 async function loadArchiveRoute() {
   vi.resetModules();
-  return import('@/app/api/agents/archive/route');
+  return import('@/server/api-routes/agents/archive/route');
 }
 
 describe('/api/agents/archive', () => {
@@ -85,7 +85,7 @@ describe('/api/agents/archive', () => {
       await writeFile(path.join(agentsDir, 'alpha-agent.yaml'), stringify(agentConfig('alpha-agent')), 'utf8');
       await writeFile(path.join(agentsDir, 'beta-agent.yml'), stringify(agentConfig('beta-agent')), 'utf8');
 
-      const { PUT } = await import('@/app/api/agents/archive/route');
+      const { PUT } = await import('@/server/api-routes/agents/archive/route');
       const response = await PUT(makeRequest('/api/agents/archive', {
         method: 'PUT',
         json: { agents: ['alpha-agent', 'beta-agent'] },

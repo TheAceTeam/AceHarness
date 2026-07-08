@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from 'react';
 import { runsApi, workflowApi } from '@/lib/core/api';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
+import { storeWorkflowSseEventAsAgentMessage } from '@/client/ai/messages';
 
 export type WorkflowLiveChatStreamStatus = 'running' | 'completed' | 'failed' | 'killed';
 
@@ -195,6 +196,10 @@ function hydrateEventLog(runId: string) {
 }
 
 function handleWorkflowEvent(event: any) {
+  try {
+    storeWorkflowSseEventAsAgentMessage(event && typeof event === 'object' ? event : { type: 'workflow-event', data: event });
+  } catch {}
+
   const type = String(event?.type || '');
   const data = event?.data || {};
 

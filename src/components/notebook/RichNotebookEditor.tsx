@@ -38,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { withBasePath } from '@/client/base-url';
 import { ImperativePanelHandle, ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useToast } from '@/components/ui/toast';
 import { createLowlight } from 'lowlight';
@@ -759,7 +760,7 @@ export function RichNotebookEditor({
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const baseUrl = `${protocol}//${window.location.host}/api/notebook/collab`;
+    const baseUrl = `${protocol}//${window.location.host}${withBasePath('/api/notebook/collab')}`;
     const doc = new Y.Doc();
     const provider = new WebsocketProvider(baseUrl, 'room', doc, {
       params: {
@@ -3095,7 +3096,7 @@ export function RichNotebookEditor({
     return (
       <>
         <NotebookSyncLoader />
-        <style jsx global>{`
+        <style>{`
           .font-loader .fl-scene {
             --bw: 68px;
             --bh: 96px;
@@ -4048,7 +4049,7 @@ export function RichNotebookEditor({
           </div>
         </aside>
       )}
-      <style jsx global>{`
+      <style>{`
         .hljs { display: block; color: #e5e7eb; background: transparent; }
         .ProseMirror .hljs { white-space: pre; }
         .ProseMirror pre code { caret-color: white; }

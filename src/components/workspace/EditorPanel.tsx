@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import dynamic from "next/dynamic"
+import dynamic from "@/lib/navigation/dynamic"
 import { useTheme } from "next-themes"
 import { Loader2, FileCode2, Play, Eye, RefreshCw, Maximize2, X } from "lucide-react"
 import { NotebookEditor } from "@/components/notebook/NotebookEditor"
 import { AnsiLogBlock } from "@/components/AnsiLogBlock"
+import Markdown from "@/components/Markdown"
 import { registerCangjieLanguage } from "@/lib/cangjie/language"
 import { registerCMakeLanguage } from "@/lib/core/cmake-language"
 import { workspaceApi, type NotebookScope, type WorkspaceMode } from "@/lib/core/api"
@@ -79,6 +80,7 @@ const OFFICE_PREVIEW_EXTENSIONS = new Set([
 ])
 
 const HTML_PREVIEW_EXTENSIONS = new Set(["html", "htm"])
+const MARKDOWN_PREVIEW_EXTENSIONS = new Set(["md", "markdown", "mdx"])
 
 interface EditorPanelProps {
   filePath: string | null
@@ -234,6 +236,13 @@ function formatErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+function formatFileSize(bytes: number | null | undefined): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "未知大小"
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
+
 export function EditorPanel({
   filePath,
   workspacePath,
@@ -275,6 +284,8 @@ export function EditorPanel({
   const [htmlPreviewOpen, setHtmlPreviewOpen] = React.useState(false)
   const [htmlPreviewModalOpen, setHtmlPreviewModalOpen] = React.useState(false)
   const [htmlPreviewVersion, setHtmlPreviewVersion] = React.useState(0)
+  const [markdownPreviewOpen, setMarkdownPreviewOpen] = React.useState(false)
+  const [markdownPreviewModalOpen, setMarkdownPreviewModalOpen] = React.useState(false)
   const cangjieRegistered = React.useRef(false)
   const cmakeRegistered = React.useRef(false)
   const suggestionDecorationIdsRef = React.useRef<string[]>([])
@@ -612,9 +623,26 @@ export function EditorPanel({
       && !error
       && !oversize,
   )
-  const htmlPreviewUrl = canPreviewHtml && workspacePath && filePath
-    ? `${workspaceApi.getStaticPreviewUrl(workspacePath, filePath)}?v=${htmlPreviewVersion}`
-    : ""
+  const canPreviewMarkdown = Boolean(
+    mode === 'default'
+      && filePath
+      && fileType
+      && MARKDOWN_PREVIEW_EXTENSIONS.has(fileType)
+      && editorContent != null
+      && !loading
+      && !error
+      && !oversize,
+  )
+  const markdownPreviewContent = editorContent ?? ""
+  const editorSplitPreviewOpen = (canPreviewHtml && htmlPreviewOpen) || (canPreviewMarkdown && markdownPreviewOpen)
+  const htmlPreviewUrl = React.useMemo(() => {
+    if (!canPreviewHtml || !workspacePath || !filePath) return ""
+    try {
+      return `${workspaceApi.getStaticPreviewUrl(workspacePath, filePath)}?v=${htmlPreviewVersion}`
+    } catch {
+      return ""
+    }
+  }, [canPreviewHtml, filePath, htmlPreviewVersion, workspacePath])
 
   React.useEffect(() => {
     if (!isNotebook) {
@@ -629,6 +657,13 @@ export function EditorPanel({
       setHtmlPreviewModalOpen(false)
     }
   }, [canPreviewHtml])
+
+  React.useEffect(() => {
+    if (!canPreviewMarkdown) {
+      setMarkdownPreviewOpen(false)
+      setMarkdownPreviewModalOpen(false)
+    }
+  }, [canPreviewMarkdown])
 
   React.useEffect(() => {
     const isPreviewableFile = Boolean(fileBlob && fileType && PREVIEW_EXTENSIONS.has(fileType))
@@ -745,6 +780,20 @@ export function EditorPanel({
                   </MenubarItem>
                 </>
               )}
+              {canPreviewMarkdown && (
+                <>
+                  <MenubarSeparator />
+                  <MenubarCheckboxItem
+                    checked={markdownPreviewOpen}
+                    onCheckedChange={(checked) => setMarkdownPreviewOpen(checked === true)}
+                  >
+                    Markdown 预览
+                  </MenubarCheckboxItem>
+                  <MenubarItem onClick={() => setMarkdownPreviewModalOpen(true)}>
+                    全屏预览
+                  </MenubarItem>
+                </>
+              )}
             </MenubarContent>
           </MenubarMenu>
           <div className="ml-auto flex items-center px-2 gap-2">
@@ -781,6 +830,30 @@ export function EditorPanel({
                 >
                   <Maximize2 className="h-3.5 w-3.5" />
                   <span className="sr-only">全屏 HTML 预览</span>
+                </Button>
+              </>
+            )}
+            {canPreviewMarkdown && (
+              <>
+                <Button
+                  variant={markdownPreviewOpen ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setMarkdownPreviewOpen((value) => !value)}
+                  className="h-7 gap-1.5"
+                  title="切换 Markdown 预览"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  预览
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setMarkdownPreviewModalOpen(true)}
+                  className="h-7 w-7"
+                  title="全屏 Markdown 预览"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  <span className="sr-only">全屏 Markdown 预览</span>
                 </Button>
               </>
             )}
@@ -844,7 +917,7 @@ export function EditorPanel({
           ) : oversize ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
               <FileCode2 className="h-12 w-12" />
-              <p className="text-sm">文件过大（{fileSize ? (fileSize >= 1024 * 1024 ? `${(fileSize / 1024 / 1024).toFixed(1)}MB` : `${(fileSize / 1024).toFixed(1)}KB`) : ""}），仅支持预览和编辑 1MB 以下的文件</p>
+              <p className="text-sm">文件过大（{formatFileSize(fileSize)}），仅支持预览和编辑 1 MB 以下的文件</p>
             </div>
           ) : fileBlob && fileType && PREVIEW_EXTENSIONS.has(fileType) ? (
             <div
@@ -884,14 +957,14 @@ export function EditorPanel({
             />
           ) : (
             <div className="flex h-full min-h-0">
-              <div className={cn("min-h-0", canPreviewHtml && htmlPreviewOpen ? "w-1/2 border-r" : "w-full")}>
+              <div className={cn("min-h-0", editorSplitPreviewOpen ? "w-1/2 border-r" : "w-full")}>
                 <MonacoEditor
                   height="100%"
                   language={getLanguage(filePath)}
                   theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
                   value={editorContent ?? ""}
-                  onChange={(value) => setEditorContent(value ?? "")}
-                  onMount={(editor, monaco) => {
+                  onChange={(value: string | undefined) => setEditorContent(value ?? "")}
+                  onMount={(editor: any, monaco: any) => {
                 editorRef.current = editor
                 monacoRef.current = monaco
                 setEditorMountVersion((version) => version + 1)
@@ -1063,6 +1136,26 @@ export function EditorPanel({
                   />
                 </div>
               ) : null}
+              {canPreviewMarkdown && markdownPreviewOpen ? (
+                <div className="flex min-h-0 w-1/2 flex-col bg-background">
+                  <div className="flex h-9 shrink-0 items-center justify-between border-b px-3 text-xs text-muted-foreground">
+                    <span className="truncate">Markdown 预览</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setMarkdownPreviewModalOpen(true)}
+                      title="全屏预览"
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                      <span className="sr-only">全屏预览</span>
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
+                    <Markdown>{markdownPreviewContent}</Markdown>
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -1108,6 +1201,34 @@ export function EditorPanel({
             className="min-h-0 w-full flex-1 bg-white"
             sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={markdownPreviewModalOpen && canPreviewMarkdown} onOpenChange={setMarkdownPreviewModalOpen}>
+        <DialogContent className="flex h-screen w-screen max-w-none flex-col gap-0 rounded-none p-0">
+          <DialogHeader className="shrink-0 border-b px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <DialogTitle className="text-sm">Markdown 全屏预览</DialogTitle>
+                <DialogDescription className="truncate text-xs">
+                  {filePath || "Markdown 文件"}
+                </DialogDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMarkdownPreviewModalOpen(false)}
+                className="h-8 w-8 shrink-0"
+                title="关闭预览"
+              >
+                <X className="h-4 w-4" />
+                <span className="sr-only">关闭预览</span>
+              </Button>
+            </div>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-auto px-8 py-6">
+            <Markdown>{markdownPreviewContent}</Markdown>
+          </div>
         </DialogContent>
       </Dialog>
 

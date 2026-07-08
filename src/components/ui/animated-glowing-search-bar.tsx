@@ -86,7 +86,7 @@ const AnimatedGlowingSearchBar = ({
           </div>
         </div>
       </div>
-      <style jsx>{`
+      <style>{`
         .office-search-shell {
           transition: filter 220ms ease, transform 220ms ease;
         }

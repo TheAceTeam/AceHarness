@@ -1445,7 +1445,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     configFile: string,
     requirementsOrChecks?: string | PersistedQualityCheck[],
     maybePreflightChecks?: PersistedQualityCheck[],
-    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string> },
+    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string>; workingDirectory?: string },
     requestedRunId?: string,
   ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
@@ -1540,6 +1540,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Load config
       const configContent = await this.readWorkflowConfigContent(configFile);
       let workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+      if (initialContexts?.workingDirectory) {
+        workflowConfig = {
+          ...workflowConfig,
+          context: {
+            ...(workflowConfig.context || {}),
+            projectRoot: initialContexts.workingDirectory,
+          },
+        };
+      }
       this.currentWorkflowConfig = workflowConfig;
       this.workflowName = workflowConfig.workflow.name || '';
       this.currentRequirements = requirements || workflowConfig.context?.requirements || '';
@@ -6595,9 +6604,6 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
-    if (requiresFinalVerdict) {
-      parts.push(this.buildStateVerdictTransitionContext(state));
-    }
 
     const roadmapKey = `${state.name}:${requiresFinalVerdict ? 'with-verdict' : 'without-verdict'}:${config.workflow.states.map((item) => {
       const stepSig = (item.steps || []).map((stateStep) => stateStep.name).join('|');
@@ -6772,7 +6778,7 @@ try {
         .filter((transition) => transition.condition?.verdict)
         .map((transition) => `- ${transition.condition.verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`)
         .join('\n') || '- 当前状态未配置 verdict 转移。';
-      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们的真实流向完全由当前状态 transitions 决定。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     if (this.currentRunId) {
@@ -6934,15 +6940,6 @@ try {
           parts.push(conclusions.join('\n\n'));
         }
       } catch { /* non-critical */ }
-    }
-
-    // ========== Supervisor-Lite: 注入可选的下一状态 ==========
-    if (state.transitions && state.transitions.length > 0) {
-      parts.push(`\n# 可选的下一状态`);
-      for (const t of state.transitions) {
-        const targetState = config.workflow.states.find(s => s.name === t.to);
-        parts.push(`- ${t.to}: ${targetState?.description || '无描述'}`);
-      }
     }
 
     // ========== Supervisor-Lite: 注入额外上下文（信息收集循环） ==========
