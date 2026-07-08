@@ -14,6 +14,16 @@ if (typeof process !== 'undefined' && typeof process.on === 'function' && !(glob
   });
 }
 
+if (import.meta.env.SSR) {
+  void import('@/lib/run/runtime-skills')
+    .then(({ refreshBundledAceHarnessSkillsOnStartup }) => {
+      refreshBundledAceHarnessSkillsOnStartup();
+    })
+    .catch((error) => {
+      console.warn('[ACEHarness] Runtime skill startup refresh failed:', error);
+    });
+}
+
 const requestContextMiddleware = createMiddleware().server(async ({ next }) => {
   return next();
 });

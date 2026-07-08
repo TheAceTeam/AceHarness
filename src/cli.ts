@@ -29,8 +29,10 @@ import {
   getRepoRoot,
   getWorkspaceDataFile,
 } from '@/lib/core/app-paths';
+import { refreshBundledAceHarnessSkillsOnStartup } from '@/lib/run/runtime-skills';
 
 process.chdir(getRepoRoot());
+refreshBundledAceHarnessSkillsOnStartup();
 
 type Locale = 'zh' | 'en';
 type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli';

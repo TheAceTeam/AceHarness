@@ -124,6 +124,17 @@ function getAppPaths() {
   return appPaths;
 }
 
+function refreshRuntimeSkillsOnStartup() {
+  try {
+    const runtimeSkillsPath = path.join(root, 'dist', 'lib', 'run', 'runtime-skills.js');
+    if (!fs.existsSync(runtimeSkillsPath)) return;
+    const runtimeSkills = require(runtimeSkillsPath);
+    runtimeSkills.refreshBundledAceHarnessSkillsOnStartup?.();
+  } catch (error) {
+    console.warn('[ACEHarness] Runtime skill startup refresh failed:', error);
+  }
+}
+
 function readJson(filePath, fallback) {
   try {
     if (!fs.existsSync(filePath)) return fallback;
@@ -423,6 +434,7 @@ loadProjectEnvFiles();
 process.env.NODE_ENV = process.env.NODE_ENV || 'production';
 const basePath = normalizeBasePath(process.env.BASEURL || process.env.BASE_URL);
 process.env.NEXT_PUBLIC_BASEURL = process.env.NEXT_PUBLIC_BASEURL || basePath;
+refreshRuntimeSkillsOnStartup();
 
 if (!fs.existsSync(serverEntry)) {
   console.error('[ACEHarness] 未找到 TanStack Start 服务端产物 dist/server/server.mjs。请先执行 `npm run build:start`。');
