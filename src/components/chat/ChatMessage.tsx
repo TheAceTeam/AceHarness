@@ -863,7 +863,7 @@ function buildProcessTimelineState(content: string, isStreaming: boolean): Proce
         start: entry.startBlockEnd,
         end: entry.resultBlockStart
           ?? nextSiblingStart
-          ?? ((entry.toolId || entry.sessionId) ? source.length : entry.startBlockEnd),
+          ?? entry.startBlockEnd,
       };
     })
     .filter(({ start, end }) => end > start)

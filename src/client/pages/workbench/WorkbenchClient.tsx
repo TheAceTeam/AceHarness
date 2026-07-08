@@ -221,7 +221,7 @@ const MonacoEditor = dynamic(
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
 type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'conversation' | 'changes' | 'documents' | 'plan' | 'agora' | 'live' | 'spec';
-type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'agora' | 'live' | 'spec';
+type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agora' | 'live' | 'spec';
 type RunLeftPanelTab = 'summary' | 'directory';
 type RunRightPanelTab = 'detail' | 'live' | 'context' | 'questions' | 'diff';
 const WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX = 'aceharness:workflow-run:panel-tabs';
@@ -516,6 +516,7 @@ function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailab
   if (tab === 'state') return 'state';
   if (tab === 'workspace') return 'workspace';
   if (tab === 'changes') return 'changes';
+  if (tab === 'documents') return 'documents';
   if (tab === 'agora') return 'agora';
   if (tab === 'live') return 'live';
   if (tab === 'spec' && runtimeSpecAvailable) return 'spec';
@@ -2961,7 +2962,7 @@ export default function WorkbenchPage({
       handleRunWorkbenchTabChange('agora');
       return;
     }
-    if (runWorkbenchTab === 'documents' || runWorkbenchTab === 'plan') {
+    if (runWorkbenchTab === 'plan') {
       handleRunWorkbenchTabChange('overview');
       return;
     }
@@ -11683,6 +11684,7 @@ export default function WorkbenchPage({
     { key: 'state' as const, label: '状态图', icon: 'hub' },
     { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
     { key: 'changes' as const, label: '变更', icon: 'difference' },
+    { key: 'documents' as const, label: '文档', icon: 'description' },
     { key: 'agora' as const, label: '对话', icon: 'forum' },
     { key: 'live' as const, label: '实时输出', icon: 'cell_tower' },
     ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
@@ -12307,13 +12309,18 @@ export default function WorkbenchPage({
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           汇总当前运行状态、当前位置和关键执行数据。状态图和工作区通过左侧运行记录子菜单进入。
         </p>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <div className={styles.workbenchMetric}><span>状态</span><strong>{formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}</strong></div>
-          <div className={styles.workbenchMetric}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
-          <div className={styles.workbenchMetric}><span>运行时长</span><strong>{runElapsedLabel}</strong></div>
-          <div className={styles.workbenchMetric}><span>已完成</span><strong>{completedSteps.length}</strong></div>
-          <div className={styles.workbenchMetric}><span>转移次数</span><strong>{smTransitionCount}</strong></div>
-          <div className={styles.workbenchMetric}><span>变更</span><strong>{workspaceChangeCount}</strong></div>
+        <div className="mt-5 space-y-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className={styles.workbenchMetric}><span>状态</span><strong>{formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}</strong></div>
+            <div className={styles.workbenchMetric}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
+            <div className={styles.workbenchMetric}><span>运行时长</span><strong>{runElapsedLabel}</strong></div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className={styles.workbenchMetric}><span>已完成</span><strong>{completedSteps.length}</strong></div>
+            <div className={styles.workbenchMetric}><span>转移次数</span><strong>{smTransitionCount}</strong></div>
+            <div className={styles.workbenchMetric}><span>变更</span><strong>{workspaceChangeCount}</strong></div>
+            <div className={styles.workbenchMetric}><span>总 Token</span><strong>{formatTokenCount(workflowTokenAnalytics.total.totalTokens || 0)}</strong></div>
+          </div>
         </div>
         <div className={styles.workbenchTransitionSection}>
           <div className={styles.workbenchTransitionHeader}>
@@ -12423,7 +12430,7 @@ export default function WorkbenchPage({
                     renderRunAgoraPanel()
                   ) : runDetailSection === 'live' ? (
                     renderRunLiveOutputPanel()
-                  ) : runWorkbenchTab === 'documents' ? (
+                  ) : runDetailSection === 'documents' ? (
                     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
                       <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
                         <DocumentsPanel
@@ -12443,20 +12450,53 @@ export default function WorkbenchPage({
                   ) : runDetailSection === 'workspace' ? (
                     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
                       {currentRunWorkspacePath ? (
-                        <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
-                          <WorkspaceEditor
-                            open
-                            onOpenChange={() => {}}
-                            workspacePath={workspaceEditorPath || currentRunWorkspacePath}
-                            initialFilePath={workspaceEditorFilePath}
-                            initialLineNumber={workspaceEditorLineNumber}
-                            initialColumn={workspaceEditorColumn}
-                            title={workspaceEditorTitle}
-                            presentation="page"
-                            searchParamsSnapshot={searchParamsString}
-                            onFileLocationChange={handleWorkspaceEditorFileLocationChange}
-                          />
-                        </div>
+                        <>
+                          {workspaceEditorPath && workspaceEditorPath !== currentRunWorkspacePath ? (
+                            <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-background px-4 py-2.5 text-xs shadow-sm">
+                              <div className="min-w-0">
+                                <span className="text-muted-foreground">当前查看目录：</span>
+                                <span className="break-all font-medium text-foreground">{workspaceEditorPath}</span>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 shrink-0 gap-1.5 text-xs"
+                                onClick={() => {
+                                  setWorkspaceEditorPath(currentRunWorkspacePath);
+                                  setWorkspaceEditorTitle(undefined);
+                                  setWorkspaceEditorFilePath(null);
+                                  setWorkspaceEditorLineNumber(null);
+                                  setWorkspaceEditorColumn(null);
+                                  updateUrl({
+                                    tab: 'workspace',
+                                    workspace: '1',
+                                    workspaceFile: null,
+                                    workspaceLine: null,
+                                    workspaceColumn: null,
+                                  });
+                                }}
+                              >
+                                <span className="material-symbols-outlined text-sm">home_storage</span>
+                                回到运行工作区
+                              </Button>
+                            </div>
+                          ) : null}
+                          <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
+                            <WorkspaceEditor
+                              open
+                              onOpenChange={() => {}}
+                              workspacePath={workspaceEditorPath || currentRunWorkspacePath}
+                              initialFilePath={workspaceEditorFilePath}
+                              initialLineNumber={workspaceEditorLineNumber}
+                              initialColumn={workspaceEditorColumn}
+                              title={workspaceEditorTitle}
+                              presentation="page"
+                              searchParamsSnapshot={searchParamsString}
+                              onFileLocationChange={handleWorkspaceEditorFileLocationChange}
+                            />
+                          </div>
+                        </>
                       ) : (
                         <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-background/70 p-6 text-center text-sm text-muted-foreground">
                           当前运行还没有可用的工作区目录。

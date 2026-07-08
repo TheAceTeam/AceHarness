@@ -7,7 +7,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Checkbox } from '@/components/ui/checkbox';
 import ConfirmDialog from '@/components/ConfirmDialog';
@@ -72,10 +71,6 @@ type DocTreeRow =
   | { type: 'summary'; key: string; group: DocTreeGroup; file: DocFile }
   | { type: 'group'; key: string; group: DocTreeGroup }
   | { type: 'detail'; key: string; group: DocTreeGroup; file: DocFile };
-
-type CompactFolderRow =
-  | { type: 'folder'; key: string; group: DocFolderGroup }
-  | { type: 'file'; key: string; group: DocFolderGroup; file: DocFile };
 
 interface DocumentsPanelProps {
   runId: string | null;
@@ -274,8 +269,6 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const [manualLoading, setManualLoading] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
   const [loadedGroups, setLoadedGroups] = useState<Set<string>>(new Set());
-  const [modalOpen, setModalOpen] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
 
   // Sorting / filtering
   const [sortField, setSortField] = useState<SortField>('time');
@@ -510,17 +503,6 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     return rows;
   }, [expandedGroups, treeGroups]);
 
-  const compactFolderRows = useMemo<CompactFolderRow[]>(() => {
-    const rows: CompactFolderRow[] = [];
-    folderGroups.forEach((group) => {
-      rows.push({ type: 'folder', key: `folder:${group.key}`, group });
-      group.files.forEach((file) => {
-        rows.push({ type: 'file', key: `file:${group.key}:${getDocKey(file)}`, group, file });
-      });
-    });
-    return rows;
-  }, [folderGroups]);
-
   const toggleSort = (field: SortField) => {
     if (sortField === field) setSortOrder(o => o === 'asc' ? 'desc' : 'asc');
     else { setSortField(field); setSortOrder('asc'); }
@@ -641,7 +623,6 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         return;
       }
 
-      setModalOpen(true);
       await selectFile(latestFile);
     } catch {
       toast('error', '打开最新 AI 结论文档失败');
@@ -825,50 +806,42 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   );
 
   // --- Toolbar ---
-  const toolbar = (compact?: boolean) => (
-    <div className={`flex items-center gap-2 flex-wrap ${compact ? 'p-2' : 'p-3'}`}>
-      {!compact && (
-        <Input
-          placeholder="搜索文件..."
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          className="h-7 text-xs w-40"
-        />
-      )}
-      {!compact && (
-        <Select value={sortField} onValueChange={v => { setSortField(v as SortField); }}>
-          <SelectTrigger className="h-7 text-xs w-[90px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="name">按名称</SelectItem>
-            <SelectItem value="time">按时间</SelectItem>
-            <SelectItem value="size">按大小</SelectItem>
-          </SelectContent>
-        </Select>
-      )}
-      {!compact && (
-        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')} title={sortOrder === 'asc' ? '升序' : '降序'}>
-          <span className="material-symbols-outlined text-sm">{sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward'}</span>
-        </Button>
-      )}
-      {!compact && (
-        <div className="flex items-center gap-1 ml-1">
-          {([['all', '全部'], ['conclusion', '结论'], ['detail', '详情']] as const).map(([key, label]) => (
-            <Badge
-              key={key}
-              variant={docFilter === key ? 'default' : 'outline'}
-              className={`cursor-pointer text-[10px] h-5 px-1.5 select-none transition-colors ${docFilter === key ? '' : 'hover:bg-muted'}`}
-              onClick={() => setDocFilter(key)}
-            >
-              {label}
-              <span className="ml-0.5 text-[9px] opacity-70">
-                {key === 'all' ? files.length : key === 'conclusion' ? files.filter(f => !hasTimestamp(f.filename)).length : files.filter(f => hasTimestamp(f.filename)).length}
-              </span>
-            </Badge>
-          ))}
-        </div>
-      )}
+  const toolbar = () => (
+    <div className="flex flex-wrap items-center gap-2 p-3">
+      <Input
+        placeholder="搜索文件..."
+        value={searchQuery}
+        onChange={e => setSearchQuery(e.target.value)}
+        className="h-7 w-40 text-xs"
+      />
+      <Select value={sortField} onValueChange={v => { setSortField(v as SortField); }}>
+        <SelectTrigger className="h-7 w-[90px] text-xs"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="name">按名称</SelectItem>
+          <SelectItem value="time">按时间</SelectItem>
+          <SelectItem value="size">按大小</SelectItem>
+        </SelectContent>
+      </Select>
+      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')} title={sortOrder === 'asc' ? '升序' : '降序'}>
+        <span className="material-symbols-outlined text-sm">{sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward'}</span>
+      </Button>
+      <div className="ml-1 flex items-center gap-1">
+        {([['all', '全部'], ['conclusion', '结论'], ['detail', '详情']] as const).map(([key, label]) => (
+          <Badge
+            key={key}
+            variant={docFilter === key ? 'default' : 'outline'}
+            className={`h-5 cursor-pointer select-none px-1.5 text-[10px] transition-colors ${docFilter === key ? '' : 'hover:bg-muted'}`}
+            onClick={() => setDocFilter(key)}
+          >
+            {label}
+            <span className="ml-0.5 text-[9px] opacity-70">
+              {key === 'all' ? files.length : key === 'conclusion' ? files.filter(f => !hasTimestamp(f.filename)).length : files.filter(f => hasTimestamp(f.filename)).length}
+            </span>
+          </Badge>
+        ))}
+      </div>
       <div className="flex-1" />
-      {!compact && docPagination && (docPagination.totalPages || 1) > 1 && (
+      {docPagination && (docPagination.totalPages || 1) > 1 && (
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <Button
             variant="ghost"
@@ -913,35 +886,20 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadFiles} disabled={loading}>
         <span className="material-symbols-outlined text-sm">refresh</span>
       </Button>
-      {compact && (
-        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setModalOpen(true)} title="弹出文件管理器">
-          <span className="material-symbols-outlined text-sm">open_in_new</span>
-        </Button>
-      )}
-      {!compact && fullscreen && (
-        <>
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFolderTreeVisible}
-            title={folderTreeVisible ? '隐藏文件夹' : '显示文件夹'}>
-            <span className="material-symbols-outlined text-sm">side_navigation</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFileListVisible}
-            title={fileListVisible ? '隐藏文件列表' : '显示文件列表'}>
-            <span className="material-symbols-outlined text-sm">view_sidebar</span>
-          </Button>
-        </>
-      )}
-      {!compact && (
-        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setFullscreen(f => !f)} title={fullscreen ? '退出全屏' : '全屏'}>
-          <span className="material-symbols-outlined text-sm">{fullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
-        </Button>
-      )}
+      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFolderTreeVisible}
+        title={folderTreeVisible ? '隐藏文件夹' : '显示文件夹'}>
+        <span className="material-symbols-outlined text-sm">side_navigation</span>
+      </Button>
+      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFileListVisible}
+        title={fileListVisible ? '隐藏文件列表' : '显示文件列表'}>
+        <span className="material-symbols-outlined text-sm">view_sidebar</span>
+      </Button>
     </div>
   );
 
   // --- File row ---
   const fileRow = (
     file: DocFile,
-    compact: boolean,
     options?: { indent?: number; prefix?: ReactNode; muted?: boolean }
   ) => {
     const docKey = getDocKey(file);
@@ -950,21 +908,6 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     const isSelected = selected.has(docKey);
     const isActive = previewFile && getDocKey(previewFile) === docKey;
     const rowStyle = options?.indent ? { paddingLeft: `${12 + options.indent}px` } : undefined;
-
-    if (compact) {
-      return (
-        <div
-          key={file.filename}
-          className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30 ${options?.muted ? 'text-muted-foreground' : ''}`}
-          style={rowStyle}
-          onClick={() => { setModalOpen(true); selectFile(file); }}
-        >
-          {options?.prefix}
-          <span className={`material-symbols-outlined text-sm shrink-0 ${getDocumentIconClass(file)}`}>{getDocumentIcon(file)}</span>
-          <span className="truncate flex-1" title={file.filename}>{getDisplayFileName(file)}</span>
-        </div>
-      );
-    }
 
     return (
       <div
@@ -1050,7 +993,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     </button>
   );
 
-  const renderTreeList = (compact: boolean) => {
+  const renderTreeList = () => {
     if (loading) {
       return <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>;
     }
@@ -1060,26 +1003,24 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
     return (
       <>
-        {!compact && (
-          <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
-            <Checkbox
-              checked={
-                (() => {
-                  const editableFiles = treeGroups
-                    .flatMap(group => group.summary ? [group.summary, ...group.details] : group.details)
-                    .filter(file => isRootRunFile(file, runId));
-                  return editableFiles.length > 0 && editableFiles.every(file => selected.has(getDocKey(file)));
-                })()
-              }
-              onCheckedChange={toggleSelectAll}
-              className="h-3 w-3"
-            />
-            <span className="flex-1">总结 / 详情</span>
-            <span className="w-14 text-right">大小</span>
-            <span className="w-20 text-right">时间</span>
-            <span className="w-5" />
-          </div>
-        )}
+        <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
+          <Checkbox
+            checked={
+              (() => {
+                const editableFiles = treeGroups
+                  .flatMap(group => group.summary ? [group.summary, ...group.details] : group.details)
+                  .filter(file => isRootRunFile(file, runId));
+                return editableFiles.length > 0 && editableFiles.every(file => selected.has(getDocKey(file)));
+              })()
+            }
+            onCheckedChange={toggleSelectAll}
+            className="h-3 w-3"
+          />
+          <span className="flex-1">总结 / 详情</span>
+          <span className="w-14 text-right">大小</span>
+          <span className="w-20 text-right">时间</span>
+          <span className="w-5" />
+        </div>
         <VirtualList
           items={treeRows}
           estimateSize={34}
@@ -1090,12 +1031,12 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           getKey={(row) => row.key}
           renderItem={(row) => {
             if (row.type === 'summary') {
-              return fileRow(row.file, compact, {
+              return fileRow(row.file, {
                 prefix: row.group.detailCount > 0 ? treeChevron(row.group) : <span className="w-4 shrink-0" />,
               });
             }
             if (row.type === 'detail') {
-              return fileRow(row.file, compact, {
+              return fileRow(row.file, {
                 indent: 22,
                 prefix: <span className="material-symbols-outlined text-[12px] text-muted-foreground shrink-0">subdirectory_arrow_right</span>,
                 muted: true,
@@ -1104,12 +1045,12 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
             return (
               <div
                 className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border/30 bg-muted/20"
-                style={compact ? undefined : { paddingLeft: '12px' }}
+                style={{ paddingLeft: '12px' }}
               >
                 {row.group.detailCount > 0 ? treeChevron(row.group) : <span className="w-4 shrink-0" />}
                 <span className="material-symbols-outlined text-sm text-amber-600 shrink-0">topic</span>
                 <span className="flex-1 truncate font-medium">{row.group.name}</span>
-                {!compact && <span className="text-[10px] text-muted-foreground shrink-0">{row.group.detailCount} 条详情</span>}
+                <span className="text-[10px] text-muted-foreground shrink-0">{row.group.detailCount} 条详情</span>
               </div>
             );
           }}
@@ -1119,15 +1060,15 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   };
 
   // --- File list ---
-  const fileList = (compact: boolean) => (
+  const fileList = () => (
     <div className="flex-1 overflow-y-auto">
-      {docFilter === 'all' ? renderTreeList(compact) : (
+      {docFilter === 'all' ? renderTreeList() : (
         <>
       {loading && <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>}
       {!loading && processedFiles.length === 0 && (
         <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
       )}
-      {!loading && !compact && processedFiles.length > 0 && (
+      {!loading && processedFiles.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
           <Checkbox
             checked={(() => {
@@ -1153,43 +1094,12 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         <VirtualList
           items={processedFiles}
           estimateSize={34}
-          height={!compact ? 'calc(100% - 29px)' : '100%'}
+          height="calc(100% - 29px)"
           className="min-h-0"
           testId="documents-file-virtual-list"
           maxRenderedItems={80}
           getKey={(file) => getDocKey(file)}
-          renderItem={(file) => fileRow(file, compact)}
-        />
-      )}
-        </>
-      )}
-    </div>
-  );
-
-  // --- Compact embedded: show folder groups + files ---
-  const compactView = () => (
-    <div className="flex-1 overflow-y-auto">
-      {docFilter === 'all' ? renderTreeList(true) : (
-        <>
-      {loading && <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>}
-      {!loading && files.length === 0 && (
-        <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
-      )}
-      {!loading && compactFolderRows.length > 0 && (
-        <VirtualList
-          items={compactFolderRows}
-          estimateSize={34}
-          height="100%"
-          className="min-h-0"
-          testId="documents-compact-folder-virtual-list"
-          maxRenderedItems={80}
-          getKey={(row) => row.key}
-          renderItem={(row) => row.type === 'folder' ? (
-            <div className="flex items-center gap-1.5 border-b border-border/30 bg-muted/30 px-3 py-1 text-[10px] font-semibold text-muted-foreground">
-              <span className="material-symbols-outlined text-xs">folder</span>
-              {row.group.label} ({row.group.files.length})
-            </div>
-          ) : fileRow(row.file, true)}
+          renderItem={(file) => fileRow(file)}
         />
       )}
         </>
@@ -1264,72 +1174,42 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
   return (
     <>
-      {/* Embedded compact mode */}
-      <div className="flex flex-col h-full">
-        <div className="flex items-center gap-2 p-2">
-          <div className="flex items-center gap-1">
-            {([['all', '全部'], ['conclusion', '结论'], ['detail', '详情']] as const).map(([key, label]) => (
-              <Badge
-                key={key}
-                variant={docFilter === key ? 'default' : 'outline'}
-                className={`cursor-pointer text-[10px] h-5 px-1.5 select-none transition-colors ${docFilter === key ? '' : 'hover:bg-muted'}`}
-                onClick={() => setDocFilter(key)}
-              >
-                {label}
-              </Badge>
-            ))}
-          </div>
-          <div className="flex-1" />
-          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadFiles} disabled={loading}>
-            <span className="material-symbols-outlined text-sm">refresh</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setModalOpen(true)} title="弹出文件管理器">
-            <span className="material-symbols-outlined text-sm">open_in_new</span>
-          </Button>
+      <section className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+        <div className="shrink-0 border-b border-border/70 bg-muted/20">
+          {toolbar()}
         </div>
-        {compactView()}
-      </div>
-
-      {/* Popup modal — Explorer style */}
-      <Dialog open={modalOpen} onOpenChange={(open) => { setModalOpen(open); if (!open) setFullscreen(false); }}>
-        <DialogContent className={`p-0 flex flex-col gap-0 ${fullscreen ? 'max-w-none w-screen h-screen rounded-none' : 'max-w-5xl w-[90vw] h-[80vh]'}`}>
-          <DialogTitle className="sr-only">文件管理器</DialogTitle>
-          <div className="border-b border-border">
-            {toolbar(false)}
-          </div>
-          <div className="flex flex-1 overflow-hidden">
-            {(!fullscreen || folderTreeVisible) && (
-              <div
-                style={fullscreen && folderTreeVisible ? { width: folderTreeWidth } : undefined}
-                className={fullscreen ? 'shrink-0 flex flex-col overflow-hidden' : ''}
-              >
-                {folderTree()}
-              </div>
-            )}
-            {fullscreen && folderTreeVisible && (
-              <div
-                className="w-1 hover:w-1.5 bg-border hover:bg-primary cursor-col-resize shrink-0 transition-colors"
-                onMouseDown={e => onResizeStart('folderTree', e)}
-              />
-            )}
-            {(!fullscreen || fileListVisible) && (
-              <div
-                style={fullscreen && fileListVisible ? { width: fileListWidth } : undefined}
-                className={`flex flex-col overflow-hidden border-r border-border ${fullscreen ? 'shrink-0' : 'flex-1'}`}
-              >
-                {fileList(false)}
-              </div>
-            )}
-            {fullscreen && fileListVisible && (
-              <div
-                className="w-1 hover:w-1.5 bg-border hover:bg-primary cursor-col-resize shrink-0 transition-colors"
-                onMouseDown={e => onResizeStart('fileList', e)}
-              />
-            )}
-            {previewPane()}
-          </div>
-        </DialogContent>
-      </Dialog>
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {folderTreeVisible && (
+            <div
+              style={{ width: folderTreeWidth }}
+              className="shrink-0 overflow-hidden"
+            >
+              {folderTree()}
+            </div>
+          )}
+          {folderTreeVisible && (
+            <div
+              className="w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:w-1.5 hover:bg-primary/60"
+              onMouseDown={e => onResizeStart('folderTree', e)}
+            />
+          )}
+          {fileListVisible && (
+            <div
+              style={{ width: fileListWidth }}
+              className="shrink-0 overflow-hidden border-r border-border"
+            >
+              {fileList()}
+            </div>
+          )}
+          {fileListVisible && (
+            <div
+              className="w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:w-1.5 hover:bg-primary/60"
+              onMouseDown={e => onResizeStart('fileList', e)}
+            />
+          )}
+          {previewPane()}
+        </div>
+      </section>
 
       <NotebookSaveDialog
         open={saveNotebookDialogOpen}
