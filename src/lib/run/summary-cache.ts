@@ -8,6 +8,7 @@ import type { PersistedRunState } from '@/lib/run/state-persistence';
 const RUNS_DIR = getWorkspaceRunsDir();
 const SUMMARY_CACHE_FILE = 'summary.json';
 const SUMMARY_CACHE_VERSION = 1;
+const WINDOWS_RENAME_RETRY_DELAYS_MS = [40, 120, 300, 700];
 
 export interface RunSummaryTokenUsage {
   inputTokens: number;
@@ -346,11 +347,30 @@ export async function saveRunSummaryCache(summary: RunSummaryCache): Promise<voi
   const temp = resolve(dir, `${SUMMARY_CACHE_FILE}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await writeFile(temp, `${JSON.stringify(summary, null, 2)}\n`, 'utf-8');
   try {
-    await rename(temp, target);
+    await renameWithRetry(temp, target);
   } catch (error) {
     await rm(temp, { force: true }).catch(() => {});
     throw error;
   }
+}
+
+async function renameWithRetry(source: string, target: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= WINDOWS_RENAME_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await rename(source, target);
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!isTransientRenameError(error) || attempt >= WINDOWS_RENAME_RETRY_DELAYS_MS.length) break;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, WINDOWS_RENAME_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+  throw lastError;
+}
+
+function isTransientRenameError(error: any): boolean {
+  return error?.code === 'EPERM' || error?.code === 'EBUSY' || error?.code === 'EACCES';
 }
 
 export async function loadRunSummaryCache(runId: string): Promise<RunSummaryCache | null> {

@@ -330,11 +330,18 @@ function normalizeWorkflowVerdict(value: unknown): 'pass' | 'conditional_pass' |
   return null;
 }
 
+function stripResultBlocks(raw: string): string {
+  return String(raw || '')
+    .replace(/<result>[\s\S]*?<\/result>/gi, '')
+    .replace(/<result>[\s\S]*$/gi, '')
+    .trim();
+}
+
 export function compactStepConclusion(raw: string): string {
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
   if (tagged) return tagged;
 
-  const text = stripNonAiStreamArtifacts(raw).trim();
+  const text = stripResultBlocks(stripNonAiStreamArtifacts(raw)).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
   return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
@@ -3012,31 +3019,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private extractVerdictJson(raw: string): { verdict: 'pass' | 'conditional_pass' | 'fail' } | null {
-    const fencedJsonPattern = /```(?:json)?\s*([\s\S]*?)```/gi;
-    const candidates: any[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = fencedJsonPattern.exec(raw)) !== null) {
-      const parsed = this.extractJsonObject(match[1] || '');
-      if (parsed && normalizeWorkflowVerdict(parsed.verdict)) candidates.push(parsed);
-    }
-
-    for (const block of extractTaggedBlocks(raw, 'step-conclusion')) {
-      const parsed = this.extractJsonObject(block);
-      if (parsed && normalizeWorkflowVerdict(parsed.verdict)) candidates.push(parsed);
-    }
-
-    const direct = this.extractJsonObject(raw);
-    if (direct && normalizeWorkflowVerdict(direct.verdict)) candidates.push(direct);
-
-    const fromResult = extractStructuredResult(raw, (parsed: any): parsed is { verdict: 'pass' | 'conditional_pass' | 'fail' } => (
-      Boolean(parsed && normalizeWorkflowVerdict(parsed.verdict))
+    const fromResult = extractStructuredResult(raw, (parsed: any): parsed is any => (
+      Boolean(parsed && (parsed.kind === 'workflow_step_verdict' || parsed.type === 'workflow_step_verdict'))
     ));
-    if (fromResult && normalizeWorkflowVerdict(fromResult.verdict)) candidates.push(fromResult);
-
-    for (let index = candidates.length - 1; index >= 0; index -= 1) {
-      const verdict = normalizeWorkflowVerdict(candidates[index]?.verdict);
-      if (verdict) return { verdict };
-    }
+    const payload = fromResult?.payload && typeof fromResult.payload === 'object'
+      ? fromResult.payload
+      : fromResult;
+    const verdict = normalizeWorkflowVerdict(payload?.verdict);
+    if (verdict) return { verdict };
 
     return null;
   }
@@ -6230,7 +6220,7 @@ try {
       if (this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
         this.emit('log', {
           level: 'warning',
-          message: `步骤 "${state.name}/${step.name}" 缺少严格最终裁决 JSON，正在请求 Agent 补交。`,
+          message: `步骤 "${state.name}/${step.name}" 缺少 workflow_step_verdict 结果块，正在请求 Agent 补交。`,
         });
         const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
         const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
@@ -6245,7 +6235,7 @@ try {
           tokenUsage: this.mergeTokenUsage(stepResult.tokenUsage, repairResult.tokenUsage),
         };
         if (!this.hasRequiredVerdictJson(output)) {
-          throw new Error(`步骤 "${state.name}/${step.name}" 补交后仍缺少严格最终裁决 JSON`);
+          throw new Error(`步骤 "${state.name}/${step.name}" 补交后仍缺少 workflow_step_verdict 结果块`);
         }
       }
       if (isEngineLevelFailure(output)) {
@@ -6538,16 +6528,12 @@ try {
     return [
       originalContext,
       '\n# 系统补充要求：缺少最终裁决 JSON',
-      `你刚才完成了状态 "${state.name}" 的最后步骤 "${step.name}"，但回复中没有包含可解析的最终裁决 JSON。`,
+      `你刚才完成了状态 "${state.name}" 的最后步骤 "${step.name}"，但回复中没有包含可解析的 workflow_step_verdict 结果块。`,
       '不要重新执行任务，不要重复完整过程，只基于你刚才的结果补交最终裁决。',
-      '必须只补交以下 JSON 块（用 ```json 包裹），且 verdict 的值必须从 pass、conditional_pass、fail 中选择一个真实值：',
-      '```json',
-      '{',
-      '  "verdict": "pass",',
-      '  "remaining_issues": 0,',
-      '  "summary": "一句话总结"',
-      '}',
-      '```',
+      '必须只补交以下 <result> 结果块，且 <result> 内只能放一个裸 JSON 对象：',
+      '<result>',
+      '{"kind":"workflow_step_verdict","payload":{"verdict":"pass","remaining_issues":0,"summary":"一句话总结","reason":"选择该 verdict 的依据"}}',
+      '</result>',
       '如果不能通过，请把 verdict 改为 conditional_pass 或 fail，并同步填写 remaining_issues。',
       '随后可以输出 <step-conclusion>，用于步骤归档和后续步骤复用。',
       '\n# 你上一轮输出',
@@ -6823,7 +6809,7 @@ try {
         .filter((transition) => transition.condition?.verdict)
         .map((transition) => `- ${transition.condition.verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`)
         .join('\n') || '- 当前状态未配置 verdict 转移。';
-      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 <result> 结果块，用于自动化流程判断；该结果块必须放在 <step-conclusion> 之前。\n\n<result>\n{"kind":"workflow_step_verdict","payload":{"verdict":"pass | conditional_pass | fail","remaining_issues":0,"summary":"一句话总结","reason":"选择该 verdict 的依据"}}\n</result>\n\n字段说明：\n- \`kind\`: 必须固定为 \`"workflow_step_verdict"\`。\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n- \`reason\`: 说明选择该 verdict 的依据。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     if (this.currentRunId) {
@@ -6832,7 +6818,7 @@ try {
         conclusionScope,
         '步骤成果详细总结与步骤结论是两种不同输出。',
         '步骤成果详细总结请按时间戳前缀命名写入 outputs 目录；步骤结论必须放在回复末尾的 <step-conclusion> 中。',
-        '如果本步骤还需输出流程裁决 JSON，顺序必须是：裁决 JSON -> <step-conclusion>。',
+        '如果本步骤还需输出流程裁决结果，顺序必须是：<result>workflow_step_verdict</result> -> <step-conclusion>。',
         '请在回复末尾单独输出 <step-conclusion>，里面只写可被下一状态或后续 agent 直接复用的步骤结论，不要包含完整过程日志、命令回显、长篇原始证据或重复上下文。',
         '步骤结论必须自包含：下一步 agent 不读完整对话时，也能知道本步骤做了什么、改了哪里、验证到什么程度、还剩什么风险。',
         '建议结构:',
@@ -7724,9 +7710,12 @@ try {
     const validStates = new Set(config.workflow.states.map(s => s.name));
     // Check outputs in reverse order (last judge output takes precedence)
     for (const output of [...stepOutputs].reverse()) {
-      const parsed = this.extractJsonObject(output);
-      if (parsed?.next_state && validStates.has(parsed.next_state)) {
-        return parsed.next_state;
+      const parsed = extractStructuredResult(output, (value: any): value is any => (
+        Boolean(value && (value.kind === 'workflow_step_verdict' || value.type === 'workflow_step_verdict'))
+      ));
+      const payload = parsed?.payload && typeof parsed.payload === 'object' ? parsed.payload : parsed;
+      if (payload?.next_state && validStates.has(payload.next_state)) {
+        return payload.next_state;
       }
     }
     return null;
@@ -7798,7 +7787,7 @@ try {
       return parsed.verdict;
     }
 
-    throw new Error('缺少严格最终裁决 JSON');
+    throw new Error('缺少严格 workflow_step_verdict 结果块');
   }
 
   private getTransitionReason(result: StateExecutionResult): string {

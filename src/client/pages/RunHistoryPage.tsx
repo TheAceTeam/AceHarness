@@ -24,6 +24,7 @@ import {
 import { Button } from '@/components/ui/button';
 import type { ActionMenuGroup } from '@/components/ui/action-menu';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { BulkActionBar } from '@/components/ui/bulk-action-bar';
 import {
   DetailDrawer,
   DetailDrawerBody,
@@ -40,7 +41,6 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { PaginationBar } from '@/components/PaginationBar';
 import { MultiCombobox } from '@/components/ui/combobox';
 import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
@@ -279,6 +279,7 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
   const [selectedRun, setSelectedRun] = useState<RunRow | null>(null);
   const [pendingRunAction, setPendingRunAction] = useState<string | null>(null);
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(() => new Set());
 
   useDocumentTitle('运行记录');
 
@@ -435,6 +436,10 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
       return [{ ...item, depth }, ...visibleChildren];
     });
   const displayedRunItems = useMemo(() => flattenRunItems(runItems), [runItems, expandedRunIds]);
+  const selectedDisplayedRunIds = useMemo(
+    () => displayedRunItems.filter((run) => selectedRunIds.has(run.id)).map((run) => run.id),
+    [displayedRunItems, selectedRunIds],
+  );
   const toggleExpandedRun = (runId: string) => {
     setExpandedRunIds((prev) => {
       const next = new Set(prev);
@@ -495,12 +500,44 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
     if (!ok) return;
     void runAction('delete', run, async () => {
       await runsApi.deleteRun(run.id);
+      setSelectedRunIds((current) => {
+        const next = new Set(current);
+        next.delete(run.id);
+        return next;
+      });
       if (selectedRun?.id === run.id) setSelectedRun(null);
       window.dispatchEvent(new CustomEvent(WORKFLOW_RUN_DELETED_EVENT, {
         detail: { runId: run.id, configFile: run.configFile },
       }));
       toast('success', '运行记录已删除');
     });
+  };
+  const deleteSelectedRuns = async () => {
+    const ids = Array.from(selectedRunIds).filter(Boolean);
+    if (ids.length === 0) return;
+    const ok = window.confirm(`删除已选 ${ids.length} 条运行记录？该操作会删除运行目录，无法撤销。`);
+    if (!ok) return;
+    setPendingRunAction('bulk-delete');
+    try {
+      const result = await apiRequest<{ deletedCount?: number; errors?: string[]; message?: string }>('/api/runs/batch', {
+        method: 'POST',
+        body: { action: 'delete', runIds: ids },
+      });
+      if (selectedRun && ids.includes(selectedRun.id)) setSelectedRun(null);
+      for (const runId of ids) {
+        const run = statusFilteredRunRows.find((item) => item.id === runId);
+        window.dispatchEvent(new CustomEvent(WORKFLOW_RUN_DELETED_EVENT, {
+          detail: { runId, configFile: run?.configFile },
+        }));
+      }
+      setSelectedRunIds(new Set());
+      await refreshRuns();
+      toast(result.errors?.length ? 'warning' : 'success', result.message || `已删除 ${result.deletedCount ?? ids.length} 条运行记录`);
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '批量删除失败');
+    } finally {
+      setPendingRunAction(null);
+    }
   };
   const analyzeRun = (run: RunRow) => runAction('analyze', run, async () => {
     const result = await apiRequest<{ steps?: unknown[]; summary?: { totalSteps?: number; avgScore?: number } }>(`/api/prompt-analysis?runId=${encodeURIComponent(run.id)}`);
@@ -867,6 +904,13 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
               direction: sortDirection,
               onSortChange: ({ columnId }) => toggleSort(columnId as TokenRankingSortKey),
             }}
+            pagination={{
+              page: activePagination.page || 1,
+              pageSize,
+              total: activePagination.total || 0,
+              onPageChange: (p) => updateQuery({ page: String(p) }),
+              label: totalLabel,
+            }}
             density="comfortable"
           />
         ) : (
@@ -888,24 +932,42 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
               direction: sortDirection,
               onSortChange: ({ columnId }) => toggleSort(columnId as RunSortKey),
             }}
+            selection={{
+              selectedKeys: selectedDisplayedRunIds,
+              onSelectedKeysChange: (keys) => setSelectedRunIds(new Set(keys.map(String))),
+              ariaLabel: '选择当前页运行记录',
+            }}
+            pagination={{
+              page: activePagination.page || 1,
+              pageSize,
+              total: activePagination.total || 0,
+              onPageChange: (p) => updateQuery({ page: String(p) }),
+              label: totalLabel,
+            }}
             onRowClick={(run) => setSelectedRun(run)}
             rowActions={getRunActions}
             density="comfortable"
           />
         )}
 
-        {(activePagination.totalPages || 1) > 1 && (
-          <PaginationBar
-            current={activePagination.page || 1}
-            total={activePagination.total || 0}
-            pageSize={pageSize}
-            onPageChange={(p) => updateQuery({ page: String(p) })}
-            pageSizeOptions={[20, 50, 100]}
-            onPageSizeChange={(size) => updateQuery({ pageSize: String(size), page: '1' })}
-            itemLabel="条记录"
-            paginationStyle="numbered"
+        {view === 'runs' ? (
+          <BulkActionBar
+            selectedCount={selectedRunIds.size}
+            onClear={() => setSelectedRunIds(new Set())}
+            actions={(
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={pendingRunAction === 'bulk-delete'}
+                onClick={() => { void deleteSelectedRuns(); }}
+              >
+                <Trash2 className="mr-1.5 h-4 w-4" />
+                {pendingRunAction === 'bulk-delete' ? '删除中...' : '删除已选'}
+              </Button>
+            )}
           />
-        )}
+        ) : null}
       </main>
       <DetailDrawer open={!!selectedRun} onOpenChange={(open) => { if (!open) setSelectedRun(null); }}>
         <DetailDrawerContent widthClassName="w-[min(560px,calc(100vw-1rem))]">

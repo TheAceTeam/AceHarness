@@ -2364,24 +2364,18 @@ export function AgoraChatPanel({
             emptyText=""
             helperText={layout === 'workspace' ? null : 'Ctrl/Cmd + Enter 发送。'}
             customControls={runtimeComposerControls}
-            inlineContent={(
-              <>
-                {hiddenMessageCount > 0 ? (
-                  <div className="mb-3 flex justify-center">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 rounded-full px-3 text-xs"
-                      onClick={() => setVisibleMessageCount((count) => count + AGORA_VISIBLE_MESSAGE_STEP)}
-                    >
-                      加载更早的 {hiddenMessageCount} 条
-                    </Button>
-                  </div>
-                ) : null}
-                {inlineContent}
-              </>
-            )}
+            messagesHeader={hiddenMessageCount > 0 ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-full border-border/70 bg-background/95 px-3 text-xs shadow-sm"
+                onClick={() => setVisibleMessageCount((count) => count + AGORA_VISIBLE_MESSAGE_STEP)}
+              >
+                加载更早的 {hiddenMessageCount} 条
+              </Button>
+            ) : null}
+            inlineContent={inlineContent}
             inlineContentSpeakerName={inlineContentSpeakerName}
             onDeleteMessage={handleDeleteRoomMessage}
             onQuoteMessage={(value) => handleQuoteRoomMessage(value)}

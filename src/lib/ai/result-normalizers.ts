@@ -75,6 +75,19 @@ export type ClarificationFormResult = {
   questions: ClarificationQuestionItem[];
 };
 
+export type WorkflowStepVerdictResult = {
+  type: 'workflow_step_verdict';
+  verdict: 'pass' | 'conditional_pass' | 'fail';
+  remaining_issues?: number;
+  remainingIssues?: number;
+  summary?: string;
+  reason?: string;
+  nextStep?: number;
+  knownInputs?: Record<string, unknown>;
+  missingInputs?: string[];
+  blockingItems?: string[];
+};
+
 export function extractStructuredResultPayload<T extends object>(
   markdown: string,
   expectedType: string
@@ -230,6 +243,12 @@ export function diagnoseExtractionFailure(markdown: string, expectedKind: string
       const expectedKey = payload.scope === 'workflow' ? 'workflow' : payload.scope === 'state' ? 'state' : 'step';
       if (!payload.patch[expectedKey] || typeof payload.patch[expectedKey] !== 'object') {
         return `payload.patch.${expectedKey} 缺失或不是对象。`;
+      }
+    }
+
+    if (expectedKind === 'workflow_step_verdict') {
+      if (!['pass', 'conditional_pass', 'fail'].includes(String(payload.verdict || ''))) {
+        return 'payload.verdict 必须是 pass、conditional_pass 或 fail。';
       }
     }
 

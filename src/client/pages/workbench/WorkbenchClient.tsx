@@ -61,7 +61,6 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Switch } from '@/components/ui/switch';
@@ -77,7 +76,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
@@ -98,6 +96,7 @@ import {
   diagnoseExtractionFailure,
   extractStructuredResultPayload,
 } from '@/lib/ai/result-normalizers';
+import { getResultSections, extractJsonObject as extractResultJsonObject } from '@/lib/ai/result-channel';
 import {
   applyDesignOptimizationPatch,
   buildDesignOptimizationPrompt,
@@ -656,7 +655,6 @@ type ContextWorkspaceDialogProps = {
   globalDraft: string;
   phaseDrafts: Record<string, string>;
   workingDirectoryDraft?: string;
-  initialTab?: 'overview' | 'global' | 'state';
   focusTarget: string;
   onFocusTargetChange: (value: string) => void;
   footerText: string;
@@ -1132,6 +1130,107 @@ function splitMarkdownIntoVirtualPages(content: string, limit = 30000): string[]
   return pages.filter((page) => page.trim().length > 0);
 }
 
+function getWorkflowResultDisplayItems(content: string): Array<{ type: 'workflow_step_verdict'; payload: any }> {
+  const items: Array<{ type: 'workflow_step_verdict'; payload: any }> = [];
+  for (const section of getResultSections(String(content || ''))) {
+    const parsed = extractResultJsonObject(section.content);
+    const kind = typeof parsed?.kind === 'string'
+      ? parsed.kind
+      : typeof parsed?.type === 'string'
+        ? parsed.type
+        : '';
+    if (kind !== 'workflow_step_verdict') continue;
+    const payload = parsed?.payload && typeof parsed.payload === 'object' ? parsed.payload : parsed;
+    if (payload && typeof payload === 'object') {
+      items.push({ type: 'workflow_step_verdict', payload });
+    }
+  }
+  return items;
+}
+
+function stripResultBlocksForWorkbenchDisplay(content: string): string {
+  let text = String(content || '');
+  for (const section of [...getResultSections(text)].reverse()) {
+    text = text.slice(0, section.start) + text.slice(section.end);
+  }
+  return text.replace(/<result>[\s\S]*$/i, '').trim();
+}
+
+function WorkflowStepVerdictCard({ payload }: { payload: any }) {
+  const verdict = String(payload?.verdict || '').trim();
+  const remainingIssues = Number.isFinite(Number(payload?.remaining_issues))
+    ? Number(payload.remaining_issues)
+    : Number.isFinite(Number(payload?.remainingIssues))
+      ? Number(payload.remainingIssues)
+      : null;
+  const label = verdict === 'pass'
+    ? '通过'
+    : verdict === 'conditional_pass'
+      ? '有条件通过'
+      : verdict === 'fail'
+        ? '未通过'
+        : '裁决';
+  const icon = verdict === 'pass' ? 'check_circle' : verdict === 'fail' ? 'error' : 'rule';
+  const tone = verdict === 'pass'
+    ? 'border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-300'
+    : verdict === 'fail'
+      ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300'
+      : 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  const summary = String(payload?.summary || '').trim();
+  const reason = String(payload?.reason || '').trim();
+  const missingInputs = Array.isArray(payload?.missingInputs) ? payload.missingInputs.filter(Boolean) : [];
+  const blockingItems = Array.isArray(payload?.blockingItems) ? payload.blockingItems.filter(Boolean) : [];
+
+  return (
+    <div className={cn('my-3 rounded-xl border p-3', tone)}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="material-symbols-outlined text-base">{icon}</span>
+        <span className="text-sm font-semibold">流程裁决：{label}</span>
+        {remainingIssues !== null && (
+          <Badge variant="outline" className="border-current/20 bg-background/40 text-[10px] text-current">
+            剩余问题 {remainingIssues}
+          </Badge>
+        )}
+        {payload?.nextStep !== undefined && payload?.nextStep !== null && (
+          <Badge variant="outline" className="border-current/20 bg-background/40 text-[10px] text-current">
+            下一步 {String(payload.nextStep)}
+          </Badge>
+        )}
+      </div>
+      {(summary || reason) && (
+        <div className="mt-2 space-y-2 text-sm leading-6 text-foreground">
+          {summary && <Markdown>{summary}</Markdown>}
+          {reason && reason !== summary && <Markdown>{reason}</Markdown>}
+        </div>
+      )}
+      {(missingInputs.length > 0 || blockingItems.length > 0) && (
+        <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+          {missingInputs.length > 0 && (
+            <div className="rounded-lg border border-border/60 bg-background/50 p-2">
+              <div className="mb-1 font-medium text-foreground">待补充输入</div>
+              <ul className="list-disc space-y-1 pl-4">
+                {missingInputs.slice(0, 6).map((item: unknown, index: number) => (
+                  <li key={`missing-${index}`}>{String(item)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {blockingItems.length > 0 && (
+            <div className="rounded-lg border border-border/60 bg-background/50 p-2">
+              <div className="mb-1 font-medium text-foreground">阻塞项</div>
+              <ul className="list-disc space-y-1 pl-4">
+                {blockingItems.slice(0, 6).map((item: unknown, index: number) => (
+                  <li key={`blocking-${index}`}>{String(item)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AceAwareMarkdown({
   content,
   isStreaming = false,
@@ -1144,33 +1243,36 @@ function AceAwareMarkdown({
   const rawPrepared = isStreaming
     ? getStreamingAceProcessReadyContent(content)
     : String(content || '');
-  const prepared = rawPrepared;
+  const resultItems = getWorkflowResultDisplayItems(rawPrepared);
+  const prepared = stripResultBlocksForWorkbenchDisplay(rawPrepared);
   if (prepared.includes('<ace-process>')) {
     return (
       <div className={className}>
         <WrapperProcessBlocks content={prepared} isStreaming={isStreaming} />
+        {resultItems.map((item, index) => (
+          <WorkflowStepVerdictCard key={`workflow-result-${index}`} payload={item.payload} />
+        ))}
       </div>
     );
   }
   return (
     <div className={className}>
-      <Markdown>{prepared}</Markdown>
+      {prepared ? <Markdown>{prepared}</Markdown> : null}
+      {resultItems.map((item, index) => (
+        <WorkflowStepVerdictCard key={`workflow-result-${index}`} payload={item.payload} />
+      ))}
     </div>
   );
 }
 
 function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'global' | 'state'>(props.initialTab || 'state');
   const startupFlowEnabled = (props.preflightPreview?.commands?.length || 0) > 0;
   const [startupStep, setStartupStep] = useState<'context' | 'preflight'>('context');
   const [localGlobalDraft, setLocalGlobalDraft] = useState(props.globalDraft);
   const [localPhaseDrafts, setLocalPhaseDrafts] = useState<Record<string, string>>(props.phaseDrafts);
   const [localWorkingDirectory, setLocalWorkingDirectory] = useState(props.workingDirectoryDraft || '');
-  const [localFocusTarget, setLocalFocusTarget] = useState(props.focusTarget || props.startContextTargets[0] || '');
   const filledCount = props.startContextTargets.filter((name) => (localPhaseDrafts[name] || '').trim().length > 0).length;
   const coverage = props.startContextTargets.length > 0 ? Math.round((filledCount / props.startContextTargets.length) * 100) : 0;
-  const currentTarget = localFocusTarget || props.startContextTargets[0] || '';
-  const currentTargetValue = currentTarget ? (localPhaseDrafts[currentTarget] || '') : '';
   const previewCommands = props.preflightPreview?.commands || [];
   const workflowCommandCount = previewCommands.filter((item) => item.origin === 'workflow').length;
   const inferredCommandCount = previewCommands.filter((item) => item.origin === 'inferred').length;
@@ -1188,16 +1290,8 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   }, [props.workingDirectoryDraft]);
 
   useEffect(() => {
-    setLocalFocusTarget(props.focusTarget || props.startContextTargets[0] || '');
-  }, [props.focusTarget, props.startContextTargets]);
-
-  useEffect(() => {
     setStartupStep('context');
   }, [startupFlowEnabled, props.preflightPreview]);
-
-  useEffect(() => {
-    setActiveTab(props.initialTab || 'state');
-  }, [props.initialTab]);
 
   return (
     <div className="flex max-h-[92vh] w-[1120px] max-w-full flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm">
@@ -1270,195 +1364,115 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
       </div>
 
       {startupStep === 'context' ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[280px,minmax(0,1fr)] xl:grid-cols-[320px,minmax(0,1fr)]">
-          <div className="min-h-0 overflow-hidden border-b border-border/70 bg-muted/10 lg:border-b-0 lg:border-r">
-            <div className="flex h-full min-h-0 flex-col p-4">
-              <div className="mb-3 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">状态导航</div>
-              <Command className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
-                <CommandInput placeholder={`搜索${props.startContextScopeLabel}...`} />
-                <CommandList className="min-h-0 flex-1 overflow-y-auto">
-                  <CommandEmpty>没有匹配的{props.startContextScopeLabel}</CommandEmpty>
-                  <CommandGroup heading={`${props.startContextScopeLabel}列表`}>
-                    {props.startContextTargets.map((name, index) => {
-                      const filled = (props.phaseDrafts[name] || '').trim().length > 0;
-                      const selected = currentTarget === name;
-                      return (
-                        <CommandItem
-                          key={`context-target-${name}`}
-                          value={`${name} ${index + 1}`}
-                          onSelect={() => {
-                            setLocalFocusTarget(name);
-                            props.onFocusTargetChange(name);
-                            setActiveTab('state');
-                          }}
-                          className={`cursor-pointer rounded-lg border px-3 py-3 transition-colors hover:bg-muted/40 ${selected ? 'border-primary/30 bg-accent text-accent-foreground' : 'border-transparent'}`}
-                        >
-                          <div className="flex w-full items-center gap-3">
-                            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${selected ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
-                              {index + 1}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm font-medium">{name}</div>
-                              <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                                <span>{filled ? '已填写' : '待补充'}</span>
-                                <span className={`h-2 w-2 rounded-full ${filled ? 'bg-emerald-500' : 'bg-muted-foreground/35'}`} />
-                              </div>
-                            </div>
-                          </div>
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </div>
-          </div>
-
-          <div className="min-h-0 min-w-0 overflow-hidden bg-background">
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="flex h-full flex-col">
-              <div className="shrink-0 border-b border-border/70 px-4 py-4 sm:px-5">
-                <TabsList className="grid w-full grid-cols-3 rounded-2xl sm:max-w-[420px]">
-                  <TabsTrigger value="overview" className="rounded-xl">总览</TabsTrigger>
-                  <TabsTrigger value="global" className="rounded-xl">全局</TabsTrigger>
-                  <TabsTrigger value="state" className="rounded-xl">{props.startContextScopeLabel}</TabsTrigger>
-                </TabsList>
+        <div className="min-h-0 flex-1 overflow-y-auto bg-background px-4 py-4 sm:px-6 sm:py-6">
+          <div className="mx-auto max-w-5xl space-y-4">
+            <section className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <Label className="text-sm font-semibold">本次运行工作目录</Label>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    默认读取工作流设置。这里调整后只影响本次启动。
+                  </p>
+                </div>
+                <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">临时设置</Badge>
               </div>
+              <div className="mt-4">
+                <WorkspaceDirectoryPicker
+                  workspaceRoot={localWorkingDirectory || props.projectRoot || ''}
+                  value={localWorkingDirectory}
+                  onChange={setLocalWorkingDirectory}
+                  className="rounded-xl border-border/60 bg-background/90"
+                />
+              </div>
+            </section>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
-                <TabsContent value="overview" className="mt-0">
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                      <div className="text-sm font-semibold">本次运行工作目录</div>
-                      <div className="mt-3 space-y-2">
-                        <Input
-                          value={localWorkingDirectory}
-                          onChange={(event) => setLocalWorkingDirectory(event.target.value)}
-                          placeholder={props.projectRoot || '输入绝对路径'}
-                          className="h-10 rounded-xl border-border/60 bg-background/90"
-                        />
-                        <div className="text-xs leading-5 text-muted-foreground">
-                          留空时使用工作流配置里的工作目录。填写后只影响本次启动，配置文件保持不变。
-                        </div>
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                      <div className="text-sm font-semibold">填写建议</div>
-                      <div className="mt-3 space-y-3 text-sm leading-6 text-muted-foreground">
-                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">全局上下文写不变约束、兼容策略和统一交付边界。</div>
-                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">{props.startContextScopeLabel}上下文写局部输入、特殊注意事项和额外检查点。</div>
-                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">优先补齐高风险节点，避免每个节点都复制同一段全局说明。</div>
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none xl:col-span-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm font-semibold">覆盖率</div>
-                        <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{coverage}%</Badge>
-                      </div>
-                      <div className="mt-4"><Progress value={coverage} className="h-2" /></div>
-                      <div className="mt-4 space-y-2">
-                        {props.startContextTargets.slice(0, 6).map((name) => {
-                          const filled = (localPhaseDrafts[name] || '').trim().length > 0;
-                          return (
-                            <button
-                              key={`context-summary-${name}`}
-                              type="button"
-                              onClick={() => {
-                                setLocalFocusTarget(name);
-                                props.onFocusTargetChange(name);
-                                setActiveTab('state');
-                              }}
-                              className="flex w-full items-center justify-between rounded-2xl border border-border/60 bg-background/80 px-3 py-2 text-left text-sm hover:bg-muted/40"
-                            >
-                              <span className="truncate">{name}</span>
-                              <Badge variant={filled ? 'secondary' : 'outline'} className="rounded-full px-2 text-[10px]">
-                                {filled ? '已填' : '空白'}
-                              </Badge>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                  {props.preflightPreview && props.preflightPreview.commands.length > 0 ? (
-                    <div className="mt-4 rounded-xl border border-border/60 bg-card p-5 shadow-none">
+            <section className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <Label className="text-sm font-semibold">全局上下文</Label>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    适合填写本次运行共用的项目背景、交付边界、兼容策略和统一要求。
+                  </p>
+                </div>
+                <Badge variant="secondary" className="rounded-full px-2.5 text-[10px]">所有步骤共享</Badge>
+              </div>
+              <Textarea
+                value={localGlobalDraft}
+                onChange={(e) => setLocalGlobalDraft(e.target.value)}
+                placeholder="例如：优先保持现有架构、接口变更先兼容旧调用方、代码风格跟随仓库现状"
+                rows={8}
+                className="mt-4 min-h-[180px] resize-y rounded-xl border-border/60 bg-background/90 text-sm leading-6 shadow-none"
+              />
+            </section>
+
+            <section className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <Label className="text-sm font-semibold">每个{props.startContextScopeLabel}的上下文</Label>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    适合填写局部输入、特殊注意事项和额外检查点，内容会进入对应节点。
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{filledCount}/{props.startContextTargets.length || 0} 已填写</Badge>
+                  <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{coverage}%</Badge>
+                </div>
+              </div>
+              <Progress value={coverage} className="mt-4 h-2" />
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {props.startContextTargets.length > 0 ? props.startContextTargets.map((name, index) => {
+                  const value = localPhaseDrafts[name] || '';
+                  const filled = value.trim().length > 0;
+                  return (
+                    <div key={`context-target-editor-${name}`} className="rounded-xl border border-border/60 bg-background/80 p-4">
                       <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold">启动前检查命令</div>
-                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                            以下命令会在服务器侧于目录 {props.preflightPreview.cwd} 中执行。你可以直接执行，也可以跳过本次检查。
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-semibold text-muted-foreground">
+                              {index + 1}
+                            </span>
+                            <div className="truncate text-sm font-medium">{name}</div>
                           </div>
                         </div>
-                        <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">
-                          {props.preflightPreview.commands.length} 条
+                        <Badge variant={filled ? 'secondary' : 'outline'} className="shrink-0 rounded-full px-2 text-[10px]">
+                          {filled ? '已填写' : '待补充'}
                         </Badge>
                       </div>
-                      <div className="mt-4 space-y-2">
-                        {props.preflightPreview.commands.map((item, index) => (
-                          <div key={`preflight-preview-${index}-${item.command}`} className="rounded-2xl border border-border/60 bg-background/80 px-3 py-2">
-                            <div className="flex items-start justify-between gap-3">
-                              <code className="min-w-0 flex-1 whitespace-pre-wrap break-all text-xs leading-5 text-foreground">{item.command}</code>
-                              <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'} className="shrink-0 rounded-full px-2 text-[10px]">
-                                {item.origin === 'inferred' ? '推断' : '配置'}
-                              </Badge>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      <Textarea
+                        value={value}
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          setLocalPhaseDrafts((prev) => ({ ...prev, [name]: nextValue }));
+                        }}
+                        placeholder={`输入仅对「${name}」生效的上下文`}
+                        rows={6}
+                        className="mt-3 min-h-[132px] resize-y rounded-xl border-border/60 bg-card text-sm leading-6 shadow-none"
+                      />
                     </div>
-                  ) : null}
-                </TabsContent>
-
-                <TabsContent value="global" className="mt-0">
-                  <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <Label className="text-sm font-medium">全局上下文</Label>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">所有步骤都能看到。适合写共享原则，不适合堆局部执行细节。</p>
-                      </div>
-                      <Badge variant="secondary" className="rounded-full px-2.5 text-[10px]">共享</Badge>
-                    </div>
-                    <Textarea
-                      value={localGlobalDraft}
-                      onChange={(e) => setLocalGlobalDraft(e.target.value)}
-                      placeholder="例如：优先保持现有架构、接口变更先兼容旧调用方、代码风格跟随仓库现状"
-                      rows={16}
-                      className="mt-4 min-h-[220px] resize-none rounded-2xl border-border/60 bg-background/90 text-sm leading-6 shadow-sm sm:min-h-[320px] lg:min-h-[420px]"
-                    />
+                  );
+                }) : (
+                  <div className="rounded-xl border border-dashed border-border/60 bg-background/70 px-4 py-6 text-sm text-muted-foreground lg:col-span-2">
+                    当前工作流没有可单独设置的{props.startContextScopeLabel}。
                   </div>
-                </TabsContent>
-
-                <TabsContent value="state" className="mt-0">
-                  <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <Label className="text-sm font-medium">{currentTarget || `当前${props.startContextScopeLabel}`}</Label>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">这里只编辑当前选中的{props.startContextScopeLabel}，内容只会注入对应节点。</p>
-                      </div>
-                      {currentTarget ? (
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{props.startContextScopeLabel}</Badge>
-                          <Badge variant={(currentTargetValue || '').trim() ? 'secondary' : 'outline'} className="rounded-full px-2.5 text-[10px]">
-                            {(currentTargetValue || '').trim() ? '已填写' : '待补充'}
-                          </Badge>
-                        </div>
-                      ) : null}
-                    </div>
-                    <Textarea
-                      value={currentTargetValue}
-                      onChange={(e) => {
-                        if (!currentTarget) return;
-                        const nextValue = e.target.value;
-                        setLocalPhaseDrafts((prev) => ({ ...prev, [currentTarget]: nextValue }));
-                      }}
-                      placeholder={currentTarget ? `输入仅对「${currentTarget}」生效的上下文` : `先从左侧选择一个${props.startContextScopeLabel}`}
-                      rows={16}
-                      disabled={!currentTarget}
-                      className="mt-4 min-h-[220px] resize-none rounded-2xl border-border/60 bg-background/90 text-sm leading-6 shadow-sm disabled:opacity-60 sm:min-h-[320px] lg:min-h-[420px]"
-                    />
-                  </div>
-                </TabsContent>
+                )}
               </div>
-            </Tabs>
+            </section>
+
+            {props.preflightPreview && props.preflightPreview.commands.length > 0 ? (
+              <section className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">启动前检查命令</div>
+                    <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                      下一步会确认这些检查命令，执行目录为 {props.preflightPreview.cwd}。
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">
+                    {props.preflightPreview.commands.length} 条
+                  </Badge>
+                </div>
+              </section>
+            ) : null}
           </div>
         </div>
       ) : (
@@ -7025,6 +7039,7 @@ export default function WorkbenchPage({
     const nextPhaseDrafts = Object.fromEntries(
       startContextTargets.map((name: string) => [name, phaseContexts[name] || ''])
     ) as Record<string, string>;
+    const configuredStartWorkspace = resolvedProjectRoot || projectRoot || '';
     setPendingStartRequest({
       mode,
       skipPreflight: options?.skipPreflight,
@@ -7033,13 +7048,13 @@ export default function WorkbenchPage({
     });
     setStartGlobalContextDraft(globalContext || '');
     setStartPhaseContextDrafts(nextPhaseDrafts);
-    setStartWorkingDirectoryDraft(currentRunWorkspacePath || '');
+    setStartWorkingDirectoryDraft(configuredStartWorkspace);
     setStartContextFocusTarget(startContextTargets[0] || '');
     setShowStartWorkflowDialog(true);
     try {
       let preflightPreview: Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null = null;
       if (!options?.skipPreflight) {
-        preflightPreview = await workflowApi.preflightPreview(configFile, currentRunWorkspacePath || undefined);
+        preflightPreview = await workflowApi.preflightPreview(configFile, configuredStartWorkspace || undefined);
       }
       setPendingStartRequest((current) => current && current.mode === mode ? {
         mode,
@@ -7052,7 +7067,7 @@ export default function WorkbenchPage({
     } finally {
       setStartRequesting(false);
     }
-  }, [configFile, currentRunWorkspacePath, globalContext, phaseContexts, rehearsalMode, startContextTargets, startRequesting, starting, toast]);
+  }, [configFile, globalContext, phaseContexts, projectRoot, rehearsalMode, resolvedProjectRoot, startContextTargets, startRequesting, starting, toast]);
 
   useEffect(() => {
     if (autoStartHandledRef.current) return;
@@ -7308,7 +7323,8 @@ export default function WorkbenchPage({
   const stopWorkflow = useCallback(async () => {
     setStopping(true);
     try {
-      const stopResult = await workflowApi.stop(configFile) as { runIds?: string[] };
+      const targetRunId = runId || selectedRun?.id || initialRunId || undefined;
+      const stopResult = await workflowApi.stop(configFile, targetRunId) as { runIds?: string[] };
       const stoppedAt = new Date().toISOString();
       const stoppedRunIds = new Set(
         (Array.isArray(stopResult.runIds) ? stopResult.runIds : [])
@@ -14708,8 +14724,7 @@ export default function WorkbenchPage({
               }
               globalDraft={startGlobalContextDraft}
               phaseDrafts={startPhaseContextDrafts}
-              workingDirectoryDraft={startWorkingDirectoryDraft || currentRunWorkspacePath || projectRoot}
-              initialTab="global"
+              workingDirectoryDraft={startWorkingDirectoryDraft || resolvedProjectRoot || projectRoot}
               focusTarget={startContextFocusTarget}
               onFocusTargetChange={setStartContextFocusTarget}
               footerText={pendingStartRequest.preflightPreview?.commands?.length
@@ -14724,7 +14739,7 @@ export default function WorkbenchPage({
               preflightPreview={pendingStartRequest.preflightPreview}
               startContextTargets={startContextTargets}
               startContextScopeLabel={startContextScopeLabel}
-              projectRoot={projectRoot}
+              projectRoot={resolvedProjectRoot || projectRoot}
               onCancel={() => {
                 setShowStartWorkflowDialog(false);
                 setPendingStartRequest(null);

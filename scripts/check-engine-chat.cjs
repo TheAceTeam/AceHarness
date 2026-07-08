@@ -270,6 +270,61 @@ function expandEngineTargets(engines, driver, supportsDriverSelection, resolveEf
   });
 }
 
+async function createEngineFromEffectiveType(engineType) {
+  switch (engineType) {
+    case 'kiro-cli': {
+      const { KiroCliEngineWrapper } = require('../src/lib/engines/kiro-cli-wrapper');
+      return new KiroCliEngineWrapper();
+    }
+    case 'claude-code': {
+      const { ClaudeCodeEngineWrapper } = require('../src/lib/engines/claude-code-wrapper');
+      return new ClaudeCodeEngineWrapper();
+    }
+    case 'claude-code-acp': {
+      const { ClaudeCodeAcpEngineWrapper } = require('../src/lib/engines/claude-code-acp-wrapper');
+      return new ClaudeCodeAcpEngineWrapper();
+    }
+    case 'codex': {
+      const { CodexEngineWrapper } = require('../src/lib/engines/codex-wrapper');
+      return new CodexEngineWrapper();
+    }
+    case 'cursor': {
+      const { CursorEngineWrapper } = require('../src/lib/engines/cursor-wrapper');
+      return new CursorEngineWrapper();
+    }
+    case 'opencode': {
+      const { OpenCodeEngineWrapper } = require('../src/lib/engines/opencode-wrapper');
+      return new OpenCodeEngineWrapper();
+    }
+    case 'opencode-sdk': {
+      const { OpenCodeSdkEngineWrapper } = require('../src/lib/engines/opencode-sdk-wrapper');
+      return new OpenCodeSdkEngineWrapper();
+    }
+    case 'nga': {
+      const { NgaEngineWrapper } = require('../src/lib/engines/nga-wrapper');
+      return new NgaEngineWrapper();
+    }
+    case 'nga-sdk': {
+      const { NgaSdkEngineWrapper } = require('../src/lib/engines/nga-sdk-wrapper');
+      return new NgaSdkEngineWrapper();
+    }
+    case 'codegenie': {
+      const { CodegenieEngineWrapper } = require('../src/lib/engines/codegenie-wrapper');
+      return new CodegenieEngineWrapper();
+    }
+    case 'codegenie-sdk': {
+      const { CodegenieSdkEngineWrapper } = require('../src/lib/engines/codegenie-sdk-wrapper');
+      return new CodegenieSdkEngineWrapper();
+    }
+    case 'trae-cli': {
+      const { TraeCliEngineWrapper } = require('../src/lib/engines/trae-cli-wrapper');
+      return new TraeCliEngineWrapper();
+    }
+    default:
+      throw new Error(`不支持的 effective engine: ${engineType}`);
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const unsupported = options.engines.filter((engine) => !SUPPORTED_ENGINES.includes(engine));
@@ -286,18 +341,15 @@ async function main() {
   }
 
   setupTsRuntime();
-  const { createEngine, createEngineForDriver, supportsDriverSelection, resolveEffectiveEngine } = require('../src/lib/engines/engine-factory');
+  const { supportsDriverSelection, resolveEffectiveEngine } = require('../src/lib/engines/engine-selection');
   const targets = expandEngineTargets(options.engines, options.driver, supportsDriverSelection, resolveEffectiveEngine);
 
   const rows = [];
   for (const target of targets) {
-    const driver = target.label.includes('/') ? target.label.split('/').pop() : '';
     const row = await runEngine(
       target.effectiveEngine,
       options,
-      driver === 'sdk' || driver === 'stdio'
-        ? (() => createEngineForDriver(target.label.split('/')[0], driver))
-        : createEngine,
+      createEngineFromEffectiveType,
     );
     row.engine = target.label;
     rows.push(row);

@@ -7,23 +7,31 @@ import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody<any>(request, {});
-    const { configFile } = body as { configFile?: string };
+    const { configFile, runId } = body as { configFile?: string; runId?: string };
     const touchedRunIds = new Set<string>();
 
-    if (configFile) {
+    if (runId) {
+      const manager = await workflowRegistry.getManagerByRunId(runId);
+      if (manager) {
+        await manager.stop();
+        touchedRunIds.add(runId);
+      }
+    }
+
+    if (configFile && !runId) {
       const manager = workflowRegistry.getRunningManager(configFile);
       if (manager) {
-        const runId = manager.getStatus().runId as string | undefined;
+        const managerRunId = manager.getStatus().runId as string | undefined;
         await manager.stop();
-        if (runId) touchedRunIds.add(runId);
+        if (managerRunId) touchedRunIds.add(managerRunId);
       }
-    } else {
+    } else if (!configFile && !runId) {
       // Stop all running workflows
       const running = workflowRegistry.getRunningManagers();
       for (const { manager } of running) {
-        const runId = manager.getStatus().runId as string | undefined;
+        const managerRunId = manager.getStatus().runId as string | undefined;
         await manager.stop();
-        if (runId) touchedRunIds.add(runId);
+        if (managerRunId) touchedRunIds.add(managerRunId);
       }
     }
 
@@ -31,7 +39,9 @@ export async function POST(request: Request) {
 
     // Fallback: if there is no active manager but run records are still marked
     // as running/preparing, force them to stopped so History view is consistent.
-    const candidateRuns = configFile
+    const candidateRuns = runId
+      ? (await listRuns()).filter((run) => run.id === runId)
+      : configFile
       ? await listRunsByConfig(configFile)
       : await listRuns();
     for (const run of candidateRuns) {

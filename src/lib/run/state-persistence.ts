@@ -9,6 +9,7 @@ import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
+const WINDOWS_RENAME_RETRY_DELAYS_MS = [40, 120, 300, 700];
 const streamPersistedLengths = new Map<string, number>();
 const runStateWriteQueues = new Map<string, Promise<void>>();
 const streamWriteQueues = new Map<string, Promise<void>>();
@@ -741,7 +742,7 @@ async function writeRunStateNow(state: PersistedRunState): Promise<void> {
   const temp = resolve(dir, `state.yaml.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await writeFile(temp, yamlContent, 'utf-8');
   try {
-    await rename(temp, target);
+    await renameWithRetry(temp, target);
   } catch (error) {
     await rm(temp, { force: true }).catch(() => {});
     throw error;
@@ -771,6 +772,25 @@ async function writeRunStateNow(state: PersistedRunState): Promise<void> {
   await store.saveSnapshot(state.runId, snapshot, { seq: event?.seq }).catch((error) => {
     console.warn('[run-state] failed to save workflow snapshot:', error);
   });
+}
+
+async function renameWithRetry(source: string, target: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= WINDOWS_RENAME_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await rename(source, target);
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!isTransientRenameError(error) || attempt >= WINDOWS_RENAME_RETRY_DELAYS_MS.length) break;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, WINDOWS_RENAME_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+  throw lastError;
+}
+
+function isTransientRenameError(error: any): boolean {
+  return error?.code === 'EPERM' || error?.code === 'EBUSY' || error?.code === 'EACCES';
 }
 
 export async function saveRunState(state: PersistedRunState): Promise<void> {

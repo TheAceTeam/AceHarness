@@ -527,6 +527,7 @@ const MACHINE_RESULT_KINDS = new Set([
   'plan_draft',
   'workflow_draft',
   'workflow_patch',
+  'workflow_step_verdict',
   'workflow_clarification_summary',
   'workflow_clarification_facts',
   'workflow_clarification_gaps',
@@ -578,6 +579,52 @@ function collectMachinePayload(
     } else if (isHomeSidebarHintLike(parsed)) {
       sidebarHints.push(parsed);
     }
+    return true;
+  }
+
+  if (kind === 'workflow_step_verdict') {
+    const payload = parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : parsed;
+    const verdict = String(payload?.verdict || '').trim();
+    const remaining = payload?.remaining_issues ?? payload?.remainingIssues;
+    const label = verdict === 'pass'
+      ? '通过'
+      : verdict === 'conditional_pass'
+        ? '有条件通过'
+        : verdict === 'fail'
+          ? '未通过'
+          : '裁决';
+    const color = verdict === 'pass' ? 'green' : verdict === 'fail' ? 'red' : 'yellow';
+    const rows: Array<{ label: string; value: string; icon?: string }> = [];
+    if (remaining !== undefined && remaining !== null && String(remaining).trim()) {
+      rows.push({ label: '剩余问题', value: String(remaining), icon: 'rule' });
+    }
+    if (payload?.nextStep !== undefined && payload?.nextStep !== null) {
+      rows.push({ label: '下一步', value: String(payload.nextStep), icon: 'arrow_forward' });
+    }
+    cards.push(validateCard({
+      header: {
+        icon: verdict === 'pass' ? 'check_circle' : verdict === 'fail' ? 'error' : 'rule',
+        title: `流程裁决：${label}`,
+        badges: [{ text: verdict || 'workflow_step_verdict', color }],
+      },
+      blocks: [
+        {
+          type: 'status',
+          state: label,
+          color,
+          rows,
+        },
+        ...((payload?.summary || payload?.reason)
+          ? [{ type: 'text', content: String(payload.summary || payload.reason || '').trim(), maxLines: 6 }]
+          : []),
+        ...(Array.isArray(payload?.missingInputs) && payload.missingInputs.length
+          ? [{ type: 'list', items: payload.missingInputs.slice(0, 6).map((item: unknown) => ({ icon: 'info', text: String(item) })) }]
+          : []),
+        ...(Array.isArray(payload?.blockingItems) && payload.blockingItems.length
+          ? [{ type: 'list', items: payload.blockingItems.slice(0, 6).map((item: unknown) => ({ icon: 'warning', color: 'text-amber-500', text: String(item) })) }]
+          : []),
+      ],
+    }));
     return true;
   }
 
