@@ -49,7 +49,7 @@ vite.config.ts
 .ace-outputs/
 .aceharness/
 
-runs/
+/runs/
 
 # check script outputs
 scripts/.check-batch-logs/
