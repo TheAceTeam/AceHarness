@@ -322,6 +322,14 @@ function extractTaggedBlocks(text: string, tag: string): string[] {
   return blocks;
 }
 
+function normalizeWorkflowVerdict(value: unknown): 'pass' | 'conditional_pass' | 'fail' | null {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'pass') return 'pass';
+  if (raw === 'conditional_pass') return 'conditional_pass';
+  if (raw === 'fail') return 'fail';
+  return null;
+}
+
 export function compactStepConclusion(raw: string): string {
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
   if (tagged) return tagged;
@@ -3001,6 +3009,36 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   private extractJsonObject(raw: string): any | null {
     return extractStructuredJsonObject(raw);
+  }
+
+  private extractVerdictJson(raw: string): { verdict: 'pass' | 'conditional_pass' | 'fail' } | null {
+    const fencedJsonPattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+    const candidates: any[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = fencedJsonPattern.exec(raw)) !== null) {
+      const parsed = this.extractJsonObject(match[1] || '');
+      if (parsed && normalizeWorkflowVerdict(parsed.verdict)) candidates.push(parsed);
+    }
+
+    for (const block of extractTaggedBlocks(raw, 'step-conclusion')) {
+      const parsed = this.extractJsonObject(block);
+      if (parsed && normalizeWorkflowVerdict(parsed.verdict)) candidates.push(parsed);
+    }
+
+    const direct = this.extractJsonObject(raw);
+    if (direct && normalizeWorkflowVerdict(direct.verdict)) candidates.push(direct);
+
+    const fromResult = extractStructuredResult(raw, (parsed: any): parsed is { verdict: 'pass' | 'conditional_pass' | 'fail' } => (
+      Boolean(parsed && normalizeWorkflowVerdict(parsed.verdict))
+    ));
+    if (fromResult && normalizeWorkflowVerdict(fromResult.verdict)) candidates.push(fromResult);
+
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      const verdict = normalizeWorkflowVerdict(candidates[index]?.verdict);
+      if (verdict) return { verdict };
+    }
+
+    return null;
   }
 
   private buildSpecRevisionVoteContext(input: SpecRevisionVoteTriggerInput): string {
@@ -6190,6 +6228,10 @@ try {
       let stepResult = await this.runAgentStep(step, context, config, stepId);
       let output = stepResult.output;
       if (this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
+        this.emit('log', {
+          level: 'warning',
+          message: `步骤 "${state.name}/${step.name}" 缺少严格最终裁决 JSON，正在请求 Agent 补交。`,
+        });
         const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
         const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
         output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
@@ -6202,6 +6244,9 @@ try {
           sessionId: repairResult.sessionId || stepResult.sessionId,
           tokenUsage: this.mergeTokenUsage(stepResult.tokenUsage, repairResult.tokenUsage),
         };
+        if (!this.hasRequiredVerdictJson(output)) {
+          throw new Error(`步骤 "${state.name}/${step.name}" 补交后仍缺少严格最终裁决 JSON`);
+        }
       }
       if (isEngineLevelFailure(output)) {
         throw new Error(output.trim() || '引擎返回致命错误输出');
@@ -6480,8 +6525,7 @@ try {
   }
 
   private hasRequiredVerdictJson(output: string): boolean {
-    const parsed = this.extractJsonObject(output);
-    return Boolean(parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict));
+    return Boolean(this.extractVerdictJson(output));
   }
 
   private buildMissingFinalVerdictPrompt(
@@ -6496,15 +6540,16 @@ try {
       '\n# 系统补充要求：缺少最终裁决 JSON',
       `你刚才完成了状态 "${state.name}" 的最后步骤 "${step.name}"，但回复中没有包含可解析的最终裁决 JSON。`,
       '不要重新执行任务，不要重复完整过程，只基于你刚才的结果补交最终裁决。',
-      '必须先输出以下 JSON 块（用 ```json 包裹），且 verdict 只能是 pass、conditional_pass、fail 三者之一：',
+      '必须只补交以下 JSON 块（用 ```json 包裹），且 verdict 的值必须从 pass、conditional_pass、fail 中选择一个真实值：',
       '```json',
       '{',
-      '  "verdict": "pass | conditional_pass | fail",',
+      '  "verdict": "pass",',
       '  "remaining_issues": 0,',
       '  "summary": "一句话总结"',
       '}',
       '```',
-      '随后必须输出 <step-conclusion>，用于步骤归档和后续步骤复用。',
+      '如果不能通过，请把 verdict 改为 conditional_pass 或 fail，并同步填写 remaining_issues。',
+      '随后可以输出 <step-conclusion>，用于步骤归档和后续步骤复用。',
       '\n# 你上一轮输出',
       previous || '[上一轮没有可用输出]',
     ].join('\n');
@@ -7748,33 +7793,12 @@ try {
       return 'fail';
     }
 
-    const parsed = this.extractJsonObject(output);
+    const parsed = this.extractVerdictJson(output);
     if (parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict)) {
       return parsed.verdict;
     }
 
-    const conclusion = extractTaggedBlock(output, 'step-conclusion');
-    const conclusionVerdict = conclusion ? this.parseVerdictFromConclusion(conclusion) : null;
-    if (conclusionVerdict) {
-      return conclusionVerdict;
-    }
-
-    // Fallback: check for keywords
-    if (/\b(fail|失败|不通过)\b/i.test(output)) return 'fail';
-    if (/\b(pass|通过|成功)\b/i.test(output)) return 'pass';
-    return 'conditional_pass';
-  }
-
-  private parseVerdictFromConclusion(conclusion: string): 'pass' | 'conditional_pass' | 'fail' | null {
-    const text = conclusion.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const verdictPattern = /(?:verdict|裁定|裁决|结果|结论|判断)\s*(?:为|是|:|：|=)?\s*`?\s*(conditional_pass|fail|pass|有条件通过|失败|不通过|通过|成功)\s*`?/i;
-    const match = text.match(verdictPattern);
-    if (!match) return null;
-    const raw = match[1].toLowerCase();
-    if (raw === 'fail' || raw === '失败' || raw === '不通过') return 'fail';
-    if (raw === 'conditional_pass' || raw === '有条件通过') return 'conditional_pass';
-    if (raw === 'pass' || raw === '通过' || raw === '成功') return 'pass';
-    return null;
+    throw new Error('缺少严格最终裁决 JSON');
   }
 
   private getTransitionReason(result: StateExecutionResult): string {
