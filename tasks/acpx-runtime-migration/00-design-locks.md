@@ -15,7 +15,7 @@ Updated: 2026-07-09
 - `package.json` already includes TanStack Start, Router, React Query, React DB, React Virtual, and TanStack AI.
 - `package.json` still includes SDK packages such as `@openai/codex-sdk`, `@opencode-ai/sdk`, `@anthropic-ai/sdk`, `@anthropic-ai/claude-agent-sdk`, and ACP SDK packages.
 - `src/lib/engines` contains old wrapper implementations and old `engine-interface`.
-- `src/server/api-routes/engine` contains legacy engine API routes.
+- `src/server/api-routes/engine` contains oldArchitecture engine API routes.
 - `src/client/query/query-keys.ts` contains existing `engines`, `engineAvailability`, `models`, and `agents` query keys.
 - `src/client/db/collections.ts` already uses TanStack DB local-only collections.
 
@@ -43,5 +43,5 @@ Updated: 2026-07-09
 ## Example Or Documentation Rules
 
 - Docs and examples should use `agentId`, `runtimeSessionId`, `turnId`, `modelRouteId`, and `runtimeProfileId`.
-- Legacy names such as `driver`, `backendSessionId`, `activeEngine`, and `ModelOption` may appear only in migration notes or deletion checks.
+- oldArchitecture names such as `driver`, `backendSessionId`, `activeEngine`, and `ModelOption` may appear only in migration notes or deletion checks.
 - Verification records must mention commands actually run and whether they passed, failed, or were skipped.

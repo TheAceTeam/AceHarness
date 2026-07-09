@@ -521,7 +521,7 @@ export default function AgentsManager({
   ];
   const { isDashboardShell } = useDashboardShellHeader({
     title: 'Agent 管理',
-    subtitle: `管理 ${dbAgents.length} 个可调度角色与运行时 Agent 编队`,
+    subtitle: `管理 ${dbAgents.length} 个可调度角色与 Agent 编队`,
     actions: (
       <>
         <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
@@ -570,7 +570,7 @@ export default function AgentsManager({
           open={workspaceOpen}
           onOpenChange={setWorkspaceOpen}
           workspacePath={runtimeAgentsDir}
-          title="Runtime Agents"
+          title="Agent 配置目录"
         />
       ) : null}
       <input
@@ -584,7 +584,7 @@ export default function AgentsManager({
         <PageHeader
           className="sticky top-0 z-20 bg-card/95 supports-[backdrop-filter]:bg-card/90"
           title="Agent 管理"
-          subtitle={`管理 ${dbAgents.length} 个可调度角色与运行时 Agent 编队`}
+          subtitle={`管理 ${dbAgents.length} 个可调度角色与 Agent 编队`}
           status={<StatusPill tone={agentError ? 'danger' : 'accent'}>{agentError ? '加载异常' : `${filteredAgents.length} 可见`}</StatusPill>}
           leading={(
             <Button variant="ghost" size="icon" asChild>
@@ -649,7 +649,7 @@ export default function AgentsManager({
           </DataCard>
           <DataCard>
             <DataCardTitle>工作目录</DataCardTitle>
-            <DataCardDescription>{runtimeAgentsDir ? '运行时目录已连接' : '暂无可打开目录'}</DataCardDescription>
+            <DataCardDescription>{runtimeAgentsDir ? 'Agent 配置目录已连接' : '暂无可打开目录'}</DataCardDescription>
             <DataCardActions className="mt-3 justify-start">
               <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
                 <FolderOpen className="mr-2 h-4 w-4" />

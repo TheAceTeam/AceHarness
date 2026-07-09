@@ -221,6 +221,8 @@ export interface RuntimeEvent<TPayload = unknown> {
   messageId?: string;
   toolCallId?: string;
   payload: TPayload;
+  usage?: TokenUsage;
+  cost?: CostUsage;
   redacted: boolean;
   createdAt: string;
 }

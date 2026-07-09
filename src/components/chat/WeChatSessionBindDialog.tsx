@@ -45,7 +45,7 @@ function resolveBindingTarget(session: ChatSession | null): {
       targetLabel: session.title || '当前对话',
       payload: {
         agentName: session.agentBinding?.agentName || session.workflowBinding.supervisorAgent || 'default-supervisor',
-        agentSessionId: session.backendSessionId || session.workflowBinding.supervisorSessionId || undefined,
+        agentSessionId: session.runtimeSessionId || session.workflowBinding.supervisorSessionId || undefined,
         frontendSessionId: session.id,
         runId: session.workflowBinding.runId,
         configFile: session.workflowBinding.configFile,
@@ -59,7 +59,7 @@ function resolveBindingTarget(session: ChatSession | null): {
     targetLabel: session?.title || '当前对话',
     payload: {
       agentName,
-      agentSessionId: session?.backendSessionId || undefined,
+      agentSessionId: session?.runtimeSessionId || undefined,
       frontendSessionId: session?.id,
     },
   };

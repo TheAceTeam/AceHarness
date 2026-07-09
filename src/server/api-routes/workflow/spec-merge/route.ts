@@ -12,8 +12,7 @@ import {
   getSpecRootDir,
   readDeltaSpec,
 } from '@/lib/spec/persistence';
-import { createEngine } from '@/lib/engines/engine-factory';
-import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
+import { createWorkflowRuntime, executeWorkflowRuntimeWithContextRecovery } from '@/lib/workflow/runtime-facade';
 import { sha256, buildDeltaDigest, stripCodeFence, createUnifiedDiff } from '@/lib/spec/merge-utils';
 
 export { sha256, buildDeltaDigest, stripCodeFence, createUnifiedDiff } from '@/lib/spec/merge-utils';
@@ -91,12 +90,12 @@ async function generateAiMergedSpec(input: {
   userId?: string;
 }): Promise<{ content: string; summary: string } | null> {
   try {
-    const engine = await createEngine();
+    const engine = await createWorkflowRuntime();
     if (!engine) return null;
 
     const prompt = `你是 ACEHarness Spec Coding 的合并助手。请把本次 Delta Spec 合并进 master spec.md。\n\n规则：\n- master spec.md 是基线，必须保留未受影响章节。\n- Delta 的 requirements/design/tasks 是本次变更来源。\n- 只根据给定内容合并，不要臆造未提供事实。\n- 输出必须是完整的合并后 spec.md 正文。\n- 不要输出解释、diff、代码围栏或额外前后缀。\n\n# Master spec.md\n\n${input.masterBefore}\n\n# Delta requirements.md\n\n${input.requirements}\n\n# Delta design.md\n\n${input.design}\n\n# Delta tasks.md\n\n${input.tasks}`;
 
-    const result = await executeEngineWithContextRecovery(engine, {
+    const result = await executeWorkflowRuntimeWithContextRecovery(engine, {
       agent: 'spec-merge-assistant',
       step: 'merge-delta-spec-to-master',
       prompt,

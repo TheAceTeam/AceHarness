@@ -13,15 +13,43 @@ CREATE TABLE IF NOT EXISTS model_routes (
 );
 
 CREATE TABLE IF NOT EXISTS env_profiles (
-  id TEXT PRIMARY KEY
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT,
+  visibility TEXT NOT NULL DEFAULT 'private',
+  display_name TEXT NOT NULL,
+  agent_id TEXT,
+  variables_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK(visibility IN ('private','workspace'))
 );
 
 CREATE TABLE IF NOT EXISTS secret_profiles (
-  id TEXT PRIMARY KEY
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT,
+  visibility TEXT NOT NULL DEFAULT 'private',
+  display_name TEXT NOT NULL,
+  agent_id TEXT,
+  encrypted INTEGER NOT NULL,
+  encryption_key_ready INTEGER NOT NULL,
+  secrets_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK(visibility IN ('private','workspace')),
+  CHECK(encrypted IN (0,1)),
+  CHECK(encryption_key_ready IN (0,1))
 );
 
 CREATE TABLE IF NOT EXISTS permission_policies (
-  id TEXT PRIMARY KEY
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT,
+  visibility TEXT NOT NULL DEFAULT 'workspace',
+  policy_id TEXT NOT NULL DEFAULT 'unrestricted',
+  display_name TEXT NOT NULL DEFAULT 'Unrestricted',
+  created_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+  updated_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+  CHECK(visibility IN ('private','workspace')),
+  CHECK(policy_id IN ('unrestricted','approve-reads','ask','deny-destructive','deny-all'))
 );
 
 CREATE TABLE IF NOT EXISTS runtime_sessions (
@@ -250,6 +278,12 @@ CREATE INDEX IF NOT EXISTS idx_runtime_sessions_owner_updated
   ON runtime_sessions(owner_user_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_sessions_kind_status_updated
   ON runtime_sessions(kind, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_env_profiles_owner_visibility
+  ON env_profiles(owner_user_id, visibility, agent_id);
+CREATE INDEX IF NOT EXISTS idx_secret_profiles_owner_visibility
+  ON secret_profiles(owner_user_id, visibility, agent_id);
+CREATE INDEX IF NOT EXISTS idx_permission_policies_owner_visibility
+  ON permission_policies(owner_user_id, visibility, policy_id);
 
 CREATE INDEX IF NOT EXISTS idx_runtime_session_operations_session_kind_status_created
   ON runtime_session_operations(session_id, kind, status, created_at);

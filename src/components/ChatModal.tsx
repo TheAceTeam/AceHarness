@@ -12,6 +12,7 @@ import { Conversation, ConversationContent, ConversationScrollButton } from '@/c
 import { PromptInput, PromptInputTextarea, PromptInputFooter, PromptInputSubmit } from '@/components/ai-elements/prompt-input';
 import type { PromptInputMessage } from '@/components/ai-elements/prompt-input';
 import { normalizeAssistantDisplay } from '@/lib/chat/actions';
+import { resolveChatRuntimeDisplay } from '@/lib/chat/runtime-session-display';
 import { cn } from '@/lib/core/utils';
 
 interface AuthViewer {
@@ -91,6 +92,12 @@ export default function ChatModal() {
   const [currentUser, setCurrentUser] = useState<AuthViewer | null>(() => readStoredAuthUser());
   const effectiveEngine = useCurrentEngine(engine);
   const isComposerReady = isModelSelectionReady && Boolean(model && effectiveEngine);
+  const runtimeDisplay = useMemo(() => resolveChatRuntimeDisplay({
+    engine: effectiveEngine,
+    model,
+    isStreaming: loading,
+    hasError: messages.some((message) => message.role === 'error'),
+  }), [effectiveEngine, loading, messages, model]);
 
   useEffect(() => {
     if (!model && ctxModel) setModel(ctxModel);
@@ -247,7 +254,12 @@ export default function ChatModal() {
           )}
         >
           <div className="flex items-center justify-between border-b bg-muted px-4 py-3 flex-shrink-0">
-            <span className="font-semibold text-sm">轻聊</span>
+            <div className="min-w-0">
+              <span className="block text-sm font-semibold">轻聊</span>
+              <span className="block truncate text-[11px] text-muted-foreground">
+                {runtimeDisplay.status === 'idle' ? runtimeDisplay.routeLabel : `${runtimeDisplay.routeLabel} · ${runtimeDisplay.statusLabel}`}
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -275,7 +287,7 @@ export default function ChatModal() {
               {loading && (
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <RobotLogo size={24} />
-                  <Shimmer as="span" className="text-sm">思考中...</Shimmer>
+                  <Shimmer as="span" className="text-sm">{runtimeDisplay.statusLabel}</Shimmer>
                 </div>
               )}
             </ConversationContent>

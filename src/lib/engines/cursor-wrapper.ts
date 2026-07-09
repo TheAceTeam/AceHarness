@@ -2,7 +2,7 @@
  * Cursor CLI Engine Wrapper
  *
  * Wraps ACPEngine to implement the Engine interface for Cursor Agent CLI.
- * The actual command is `cursor-agent acp` or legacy `agent acp` (not `cursor acp`).
+ * The actual command is `cursor-agent acp` or preRuntime `agent acp` (not `cursor acp`).
  *
  * Cursor ACP quirks vs OpenCode/Kiro:
  * - tool_call events always have empty rawInput {}

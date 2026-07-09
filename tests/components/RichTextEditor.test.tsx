@@ -45,7 +45,7 @@ describe('RichTextEditor mention markdown helpers', () => {
     expect(normalizeMentionMarkdown('[@ id="agent-alpha"]')).toBe('@agent-alpha');
   });
 
-  test('normalizes legacy mention markup to plain mentions', () => {
+  test('normalizes preRuntime mention markup to plain mentions', () => {
     expect(normalizeMentionMarkdown('<mention id="Agent-Alpha" label="Agent-Alpha" /> 请先看')).toBe('@Agent-Alpha 请先看');
     expect(normalizeMentionMarkdown('[mention id="Agent-Beta" label="Agent &amp; Beta"]')).toBe('@Agent & Beta');
   });

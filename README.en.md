@@ -177,7 +177,7 @@ Core startup and runtime-directory variables:
 | `ACE_HOST` | Server bind address | `127.0.0.1` |
 | `ACE_PORT` | ACEHarness service port | `3000` |
 | `PORT` | Generic service port | Higher priority than `ACE_PORT` |
-| `BASEURL` / `BASE_URL` | Reverse-proxy subpath or public site prefix used to generate Next.js `basePath` / `assetPrefix`, so `_next` CSS/JS assets are not emitted from the domain root | Empty when unset; examples: `/ace` or `https://example.com/ace` |
+| `BASEURL` / `BASE_URL` | Reverse-proxy subpath or public site prefix used for application routes and static asset URLs | Empty when unset; examples: `/ace` or `https://example.com/ace` |
 | `ACE_HOME` | ACE runtime root; controls where `config/`, `data/`, `cache/`, `logs/`, and `workspace/` live | Falls back by platform when unset |
 | `APPDATA` | Windows fallback root for `ACE_HOME` | `<APPDATA>/ACEHarness` |
 | `XDG_DATA_HOME` | Linux / macOS fallback root for `ACE_HOME` | `<XDG_DATA_HOME>/aceharness` |
@@ -219,39 +219,8 @@ Public-origin and channel-recovery variables:
 | Variable | Description | Default / precedence |
 |------|-------------|----------------------|
 | `ACE_PUBLIC_ORIGIN` | Absolute public origin used for webhook URLs, callbacks, and the official WeChat bridge | Highest priority |
-| `NEXT_PUBLIC_ACE_ORIGIN` | Public-origin fallback | Lower priority than `ACE_PUBLIC_ORIGIN` |
-| `NEXT_PUBLIC_APP_ORIGIN` | Public-origin fallback | Lower priority than `NEXT_PUBLIC_ACE_ORIGIN` |
 | `ACE_WECHAT_AUTO_RESTORE` | Auto-restore official WeChat bridges after the service starts | Enabled by default; disable with `0` / `false` |
 | `ACE_WECHAT_RESTORE_DELAY_MS` | Delay before official WeChat bridge restore (ms) | `3000` |
-
-Diagnostics and ACP / streaming variables:
-
-| Variable | Description | Default / precedence |
-|------|-------------|----------------------|
-| `ACE_TIMING_DEBUG` | Print service and ACP timing logs | On by default in local development, off in production / test |
-| `ACE_ACP_TIMING_DEBUG` | Additional switch for ACP timing logs | Can be combined with `ACE_TIMING_DEBUG` |
-| `ACE_ACP_STREAM_DEBUG` | Print ACP stream-event debug output | Follows engine diagnostic logging when unset |
-| `ACE_ACP_INIT_TIMEOUT_MS` | ACP `connection.initialize` timeout in ms | `30000` |
-| `ACE_ACP_NEW_SESSION_TIMEOUT_MS` | ACP `newSession` timeout in ms | `60000` |
-| `ACE_ACP_LOAD_SESSION_TIMEOUT_MS` | ACP `session/load` timeout in ms | `30000` |
-| `ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS` | Total timeout for model discovery in ms | `init + newSession + 15000` |
-| `ACE_CHAT_STREAM_DEBUG` | Claude Code SDK streaming debug | Off by default |
-| `ACE_CLAUDE_CODE_EXECUTABLE` | Explicit path to the Claude Code executable | Falls back to `CLAUDE_CODE_EXECUTABLE` or auto-discovery |
-| `ACE_CLAUDE_API_RETRY_ATTEMPTS` | Max Claude Code SDK API retry attempts | `12` |
-| `ACE_CLAUDE_API_RETRY_MIN_DELAY_MS` | Minimum Claude Code SDK API retry delay in ms | `10000` |
-
-Engine-specific ACE variables:
-
-| Variable | Description | Default / precedence |
-|------|-------------|----------------------|
-| `ACE_CODEGENIE_BIN` | Path to the CodeGenie executable | Auto-detected from PATH / SDK settings when unset |
-| `ACE_CODEGENIE_SDK_BASE_URL` | CodeGenie SDK service URL | Uses the built-in default when unset |
-| `ACE_CODEGENIE_SDK_COMMAND` | CodeGenie SDK launch command | Auto-detected from PATH / SDK settings when unset |
-| `ACE_CODEGENIE_SDK_TIMEOUT_MS` | CodeGenie SDK request timeout in ms | Uses the built-in default when unset |
-| `ACE_NGA_BIN` | Path to the NGA executable | Auto-detected from PATH / SDK settings when unset |
-| `ACE_NGA_SDK_BASE_URL` | NGA SDK service URL | Uses the built-in default when unset |
-| `ACE_NGA_SDK_COMMAND` | NGA SDK launch command | Auto-detected from PATH / SDK settings when unset |
-| `ACE_NGA_SDK_TIMEOUT_MS` | NGA SDK request timeout in ms | Uses the built-in default when unset |
 
 ## Channel Integrations
 

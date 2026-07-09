@@ -1,5 +1,6 @@
 import { ApiError } from './query-client';
 import { withBasePath } from '../base-url';
+import { buildLoginHref, getCurrentAuthReturnTo } from '@/lib/navigation/return-target';
 
 export type ApiRequestOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
@@ -23,10 +24,11 @@ export function clearAuthSession(options: { emitEvent?: boolean } = {}) {
 
 function handleUnauthorized(redirect = true) {
   if (typeof window === 'undefined') return;
-  clearAuthSession();
+  const onLoginPage = window.location.pathname === withBasePath('/login');
+  clearAuthSession({ emitEvent: redirect && !onLoginPage });
   if (!redirect) return;
-  if (window.location.pathname !== withBasePath('/login')) {
-    window.location.replace(withBasePath('/login'));
+  if (!onLoginPage) {
+    window.location.replace(withBasePath(buildLoginHref(getCurrentAuthReturnTo('/'))));
   }
 }
 
@@ -77,8 +79,8 @@ export async function apiFetch(
     headers,
   });
 
-  if (response.status === 401) {
-    handleUnauthorized(config.authRedirect !== false);
+  if (response.status === 401 && config.authRedirect !== false) {
+    handleUnauthorized(true);
   }
 
   return response;

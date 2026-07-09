@@ -2464,6 +2464,45 @@ describe('Wrapper stream markdown rendering', () => {
     expect(runningLabels).toHaveLength(0);
   });
 
+  test('ace-process skill read result with matching toolId marks the tool completed', async () => {
+    const view = renderWrapperStream([
+      {
+        type: 'text',
+        content: formatAceToolCall({
+          toolName: 'read',
+          toolId: 'tool-skill-read',
+          title: '📖 读取文件',
+          rawInput: {
+            command: "Get-Content 'C:\\Users\\Shawn\\Documents\\ACEHarness\\skills\\werewolf-tabletalk\\SKILL.md'",
+          },
+        }),
+      },
+      {
+        type: 'text',
+        content: formatAceToolResult({
+          toolName: 'skill',
+          toolId: 'tool-skill-read',
+          title: '技能文档',
+          rawOutput: {
+            command: "Get-Content 'C:\\Users\\Shawn\\Documents\\ACEHarness\\skills\\werewolf-tabletalk\\SKILL.md'",
+            output: '# Werewolf Tabletalk',
+            exitCode: 0,
+          },
+        }),
+      },
+    ], { isStreaming: true });
+
+    await openAllDetails(view.container);
+
+    const cards = getToolCards(view.container);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].toolId).toBe('tool-skill-read');
+    expect(cards[0].state).toBe('output-available');
+    expect(cards[0].text).toContain('Completed');
+    expect(cards[0].text).toContain('Werewolf Tabletalk');
+    expect(cards[0].text).not.toContain('Running');
+  });
+
   test('powershell tool card does not repeat the same command in summary and details', async () => {
     const command = '"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe" -Command "@\' {\\\"header\\\":{\\\"title\\\":\\\"工作流配置总览\\\"}} \'@ | node validate-card.mjs"';
     const view = renderWrapperStream([
@@ -2494,6 +2533,55 @@ describe('Wrapper stream markdown rendering', () => {
     const powershellCard = powershellCards[0].node;
     expect(within(powershellCard).getAllByText(command).length).toBe(1);
     expect(within(powershellCard).getByText('VALID ✓')).toBeInTheDocument();
+  });
+
+  test('completed tool cards keep collapsed by default but show result after opening', async () => {
+    const view = renderWrapperStream([
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-call',
+          { toolId: 'cmd-result-1', toolName: 'powershell', title: '💻 执行命令', command: 'Get-Content README.md' },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-result',
+          { toolId: 'cmd-result-1', toolName: 'powershell', title: '💻 执行命令', output: '# README', exitCode: 0 },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-call',
+          { toolId: 'skill-result-1', toolName: 'skill', title: '技能文档', name: 'werewolf-tabletalk' },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-result',
+          { toolId: 'skill-result-1', toolName: 'skill', title: '技能文档', name: 'werewolf-tabletalk', output: '# Werewolf Tabletalk' },
+          '',
+        ),
+      },
+    ], { isStreaming: true });
+
+    let cards = getToolCards(view.container);
+    expect(cards).toHaveLength(2);
+    expect(cards.every((card) => card.state === 'output-available')).toBe(true);
+    expect(cards.every((card) => card.expanded === false)).toBe(true);
+
+    await openAllDetails(view.container);
+
+    cards = getToolCards(view.container);
+    expect(cards.every((card) => card.expanded === true)).toBe(true);
+    expect(cards[0].text).toContain('# README');
+    expect(cards[1].text).toContain('Werewolf Tabletalk');
   });
 
   test('ace-process binds read results using <path> from content and merges subtask result into the only pending subtask', async () => {
@@ -3507,7 +3595,7 @@ describe('Wrapper stream markdown rendering', () => {
       '<ace-process>{"kind":"tool-call","toolName":"grep","title":"搜索内容","pattern":"ICE"}</ace-process>',
       'grep 完成。',
     ].join('\n');
-    const legacyPayload = JSON.stringify({
+    const preRuntimePayload = JSON.stringify({
       toolName: 'read',
       title: '📖 读取文件',
       output: nestedToolOutput,
@@ -3516,7 +3604,7 @@ describe('Wrapper stream markdown rendering', () => {
     })
       .replace(/<ace-process>/g, '\\u003cace-process\\u003e')
       .replace(/<\/ace-process>/g, '\\u003c/ace-process\\u003e');
-    const raw = `<ace-process>${legacyPayload}</ace-process>\nVisible text`;
+    const raw = `<ace-process>${preRuntimePayload}</ace-process>\nVisible text`;
 
     const parsed = extractAceProcessBlocks(raw);
 

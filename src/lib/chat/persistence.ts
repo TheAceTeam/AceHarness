@@ -101,6 +101,7 @@ export interface PersistedChatSession {
   conversationMode?: HomeConversationMode;
   model: string;
   engine?: string;
+  runtimeSessionId?: string;
   backendSessionId?: string;
   workflowBinding?: WorkflowRunBinding;
   creationSession?: WorkflowCreationBinding;
@@ -250,6 +251,34 @@ export async function deleteChatSession(id: string): Promise<boolean> {
   return false;
 }
 
+export async function deleteChatSessionsByWorkflowRun(runId: string): Promise<{ deletedCount: number; sessionIds: string[] }> {
+  const targetRunId = String(runId || '').trim();
+  if (!targetRunId) return { deletedCount: 0, sessionIds: [] };
+
+  await ensureDir();
+  const files = await readdir(CHAT_DIR);
+  const sessionIds: string[] = [];
+
+  for (const file of files.filter((item) => item.endsWith('.json'))) {
+    try {
+      const content = await readFile(resolve(CHAT_DIR, file), 'utf-8');
+      const session = JSON.parse(content) as PersistedChatSession;
+      if (session.workflowBinding?.runId === targetRunId) {
+        sessionIds.push(session.id);
+      }
+    } catch {
+      // Skip corrupted session files.
+    }
+  }
+
+  let deletedCount = 0;
+  for (const sessionId of sessionIds) {
+    if (await deleteChatSession(sessionId)) deletedCount += 1;
+  }
+
+  return { deletedCount, sessionIds };
+}
+
 export async function deleteAllChatSessions(): Promise<number> {
   await ensureDir();
   const files = await readdir(CHAT_DIR);
@@ -282,7 +311,7 @@ export async function updateChatSessionWorkflowBinding(
 export async function appendChatSessionMessage(
   sessionId: string,
   message: Omit<PersistedMessage, 'id' | 'timestamp'> & Partial<Pick<PersistedMessage, 'id' | 'timestamp'>>,
-  options?: { backendSessionId?: string | null; dedupeKey?: string }
+  options?: { runtimeSessionId?: string | null; backendSessionId?: string | null; dedupeKey?: string }
 ): Promise<void> {
   const session = await loadChatSession(sessionId);
   if (!session) return;
@@ -304,7 +333,9 @@ export async function appendChatSessionMessage(
     id: options?.dedupeKey || message.id || `${now}-${Math.random().toString(36).slice(2, 8)}`,
     timestamp: now,
   });
-  if (options?.backendSessionId) {
+  if (options?.runtimeSessionId) {
+    session.runtimeSessionId = options.runtimeSessionId;
+  } else if (options?.backendSessionId) {
     session.backendSessionId = options.backendSessionId;
   }
   session.updatedAt = now;

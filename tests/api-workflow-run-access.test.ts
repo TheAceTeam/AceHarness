@@ -65,7 +65,7 @@ describe('workflow run access control', () => {
     });
   });
 
-  test('allows owner, admin, and legacy unowned runs but rejects other users', () => {
+  test('allows owner, admin, and preRuntime unowned runs but rejects other users', () => {
     expect(canAccessRunState({ id: 'owner', role: 'user' }, { runOwnerId: 'owner' } as any)).toBe(true);
     expect(canAccessRunState({ id: 'admin', role: 'admin' }, { runOwnerId: 'owner' } as any)).toBe(true);
     expect(canAccessRunState({ id: 'user-2', role: 'user' }, {} as any)).toBe(true);

@@ -179,7 +179,7 @@ describe('runtime contracts', () => {
     expect(permission.operation).toBe('execute');
   });
 
-  test('runtime-agent boundary does not import legacy engines', async () => {
+  test('runtime-agent boundary does not import preRuntime engines', async () => {
     const files = [
       'src/lib/runtime-agent/contracts.ts',
       'src/lib/runtime-agent/index.ts',

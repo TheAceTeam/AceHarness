@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { deleteChatSessionsByWorkflowRun } from '@/lib/chat/persistence';
 import { jsonOk } from '@/server/api-route-runtime/request-utils';
 
 const RUNS_DIR = getWorkspaceRunsDir();
@@ -56,8 +57,14 @@ export async function DELETE(
 
     // Delete the run directory
     await rm(runDir, { recursive: true, force: true });
+    const chatCleanup = await deleteChatSessionsByWorkflowRun(runId);
 
-    return jsonOk({ success: true, message: '运行记录已删除' });
+    return jsonOk({
+      success: true,
+      message: '运行记录已删除',
+      deletedChatSessionsCount: chatCleanup.deletedCount,
+      deletedChatSessionIds: chatCleanup.sessionIds,
+    });
   } catch (error: any) {
     return jsonOk(
       { error: '删除失败', message: error.message },

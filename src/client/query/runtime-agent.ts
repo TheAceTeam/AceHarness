@@ -57,7 +57,7 @@ export type RuntimeSnapshotResponse = {
 };
 
 export function buildRuntimeSessionPath(runtimeSessionId: string) {
-  return `/api/runtime/sessions/${encodeURIComponent(runtimeSessionId)}`;
+  return `/api/runtime-sessions/${encodeURIComponent(runtimeSessionId)}`;
 }
 
 export function buildRuntimeTurnsPath({ runtimeSessionId, offset = 0, limit = 100 }: RuntimePageParams) {
@@ -75,12 +75,12 @@ export function buildRuntimeProjectionPath({ runtimeSessionId, projectionVersion
   return `${buildRuntimeSessionPath(runtimeSessionId)}/projection?${search.toString()}`;
 }
 
-export function buildRuntimeSnapshotPath(runtimeSessionId: string) {
-  return `${buildRuntimeSessionPath(runtimeSessionId)}/snapshot`;
-}
-
 export function fetchRuntimeSession(runtimeSessionId: string) {
-  return apiRequest<RuntimeSessionRow>(buildRuntimeSessionPath(runtimeSessionId));
+  return apiRequest<{ session: RuntimeSessionRow }>(buildRuntimeSessionPath(runtimeSessionId))
+    .then((response) => ({
+      ...response.session,
+      id: response.session.id || response.session.runtimeSessionId,
+    }));
 }
 
 export function fetchRuntimeTurns(params: RuntimePageParams) {
@@ -95,8 +95,15 @@ export function fetchRuntimeProjection(params: RuntimeProjectionParams) {
   return apiRequest<RuntimeProjectionRow>(buildRuntimeProjectionPath(params));
 }
 
-export function fetchRuntimeSnapshot(runtimeSessionId: string) {
-  return apiRequest<RuntimeSnapshotResponse>(buildRuntimeSnapshotPath(runtimeSessionId));
+export async function fetchRuntimeSnapshot(runtimeSessionId: string): Promise<RuntimeSnapshotResponse> {
+  const [session, events] = await Promise.all([
+    fetchRuntimeSession(runtimeSessionId),
+    fetchRuntimeEvents({ runtimeSessionId, afterSeq: 0, limit: 100 }),
+  ]);
+  return {
+    sessions: session ? [session] : [],
+    events: events.events,
+  };
 }
 
 export function useRuntimeSessionQuery(runtimeSessionId?: string) {

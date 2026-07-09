@@ -21,6 +21,12 @@ export interface SystemSettings {
     runtimeEnabled?: boolean;
     persistMode?: 'manual' | 'review' | 'auto';
   };
+  runtimeControls?: {
+    defaultPermissionPolicyId?: 'unrestricted' | 'approve-reads' | 'ask' | 'deny-destructive' | 'deny-all';
+  };
+  runtimeDebug?: {
+    acpxTraceEnabled?: boolean;
+  };
   emailNotifications?: {
     enabled?: boolean;
     smtpHost?: string;

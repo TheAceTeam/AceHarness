@@ -1,7 +1,7 @@
 # Task 9: TanStack Client State Layer
 
-Progress: 45%
-Status: In Progress
+Progress: 100%
+Status: Done
 
 ## Goal
 
@@ -34,3 +34,11 @@ Migrate client cache and local reactive state to runtime-aware TanStack Query ke
 - `npm test -- tests/runtime-client-state.test.ts`: pass.
 - `npx vitest run tests/model-routes-sqlite.test.ts tests/runtime-security-profiles.test.ts tests/runtime-client-state.test.ts tests/runtime-contracts.test.ts tests/runtime-sqlite-schema.test.ts tests/agent-registry.test.ts`: pass, 33 tests.
 - `npx tsc --noEmit --pretty false`: fail only on remaining baseline gaps in `WorkbenchClient.tsx` and `src/start.ts`.
+- Task 9 closeout: runtime query keys now guard against provider/acpx/native/auth/secret/raw key material.
+- Task 9 closeout: runtime TanStack DB rows are normalized through platform-facing allow-lists before upsert.
+- Task 9 closeout: added initial snapshot fetch/sync helper plus SSE/NDJSON incremental upsert helper with testable 50-100ms batching fallback.
+- Task 9 closeout: `npx vitest run tests/runtime-client-state.test.ts`: pass, 8 tests.
+- Task 9 closeout: `npx tsc --noEmit --pretty false`: pass.
+- Task 9 route alignment: runtime client paths now target `/api/runtime-sessions/:id`; initial snapshot uses existing session and events routes instead of a non-existent snapshot endpoint.
+- Task 9 route alignment: `npx vitest run tests/runtime-client-state.test.ts tests/api-runtime-sessions-route.test.ts`: pass, 24 tests.
+- Task 9 route alignment: `npx tsc --noEmit --pretty false`: pass.

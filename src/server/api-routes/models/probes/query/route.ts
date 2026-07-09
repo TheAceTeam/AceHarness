@@ -2,6 +2,7 @@ import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-
 import { requireAuth } from '@/lib/auth/middleware';
 import { listModelProbes } from '@/lib/models/probes';
 import type { ModelProbeListSummary, ModelProbeRuntimeStatus, ModelProbeSummary } from '@/lib/models/probe-types';
+import { attachModelRouteIdsToProbeResponse } from '../model-route-probe-dto';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,13 +46,15 @@ export async function GET(request: Request) {
     const { searchParams } = requestUrl(request);
     const provider = String(searchParams.get('provider') || '').trim().toLowerCase();
     const engine = String(searchParams.get('engine') || '').trim().toLowerCase();
+    const modelRouteId = String(searchParams.get('modelRouteId') || '').trim();
     const keyword = String(searchParams.get('keyword') || '').trim().toLowerCase();
     const status = String(searchParams.get('status') || '').trim() as ModelProbeRuntimeStatus | '';
     const historyLimit = readHistoryLimit(searchParams.get('historyLimit'));
 
-    const data = await listModelProbes({ historyLimit });
+    const data = attachModelRouteIdsToProbeResponse(await listModelProbes({ historyLimit }));
     const probes = data.probes.filter((probe) => {
       if (provider && !probe.endpoints.some((item) => item.toLowerCase() === provider)) return false;
+      if (modelRouteId && (probe as any).modelRouteId !== modelRouteId) return false;
       if (engine && probe.engine.toLowerCase() !== engine) return false;
       if (status && probe.status !== status) return false;
       if (keyword) {
@@ -67,6 +70,7 @@ export async function GET(request: Request) {
       filters: {
         provider: provider || null,
         engine: engine || null,
+        modelRouteId: modelRouteId || null,
         status: status || null,
         keyword: keyword || null,
         historyLimit: historyLimit || null,

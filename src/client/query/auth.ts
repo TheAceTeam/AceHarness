@@ -47,9 +47,18 @@ export function isAuthUnauthorizedError(error: unknown) {
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {
-  const data = await apiRequest<CurrentUserResponse>('/api/auth/me', {
-    authRedirect: false,
-  });
+  let data: CurrentUserResponse;
+  try {
+    data = await apiRequest<CurrentUserResponse>('/api/auth/me', {
+      authRedirect: false,
+    });
+  } catch (error) {
+    if (isAuthUnauthorizedError(error)) {
+      syncStoredUser(null);
+      return null;
+    }
+    throw error;
+  }
   const user = data.user ?? null;
   syncStoredUser(user);
   return user;
@@ -118,6 +127,9 @@ export function useLoginMutation() {
       }
       const user = data.user || { email: payload.email, username: payload.email.split('@')[0] || payload.email };
       syncStoredUser(user);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth:changed'));
+      }
       queryClient.setQueryData(queryKeys.auth.currentUser(), user);
     },
   });

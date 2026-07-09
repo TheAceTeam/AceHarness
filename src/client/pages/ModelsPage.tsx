@@ -53,16 +53,16 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { cn } from '@/lib/core/utils';
-import { ComboboxPortalProvider, MultiCombobox } from '@/components/ui/combobox';
+import { AiModelSelectorField } from '@/components/AiModelSelectorField';
 import { PaginationBar } from '@/components/PaginationBar';
 import { useToast } from '@/components/ui/toast';
 import ModelProbeMonitor from '@/components/models/ModelProbeMonitor';
 import ModelDiagnosticsWorkbench from '@/components/models/ModelDiagnosticsWorkbench';
 import { EngineIcon } from '@/components/EngineIcon';
 import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
-import { getConcreteEngines, getEngineDisplayName } from '@/lib/core/engine-metadata';
-import { getLogicalEngineId } from '@/lib/engines/engine-selection';
-import { useModelsQuery, useSaveModelsMutation } from '@/client/query/engines';
+import { getEngineDisplayName } from '@/lib/core/engine-metadata';
+import { normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
+import { useModelsQuery, useRuntimeEngineOptionsQuery, useSaveModelsMutation } from '@/client/query/engines';
 import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useModelCatalogRows, useSyncModelCatalogToDb } from '@/client/db/collections';
@@ -71,6 +71,12 @@ import type { ModelsSearch } from '@/routes/models';
 interface Model {
   id: string;
   name: string;
+  modelRouteId?: string | null;
+  modelId?: string;
+  agentId?: string | null;
+  providerModel?: string | null;
+  runtime?: string | null;
+  isDefault?: boolean;
   endpoints: string[];
   engines: string[];
   status: 'active' | 'inactive';
@@ -80,7 +86,7 @@ interface Model {
   updatedAt?: string;
 }
 
-type ModelTab = NonNullable<ModelsSearch['tab']>;
+type ModelTab = 'catalog' | 'probes' | 'diagnostics';
 
 interface ModelsPageProps {
   routeSearch?: ModelsSearch;
@@ -88,6 +94,20 @@ interface ModelsPageProps {
 }
 
 const DEFAULT_MODEL_ENDPOINTS = ['anthropic', 'openai'] as const;
+const DEFAULT_COST_MULTIPLIER = 1;
+const DEFAULT_CONTEXT_WINDOW = 128000;
+
+function normalizeCostMultiplier(value: unknown): number {
+  if (value === '' || value === null || value === undefined) return DEFAULT_COST_MULTIPLIER;
+  const next = Number(value);
+  return Number.isFinite(next) ? next : DEFAULT_COST_MULTIPLIER;
+}
+
+function normalizeContextWindow(value: unknown): number {
+  if (value === '' || value === null || value === undefined) return DEFAULT_CONTEXT_WINDOW;
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? next : DEFAULT_CONTEXT_WINDOW;
+}
 
 function normalizeClientModelEngines(engines: unknown): string[] {
   if (!Array.isArray(engines)) return [];
@@ -96,25 +116,44 @@ function normalizeClientModelEngines(engines: unknown): string[] {
       engines
         .map((engine) => String(engine || '').trim())
         .filter(Boolean)
-        .map((engine) => getLogicalEngineId(engine) || engine),
+        .map((engine) => normalizeRuntimeEngineId(engine) || engine),
     ),
   );
 }
 
 function normalizeClientModelOptions(models: any[]): Model[] {
   return models.map((model) => ({
-    id: String(model.value || ''),
+    id: String(model.modelRouteId || model.value || ''),
     name: String(model.label || model.value || ''),
+    modelRouteId: typeof model.modelRouteId === 'string' ? model.modelRouteId : null,
+    modelId: typeof model.modelId === 'string' ? model.modelId : String(model.value || ''),
+    agentId: typeof model.agentId === 'string' ? model.agentId : null,
+    providerModel: typeof model.providerModel === 'string' ? model.providerModel : null,
+    runtime: typeof model.runtime === 'string' ? model.runtime : null,
+    isDefault: Boolean(model.isDefault),
     endpoints: Array.isArray(model.endpoints)
       ? Array.from(new Set(model.endpoints.map((endpoint: unknown) => String(endpoint || '').trim()).filter(Boolean)))
       : [],
     engines: normalizeClientModelEngines(model.engines),
     status: model.status === 'inactive' ? 'inactive' : 'active',
-    costMultiplier: Number.isFinite(Number(model.costMultiplier)) ? Number(model.costMultiplier) : 1,
-    contextWindow: Number.isFinite(Number(model.contextWindow)) ? Number(model.contextWindow) : undefined,
+    costMultiplier: normalizeCostMultiplier(model.costMultiplier),
+    contextWindow: normalizeContextWindow(model.contextWindow),
     createdAt: typeof model.createdAt === 'string' ? model.createdAt : undefined,
     updatedAt: typeof model.updatedAt === 'string' ? model.updatedAt : undefined,
   }));
+}
+
+function normalizeModelTab(value: unknown): ModelTab {
+  if (value === 'routes') return 'catalog';
+  if (value === 'catalog' || value === 'probes' || value === 'diagnostics') return value;
+  if (value === 'probe') return 'probes';
+  return 'catalog';
+}
+
+function modelTabStatusLabel(tab: ModelTab): string {
+  if (tab === 'probes') return '可用性';
+  if (tab === 'diagnostics') return '诊断评测';
+  return '模型列表';
 }
 
 function EndpointTag({ endpoint, iconOnly = false }: { endpoint: string; iconOnly?: boolean }) {
@@ -246,16 +285,16 @@ function SortableModelCard({
               )}
             </div>
           </div>
-          {model.engines.length > 0 && (
-            <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-x-2.5">
-              <Settings className="mt-2 h-3.5 w-3.5 text-muted-foreground/80" />
-              <div className="flex min-w-0 flex-wrap gap-1.5">
-                {model.engines.map((engine) => (
-                  <EngineTag key={`${model.id}-engine-${engine}`} engine={engine} compact />
-                ))}
-              </div>
+          <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-x-2.5">
+            <Settings className="mt-2 h-3.5 w-3.5 text-muted-foreground/80" />
+            <div className="flex min-w-0 flex-wrap gap-1.5">
+              {model.engines.length > 0 ? model.engines.map((engine) => (
+                <EngineTag key={`${model.id}-engine-${engine}`} engine={engine} compact />
+              )) : (
+                <span className="py-1 text-xs text-muted-foreground">-</span>
+              )}
             </div>
-          )}
+          </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-[22px] text-xs">
             {model.contextWindow && (
               <span>{model.contextWindow.toLocaleString()} ctx</span>
@@ -328,6 +367,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
   const returnTarget = getOfficeAwareReturnTarget(searchParams.get('from'));
   const { toast } = useToast();
   const modelsQuery = useModelsQuery();
+  const runtimeEngineOptionsQuery = useRuntimeEngineOptionsQuery();
   const saveModelsMutation = useSaveModelsMutation();
 
   const [models, setModels] = useState<Model[]>([]);
@@ -351,17 +391,17 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
   const [newModel, setNewModel] = useState<Omit<Model, 'createdAt' | 'updatedAt'>>({
     id: '',
     name: '',
-    endpoints: [],
+    endpoints: [...DEFAULT_MODEL_ENDPOINTS],
     engines: [],
     status: 'active',
     costMultiplier: 1,
-    contextWindow: undefined,
+    contextWindow: DEFAULT_CONTEXT_WINDOW,
   });
   const [activeTab, setActiveTab] = useState<ModelTab>(() => {
-    if (routeSearch?.tab) return routeSearch.tab;
+    if (routeSearch?.tab) return normalizeModelTab(routeSearch.tab);
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('models-active-tab');
-      if (saved === 'catalog' || saved === 'probe' || saved === 'diagnostics') return saved;
+      return normalizeModelTab(saved);
     }
     return 'catalog';
   });
@@ -375,15 +415,16 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
   }, [activeTab]);
 
   useEffect(() => {
-    if (routeSearch?.tab && routeSearch.tab !== activeTab) {
-      setActiveTab(routeSearch.tab);
+    const nextTab = normalizeModelTab(routeSearch?.tab);
+    if (routeSearch?.tab && nextTab !== activeTab) {
+      setActiveTab(nextTab);
     }
   }, [activeTab, routeSearch?.tab]);
 
   const handleTabChange = useCallback((value: string) => {
-    const nextTab = value as ModelTab;
+    const nextTab = normalizeModelTab(value);
     setActiveTab(nextTab);
-    onRouteSearchChange?.({ tab: nextTab });
+    onRouteSearchChange?.({ tab: nextTab === 'probes' ? 'probe' : nextTab });
   }, [onRouteSearchChange]);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -406,15 +447,18 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
 
   const serializeModelsForApi = useCallback((items: Model[]) => ({
     models: items.map((model) => ({
-      value: model.id,
+      value: model.modelId || model.id,
+      modelRouteId: model.modelRouteId || undefined,
+      modelId: model.modelId || model.id,
       label: model.name,
       endpoints: model.endpoints || [],
       engines: normalizeClientModelEngines(model.engines),
       status: model.status,
-      costMultiplier: model.costMultiplier,
-      contextWindow: model.contextWindow,
+      costMultiplier: normalizeCostMultiplier(model.costMultiplier),
+      contextWindow: normalizeContextWindow(model.contextWindow),
       createdAt: model.createdAt,
       updatedAt: model.updatedAt,
+      isDefault: model.isDefault,
     })),
   }), []);
 
@@ -459,20 +503,28 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
   }, [allEndpoints, editingModel, newModel.endpoints]);
 
   const engineOptions = useMemo(() => {
-    const set = new Set<string>();
-    getConcreteEngines().forEach((engine) => normalizeClientModelEngines([engine.id]).forEach((id) => set.add(id)));
-    allEngines.forEach((engine) => set.add(engine));
-    normalizeClientModelEngines(editingModel?.engines).forEach((engine) => set.add(engine));
-    normalizeClientModelEngines(newModel.engines).forEach((engine) => set.add(engine));
-    return Array.from(set)
-      .filter(Boolean)
-      .sort((a, b) => getEngineDisplayName(a).localeCompare(getEngineDisplayName(b), 'zh-CN'))
-      .map((engine) => ({
+    const byId = new Map<string, string>();
+    for (const item of runtimeEngineOptionsQuery.data || []) {
+      const engine = normalizeClientModelEngines([item.id])[0];
+      const label = item.name || getEngineDisplayName(engine) || engine;
+      if (engine) byId.set(engine, label);
+    }
+    for (const engine of allEngines) {
+      if (!byId.has(engine)) byId.set(engine, getEngineDisplayName(engine) || engine);
+    }
+    const iconPathById = new Map(
+      (runtimeEngineOptionsQuery.data || [])
+        .map((item) => [normalizeClientModelEngines([item.id])[0], item.iconPath] as const)
+        .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
+    );
+    return Array.from(byId.entries())
+      .sort(([, a], [, b]) => a.localeCompare(b, 'zh-CN'))
+      .map(([engine, label]) => ({
         value: engine,
-        label: getEngineDisplayName(engine) || engine,
-        icon: <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />,
+        label,
+        icon: <EngineIcon engineId={engine} iconPath={iconPathById.get(engine)} className="h-3.5 w-3.5" alt={label} decorative={false} />,
       }));
-  }, [allEngines, editingModel, newModel.engines]);
+  }, [allEngines, runtimeEngineOptionsQuery.data]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -493,12 +545,19 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
     }
   }
 
-  const filteredModels = useModelCatalogRows({
+  const catalogRows = useModelCatalogRows({
     keyword: searchQuery,
     endpoints: selectedEndpoints,
     engines: selectedEngines,
     statuses: selectedStatus,
   }) as Model[];
+  const modelById = useMemo(() => new Map(models.map((model) => [model.id, model])), [models]);
+  const catalogRowsWithRouteMetadata = useMemo(() => (
+    catalogRows.map((row) => ({ ...row, ...modelById.get(row.id) }))
+  ), [catalogRows, modelById]);
+  const filteredModels = useMemo(() => (
+    catalogRowsWithRouteMetadata
+  ), [catalogRowsWithRouteMetadata]);
 
   const totalPages = Math.ceil(filteredModels.length / pageSize);
   const paginatedModels = filteredModels.slice(
@@ -508,7 +567,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, selectedEndpoints, selectedEngines, selectedStatus]);
+  }, [activeTab, searchQuery, selectedEndpoints, selectedEngines, selectedStatus]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedModels((prev) => {
@@ -581,7 +640,12 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
 
   const handleEditSave = async () => {
     if (!editingModel || !editingOriginalId) return;
-    const updatedModel = { ...editingModel, updatedAt: new Date().toISOString() };
+    const updatedModel = {
+      ...editingModel,
+      costMultiplier: normalizeCostMultiplier(editingModel.costMultiplier),
+      contextWindow: normalizeContextWindow(editingModel.contextWindow),
+      updatedAt: new Date().toISOString(),
+    };
     const nextModels = models.map((m) => (m.id === editingOriginalId ? updatedModel : m));
     try {
       await persistModels(nextModels);
@@ -606,6 +670,8 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
     const now = new Date().toISOString();
     const createdModel: Model = {
       ...newModel,
+      costMultiplier: normalizeCostMultiplier(newModel.costMultiplier),
+      contextWindow: normalizeContextWindow(newModel.contextWindow),
       createdAt: now,
       updatedAt: now,
     };
@@ -613,7 +679,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
     try {
       await persistModels(nextModels);
       setModels(nextModels);
-      setNewModel({ id: '', name: '', endpoints: [], engines: [], status: 'active', costMultiplier: 1, contextWindow: undefined });
+      setNewModel({ id: '', name: '', endpoints: [...DEFAULT_MODEL_ENDPOINTS], engines: [], status: 'active', costMultiplier: 1, contextWindow: DEFAULT_CONTEXT_WINDOW });
       toast('success', `已创建模型 ${createdModel.name}`);
     } catch (error) {
       toast('error', error instanceof Error ? error.message : '创建模型失败');
@@ -713,12 +779,230 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
     },
   ], []);
 
+  const catalogOrRoutesContent = (
+    <div className="flex-1 overflow-y-auto px-6 py-6">
+      <PageToolbar
+        className="sticky top-0 z-20 mb-4 rounded-lg border bg-card shadow-none"
+        data-tour-step-id="model-filter"
+      >
+            <div className="relative min-w-[220px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="搜索模型..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+
+            <div className="flex items-center gap-1 rounded-lg border p-1">
+              <Button
+                variant={viewMode === 'gallery' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 gap-1.5 rounded-lg px-3 text-xs"
+                onClick={() => setViewMode('gallery')}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                卡片
+              </Button>
+              <Button
+                variant={viewMode === 'table' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 gap-1.5 rounded-lg px-3 text-xs"
+                onClick={() => setViewMode('table')}
+              >
+                <List className="h-3.5 w-3.5" />
+                表格
+              </Button>
+            </div>
+
+            {allEndpoints.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="mr-1 text-xs text-muted-foreground">端点:</span>
+                {allEndpoints.map((endpoint) => {
+                  const label = getEndpointDisplayName(endpoint);
+                  const hasWordmark = endpointHasWordmark(endpoint);
+                  const isActive = selectedEndpoints.includes(endpoint);
+                  return (
+                    <Button
+                      key={endpoint}
+                      variant={isActive ? 'secondary' : 'outline'}
+                      size="sm"
+                      className={cn(
+                        'h-8 gap-1.5 rounded-lg px-2.5 text-xs',
+                        isActive && 'border-border bg-muted text-foreground'
+                      )}
+                      onClick={() => {
+                        setSelectedEndpoints((prev) =>
+                          isActive
+                            ? prev.filter((value) => value !== endpoint)
+                            : [...prev, endpoint]
+                        );
+                      }}
+                    >
+                      <EndpointIcon
+                        endpoint={endpoint}
+                        mode={hasWordmark ? 'logo' : 'mark'}
+                        className={hasWordmark ? 'h-3.5 w-auto max-w-[4.75rem]' : 'h-3.5 w-3.5'}
+                        alt={label}
+                        decorative={false}
+                      />
+                      {hasWordmark ? <span className="sr-only">{label}</span> : label}
+                    </Button>
+                  );
+                })}
+              </div>
+            )}
+
+            {engineOptions.length > 0 && (
+              <div className="w-[180px]">
+                <AiModelSelectorField
+                  value=""
+                  onValueChange={() => {}}
+                  values={selectedEngines}
+                  onValuesChange={setSelectedEngines}
+                  options={engineOptions}
+                  placeholder="引擎筛选"
+                  searchPlaceholder="搜索引擎..."
+                  emptyLabel="没有匹配引擎"
+                  className="h-8 text-xs"
+                />
+              </div>
+            )}
+
+            <div className="w-[150px]">
+              <AiModelSelectorField
+                value=""
+                onValueChange={() => {}}
+                values={selectedStatus}
+                onValuesChange={setSelectedStatus}
+                options={[
+                  { label: '有效', value: 'active' },
+                  { label: '无效', value: 'inactive' },
+                ]}
+                placeholder="状态筛选"
+                searchPlaceholder="搜索状态..."
+                emptyLabel="没有匹配状态"
+                className="h-8 text-xs"
+              />
+            </div>
+
+            {activeFilterCount > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-xs text-muted-foreground"
+                onClick={() => {
+                  setSelectedEndpoints([]);
+                  setSelectedEngines([]);
+                  setSelectedStatus([]);
+                }}
+              >
+                <X className="h-3.5 w-3.5" />
+                清除 {activeFilterCount} 个筛选
+              </Button>
+            )}
+      </PageToolbar>
+
+      <div className="my-4 flex items-center justify-between text-sm text-muted-foreground">
+        <span>
+          共 {filteredModels.length} 个模型
+          {selectedModels.size > 0 && `，已选 ${selectedModels.size} 个`}
+        </span>
+        {filteredModels.length !== models.length && (
+          <span>从 {models.length} 个中筛选</span>
+        )}
+      </div>
+
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        {viewMode === 'gallery' ? (
+          <SortableContext
+            items={paginatedModels.map((m) => m.id)}
+            strategy={rectSortingStrategy}
+          >
+            {paginatedModels.length > 0 ? (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {paginatedModels.map((model) => (
+                  <SortableModelCard
+                    key={model.id}
+                    model={model}
+                    selected={selectedModels.has(model.id)}
+                    onToggleSelect={() => toggleSelect(model.id)}
+                    onEdit={() => handleEdit(model)}
+                    onDelete={() => handleDelete(model)}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </SortableContext>
+        ) : (
+          <SortableContext
+            items={paginatedModels.map((m) => m.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <DataTable
+              columns={modelTableColumns}
+              rows={paginatedModels}
+              rowKey="id"
+              density="comfortable"
+              loading={loading}
+              rowEnhancer={SortableModelTableRowEnhancer}
+              selection={{
+                selectedKeys: Array.from(selectedModels),
+                onSelectedKeysChange: (keys) => setSelectedModels(new Set(keys.map(String))),
+                ariaLabel: '选择当前页模型',
+              }}
+              rowActions={(model) => getModelRowActions(model)}
+              emptyState={{
+                icon: <Cpu className="h-12 w-12 opacity-30" />,
+                title: '没有找到匹配的模型',
+                description: '尝试调整搜索或筛选条件',
+                className: 'min-h-[260px]',
+              }}
+              aria-label="模型列表"
+            />
+          </SortableContext>
+        )}
+      </DndContext>
+
+      {viewMode === 'gallery' && filteredModels.length === 0 && !loading && (
+        <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+          <Cpu className="mb-4 h-12 w-12 opacity-30" />
+          <p className="text-lg font-medium">没有找到匹配的模型</p>
+          <p className="text-sm">尝试调整搜索或筛选条件</p>
+        </div>
+      )}
+
+      {viewMode === 'gallery' && loading && (
+        <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+          <p className="text-sm">加载中...</p>
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <PaginationBar
+          current={currentPage}
+          total={filteredModels.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setCurrentPage(1);
+          }}
+          itemLabel="模型"
+          paginationStyle="numbered"
+        />
+      )}
+    </div>
+  );
+
   const { isDashboardShell } = useDashboardShellHeader({
     title: '模型中心',
-    subtitle: '模型配置与智能探针监控',
+    subtitle: '模型配置、可用性探针与诊断评测',
     actions: activeTab === 'catalog' ? (
       <Button size="sm" className="gap-1.5 rounded-lg" onClick={() => {
-        setNewModel({ id: '', name: '', endpoints: [], engines: [], status: 'active', costMultiplier: 1, contextWindow: undefined });
+        setNewModel({ id: '', name: '', endpoints: [...DEFAULT_MODEL_ENDPOINTS], engines: [], status: 'active', costMultiplier: 1, contextWindow: DEFAULT_CONTEXT_WINDOW });
         setCreatingModel(true);
       }}>
         <Plus className="h-4 w-4" />
@@ -735,7 +1019,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
           title="模型中心"
           subtitle="模型配置、可用性探针与诊断评测"
           eyebrow="SYSTEM / EVALUATE"
-          status={<StatusPill tone={activeTab === 'catalog' ? 'accent' : 'info'}>{activeTab === 'catalog' ? 'Catalog' : activeTab === 'probe' ? 'Probes' : 'Diagnostics'}</StatusPill>}
+          status={<StatusPill tone={activeTab === 'catalog' ? 'accent' : 'info'}>{modelTabStatusLabel(activeTab)}</StatusPill>}
           secondaryActions={(
             <Button variant="outline" size="sm" asChild>
               <Link href={returnTarget.href}>
@@ -746,7 +1030,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
           )}
           primaryAction={activeTab === 'catalog' ? (
             <Button size="sm" className="gap-1.5" onClick={() => {
-              setNewModel({ id: '', name: '', endpoints: [], engines: [], status: 'active', costMultiplier: 1, contextWindow: undefined });
+              setNewModel({ id: '', name: '', endpoints: [...DEFAULT_MODEL_ENDPOINTS], engines: [], status: 'active', costMultiplier: 1, contextWindow: DEFAULT_CONTEXT_WINDOW });
               setCreatingModel(true);
             }}>
               <Plus className="h-4 w-4" />
@@ -758,246 +1042,23 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex min-h-0 flex-1 flex-col">
         <div className="border-b bg-card px-6 py-3" data-tour-step-id="model-tabs">
-          <TabsList className="grid w-full max-w-[540px] grid-cols-3 rounded-lg bg-muted/50">
-            <TabsTrigger value="catalog" className="rounded-md">模型管理</TabsTrigger>
-            <TabsTrigger value="probe" className="rounded-md">探针监控</TabsTrigger>
+          <TabsList className="grid w-full max-w-[520px] grid-cols-3 rounded-lg bg-muted/50">
+            <TabsTrigger value="catalog" className="rounded-md">模型列表</TabsTrigger>
+            <TabsTrigger value="probes" className="rounded-md">探针监控</TabsTrigger>
             <TabsTrigger value="diagnostics" className="rounded-md">诊断评测</TabsTrigger>
           </TabsList>
         </div>
 
         <TabsContent value="catalog" className="mt-0 min-h-0 flex-1 pb-28">
-          <div className="flex-1 overflow-y-auto px-6 py-6">
-            <PageToolbar
-              className="sticky top-0 z-20 mb-4 rounded-lg border bg-card shadow-none"
-              data-tour-step-id="model-filter"
-            >
-                  <div className="relative min-w-[220px] flex-1">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="搜索模型..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-1 rounded-lg border p-1">
-                    <Button
-                      variant={viewMode === 'gallery' ? 'secondary' : 'ghost'}
-                      size="sm"
-                      className="h-8 gap-1.5 rounded-lg px-3 text-xs"
-                      onClick={() => setViewMode('gallery')}
-                    >
-                      <LayoutGrid className="h-3.5 w-3.5" />
-                      卡片
-                    </Button>
-                    <Button
-                      variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-                      size="sm"
-                      className="h-8 gap-1.5 rounded-lg px-3 text-xs"
-                      onClick={() => setViewMode('table')}
-                    >
-                      <List className="h-3.5 w-3.5" />
-                      表格
-                    </Button>
-                  </div>
-
-                  {allEndpoints.length > 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="mr-1 text-xs text-muted-foreground">端点:</span>
-                      {allEndpoints.map((endpoint) => {
-                        const label = getEndpointDisplayName(endpoint);
-                        const hasWordmark = endpointHasWordmark(endpoint);
-                        const isActive = selectedEndpoints.includes(endpoint);
-                        return (
-                          <Button
-                            key={endpoint}
-                            variant={isActive ? 'secondary' : 'outline'}
-                            size="sm"
-                            className={cn(
-                              'h-8 gap-1.5 rounded-lg px-2.5 text-xs',
-                              isActive && 'border-border bg-muted text-foreground'
-                            )}
-                            onClick={() => {
-                              setSelectedEndpoints((prev) =>
-                                isActive
-                                  ? prev.filter((value) => value !== endpoint)
-                                  : [...prev, endpoint]
-                              );
-                            }}
-                          >
-                            <EndpointIcon
-                              endpoint={endpoint}
-                              mode={hasWordmark ? 'logo' : 'mark'}
-                              className={hasWordmark ? 'h-3.5 w-auto max-w-[4.75rem]' : 'h-3.5 w-3.5'}
-                              alt={label}
-                              decorative={false}
-                            />
-                            {hasWordmark ? <span className="sr-only">{label}</span> : label}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {allEngines.length > 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-muted-foreground mr-1">引擎:</span>
-                      {allEngines.map((engine) => {
-                        const isActive = selectedEngines.includes(engine);
-                        return (
-                          <Button
-                            key={engine}
-                            variant={isActive ? 'secondary' : 'outline'}
-                            size="sm"
-                            className={cn(
-                              'h-8 gap-1.5 rounded-lg px-2.5 text-xs',
-                              isActive && 'border-border bg-muted text-foreground'
-                            )}
-                            onClick={() => {
-                              setSelectedEngines((prev) =>
-                                isActive
-                                  ? prev.filter((e) => e !== engine)
-                                  : [...prev, engine]
-                              );
-                            }}
-                          >
-                            <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />
-                            {getEngineDisplayName(engine) || engine}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div className="w-[120px]">
-                    <MultiCombobox
-                      options={[
-                        { label: '有效', value: 'active' },
-                        { label: '无效', value: 'inactive' },
-                      ]}
-                      value={selectedStatus}
-                      onValueChange={setSelectedStatus}
-                      placeholder="状态筛选"
-                      emptyText="全部状态"
-                    />
-                  </div>
-
-                  {activeFilterCount > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs text-muted-foreground"
-                      onClick={() => {
-                        setSelectedEndpoints([]);
-                        setSelectedEngines([]);
-                        setSelectedStatus([]);
-                      }}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                      清除 {activeFilterCount} 个筛选
-                    </Button>
-                  )}
-            </PageToolbar>
-
-            <div className="my-4 flex items-center justify-between text-sm text-muted-foreground">
-              <span>
-                共 {filteredModels.length} 个模型
-                {selectedModels.size > 0 && `，已选 ${selectedModels.size} 个`}
-              </span>
-              {filteredModels.length !== models.length && (
-                <span>从 {models.length} 个中筛选</span>
-              )}
-            </div>
-
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              {viewMode === 'gallery' ? (
-                <SortableContext
-                  items={paginatedModels.map((m) => m.id)}
-                  strategy={rectSortingStrategy}
-                >
-                  {paginatedModels.length > 0 ? (
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                      {paginatedModels.map((model) => (
-                        <SortableModelCard
-                          key={model.id}
-                          model={model}
-                          selected={selectedModels.has(model.id)}
-                          onToggleSelect={() => toggleSelect(model.id)}
-                          onEdit={() => handleEdit(model)}
-                          onDelete={() => handleDelete(model)}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </SortableContext>
-              ) : (
-                <SortableContext
-                  items={paginatedModels.map((m) => m.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  <DataTable
-                    columns={modelTableColumns}
-                    rows={paginatedModels}
-                    rowKey="id"
-                    density="comfortable"
-                    loading={loading}
-                    rowEnhancer={SortableModelTableRowEnhancer}
-                    selection={{
-                      selectedKeys: Array.from(selectedModels),
-                      onSelectedKeysChange: (keys) => setSelectedModels(new Set(keys.map(String))),
-                      ariaLabel: '选择当前页模型',
-                    }}
-                    rowActions={(model) => getModelRowActions(model)}
-                    emptyState={{
-                      icon: <Cpu className="h-12 w-12 opacity-30" />,
-                      title: '没有找到匹配的模型',
-                      description: '尝试调整搜索或筛选条件',
-                      className: 'min-h-[260px]',
-                    }}
-                    aria-label="模型目录"
-                  />
-                </SortableContext>
-              )}
-            </DndContext>
-
-            {viewMode === 'gallery' && filteredModels.length === 0 && !loading && (
-              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                <Cpu className="mb-4 h-12 w-12 opacity-30" />
-                <p className="text-lg font-medium">没有找到匹配的模型</p>
-                <p className="text-sm">尝试调整搜索或筛选条件</p>
-              </div>
-            )}
-
-            {viewMode === 'gallery' && loading && (
-              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                <p className="text-sm">加载中...</p>
-              </div>
-            )}
-
-            {totalPages > 1 && (
-              <PaginationBar
-                current={currentPage}
-                total={filteredModels.length}
-                pageSize={pageSize}
-                onPageChange={setCurrentPage}
-                pageSizeOptions={PAGE_SIZE_OPTIONS}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  setCurrentPage(1);
-                }}
-                itemLabel="模型"
-                paginationStyle="numbered"
-              />
-            )}
-          </div>
+          {catalogOrRoutesContent}
         </TabsContent>
 
-        <TabsContent value="probe" className="mt-0 min-h-0 flex-1">
+        <TabsContent value="probes" className="mt-0 min-h-0 flex-1">
           <ModelProbeMonitor
             managedModels={models.map((model) => ({
               id: model.id,
               name: model.name,
+              modelRouteId: model.modelRouteId,
               endpoints: model.endpoints || [],
               engines: model.engines || [],
             }))}
@@ -1009,6 +1070,12 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
             managedModels={models.map((model) => ({
               id: model.id,
               name: model.name,
+              modelRouteId: model.modelRouteId,
+              modelId: model.modelId,
+              agentId: model.agentId,
+              providerModel: model.providerModel,
+              runtime: model.runtime,
+              isDefault: model.isDefault,
               endpoints: model.endpoints || [],
               engines: model.engines || [],
             }))}
@@ -1113,21 +1180,39 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
           },
           {
             id: 'routing',
-            title: '路由范围',
+            title: '可用范围',
             content: (
-              <ComboboxPortalProvider>
-                <div className="grid gap-4">
-                  <FormField
-                    label="端点"
-                    control={<MultiCombobox value={editingModel.endpoints} onValueChange={(endpoints) => setEditingModel({ ...editingModel, endpoints })} options={endpointOptions} placeholder="选择可访问该模型的 API 端点" />}
-                  />
-                  <FormField
-                    label="引擎"
-                    description="留空表示不限制，由各引擎按自身兼容性决定是否可用。"
-                    control={<MultiCombobox value={editingModel.engines} onValueChange={(engines) => setEditingModel({ ...editingModel, engines })} options={engineOptions} placeholder="选择可使用该模型的执行引擎" />}
-                  />
-                </div>
-              </ComboboxPortalProvider>
+              <div className="grid gap-4">
+                <FormField
+                  label="端点"
+                  control={(
+                    <AiModelSelectorField
+                      value=""
+                      onValueChange={() => {}}
+                      values={editingModel.endpoints}
+                      onValuesChange={(endpoints) => setEditingModel({ ...editingModel, endpoints })}
+                      options={endpointOptions}
+                      placeholder="选择可访问该模型的 API 端点"
+                      searchPlaceholder="搜索端点..."
+                    />
+                  )}
+                />
+                <FormField
+                  label="引擎"
+                  description="留空表示不限制，由各引擎按自身兼容性决定是否可用。"
+                  control={(
+                    <AiModelSelectorField
+                      value=""
+                      onValueChange={() => {}}
+                      values={editingModel.engines}
+                      onValuesChange={(engines) => setEditingModel({ ...editingModel, engines })}
+                      options={engineOptions}
+                      placeholder="选择引擎"
+                      searchPlaceholder="搜索引擎..."
+                    />
+                  )}
+                />
+              </div>
             ),
           },
           {
@@ -1141,11 +1226,11 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
                 />
                 <FormField
                   label="费用倍率"
-                  control={<Input type="number" step="0.1" min="0" value={editingModel.costMultiplier} onChange={(e) => setEditingModel({ ...editingModel, costMultiplier: parseFloat(e.target.value) || 0 })} />}
+                  control={<Input type="number" step="0.1" min="0" value={editingModel.costMultiplier} onChange={(e) => setEditingModel({ ...editingModel, costMultiplier: normalizeCostMultiplier(e.target.value) })} />}
                 />
                 <FormField
                   label="上下文窗口"
-                  control={<Input type="number" step="1000" min="0" value={editingModel.contextWindow ?? ''} onChange={(e) => setEditingModel({ ...editingModel, contextWindow: e.target.value ? parseInt(e.target.value, 10) : undefined })} />}
+                  control={<Input type="number" step="1000" min="0" value={editingModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW} onChange={(e) => setEditingModel({ ...editingModel, contextWindow: normalizeContextWindow(e.target.value) })} />}
                 />
               </div>
             ),
@@ -1183,21 +1268,39 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
           },
           {
             id: 'routing',
-            title: '路由范围',
+            title: '可用范围',
             content: (
-              <ComboboxPortalProvider>
-                <div className="grid gap-4">
-                  <FormField
-                    label="端点"
-                    control={<MultiCombobox value={newModel.endpoints} onValueChange={(endpoints) => setNewModel({ ...newModel, endpoints })} options={endpointOptions} placeholder="选择可访问该模型的 API 端点" />}
-                  />
-                  <FormField
-                    label="引擎"
-                    description="留空表示不限制，由各引擎按自身兼容性决定是否可用。"
-                    control={<MultiCombobox value={newModel.engines} onValueChange={(engines) => setNewModel({ ...newModel, engines })} options={engineOptions} placeholder="选择可使用该模型的执行引擎" />}
-                  />
-                </div>
-              </ComboboxPortalProvider>
+              <div className="grid gap-4">
+                <FormField
+                  label="端点"
+                  control={(
+                    <AiModelSelectorField
+                      value=""
+                      onValueChange={() => {}}
+                      values={newModel.endpoints}
+                      onValuesChange={(endpoints) => setNewModel({ ...newModel, endpoints })}
+                      options={endpointOptions}
+                      placeholder="选择可访问该模型的 API 端点"
+                      searchPlaceholder="搜索端点..."
+                    />
+                  )}
+                />
+                <FormField
+                  label="引擎"
+                  description="留空表示不限制，由各引擎按自身兼容性决定是否可用。"
+                  control={(
+                    <AiModelSelectorField
+                      value=""
+                      onValueChange={() => {}}
+                      values={newModel.engines}
+                      onValuesChange={(engines) => setNewModel({ ...newModel, engines })}
+                      options={engineOptions}
+                      placeholder="选择引擎"
+                      searchPlaceholder="搜索引擎..."
+                    />
+                  )}
+                />
+              </div>
             ),
           },
           {
@@ -1211,11 +1314,11 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
                 />
                 <FormField
                   label="费用倍率"
-                  control={<Input type="number" step="0.1" min="0" value={newModel.costMultiplier} onChange={(e) => setNewModel({ ...newModel, costMultiplier: parseFloat(e.target.value) || 0 })} />}
+                  control={<Input type="number" step="0.1" min="0" value={newModel.costMultiplier} onChange={(e) => setNewModel({ ...newModel, costMultiplier: normalizeCostMultiplier(e.target.value) })} />}
                 />
                 <FormField
                   label="上下文窗口"
-                  control={<Input type="number" step="1000" min="0" value={newModel.contextWindow ?? ''} onChange={(e) => setNewModel({ ...newModel, contextWindow: e.target.value ? parseInt(e.target.value, 10) : undefined })} />}
+                  control={<Input type="number" step="1000" min="0" value={newModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW} onChange={(e) => setNewModel({ ...newModel, contextWindow: normalizeContextWindow(e.target.value) })} />}
                 />
               </div>
             ),

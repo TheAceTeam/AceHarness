@@ -250,7 +250,7 @@ describe('validateWorkflowDraft', () => {
     expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
   });
 
-  test('legacy state-machine agent steps without type remain valid', () => {
+  test('preRuntime state-machine agent steps without type remain valid', () => {
     const config = validStateMachineConfig('{project_root}');
     delete (config.workflow.states[0].steps[0] as any).type;
 

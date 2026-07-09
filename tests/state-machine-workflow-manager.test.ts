@@ -95,15 +95,15 @@ vi.mock('@/lib/spec/persistence', () => ({
   readChecklist: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/engines', () => ({
-  createEngine: vi.fn(),
-  getConfiguredEngine: vi.fn().mockResolvedValue('mock-engine'),
+vi.mock('@/lib/workflow/runtime-facade', () => ({
+  createWorkflowRuntime: vi.fn(),
+  getConfiguredWorkflowRuntime: vi.fn().mockResolvedValue('mock-engine'),
+  getWorkflowRuntimeSkillsSubdir: vi.fn().mockReturnValue('skills'),
   getLogicalEngineId: vi.fn((engine) => engine === 'mock-engine' ? 'claude-code' : engine),
-  resolveRequestedEngineType: vi.fn((engine) => engine || 'mock-engine'),
-}));
-
-vi.mock('@/lib/engines/engine-config', () => ({
-  getEngineSkillsSubdir: vi.fn().mockReturnValue('skills'),
+  resolveRequestedWorkflowRuntimeType: vi.fn((engine) => engine || 'mock-engine'),
+  compactWorkflowRuntimeContextManually: vi.fn().mockResolvedValue(null),
+  executeWorkflowRuntimeWithContextRecovery: vi.fn((engine, options) => engine.execute(options)),
+  resolveRecoveredWorkflowRuntimeSessionId: vi.fn((result, fallback) => result.sessionId || fallback || null),
 }));
 
 vi.mock('@/lib/run/runtime-configs', () => ({
@@ -230,13 +230,13 @@ function makeAgentState(name: string) {
 }
 
 async function createManagerForTest(engine: MockEngine) {
-  const enginesModule = await import('@/lib/engines');
-  vi.mocked(enginesModule.createEngine).mockResolvedValue(engine as any);
+  const enginesModule = await import('@/lib/workflow/runtime-facade');
+  vi.mocked(enginesModule.createWorkflowRuntime).mockResolvedValue(engine as any);
   const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
   const manager = new StateMachineWorkflowManager();
 
   // Set up minimum internal state
-  (manager as any).currentEngine = engine;
+  (manager as any).currentRuntime = engine;
   (manager as any).engineType = 'mock-engine';
   (manager as any).status = 'running';
   (manager as any).currentRunId = 'test-run-001';
@@ -297,29 +297,29 @@ describe('parseVerdict', () => {
     expect(parseVerdict('```json\n{"verdict": "conditional_pass"}\n```')).toBe('conditional_pass');
   });
 
-  test('falls back to keyword matching for pass', async () => {
+  test('rejects keyword-only pass without strict verdict JSON', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);
-    expect(parseVerdict('All checks pass')).toBe('pass');
+    expect(() => parseVerdict('All checks pass')).toThrow('缺少严格最终裁决 JSON');
   });
 
-  test('falls back to keyword matching for fail (English)', async () => {
+  test('rejects keyword-only fail without strict verdict JSON', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);
-    expect(parseVerdict('This is a fail result')).toBe('fail');
+    expect(() => parseVerdict('This is a fail result')).toThrow('缺少严格最终裁决 JSON');
   });
 
-  test('Chinese keywords do not match due to \\b word boundary limitation', async () => {
+  test('rejects Chinese keyword-only verdicts without strict verdict JSON', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);
-    expect(parseVerdict('检查失败')).toBe('conditional_pass');
-    expect(parseVerdict('检查通过')).toBe('conditional_pass');
+    expect(() => parseVerdict('检查失败')).toThrow('缺少严格最终裁决 JSON');
+    expect(() => parseVerdict('检查通过')).toThrow('缺少严格最终裁决 JSON');
   });
 
-  test('returns conditional_pass when no keywords match', async () => {
+  test('rejects unstructured output instead of defaulting to conditional_pass', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);
-    expect(parseVerdict('Some partial results, needs more work')).toBe('conditional_pass');
+    expect(() => parseVerdict('Some partial results, needs more work')).toThrow('缺少严格最终裁决 JSON');
   });
 
   test('returns fail for empty output', async () => {
@@ -329,10 +329,10 @@ describe('parseVerdict', () => {
     expect(parseVerdict('   ')).toBe('fail');
   });
 
-  test('parses verdict from step conclusion when JSON is missing', async () => {
+  test('does not parse verdict from step conclusion when JSON is missing', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);
-    expect(parseVerdict('<step-conclusion>\n## 结果 / 裁决\n- 当前状态最终裁定为 fail。\n</step-conclusion>')).toBe('fail');
+    expect(() => parseVerdict('<step-conclusion>\n## 结果 / 裁决\n- 当前状态最终裁定为 fail。\n</step-conclusion>')).toThrow('缺少严格最终裁决 JSON');
   });
 });
 
@@ -424,7 +424,7 @@ describe('subworkflow step dispatch', () => {
     });
   });
 
-  test('does not allow legacy result mapping to hide a failed child workflow', async () => {
+  test('does not allow oldArchitecture result mapping to hide a failed child workflow', async () => {
     const { loadRunState } = await import('@/lib/run/state-persistence');
     vi.mocked(loadRunState).mockResolvedValueOnce({
       runId: 'run-2024-01-01-000000-test-uui',
@@ -432,7 +432,7 @@ describe('subworkflow step dispatch', () => {
       status: 'failed',
       statusReason: 'child failed',
       currentPhase: '子状态',
-      stepLogs: [{ output: '{"verdict":"conditional_pass","summary":"legacy should not pass"}', error: '' }],
+      stepLogs: [{ output: '{"verdict":"conditional_pass","summary":"oldArchitecture should not pass"}', error: '' }],
     } as any);
 
     registryMocks.getManagerForRun.mockResolvedValue({
@@ -460,7 +460,7 @@ describe('subworkflow step dispatch', () => {
     state.steps = [step];
 
     await expect((manager as any).executeWorkflowStepDispatch(step, state, makeConfig(), 'parent requirement'))
-      .rejects.toThrow(/legacy should not pass|child failed|子工作流失败/);
+      .rejects.toThrow(/oldArchitecture should not pass|child failed|子工作流失败/);
     expect((manager as any).subworkflowRuns[0]).toMatchObject({
       status: 'failed',
       verdict: 'fail',
@@ -770,7 +770,7 @@ describe('subworkflow step dispatch', () => {
       configFile: 'child.yaml',
       status: 'completed',
       currentPhase: '子状态',
-      stepLogs: [{ output: 'x'.repeat(20 * 1024), error: '' }],
+      stepLogs: [{ output: `${'x'.repeat(20 * 1024)}\n{"verdict":"pass","summary":"child completed"}`, error: '' }],
     } as any);
 
     registryMocks.getManagerForRun.mockResolvedValue({
@@ -957,7 +957,7 @@ describe('subworkflow step dispatch', () => {
       endTime: '2024-01-01T00:00:01.000Z',
       agents: [{ costUsd: 1.5 }],
       issueTracker: [{ type: 'test', severity: 'minor', description: 'child issue' }],
-      stepLogs: [{ output: 'child ok', error: '' }],
+      stepLogs: [{ output: 'child ok\n{"verdict":"pass","summary":"child ok"}', error: '' }],
     } as any);
 
     const childManager: any = {
@@ -1022,7 +1022,7 @@ describe('subworkflow step dispatch', () => {
       runId: 'run-2024-01-01-000000-test-uui',
       configFile: 'child.yaml',
       status: 'completed',
-      stepLogs: [{ output: 'child ok', error: '' }],
+      stepLogs: [{ output: 'child ok\n{"verdict":"pass","summary":"child ok"}', error: '' }],
     } as any);
     const childManager: any = {
       start: vi.fn().mockResolvedValue(undefined),
@@ -1066,7 +1066,7 @@ describe('subworkflow step dispatch', () => {
       runId: 'run-2024-01-01-000000-test-uui',
       configFile: 'child.yaml',
       status: 'completed',
-      stepLogs: [{ output: 'child ok', error: '' }],
+      stepLogs: [{ output: 'child ok\n{"verdict":"pass","summary":"child ok"}', error: '' }],
     } as any);
 
     const manager = await createManagerForTest(new MockEngine());
@@ -1662,7 +1662,7 @@ describe('state machine execution flow', () => {
   });
 
   test('step execution produces output from engine', async () => {
-    const engine = new MockEngine({ success: true, output: 'Step completed with results' });
+    const engine = new MockEngine({ success: true, output: 'Step completed with results\n{"verdict":"pass","summary":"Step completed"}' });
     const manager = await createManagerForTest(engine);
 
     const config = makeConfig();
@@ -1934,7 +1934,7 @@ describe('state machine execution flow', () => {
   });
 
   test('serial steps ignore agentInstanceId so synthetic parallel agents are not started', async () => {
-    const engine = new MockEngine({ success: true, output: 'Step completed by base role' });
+    const engine = new MockEngine({ success: true, output: 'Step completed by base role\n{"verdict":"pass","summary":"base role"}' });
     const manager = await createManagerForTest(engine);
 
     const config = makeConfig({
@@ -2371,7 +2371,10 @@ describe('state machine execution flow', () => {
       '重点锁定搜索入口、数据契约、结果规则、恢复逻辑这四项契约。',
       '风险点只保留两个：不要默认跨会话历史搜索，不要默认结果可跳到命中消息。',
     ].join('\n');
-    const engine = new MockEngine({ success: true, output: supervisorReview });
+    const engine = new MockEngine({
+      success: true,
+      output: `${supervisorReview}\n\n{"verdict":"pass","summary":"supervisor review text should still be rejected"}`,
+    });
     const manager = await createManagerForTest(engine);
     (manager as any).latestSupervisorReview = {
       type: 'state-review',
@@ -2448,7 +2451,7 @@ describe('state machine execution flow', () => {
   test('verdict=conditional_pass causes self-transition', async () => {
     const engine = new MockEngine({
       success: true,
-      output: 'Partial progress, needs more iterations',
+      output: 'Partial progress, needs more iterations\n{"verdict":"conditional_pass","summary":"needs more iterations"}',
     });
     const manager = await createManagerForTest(engine);
 

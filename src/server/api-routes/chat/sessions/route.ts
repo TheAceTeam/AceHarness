@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   if (user instanceof Response) return user;
   try {
     const allSessions = await listChatSessions();
-    // Backward compatibility: legacy sessions without createdBy are visible to everyone.
+    // Backward compatibility: preRuntime sessions without createdBy are visible to everyone.
     // New sessions always include createdBy and are isolated by user.
     const sessions = allSessions.filter(s => !s.createdBy || s.createdBy === user.id);
     return jsonOk({ sessions });

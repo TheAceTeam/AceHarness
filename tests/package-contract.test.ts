@@ -71,7 +71,7 @@ describe('package contract', () => {
       expect(ignored.has(entry), `.npmignore must exclude ${entry}`).toBe(true);
     }
     for (const entry of forbiddenIgnores) {
-      expect(ignored.has(entry), `.npmignore must not retain legacy Next ignore ${entry}`).toBe(false);
+      expect(ignored.has(entry), `.npmignore must not retain preRuntime Next ignore ${entry}`).toBe(false);
     }
   });
 });

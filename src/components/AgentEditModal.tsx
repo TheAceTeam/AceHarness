@@ -27,7 +27,7 @@ import {
   useGenerateAgentAvatarMutation,
   useSaveAgentMemoryMutation,
 } from '@/client/query/agents';
-import { useEngineConfigQuery } from '@/client/query/engines';
+import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { useSkillsQuery } from '@/client/query/skills';
 import { useRagKnowledgeBasesQuery } from '@/client/query/rag';
 
@@ -200,7 +200,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [memoryDraft, setMemoryDraft] = useState('');
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const memoryMaxChars = Math.max(0, Math.min(50000, Number(formData.workspaceProfile?.memory?.baseBudget || 5000)));
-  const engineConfigQuery = useEngineConfigQuery();
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
   const agentsQuery = useAgentsQuery();
   const skillsQuery = useSkillsQuery();
   const ragKnowledgeBasesQuery = useRagKnowledgeBasesQuery();
@@ -225,11 +225,11 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   }, []);
 
   useEffect(() => {
-    const data = engineConfigQuery.data;
+    const data = runtimeSelectionQuery.data;
     if (!data) return;
     setGlobalEngine(data.engine || '');
-    setGlobalDefaultModel(data.defaultModel || String(data.model || ''));
-  }, [engineConfigQuery.data]);
+    setGlobalDefaultModel(data.defaultModel || '');
+  }, [runtimeSelectionQuery.data]);
 
   useEffect(() => {
     setAvailableSkills(Array.isArray(skillsQuery.data?.skills)

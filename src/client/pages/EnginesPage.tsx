@@ -24,16 +24,14 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useToast } from '@/components/ui/toast';
-import { ArrowLeft, Check, Cpu, Zap, Search, Download, Info } from 'lucide-react';
+import { ArrowLeft, Check, Cpu, Zap, Search, Download, RefreshCw, Info } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import { SingleCombobox } from '@/components/ui/combobox';
-import { EngineIcon } from '@/components/EngineIcon';
-import { getEngineMeta } from '@/lib/core/engine-metadata';
+import { AiModelSelectorField } from '@/components/AiModelSelectorField';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
-import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
+import { modelEnginesSupportEngine, normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
+import { mergeDetectedModelsForImport } from '@/lib/models/import-merge';
 import { cn } from '@/lib/core/utils';
 import type { EnginesSearch } from '@/routes/engines';
 import {
@@ -43,7 +41,6 @@ import {
   useModelsQuery,
   useSaveEngineConfigMutation,
   useSaveModelsMutation,
-  useSmokeTestEngineModelsMutation,
 } from '@/client/query/engines';
 
 interface ModelOption {
@@ -51,7 +48,7 @@ interface ModelOption {
   label: string;
   costMultiplier: number;
   engines?: string[];
-  endpoints?: string[];
+  endpoints: string[];
 }
 
 interface DetectedModel {
@@ -64,28 +61,27 @@ interface DetectedModel {
   costMultiplier: number;
 }
 
-interface ClaudeModelSmokeResult {
-  model: string;
-  ok: boolean;
-  resolvedModel?: string;
-  error?: string;
-  durationMs: number;
-  preview?: string;
-}
-
 interface Engine {
   id: string;
   name: string;
   description: string;
   status: 'available' | 'coming-soon';
+  agentId: string;
+  iconPath?: string;
+  canDetectModels?: boolean;
   features: string[];
   endpoints: string[];
 }
 
 interface EngineAvailabilityReport {
   engine: string;
-  available: boolean;
-  drivers?: Partial<Record<'stdio' | 'sdk', boolean>>;
+  available?: boolean;
+  diagnostics?: {
+    summary?: string;
+    checkedAt?: string;
+    error?: string;
+    status?: string;
+  };
 }
 
 interface EnginesPageProps {
@@ -93,106 +89,209 @@ interface EnginesPageProps {
   onRouteSearchChange?: (next: EnginesSearch) => void;
 }
 
-const engines: Engine[] = [
-  {
-    id: 'claude-code',
+const PRODUCT_ENGINE_ORDER = [
+  'codex',
+  'claude',
+  'opencode',
+  'cursor',
+  'kiro',
+  'trae',
+  'nga',
+  'codegenie',
+  'cangjie-magic',
+  'pi',
+  'openclaw',
+  'gemini',
+  'copilot',
+  'kilocode',
+  'kimi',
+  'mux',
+  'qoder',
+  'qwen',
+] as const;
+
+const RUNTIME_AGENT_ICON_PATHS: Record<string, string> = {
+  claude: '/engines/claude.svg',
+  kiro: '/engines/kiro.svg',
+  opencode: '/engines/opencode.svg',
+  nga: '/engines/code-agent.svg',
+  codegenie: '/engines/code-genie.svg',
+  codex: '/engines/codex.svg',
+  cursor: '/engines/cursor.svg',
+  trae: '/engines/trae.svg',
+  'cangjie-magic': '/engines/magic-cli.svg',
+  openclaw: '/engines/openclaw.svg',
+  gemini: '/engines/gemini.svg',
+  copilot: '/engines/copilot.svg',
+  kilocode: '/engines/kilocode.svg',
+  kimi: '/engines/kimi.svg',
+  mux: '/engines/mux.svg',
+  pi: '/engines/pi.svg',
+  qoder: '/engines/generic-provider.svg',
+  qwen: '/engines/qwen.svg',
+};
+
+const STATIC_ENGINE_METADATA: Record<string, Omit<Engine, 'id' | 'status' | 'agentId'>> = {
+  claude: {
     name: 'Claude Code',
-    description: 'Anthropic 官方 CLI 工具，功能强大，支持完整的代码编辑和执行能力',
-    status: 'available',
+    description: '官方编程助手，适合仓库理解、代码编辑和任务执行。',
     features: ['完整的文件操作', '代码执行', 'Git 集成', 'MCP 工具支持'],
     endpoints: ['anthropic'],
   },
-  {
-    id: 'kiro-cli',
+  kiro: {
     name: 'Kiro CLI',
-    description: '基于 ACP 协议的 AI 编程助手，支持自定义 Agent 配置',
-    status: 'available',
-    features: ['ACP 协议', '自定义 Agent', 'JSON-RPC 2.0', '流式输出'],
+    description: '面向日常开发的 AI 编程助手，支持按项目配置和持续输出。',
+    features: ['自定义 Agent', 'JSON-RPC 2.0', '流式输出', '项目配置'],
     endpoints: ['anthropic', 'openai'],
   },
-  {
-    id: 'opencode',
+  opencode: {
     name: 'OpenCode',
-    description: '开源 AI 编程 Agent，支持 ACP 协议，模型在 opencode 配置中设置',
-    status: 'available',
-    features: ['ACP 协议', 'JSON-RPC 2.0', '开源', '流式输出'],
+    description: '开源 AI 编程助手，适合本地工作流和可控的模型配置。',
+    features: ['开源', 'JSON-RPC 2.0', '流式输出', '本地工作流'],
     endpoints: ['anthropic', 'openai'],
   },
-  {
-    id: 'nga',
+  nga: {
     name: 'NGA',
-    description: 'OpenCode 兼容 CLI，支持 ACP 协议、流式输出与命令行接入',
-    status: 'available',
-    features: ['ACP 协议', 'OpenCode 兼容', '流式输出', '命令行集成'],
+    description: '兼容 OpenCode 使用习惯的编程助手，适合命令行开发流程。',
+    features: ['OpenCode 兼容', '流式输出', '命令行集成', '代码编辑'],
     endpoints: ['anthropic', 'openai'],
   },
-  {
-    id: 'codegenie',
+  codegenie: {
     name: 'CodeGenie',
-    description: 'OpenCode 兼容 CLI，支持 ACP 协议、流式输出与命令行接入',
-    status: 'available',
-    features: ['ACP 协议', 'OpenCode 兼容', '流式输出', '命令行集成'],
+    description: '兼容 OpenCode 使用习惯的编程助手，适合代码编辑和执行任务。',
+    features: ['OpenCode 兼容', '流式输出', '命令行集成', '任务执行'],
     endpoints: ['anthropic', 'openai'],
   },
-  {
-    id: 'codex',
+  codex: {
     name: 'Codex',
-    description: 'OpenAI Codex 引擎，专注于代码生成和理解，基于 Codex SDK',
-    status: 'available',
-    features: ['Codex SDK', '代码生成', '代码补全', '多语言支持', 'API 集成'],
+    description: 'Codex 编程助手，专注于代码生成、理解和仓库级任务执行。',
+    features: ['代码生成', '代码补全', '多语言支持', '仓库理解'],
     endpoints: ['openai'],
   },
-  {
-    id: 'cursor',
+  cursor: {
     name: 'Cursor CLI',
-    description: 'Cursor 命令行工具，提供智能代码编辑和 AI 辅助能力，支持 ACP 协议',
-    status: 'available',
-    features: ['ACP 协议', '智能补全', '代码重构', '命令行集成', '上下文感知'],
+    description: 'Cursor 的命令行编程助手，提供智能代码编辑和上下文辅助。',
+    features: ['智能补全', '代码重构', '命令行集成', '上下文感知'],
     endpoints: ['anthropic', 'openai'],
   },
-  {
-    id: 'trae-cli',
+  trae: {
     name: 'Trae CLI',
-    description: 'Trae 命令行 AI 编程助手，支持 ACP 协议，提供智能代码编辑和执行能力',
-    status: 'available',
-    features: ['ACP 协议', '智能代码编辑', '代码执行', 'MCP 工具支持', '插件系统'],
+    description: 'Trae 的 AI 编程助手，提供智能代码编辑和任务执行能力。',
+    features: ['智能代码编辑', '代码执行', 'MCP 工具支持', '插件系统'],
     endpoints: ['anthropic', 'openai'],
   },
-  {
-    id: 'magic-cli',
+  'cangjie-magic': {
     name: 'Magic CLI',
-    description: '仓颉 Magic CLI，支持 ACP 协议，[repo url](https://gitcode.com/Cangjie-SIG/magic-cli)',
-    status: 'available',
-    features: ['ACP 协议', 'JSON-RPC 2.0', '仓颉原生', '流式输出'],
+    description: '仓颉 Magic 编程助手，适合仓颉项目的代码编辑和任务执行。',
+    canDetectModels: false,
+    features: ['JSON-RPC 2.0', '仓颉原生', '流式输出', '代码编辑'],
     endpoints: ['anthropic', 'openai'],
   },
-];
-
-const CLAUDE_ALIAS_LABELS: Record<string, string> = {
-  default: 'Auto (default)',
-  best: 'Best',
-  sonnet: 'Claude Sonnet',
-  opus: 'Claude Opus',
-  haiku: 'Claude Haiku',
-  opusplan: 'Claude Opus Plan',
+  pi: {
+    name: 'Pi',
+    description: 'Pi 编程助手，适合探索式代码协作和任务执行。',
+    features: ['代码编辑', '任务执行'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  openclaw: {
+    name: 'OpenClaw',
+    description: 'OpenClaw 编程助手，适合本地命令行开发流程。',
+    features: ['代码编辑', '任务执行'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  gemini: {
+    name: 'Gemini',
+    description: 'Gemini 编程助手，适合多模态理解、代码编辑和仓库任务。',
+    features: ['代码编辑', '上下文理解', '任务执行'],
+    endpoints: ['openai'],
+  },
+  copilot: {
+    name: 'Copilot',
+    description: 'Copilot 编程助手，适合日常代码补全、编辑和任务执行。',
+    features: ['代码补全', '代码编辑', '任务执行'],
+    endpoints: ['openai'],
+  },
+  kilocode: {
+    name: 'Kilo Code',
+    description: 'Kilo Code 编程助手，适合命令行代码编辑和自动化执行。',
+    features: ['代码编辑', '命令行集成', '任务执行'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  kimi: {
+    name: 'Kimi',
+    description: 'Kimi 编程助手，适合长上下文阅读、代码理解和任务执行。',
+    features: ['长上下文', '代码理解', '任务执行'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  mux: {
+    name: 'Mux',
+    description: 'Mux 编程助手，适合多任务编排和命令行开发流程。',
+    features: ['任务编排', '代码编辑', '命令行集成'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  qoder: {
+    name: 'Qoder',
+    description: 'Qoder 编程助手，适合仓库级代码生成、审查和任务执行。',
+    features: ['代码生成', '代码审查', '任务执行'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  qwen: {
+    name: 'Qwen',
+    description: 'Qwen 编程助手，适合中文代码协作、仓库理解和任务执行。',
+    features: ['中文协作', '代码理解', '任务执行'],
+    endpoints: ['anthropic', 'openai'],
+  },
 };
 
-function AvailabilityPill({ available, checking }: { available?: boolean; checking?: boolean }) {
-  if (checking) return <StatusPill tone="info">检查中</StatusPill>;
+function normalizeEngineId(engine?: string | null) {
+  return normalizeRuntimeEngineId(engine);
+}
+
+function buildRuntimeEngineCard(id: string): Engine {
+  const canonicalId = normalizeEngineId(id);
+  const metadata = STATIC_ENGINE_METADATA[canonicalId];
+  return {
+    id: canonicalId,
+    name: metadata?.name || canonicalId,
+    description: metadata?.description || `${canonicalId} 编程助手`,
+    status: 'available',
+    agentId: canonicalId,
+    iconPath: metadata?.iconPath || RUNTIME_AGENT_ICON_PATHS[canonicalId],
+    canDetectModels: metadata?.canDetectModels,
+    features: metadata?.features || ['代码编辑', '任务执行'],
+    endpoints: metadata?.endpoints || [],
+  };
+}
+
+function RuntimeEngineIcon({ engine, className = 'h-8 w-8' }: { engine?: Pick<Engine, 'name' | 'iconPath'>; className?: string }) {
+  if (engine?.iconPath) {
+    return <img src={engine.iconPath} alt={engine.name} className={cn('shrink-0 object-contain', className)} />;
+  }
+  return <Cpu className={cn('shrink-0 text-muted-foreground', className)} />;
+}
+
+function EngineStatusPill({ available, checking }: { available?: boolean; checking?: boolean }) {
+  if (checking && available === undefined) return <StatusPill tone="info">检查中</StatusPill>;
   if (available === true) return <StatusPill tone="success">可用</StatusPill>;
   if (available === false) return <StatusPill tone="danger">不可用</StatusPill>;
   return <StatusPill tone="neutral">未检测</StatusPill>;
 }
 
-function DriverAvailabilityPill({ available }: { available?: boolean }) {
-  if (available === true) return <StatusPill tone="success" className="h-5 px-1.5 py-0 text-[10px]">可用</StatusPill>;
-  if (available === false) return <StatusPill tone="danger" className="h-5 px-1.5 py-0 text-[10px]">不可用</StatusPill>;
-  return <StatusPill tone="neutral" className="h-5 px-1.5 py-0 text-[10px]">未检测</StatusPill>;
+function getDefaultModelLabel(modelValue: string, compatibleModels: ModelOption[]) {
+  if (!modelValue) return '使用全局默认模型';
+  return compatibleModels.find((model) => model.value === modelValue)?.label || modelValue;
+}
+
+function getAvailabilityValue(report?: EngineAvailabilityReport): boolean | undefined {
+  if (!report) return undefined;
+  if (report.available === true) return true;
+  if (report.available === false && (report.diagnostics?.checkedAt || report.diagnostics?.error)) return false;
+  return undefined;
 }
 
 function getDetectedModelSourceLabel(source?: string) {
   if (source === 'alias') return '官方别名';
-  if (source === 'api') return 'Anthropic API';
+  if (source === 'api') return '接口检测';
   if (source === 'config') return '本地配置';
   return '检测结果';
 }
@@ -204,18 +303,22 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
   useDocumentTitle('执行引擎');
   const engineConfigQuery = useEngineConfigQuery();
   const modelsQuery = useModelsQuery();
-  const availabilityQuery = useEngineAvailabilityReportsQuery();
+  const [availabilityRefreshToken, setAvailabilityRefreshToken] = useState(1);
+  const availabilityQuery = useEngineAvailabilityReportsQuery({
+    forceRefresh: availabilityRefreshToken > 0,
+    refreshToken: availabilityRefreshToken,
+  });
   const saveEngineConfigMutation = useSaveEngineConfigMutation();
   const saveModelsMutation = useSaveModelsMutation();
   const detectEngineModelsMutation = useDetectEngineModelsMutation();
-  const smokeTestEngineModelsMutation = useSmokeTestEngineModelsMutation();
-  const [currentEngine, setCurrentEngine] = useState<string>(routeSearch?.engine || 'claude-code');
+  const [currentEngine, setCurrentEngine] = useState<string>(normalizeEngineId(routeSearch?.engine) || 'claude');
+  const [selectedEngine, setSelectedEngine] = useState<string>(normalizeEngineId(routeSearch?.engine) || 'claude');
   const [defaultModel, setDefaultModel] = useState<string>('');
-  const [driverSelections, setDriverSelections] = useState<Record<string, 'stdio' | 'sdk'>>({});
   const [models, setModels] = useState<ModelOption[]>([]);
   const [engineAvailability, setEngineAvailability] = useState<Record<string, EngineAvailabilityReport>>({});
-  const loading = engineConfigQuery.isLoading || modelsQuery.isLoading;
   const checkingAvailability = availabilityQuery.isFetching;
+  const refreshingAvailability = availabilityQuery.isFetching;
+  const engines = useMemo(() => PRODUCT_ENGINE_ORDER.map((id) => buildRuntimeEngineCard(id)), []);
 
   const broadcastEngineUpdated = () => {
     if (typeof window === 'undefined') return;
@@ -232,94 +335,87 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
     const data = engineConfigQuery.data;
     if (!data) return;
     if (data.engine && !routeSearch?.engine) {
-      setCurrentEngine(data.engine);
+      const nextEngine = normalizeEngineId(data.engine) || 'claude';
+      setCurrentEngine(nextEngine);
+      setSelectedEngine(nextEngine);
     }
     if (typeof data.defaultModel === 'string') {
       setDefaultModel(data.defaultModel);
     }
-    if (data.driver || data.drivers) {
-      const validDrivers = Object.fromEntries(
-        Object.entries(data.drivers || {}).filter((entry): entry is [string, 'stdio' | 'sdk'] =>
-          entry[1] === 'stdio' || entry[1] === 'sdk'
-        )
-      );
-      const currentDriver = data.driver === 'stdio' || data.driver === 'sdk' ? data.driver : undefined;
-      setDriverSelections((prev) => ({
-        ...prev,
-        ...validDrivers,
-        ...(data.engine && currentDriver ? { [data.engine]: currentDriver } : {}),
-      }));
-    }
   }, [engineConfigQuery.data, routeSearch?.engine]);
 
   useEffect(() => {
-    if (routeSearch?.engine && routeSearch.engine !== currentEngine) {
-      setCurrentEngine(routeSearch.engine);
+    const routeEngine = normalizeEngineId(routeSearch?.engine);
+    if (routeEngine && routeEngine !== selectedEngine) {
+      setSelectedEngine(routeEngine);
     }
-  }, [currentEngine, routeSearch?.engine]);
+  }, [routeSearch?.engine, selectedEngine]);
 
   useEffect(() => {
     if (availabilityQuery.data) {
-      setEngineAvailability(availabilityQuery.data);
+      setEngineAvailability(Object.fromEntries(
+        Object.entries(availabilityQuery.data).map(([engine, report]) => [
+          normalizeEngineId(engine) || engine,
+          { ...report, engine: normalizeEngineId(report.engine) || report.engine },
+        ]),
+      ));
     }
   }, [availabilityQuery.data]);
 
-  const getModelsForEngine = (engineId: string) =>
-    models.filter(m => modelEnginesSupportEngine(m.engines, engineId));
-
-  const getDriverForEngine = (engineId: string): 'stdio' | 'sdk' =>
-    driverSelections[engineId] || (engineId === 'codegenie' || engineId === 'nga' ? 'stdio' : 'sdk');
-
-  const getEngineReport = (engineId: string): EngineAvailabilityReport | undefined =>
-    engineAvailability[engineId];
+  const getModelsForEngine = (engineId: string) => {
+    const normalizedEngineId = normalizeEngineId(engineId);
+    return models.filter((model) => {
+      const engines = Array.isArray(model.engines) ? model.engines : [];
+      if (engines.length === 0) return false;
+      return modelEnginesSupportEngine(engines, normalizedEngineId);
+    });
+  };
 
   const isEngineAvailable = (engineId: string): boolean | undefined =>
-    getEngineReport(engineId)?.available;
-
-  const isDriverAvailable = (engineId: string, driver: 'stdio' | 'sdk'): boolean | undefined =>
-    getEngineReport(engineId)?.drivers?.[driver];
+    getAvailabilityValue(engineAvailability[normalizeEngineId(engineId)]);
 
   const checkEngineAvailability = async (forceRefresh = false) => {
     if (forceRefresh) {
-      await availabilityQuery.refetch();
+      setAvailabilityRefreshToken((value) => value + 1);
       return;
     }
     await availabilityQuery.refetch();
   };
 
   const handleSelectEngine = async (engineId: string) => {
-    const engine = engines.find(e => e.id === engineId);
+    const normalizedEngineId = normalizeEngineId(engineId);
+    const engine = engines.find(e => e.id === normalizedEngineId);
     if (engine?.status === 'coming-soon') {
       return;
     }
 
     // Check if engine is available before switching
-    if (isEngineAvailable(engineId) === false) {
+    if (isEngineAvailable(normalizedEngineId) === false) {
       const hints: Record<string, string> = {
-        'kiro-cli': '安装方法：curl -fsSL https://cli.kiro.dev/install | bash',
-        'claude-code': '安装方法：npm install -g @anthropic-ai/claude-code',
-
-        'opencode': '安装方法：npm install -g opencode-ai',
-        'nga': '请确保已安装 ngagent 并把 nga 命令加入 PATH',
-        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH；若 IDE 里找不到命令，请按 CodeGenie 官方安装说明补齐可执行路径',
-        'trae-cli': '安装方法：curl -fsSL https://trae.cn/install | bash',
-        'magic-cli': '请从 https://gitcode.com/Cangjie-SIG/magic-cli 克隆仓库，并确保当前运行环境可以直接调用 magic-cli.sh',
+        kiro: '安装方法：curl -fsSL https://cli.kiro.dev/install | bash',
+        claude: '安装方法：npm install -g @anthropic-ai/claude-code',
+        opencode: '安装方法：npm install -g opencode-ai',
+        nga: '请先安装 ngagent，并确认 nga 命令可用',
+        codegenie: '请先安装 CodeGenie，并确认 codegenie 命令可用',
+        trae: '安装方法：curl -fsSL https://trae.cn/install | bash',
+        'cangjie-magic': '请先配置 Magic CLI，并确认 magic-cli.sh 可用',
       };
-      const hint = hints[engineId] || '请确保已安装相应的命令行工具';
-      toast('error', `引擎 ${engine?.name} 不可用。${hint}`);
+      const hint = hints[normalizedEngineId] || '请确保已安装相应的命令行工具';
+      toast('error', `引擎 ${engine?.name || normalizedEngineId} 不可用。${hint}`);
       return;
     }
 
     try {
-      await saveEngineConfigMutation.mutateAsync({ engine: engineId });
-      setCurrentEngine(engineId);
-      onRouteSearchChange?.({ engine: engineId });
-      const compatible = getModelsForEngine(engineId);
+      await saveEngineConfigMutation.mutateAsync({ engine: normalizedEngineId });
+      setCurrentEngine(normalizedEngineId);
+      setSelectedEngine(normalizedEngineId);
+      onRouteSearchChange?.({ engine: normalizedEngineId });
+      const compatible = getModelsForEngine(normalizedEngineId);
       if (defaultModel && !compatible.find(m => m.value === defaultModel)) {
         setDefaultModel('');
       }
       broadcastEngineUpdated();
-      toast('success', `已切换到 ${engine?.name} 引擎`);
+      toast('success', `已切换到 ${engine?.name || normalizedEngineId}`);
     } catch (error) {
       console.error('Failed to set engine:', error);
       toast('error', '切换引擎失败: ' + (error as Error).message);
@@ -330,7 +426,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
     try {
       await saveEngineConfigMutation.mutateAsync({ engine: currentEngine, defaultModel: modelValue });
       setDefaultModel(modelValue);
-      const label = models.find(m => m.value === modelValue)?.label || modelValue;
+      const label = modelValue ? models.find(m => m.value === modelValue)?.label || modelValue : '使用全局默认模型';
       broadcastEngineUpdated();
       toast('success', `默认模型已设置: ${label}`);
     } catch (error) {
@@ -339,40 +435,18 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
     }
   };
 
-  const handleSetEngineDriver = async (engineId: string, nextDriver: 'stdio' | 'sdk') => {
-    if (isDriverAvailable(engineId, nextDriver) === false) {
-      toast('error', `${engines.find((item) => item.id === engineId)?.name || engineId} 的 ${nextDriver} 驱动当前不可用`);
-      return;
-    }
-
-    const previousDriver = getDriverForEngine(engineId);
-    setDriverSelections((prev) => ({ ...prev, [engineId]: nextDriver }));
-    try {
-      await saveEngineConfigMutation.mutateAsync({ engine: currentEngine, targetEngine: engineId, driver: nextDriver });
-      broadcastEngineUpdated();
-      toast('success', `已设置 ${engines.find((item) => item.id === engineId)?.name || engineId} / ${nextDriver}`);
-    } catch (error) {
-      setDriverSelections((prev) => ({ ...prev, [engineId]: previousDriver }));
-      toast('error', error instanceof Error ? error.message : '切换失败');
-    }
-  };
-
   // --- Model detection ---
   const [detecting, setDetecting] = useState(false);
   const [detectedModels, setDetectedModels] = useState<DetectedModel[]>([]);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [detectingEngine, setDetectingEngine] = useState('');
-  const [smokeTesting, setSmokeTesting] = useState(false);
-  const [showSmokeDialog, setShowSmokeDialog] = useState(false);
-  const [smokeResults, setSmokeResults] = useState<ClaudeModelSmokeResult[]>([]);
   const [setupDrawerOpen, setSetupDrawerOpen] = useState(false);
 
   const handleDetectModels = async (engineId: string) => {
     setDetecting(true);
     setDetectingEngine(engineId);
     try {
-      const driver = getDriverForEngine(engineId);
-      const data = await detectEngineModelsMutation.mutateAsync({ engine: engineId, driver });
+      const data = await detectEngineModelsMutation.mutateAsync({ engine: engineId });
       if (data.error) {
         toast('error', `检测失败: ${data.error}`);
         return;
@@ -385,7 +459,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
         recommended: Boolean(m.recommended),
         selected: !existing.has(m.modelId),
         label: m.name || m.modelId,
-        costMultiplier: models.find(existingModel => existingModel.value === m.modelId)?.costMultiplier || 0.1,
+        costMultiplier: models.find(existingModel => existingModel.value === m.modelId)?.costMultiplier ?? 1,
       }));
       setDetectedModels(detected);
       setShowImportDialog(true);
@@ -402,27 +476,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
       toast('warning', '请至少选择一个模型');
       return;
     }
-    const mergedMap = new Map(models.map(model => [model.value, { ...model }]));
-    for (const model of toImport) {
-      const existing = mergedMap.get(model.modelId);
-      if (existing) {
-        mergedMap.set(model.modelId, {
-          ...existing,
-          label: model.label || existing.label,
-          costMultiplier: model.costMultiplier || existing.costMultiplier,
-          engines: Array.from(new Set([...(existing.engines || []), detectingEngine])),
-        });
-      } else {
-        mergedMap.set(model.modelId, {
-          value: model.modelId,
-          label: model.label,
-          costMultiplier: model.costMultiplier,
-          endpoints: [],
-          engines: [detectingEngine],
-        });
-      }
-    }
-    const merged = Array.from(mergedMap.values());
+    const merged = mergeDetectedModelsForImport({ models, detectedModels: toImport, engine: detectingEngine });
     try {
       await saveMergedModels(merged, `已导入 ${toImport.length} 个模型`);
       setShowImportDialog(false);
@@ -435,65 +489,6 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
     await saveModelsMutation.mutateAsync({ models: merged });
     setModels(merged);
     toast('success', successMessage);
-  };
-
-  const handleSmokeTestClaudeModels = async () => {
-    setSmokeTesting(true);
-    try {
-      const data = await smokeTestEngineModelsMutation.mutateAsync(['default', 'best', 'sonnet', 'opus', 'haiku', 'opusplan']);
-      if (data.error) {
-        toast('error', data.error || 'Claude Code 模型测试失败');
-        return;
-      }
-      setSmokeResults((data.results || []) as ClaudeModelSmokeResult[]);
-      setShowSmokeDialog(true);
-      const passed = (data.results || []).filter((item: ClaudeModelSmokeResult) => item.ok).length;
-      toast('success', `Claude Code 模型测试完成：${passed}/${(data.results || []).length} 可用`);
-    } catch (error) {
-      toast('error', `Claude Code 模型测试失败: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setSmokeTesting(false);
-    }
-  };
-
-  const handleImportSmokePassedModels = async () => {
-    const passed = smokeResults.filter((result) => result.ok);
-    if (passed.length === 0) {
-      toast('warning', '没有可导入的通过模型');
-      return;
-    }
-
-    const mergedMap = new Map(models.map((model) => [model.value, { ...model }]));
-    for (const result of passed) {
-      const existing = mergedMap.get(result.model);
-      const label = CLAUDE_ALIAS_LABELS[result.model] || result.resolvedModel || result.model;
-      if (existing) {
-        mergedMap.set(result.model, {
-          ...existing,
-          label: existing.label || label,
-          engines: Array.from(new Set([...(existing.engines || []), 'claude-code'])),
-          endpoints: Array.from(new Set([...(existing.endpoints || []), 'anthropic'])),
-        });
-      } else {
-        mergedMap.set(result.model, {
-          value: result.model,
-          label,
-          costMultiplier: 0.1,
-          endpoints: ['anthropic'],
-          engines: ['claude-code'],
-        });
-      }
-    }
-
-    try {
-      await saveMergedModels(
-        Array.from(mergedMap.values()),
-        `已导入 ${passed.length} 个通过测试的 Claude Code 模型`,
-      );
-      setShowSmokeDialog(false);
-    } catch (error) {
-      toast('error', error instanceof Error ? error.message : '保存模型失败');
-    }
   };
 
   const detectedModelColumns = useMemo<DataTableColumn<DetectedModel>[]>(() => [
@@ -542,42 +537,14 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
     },
   ], []);
 
-  const smokeResultColumns = useMemo<DataTableColumn<ClaudeModelSmokeResult>[]>(() => [
-    {
-      id: 'model',
-      header: '别名',
-      width: 110,
-      render: (result) => <span className="font-mono text-xs">{result.model}</span>,
-    },
-    {
-      id: 'status',
-      header: '状态',
-      width: 90,
-      render: (result) => <StatusPill tone={result.ok ? 'success' : 'danger'}>{result.ok ? '可用' : '失败'}</StatusPill>,
-    },
-    {
-      id: 'resolvedModel',
-      header: '实际模型',
-      render: (result) => <span className="font-mono text-xs">{result.resolvedModel || '未返回'}</span>,
-    },
-    {
-      id: 'duration',
-      header: '耗时',
-      width: 90,
-      render: (result) => <span className="text-xs">{(result.durationMs / 1000).toFixed(1)}s</span>,
-    },
-    {
-      id: 'detail',
-      header: '详情',
-      render: (result) => <span className="text-xs text-muted-foreground">{result.ok ? (result.preview || 'OK') : (result.error || 'Unknown error')}</span>,
-    },
-  ], []);
-
   const { isDashboardShell } = useDashboardShellHeader({
     title: '引擎管理',
     subtitle: '选择和配置 AI 编程引擎',
   }, []);
   const currentEngineMeta = engines.find(e => e.id === currentEngine);
+  const selectedEngineMeta = engines.find(e => e.id === selectedEngine) || currentEngineMeta;
+  const detectingEngineMeta = engines.find(e => e.id === detectingEngine);
+  const selectedCompatibleModels = selectedEngineMeta ? getModelsForEngine(selectedEngineMeta.id) : [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -588,7 +555,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
           title="引擎管理"
           subtitle="配置 AI 编程引擎、默认模型和可用性检测"
           eyebrow="SYSTEM"
-          status={<AvailabilityPill available={isEngineAvailable(currentEngine)} checking={checkingAvailability} />}
+          status={<EngineStatusPill available={isEngineAvailable(currentEngine)} checking={checkingAvailability} />}
           secondaryActions={(
             <>
               <Button variant="outline" size="sm" asChild>
@@ -606,9 +573,10 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
               variant="outline"
               size="sm"
               onClick={() => checkEngineAvailability(true)}
-              disabled={checkingAvailability}
+              disabled={refreshingAvailability}
             >
-              {checkingAvailability ? '检查中...' : '刷新可用性'}
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {refreshingAvailability ? '检测中...' : '刷新状态'}
             </Button>
           )}
         />
@@ -624,11 +592,12 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
                 <Cpu className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <div className="text-sm font-semibold">当前引擎：{currentEngineMeta?.name || 'Claude Code'}</div>
+                <div className="text-sm font-semibold">当前引擎：{currentEngineMeta?.name || currentEngine}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <AvailabilityPill available={isEngineAvailable(currentEngine)} checking={checkingAvailability} />
-                  <span>{getModelsForEngine(currentEngine).length} 个兼容模型</span>
-                  <span>默认模型：{defaultModel || '未设置'}</span>
+                  <EngineStatusPill available={isEngineAvailable(currentEngine)} checking={checkingAvailability} />
+                  {getModelsForEngine(currentEngine).length > 0 ? (
+                    <span>默认模型：{getDefaultModelLabel(defaultModel, getModelsForEngine(currentEngine))}</span>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -643,7 +612,16 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
 
         {/* Engines Grid */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {engines.map((engine, index) => (
+          {engines.map((engine, index) => {
+            const compatibleModels = getModelsForEngine(engine.id);
+            const hasModels = compatibleModels.length > 0;
+            const isCurrentEngine = currentEngine === engine.id;
+            const isSelectedEngine = selectedEngine === engine.id;
+            const availability = isEngineAvailable(engine.id);
+            const canUseEngineActions = availability === true;
+            const canDetectModels = canUseEngineActions && engine.canDetectModels !== false;
+
+            return (
             <motion.div
               key={engine.id}
               initial={{ opacity: 0, y: 20 }}
@@ -651,16 +629,15 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
               transition={{ delay: index * 0.03 }}
             >
               <DataCard
-                selected={currentEngine === engine.id}
+                selected={isSelectedEngine}
                 disabled={engine.status === 'coming-soon'}
-                className={cn(
-                  'relative min-h-full p-5',
-                  engine.status === 'coming-soon' ? 'opacity-60' : 'cursor-pointer'
-                )}
-                onClick={() => handleSelectEngine(engine.id)}
+                className={cn('relative min-h-full p-5', engine.status === 'coming-soon' ? 'opacity-60' : '')}
+                onClick={() => {
+                  if (engine.status !== 'coming-soon') setSelectedEngine(engine.id);
+                }}
               >
               {/* Selected Badge */}
-              {currentEngine === engine.id && (
+              {isCurrentEngine && (
                 <div className="absolute top-4 right-4">
                   <StatusPill tone="accent">
                     <Check className="w-3 h-3 mr-1" />
@@ -676,24 +653,23 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
                 </div>
               )}
 
-              {/* Availability Badge */}
-              {engine.status === 'available' && currentEngine !== engine.id && (
-                <div className="absolute top-4 right-4">
-                  <AvailabilityPill available={isEngineAvailable(engine.id)} checking={checkingAvailability} />
-                </div>
-              )}
-
               {/* Engine Icon */}
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-lg border border-border bg-muted/30">
-                <EngineIcon engineId={engine.id} className="h-8 w-8" decorative={false} alt={engine.name} />
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-lg border border-border bg-background/80 shadow-sm">
+                <RuntimeEngineIcon engine={engine} />
               </div>
 
               {/* Engine Info */}
               <h3 className="mb-2 text-base font-semibold">{engine.name}</h3>
-              <p className="text-sm text-muted-foreground mb-4">{engine.description}</p>
+              <p className="mb-4 text-sm text-muted-foreground">{engine.description}</p>
 
-              {/* Features */}
-              <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <EngineStatusPill available={availability} checking={checkingAvailability} />
+                {hasModels && isCurrentEngine ? (
+                  <span className="max-w-full truncate">默认模型：{getDefaultModelLabel(defaultModel, compatibleModels)}</span>
+                ) : null}
+              </div>
+
+              <div className="mt-4 space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">特性：</p>
                 <div className="flex flex-wrap gap-2">
                   {engine.features.map((feature) => (
@@ -704,78 +680,45 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
                 </div>
               </div>
 
-              {/* API Endpoints */}
-              <div className="space-y-2 mt-3">
-                <p className="text-xs font-medium text-muted-foreground">API 端点：</p>
-                <div className="flex flex-wrap gap-2">
-                  {engine.endpoints.map((endpoint) => (
-                    <Badge key={endpoint} variant="outline" className="text-xs">
-                      {endpoint}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-
-              {engine.status === 'available' && ['claude-code', 'opencode', 'nga', 'codegenie'].includes(engine.id) && (
-                <div className="mt-4 pt-4 border-t border-border/50" onClick={(e) => e.stopPropagation()}>
-                  <p className="text-xs font-medium text-muted-foreground mb-2">驱动模式：</p>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant={getDriverForEngine(engine.id) === 'stdio' ? 'secondary' : 'outline'}
-                      className="flex-1 h-8 text-xs justify-between gap-2"
-                      disabled={checkingAvailability || isDriverAvailable(engine.id, 'stdio') === false}
-                      onClick={() => handleSetEngineDriver(engine.id, 'stdio')}
-                    >
-                      <span>stdio (ACP)</span>
-                      <DriverAvailabilityPill available={isDriverAvailable(engine.id, 'stdio')} />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={getDriverForEngine(engine.id) === 'sdk' ? 'secondary' : 'outline'}
-                      className="flex-1 h-8 text-xs justify-between gap-2"
-                      disabled={checkingAvailability || isDriverAvailable(engine.id, 'sdk') === false}
-                      onClick={() => handleSetEngineDriver(engine.id, 'sdk')}
-                    >
-                      <span>SDK (HTTP)</span>
-                      <DriverAvailabilityPill available={isDriverAvailable(engine.id, 'sdk')} />
-                    </Button>
+              {engine.endpoints.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">API 端点：</p>
+                  <div className="flex flex-wrap gap-2">
+                    {engine.endpoints.map((endpoint) => (
+                      <Badge key={endpoint} variant="outline" className="text-xs">
+                        {endpoint}
+                      </Badge>
+                    ))}
                   </div>
-                  <p className="mt-1.5 text-[10px] text-muted-foreground">
-                    {checkingAvailability
-                      ? '驱动可用性检测中'
-                      : '点击驱动按钮会切换到对应的引擎接入方式'}
-                  </p>
-                  <p className="mt-1.5 text-[10px] text-muted-foreground">
-                    {engine.id === 'claude-code'
-                      ? (getDriverForEngine(engine.id) === 'sdk'
-                        ? 'SDK 模式使用 @anthropic-ai/claude-agent-sdk，保持当前 Claude Code 默认接入方式'
-                        : 'stdio 模式通过 claude-agent-acp 走 ACP 协议，适合统一到 ACP 驱动栈')
-                      : (getDriverForEngine(engine.id) === 'sdk'
-                        ? 'SDK 模式通过 HTTP API 通信，一个 server 服务所有会话，更稳定'
-                        : 'stdio 模式通过子进程 stdin/stdout 通信，兼容旧版本')}
-                  </p>
                 </div>
-              )}
+              ) : null}
 
               {/* Select Button */}
-              {engine.status === 'available' && currentEngine !== engine.id && (
-                <Button
-                  className="w-full mt-4"
-                  variant="outline"
-                  disabled={checkingAvailability}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSelectEngine(engine.id);
-                  }}
-                >
-                  <Zap className="w-4 h-4 mr-2" />
-                  切换到此引擎
-                </Button>
-              )}
-
-              {engine.status === 'available' && !['codex', 'magic-cli'].includes(engine.id) && (
-                <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+              {engine.status === 'available' && (
+                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={refreshingAvailability}
+                    onClick={() => checkEngineAvailability(true)}
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    {refreshingAvailability ? '检测中...' : '刷新状态'}
+                  </Button>
+                  {!isCurrentEngine && canUseEngineActions ? (
+                    <Button
+                      className="w-full"
+                      variant="outline"
+                      size="sm"
+                      disabled={refreshingAvailability}
+                      onClick={() => handleSelectEngine(engine.id)}
+                    >
+                      <Zap className="w-4 h-4 mr-2" />
+                      切换到此引擎
+                    </Button>
+                  ) : null}
+                  {canDetectModels ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -786,46 +729,38 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
                     <Search className="w-4 h-4 mr-2" />
                     {detecting && detectingEngine === engine.id ? '检测中...' : '检测可用模型'}
                   </Button>
-                  {engine.id === 'claude-code' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full mt-2"
-                      disabled={smokeTesting}
-                      onClick={handleSmokeTestClaudeModels}
-                    >
-                      <Search className="w-4 h-4 mr-2" />
-                      {smokeTesting ? '测试中...' : '测试官方别名'}
-                    </Button>
-                  )}
+                  ) : null}
                 </div>
               )}
 
-              {/* Default Model Selector — only for current engine */}
-              {currentEngine === engine.id && (
+              {isCurrentEngine && (
                 <div className="mt-4 pt-4 border-t border-border/50" onClick={(e) => e.stopPropagation()}>
-                  <p className="text-xs font-medium text-muted-foreground mb-2">默认模型：</p>
-                  <SingleCombobox
+                  <p className="text-xs font-medium text-muted-foreground mb-2">默认模型</p>
+                  <AiModelSelectorField
                     value={defaultModel}
                     onValueChange={(v) => handleSetDefaultModel(v)}
                     options={[
-                      { value: '', label: '未设置（使用全局默认）' },
-                      ...getModelsForEngine(engine.id).map(m => ({
-                        value: m.value,
-                        label: `${m.label} (${m.costMultiplier}x)`,
+                      { value: '', label: '使用全局默认模型' },
+                      ...compatibleModels.map((model) => ({
+                        value: model.value,
+                        label: model.label,
+                        description: model.value,
+                        keywords: [model.value, model.label],
                       })),
                     ]}
-                    placeholder="选择默认模型"
-                    triggerClassName="h-9 text-sm"
+                    placeholder="使用全局默认模型"
+                    searchPlaceholder="搜索模型..."
+                    emptyLabel="暂无可选模型。"
+                    className="h-9 text-sm"
                   />
                 </div>
               )}
               </DataCard>
             </motion.div>
-          ))}
+            );
+          })}
         </div>
 
-        {/* Setup summary */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -835,7 +770,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
           <div className="flex flex-col gap-3 rounded-lg border border-border bg-card px-5 py-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="font-semibold text-foreground">引擎安装与服务说明</div>
-              <div className="mt-1">高级安装命令、驱动说明和 ACE Service 指导已集中到右侧说明面板。</div>
+              <div className="mt-1">安装命令、可用性检查和 ACE Service 指导已集中到右侧说明面板。</div>
             </div>
             <Button
               variant="outline"
@@ -853,23 +788,43 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
         <DetailDrawerContent widthClassName="w-[min(520px,calc(100vw-1rem))]">
           <DetailDrawerHeader>
             <DetailDrawerTitle>安装与服务说明</DetailDrawerTitle>
-            <DetailDrawerDescription>当前引擎：{currentEngineMeta?.name || currentEngine}</DetailDrawerDescription>
+            <DetailDrawerDescription>选中引擎：{selectedEngineMeta?.name || selectedEngine}</DetailDrawerDescription>
           </DetailDrawerHeader>
           <DetailDrawerBody className="space-y-5">
             <section className="space-y-2">
               <h3 className="text-sm font-semibold text-foreground">引擎范围</h3>
               <p className="text-sm leading-6 text-muted-foreground">
-                Aceharness 支持 Opencode、Claude Code、Kiro CLI 等 AI Agent 框架，并通过 ACP/MCP 能力接入代码编辑与执行流程。
+                Aceharness 支持 OpenCode、Claude Code、Kiro CLI 等 AI 编程助手，并接入代码编辑与执行流程。
               </p>
             </section>
 
+            {selectedEngineMeta ? (
+              <section className="space-y-2">
+                <h3 className="text-sm font-semibold text-foreground">{selectedEngineMeta.name}</h3>
+                <p className="text-xs leading-5 text-muted-foreground">{selectedEngineMeta.description}</p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedEngineMeta.features.map((feature) => (
+                    <Badge key={feature} variant="outline" className="text-xs">
+                      {feature}
+                    </Badge>
+                  ))}
+                </div>
+                {selectedCompatibleModels.length > 0 ? (
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    当前可选模型：{selectedCompatibleModels.map((model) => model.label).slice(0, 4).join('、')}
+                    {selectedCompatibleModels.length > 4 ? ` 等 ${selectedCompatibleModels.length} 个` : ''}
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+
             {[
-              ['安装 Claude Code', 'npm install -g @anthropic-ai/claude-code', '安装后刷新可用性检查，即可切换使用 Claude Code 引擎。'],
-              ['安装 Kiro CLI', 'curl -fsSL https://cli.kiro.dev/install | bash', '安装后刷新可用性检查，即可切换使用 Kiro CLI 引擎。'],
-              ['安装 OpenCode', 'npm install -g opencode-ai', '安装后刷新可用性检查，即可切换使用 OpenCode 引擎。'],
-              ['安装 Codex', 'npm install -g @openai/codex-cli', '安装后刷新可用性检查，即可切换使用 Codex 引擎。'],
-              ['安装 Cursor CLI', 'curl -fsSL https://cursor.sh/install | bash', '安装后刷新可用性检查，即可切换使用 Cursor CLI 引擎。'],
-              ['安装 Trae CLI', 'curl -fsSL https://trae.cn/install | bash', '安装后刷新可用性检查，即可切换使用 Trae CLI 引擎。'],
+              ['安装 Claude Code', 'npm install -g @anthropic-ai/claude-code', '安装后刷新状态，即可切换使用 Claude Code。'],
+              ['安装 Kiro CLI', 'curl -fsSL https://cli.kiro.dev/install | bash', '安装后刷新状态，即可切换使用 Kiro CLI。'],
+              ['安装 OpenCode', 'npm install -g opencode-ai', '安装后刷新状态，即可切换使用 OpenCode。'],
+              ['安装 Codex', 'npm install -g @openai/codex-cli', '安装后刷新状态，即可切换使用 Codex。'],
+              ['安装 Cursor CLI', 'curl -fsSL https://cursor.sh/install | bash', '安装后刷新状态，即可切换使用 Cursor CLI。'],
+              ['安装 Trae CLI', 'curl -fsSL https://trae.cn/install | bash', '安装后刷新状态，即可切换使用 Trae CLI。'],
             ].map(([title, command, description]) => (
               <section key={title} className="space-y-2">
                 <h3 className="text-sm font-semibold text-foreground">{title}</h3>
@@ -883,7 +838,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
             <section className="space-y-2">
               <h3 className="text-sm font-semibold text-foreground">配置 Magic CLI</h3>
               <p className="text-xs leading-5 text-muted-foreground">
-                从仓库克隆后，确保当前运行环境可以直接调用 magic-cli.sh；完成后刷新可用性检查，即可切换使用 Magic CLI 引擎。
+                从仓库克隆后，确保当前运行环境可以直接调用 magic-cli.sh；完成后刷新状态，即可切换使用 Magic CLI。
               </p>
             </section>
 
@@ -892,7 +847,6 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
               <div className="space-y-1.5 rounded-lg border border-border bg-background/60 p-3 text-xs leading-6 text-muted-foreground">
                 <p>全局安装后，使用 <code>ace</code> 或 <code>ace start</code> 启动本地 ACE Service。首次启动会引导你完成语言、默认引擎、默认模型、管理员账号和网络模式配置。</p>
                 <p>启动向导里可直接开启后台运行。后台模式会把服务脱离当前终端继续运行，适合常驻使用。</p>
-                <p>若同时启用守护进程，ACE 会以 daemon 模式托管后台服务；当后台实例异常退出时，会自动重新拉起。</p>
                 <p>服务启动后，可用 <code>ace service</code> 查看当前受管实例，并按提示停止指定实例。</p>
               </div>
             </section>
@@ -902,9 +856,9 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
               variant="outline"
               size="sm"
               onClick={() => checkEngineAvailability(true)}
-              disabled={checkingAvailability}
+              disabled={refreshingAvailability}
             >
-              {checkingAvailability ? '检查中...' : '刷新可用性'}
+              {refreshingAvailability ? '检查中...' : '刷新状态'}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setSetupDrawerOpen(false)}>
               关闭
@@ -918,16 +872,16 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
         title={(
           <span className="inline-flex items-center gap-2">
             <Download className="h-5 w-5" />
-            导入模型 - {engines.find(e => e.id === detectingEngine)?.name}
+            导入模型 - {detectingEngineMeta?.name || detectingEngine}
           </span>
         )}
         description={`检测到 ${detectedModels.length} 个模型，勾选要导入到模型列表的模型。`}
         sourceOptions={[
           {
             id: detectingEngine || 'detected-engine',
-            label: engines.find(e => e.id === detectingEngine)?.name || detectingEngine || '检测结果',
+            label: detectingEngineMeta?.name || detectingEngine || '检测结果',
             description: '使用当前引擎检测到的模型结果。',
-            icon: detectingEngine ? <EngineIcon engineId={detectingEngine} className="h-4 w-4" decorative={false} alt={detectingEngine} /> : <Download className="h-4 w-4" />,
+            icon: detectingEngine ? <RuntimeEngineIcon engine={detectingEngineMeta} className="h-4 w-4" /> : <Download className="h-4 w-4" />,
             selected: true,
           },
         ]}
@@ -970,43 +924,6 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
         )}
       />
 
-      <Dialog open={showSmokeDialog} onOpenChange={setShowSmokeDialog}>
-        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
-          <DialogTitle className="text-lg font-semibold">
-            <Search className="w-5 h-5 inline mr-2" />
-            Claude Code 官方别名测试
-          </DialogTitle>
-          <p className="text-sm text-muted-foreground">
-            通过真实请求测试 alias 是否可用；如果 SDK 暴露了实际模型名，会显示在“实际模型”列。
-          </p>
-          <DataTable
-            columns={smokeResultColumns}
-            rows={smokeResults}
-            rowKey="model"
-            density="compact"
-            stickyHeader
-            emptyState={{
-              title: '暂无测试结果',
-              description: '运行官方别名测试后会显示结果。',
-              className: 'min-h-[220px]',
-            }}
-            className="min-h-0 flex-1 overflow-auto"
-            aria-label="Claude Code 官方别名测试结果"
-          />
-          <div className="flex justify-between items-center pt-2">
-            <span className="text-xs text-muted-foreground">
-              通过 {smokeResults.filter((result) => result.ok).length} / {smokeResults.length}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setShowSmokeDialog(false)}>关闭</Button>
-              <Button onClick={handleImportSmokePassedModels}>
-                <Download className="w-4 h-4 mr-2" />
-                导入通过测试的模型
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

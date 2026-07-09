@@ -2,6 +2,7 @@
 
 import { ActionState, getStreamingResultDisplay, parseActions, stripMachineResultBlocks } from '@/lib/chat/actions';
 import Markdown from '@/components/Markdown';
+import markdownStyles from '@/components/Markdown.module.css';
 import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useMemo, useState } from 'react';
@@ -12,7 +13,6 @@ import { RobotLogo } from '@/components/brand/RobotLogo';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
-import { Shimmer } from '@/components/ai-elements/shimmer';
 import { Message, MessageContent, MessageActions, MessageAction } from '@/components/ai-elements/message';
 import { Tool, ToolHeader, ToolContent } from '@/components/ai-elements/tool';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai-elements/reasoning';
@@ -21,6 +21,7 @@ import { Queue, QueueList, QueueItem, QueueItemContent, QueueItemDescription, Qu
 import { Terminal, TerminalContent } from '@/components/ai-elements/terminal';
 import { Artifact, ArtifactActions, ArtifactContent, ArtifactCopyButton, ArtifactHeader, ArtifactTitle } from '@/components/ai-elements/artifact';
 import { CodeBlock } from '@/components/ai-elements/code-block';
+import { Shimmer } from '@/components/ai-elements/shimmer';
 import { BookOpenIcon, ChevronDownIcon, Eye, Loader2, MessageSquareQuote, WrenchIcon } from 'lucide-react';
 import {
   extractAceProcessBlocks,
@@ -588,7 +589,7 @@ function isProcessEntryRunning(state: ProcessEntryState, isStreaming: boolean): 
 }
 
 function isCollapsedByDefaultTool(entry: ToolProcessEntry): boolean {
-  return ['bash', 'cmd', 'powershell', 'read', 'glob', 'grep', 'ls', 'skill'].includes(entry.toolName);
+  return entry.state === 'output-available';
 }
 
 function shouldOpenProcessCard({
@@ -604,8 +605,8 @@ function shouldOpenProcessCard({
   hasResult: boolean;
   defaultCollapsed?: boolean;
 }): boolean {
-  if (defaultCollapsed) return false;
   if (isProcessEntryRunning(state, isStreaming)) return true;
+  if (defaultCollapsed) return false;
   return hasRequest || hasResult;
 }
 
@@ -1124,7 +1125,7 @@ function ProcessCodeBlock({
                 ) : null}
                 {runResult?.stderr ? (
                   <div>
-                    <div className="mb-1 text-xs text-muted-foreground">stderr</div>
+                    <div className="mb-1 text-xs text-muted-foreground">错误输出</div>
                     <ProcessTerminalBlock text={runResult.stderr} />
                   </div>
                 ) : null}
@@ -1260,7 +1261,7 @@ function WriteFileMetaLine({ filePath, stats }: { filePath: string; stats?: stri
         <Eye className="size-3" />
         <span>预览</span>
       </button>
-      <FilePreviewDialog absolutePath={filePath} open={previewOpen} onOpenChange={setPreviewOpen} />
+      {previewOpen ? <FilePreviewDialog absolutePath={filePath} open={previewOpen} onOpenChange={setPreviewOpen} /> : null}
     </div>
   );
 }
@@ -1434,9 +1435,11 @@ function renderStructuredToolResult(entry: ToolProcessEntry) {
     case 'plan': {
       if (entry.toolName === 'skill') {
         const skillDoc = extractSkillDocument(entry);
+        const skillFilePath = asString((entry.resultMeta as any)?.filePath) || asString((entry.requestMeta as any)?.filePath) || extractPathFromCommand(asString((entry.requestMeta as any)?.command), 'read');
         if (skillDoc) {
           return (
             <div className="space-y-3">
+              {skillFilePath ? <WriteFileMetaLine filePath={skillFilePath} /> : null}
               {skillDoc.name ? (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <BookOpenIcon className="size-3.5 text-violet-600" />
@@ -1676,7 +1679,6 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
             defaultOpen={shouldOpen}
             data-testid="ace-subtask-card"
             data-tool-id={entry.toolId || ''}
-            data-session-id={entry.sessionId || ''}
             data-subtask-state={entry.state}
           >
             <ToolHeader
@@ -1707,18 +1709,11 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
                   <WrapperProcessBlocks content={entry.internalText} isStreaming={isStreaming && entry.state !== 'output-available'} />
                 </div>
               ) : null}
-              {(entry.agent || entry.sessionId) ? (
+              {entry.agent ? (
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                  {entry.agent ? (
-                    <span className="inline-flex items-center rounded-full border px-2 py-0.5">
-                      Agent: {entry.agent}
-                    </span>
-                  ) : null}
-                  {entry.sessionId ? (
-                    <span className="inline-flex items-center rounded-full border px-2 py-0.5">
-                      会话: {entry.sessionId}
-                    </span>
-                  ) : null}
+                  <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                    Agent: {entry.agent}
+                  </span>
                 </div>
               ) : null}
               {entry.prompt ? (
@@ -1821,9 +1816,10 @@ interface ChatMessageProps {
 
 export function ThinkingBot() {
   return (
-    <div className="inline-flex items-center gap-2 px-1 py-1 text-muted-foreground">
-      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
-      <Shimmer as="span" className="text-[13px]">思考中...</Shimmer>
+    <div className={markdownStyles.thinkingBot} aria-live="polite">
+      <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
+      <Shimmer as="span" className={markdownStyles.thinkingText}>思考中</Shimmer>
+      <span className={markdownStyles.thinkingDots}><span>.</span><span>.</span><span>.</span></span>
     </div>
   );
 }
@@ -1917,11 +1913,18 @@ function formatTokenUsage(usage?: ChatMessageProps['message']['usage']): string 
   if (values.length === 0 || values.every((value) => value === 0)) {
     return 'Token 未返回';
   }
+  const cacheHitBase = (input || 0) + (cacheRead || 0);
+  const cacheHitRate = cacheRead && cacheHitBase > 0
+    ? Math.round((cacheRead / cacheHitBase) * 100)
+    : 0;
+  const cacheParts = [
+    cacheRead ? `缓存命中 ${cacheRead.toLocaleString()} (${cacheHitRate}%)` : '',
+    cacheWrite ? `缓存写入 ${cacheWrite.toLocaleString()}` : '',
+  ].filter(Boolean);
   const parts = [
     input !== undefined ? `${input.toLocaleString()} 输入` : '',
     output !== undefined ? `${output.toLocaleString()} 输出` : '',
-    cacheRead ? `${cacheRead.toLocaleString()} 缓存读` : '',
-    cacheWrite ? `${cacheWrite.toLocaleString()} 缓存写` : '',
+    ...cacheParts,
   ].filter(Boolean);
   return parts.join(' / ');
 }
@@ -2592,14 +2595,9 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
         {!isWorkflowThinkingMessage && (sentAt || message.engine || message.model || message.usage || message.costUsd !== undefined || message.durationMs !== undefined) && (
           <div className="flex flex-wrap items-center gap-1 px-1 text-[11px] text-muted-foreground opacity-70">
             {sentAt && <span>{sentAt}</span>}
-            {message.engine && (
+            {(message.engine || message.model) && (
               <MetadataPill>
-                {getEngineDisplayName(message.engine)}
-              </MetadataPill>
-            )}
-            {message.model && (
-              <MetadataPill>
-                {modelLabel}
+                模型：{[message.engine ? getEngineDisplayName(message.engine) : '', message.model ? modelLabel : ''].filter(Boolean).join(' / ')}
               </MetadataPill>
             )}
             <span>{formatTokenUsage(message.usage)}</span>

@@ -95,6 +95,7 @@ const DEFAULT_CHAT_KNOWLEDGE_BASE = {
 const AGORA_WORKSPACE_SEGMENT = 'agora-workspaces';
 const noopToggleSetting = (_name: string) => {};
 const noopSetSettings = (_settings: Record<string, boolean>) => {};
+const SESSION_PAGE_SIZE = 30;
 
 export type SessionDirectoryView = 'conversation';
 type WorkflowBucketKey = 'creating' | 'ready' | 'active';
@@ -611,6 +612,7 @@ function ChatSidebarComponent({
 }) {
   const {
     sessions,
+    sessionsLoading,
     activeSessionId,
     activeSession,
     setActiveSessionId,
@@ -641,6 +643,7 @@ function ChatSidebarComponent({
     onSessionViewChange?.('conversation');
   }, [controlledSessionView, onSessionViewChange]);
   const [manageMode, setManageMode] = useState(false);
+  const [visibleSessionLimit, setVisibleSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [sessionSearchByView, setSessionSearchByView] = useState<Record<SessionDirectoryView, string>>({
     conversation: '',
@@ -765,6 +768,11 @@ function ChatSidebarComponent({
       return haystack.includes(normalizedSearch);
     });
   }, [baseVisibleSessions, normalizedSearch]);
+  const pagedVisibleSessions = useMemo(
+    () => visibleSessions.slice(0, visibleSessionLimit),
+    [visibleSessionLimit, visibleSessions]
+  );
+  const hasMoreVisibleSessions = visibleSessions.length > pagedVisibleSessions.length;
   const isFilteredEmpty = normalizedSearch.length > 0 && visibleSessions.length === 0;
   const visibleSessionIds = useMemo(() => getUniqueSessionIds(visibleSessions as SidebarSession[]), [visibleSessions]);
   const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds]);
@@ -797,6 +805,10 @@ function ChatSidebarComponent({
       return next.size === prev.size ? prev : next;
     });
   }, [visibleSessionIdSet]);
+
+  useEffect(() => {
+    setVisibleSessionLimit(SESSION_PAGE_SIZE);
+  }, [currentSessionView, normalizedSearch]);
 
   useEffect(() => {
     const visibleIds = new Set(agoraSavedGuests.map((guest) => guest.id));
@@ -1300,7 +1312,7 @@ function ChatSidebarComponent({
             className="h-8 justify-center gap-1.5 px-2 text-xs"
             onClick={handleCreateSession}
             title={createButtonTitle}
-            aria-label={createButtonTitle}
+            aria-label="新建对话"
           >
             <span className="material-symbols-outlined text-sm" aria-hidden="true">add</span>
             {createButtonLabel}
@@ -1397,7 +1409,17 @@ function ChatSidebarComponent({
           </div>
         )}
 
-        {visibleSessions.length === 0 && (
+        {sessionsLoading && visibleSessions.length === 0 ? (
+          <div className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div key={index} className="border-b border-border/35 px-3 py-3 last:border-b-0">
+                <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+                <div className="mt-2 h-2.5 w-5/6 animate-pulse rounded bg-muted/70" />
+                <div className="mt-2 h-2.5 w-1/3 animate-pulse rounded bg-muted/60" />
+              </div>
+            ))}
+          </div>
+        ) : visibleSessions.length === 0 && (
           <EmptySessionState
             kind={currentSessionView}
             filtered={isFilteredEmpty}
@@ -1406,7 +1428,7 @@ function ChatSidebarComponent({
         )}
         {visibleSessions.length > 0 ? (
           <div className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
-            {visibleSessions.map(session => (
+            {pagedVisibleSessions.map(session => (
               <SessionItem
                 key={session.id}
                 session={session}
@@ -1427,6 +1449,22 @@ function ChatSidebarComponent({
                 onRename={(title) => renameSession(session.id, title)}
               />
             ))}
+            {hasMoreVisibleSessions ? (
+              <div className="border-t border-border/35 p-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-full justify-center text-xs"
+                  onClick={() => setVisibleSessionLimit((current) => current + SESSION_PAGE_SIZE)}
+                >
+                  加载更多
+                  <span className="ml-1 text-[10px] text-muted-foreground">
+                    {pagedVisibleSessions.length}/{visibleSessions.length}
+                  </span>
+                </Button>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -2935,9 +2973,6 @@ function EmptySessionState({
   const description = filtered
     ? `没有找到包含“${query}”的会话。`
     : '新建对话，让 AI 帮你继续推进。';
-  const hint = filtered
-    ? '调整关键词后再试'
-    : '准备开始新的对话';
 
   return (
     <div className="px-3 py-6">
@@ -2945,7 +2980,7 @@ function EmptySessionState({
         className="min-h-[190px] rounded-lg bg-card px-4 py-6"
         icon={<span className="material-symbols-outlined text-base">forum</span>}
         title={title}
-        description={`${description} ${hint}`}
+        description={description}
       />
     </div>
   );
@@ -3232,7 +3267,7 @@ function WorkflowAgentGroup({
           <div className="min-w-0 flex-1">
             <div className="truncate text-[11px] font-medium text-foreground">{group.label}</div>
             <div className="truncate text-[9px] text-muted-foreground">
-              {group.sessionId || (group.connected ? '已绑定会话' : '等待首次对话')}
+              {group.connected ? '已绑定会话' : '等待首次对话'}
             </div>
           </div>
         </button>
@@ -3385,7 +3420,7 @@ function SessionItem({
 
   const row = (
     <div
-      className={`group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-lg' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
+      className={`home-chat-session-row group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-lg' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
         active
           ? 'border-l-[3px] border-[#8B5CF6] bg-[#EEE7FF]/70 px-3 dark:bg-violet-500/12'
           : isWeChatBound

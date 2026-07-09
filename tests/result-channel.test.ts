@@ -10,7 +10,7 @@ describe('result-channel', () => {
     });
   });
 
-  test('parses legacy fenced json payload', () => {
+  test('parses preRuntime fenced json payload', () => {
     expect(extractJsonObject('```json\n{"kind":"card","payload":{"blocks":[]}}\n```')).toEqual({
       kind: 'card',
       payload: { blocks: [] },
@@ -133,7 +133,7 @@ describe('result-channel', () => {
     expect(parsed?.data?.stateName).toBe('实现');
   });
 
-  test('supports same-line legacy fenced result payloads', () => {
+  test('supports same-line preRuntime fenced result payloads', () => {
     expect(extractJsonObject('```json {"type":"home_sidebar","activeTab":"workflow"} ```')).toEqual({
       type: 'home_sidebar',
       activeTab: 'workflow',

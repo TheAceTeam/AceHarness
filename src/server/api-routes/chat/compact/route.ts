@@ -7,10 +7,13 @@ import {
   type RequestedSkillsInput,
 } from '@/lib/chat/request-options';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
-import { createEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
-import { compactEngineContextManually } from '@/lib/engines/context-recovery';
 import { prepareAgentChat } from '@/lib/agent/chat-service';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
+import {
+  compactChatRuntimeContextManually,
+  createChatRuntimeEngine,
+  resolveRequestedChatRuntimeEngineType,
+} from '@/lib/chat/chat-engine-runtime';
 
 const COMPACT_TIMEOUT_MS = 20 * 60 * 1000;
 const COMPACT_SESSION_SEED = [
@@ -48,7 +51,6 @@ function buildCompactSource(session: any, workingDirectory?: string): string {
     `Title: ${session?.title || ''}`,
     `Engine: ${session?.engine || ''}`,
     `Model: ${session?.model || ''}`,
-    `Backend session ID: ${session?.backendSessionId || ''}`,
     workingDirectory ? `Working directory: ${workingDirectory}` : '',
     session?.agentBinding ? `Agent binding: ${JSON.stringify(session.agentBinding)}` : '',
     session?.workflowBinding ? `Workflow binding: ${JSON.stringify(session.workflowBinding)}` : '',
@@ -99,9 +101,11 @@ export async function POST(request: Request) {
     }
 
     const compactSource = buildCompactSource(session, typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined);
-    const requestedBackendSessionId = typeof body?.sessionId === 'string' && body.sessionId.trim()
-      ? body.sessionId.trim()
-      : (session.backendSessionId || undefined);
+    const requestedRuntimeSessionId = typeof body?.runtimeSessionId === 'string' && body.runtimeSessionId.trim()
+      ? body.runtimeSessionId.trim()
+      : typeof body?.sessionId === 'string' && body.sessionId.trim()
+        ? body.sessionId.trim()
+        : (session.runtimeSessionId || undefined);
     const workflowBinding = session.workflowBinding;
     const agentBinding = session.agentBinding;
     const targetAgent = workflowBinding?.supervisorAgent || agentBinding?.agentName || '';
@@ -111,7 +115,7 @@ export async function POST(request: Request) {
         agentName: targetAgent,
         message: COMPACT_SESSION_SEED,
         mode: workflowBinding?.supervisorAgent ? 'workflow-chat' : 'standalone-chat',
-        sessionId: requestedBackendSessionId || workflowBinding?.supervisorSessionId || null,
+        sessionId: requestedRuntimeSessionId || workflowBinding?.supervisorSessionId || null,
         workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
         workflowContext: workflowBinding?.supervisorAgent
           ? {
@@ -129,7 +133,7 @@ export async function POST(request: Request) {
       });
       engineToCancel = prepared.engine;
 
-      const compacted = await withTimeout(compactEngineContextManually(prepared.engine, {
+      const compacted = await withTimeout(compactChatRuntimeContextManually(prepared.engine, {
         agent: prepared.roleConfig.name,
         step: 'manual-compact',
         prompt: COMPACT_SESSION_SEED,
@@ -166,7 +170,7 @@ export async function POST(request: Request) {
       return jsonOk({
         ok: true,
         sessionId: result.sessionId || null,
-        previousSessionId: requestedBackendSessionId || null,
+        previousSessionId: requestedRuntimeSessionId || null,
         method: compacted.method,
         summary: compacted.summary,
         engine: prepared.engineType,
@@ -175,7 +179,7 @@ export async function POST(request: Request) {
     }
 
     const useModel = typeof body?.model === 'string' ? body.model : (session.model || '');
-    const engineType = await resolveRequestedEngineType(typeof body?.engine === 'string' ? body.engine : session.engine);
+    const engineType = await resolveRequestedChatRuntimeEngineType(typeof body?.engine === 'string' ? body.engine : session.engine);
     const { systemPrompt, runtimeSkillNames, enabledMcpServers } = await buildChatRequestContext({
       mode: 'dashboard',
       frontendSessionId,
@@ -185,20 +189,20 @@ export async function POST(request: Request) {
       personalDir: user.personalDir,
     });
     await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot(), runtimeSkillNames);
-    const engine = await createEngine(engineType);
+    const engine = await createChatRuntimeEngine(engineType);
     if (!engine) {
       return jsonError('引擎不可用，请检查配置', 500);
     }
     engineToCancel = engine;
 
-    const compacted = await withTimeout(compactEngineContextManually(engine, {
+    const compacted = await withTimeout(compactChatRuntimeContextManually(engine, {
       agent: 'chat',
       step: 'manual-compact',
       prompt: COMPACT_SESSION_SEED,
       systemPrompt,
       model: useModel,
       workingDirectory: getWorkspaceRoot(),
-      sessionId: requestedBackendSessionId,
+      sessionId: requestedRuntimeSessionId,
       mcpServers: enabledMcpServers,
       userId: user.id,
     }, {
@@ -227,7 +231,7 @@ export async function POST(request: Request) {
     return jsonOk({
       ok: true,
       sessionId: result.sessionId || null,
-      previousSessionId: requestedBackendSessionId || null,
+      previousSessionId: requestedRuntimeSessionId || null,
       method: compacted.method,
       summary: compacted.summary,
       engine: engineType,

@@ -88,6 +88,16 @@ export function getEngineConfigPath(): string {
   return join(getWorkspaceRoot(), '.engine.json');
 }
 
+export const SHARED_AGENT_CONFIG_DIR = '.agents';
+
+export function getWorkspaceAgentConfigDir(_engineType?: string | null): string {
+  return SHARED_AGENT_CONFIG_DIR;
+}
+
+export function getWorkspaceAgentSkillsSubdir(engineType?: string | null): string {
+  return `${getWorkspaceAgentConfigDir(engineType)}/skills`;
+}
+
 export function getWorkspaceDataDir(): string {
   return getWorkspaceDirectory('data');
 }

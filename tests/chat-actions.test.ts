@@ -275,12 +275,12 @@ describe('parseActions', () => {
     expect(result.text).not.toContain('home_sidebar');
   });
 
-  test('prefers parsing structured root payload and does not duplicate legacy fenced card blocks', () => {
+  test('prefers parsing structured root payload and does not duplicate preRuntime fenced card blocks', () => {
     const markdown = [
       '说明。',
       '<result>',
       '```card',
-      '{"header":{"title":"Legacy"},"blocks":[{"type":"text","content":"only once"}]}',
+      '{"header":{"title":"preRuntime"},"blocks":[{"type":"text","content":"only once"}]}',
       '```',
       '</result>',
     ].join('\n');
@@ -288,7 +288,7 @@ describe('parseActions', () => {
     const result = parseActions(markdown);
 
     expect(result.cards).toHaveLength(1);
-    expect(result.cards[0].header.title).toBe('Legacy');
+    expect(result.cards[0].header.title).toBe('preRuntime');
   });
 
   test('hides multiple dangling result sections while streaming', () => {

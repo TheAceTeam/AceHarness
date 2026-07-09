@@ -2,11 +2,10 @@ import { existsSync, mkdirSync, rmSync } from 'fs';
 import { resolve } from 'path';
 import { loadChatSettings, type ChatSettings } from '@/lib/chat/settings';
 import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
-import { getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/core/app-paths';
+import { getWorkspaceAgentConfigDir, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { loadChatSession } from '@/lib/chat/persistence';
 import { loadCreationSession } from '@/lib/spec/coding-store';
 import { workflowRegistry } from '@/lib/workflow/registry';
-import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { resolveMcpServersByNames, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
@@ -315,7 +314,7 @@ export async function buildChatRequestContext(options: {
 
 export async function ensureEngineRuntimeSkillsAvailable(engineType: string, workDir: string, skillNames?: string[]): Promise<void> {
   try {
-    const engineConfigDir = getEngineConfigDir(engineType);
+    const engineConfigDir = getWorkspaceAgentConfigDir(engineType);
     const configDir = resolve(workDir, engineConfigDir);
     const skillsDir = await getRuntimeSkillsDirPath();
     if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });

@@ -1,6 +1,7 @@
 import { requireAdmin } from '@/lib/auth/middleware';
 import { runModelProbes } from '@/lib/models/probes';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
+import { attachModelRouteIdsToProbeResponse } from '../model-route-probe-dto';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,12 +19,12 @@ export async function POST(request: Request) {
       dueOnly: body?.dueOnly === true,
       force: body?.force === true,
     });
-    return jsonOk({
+    return jsonOk(attachModelRouteIdsToProbeResponse({
       success: true,
       executed: result.executed,
       skipped: result.skipped,
       ...result.data,
-    });
+    }));
   } catch (error) {
     return jsonError(errorMessage(error) || 'Failed to run model probes', 500);
   }

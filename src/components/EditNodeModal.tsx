@@ -392,12 +392,12 @@ export default function EditNodeModal({
     const agentSkills = selectedAgent?.skills;
     const agentMcpServers = selectedAgent?.mcpServers;
     const agentRagKnowledgeBases = selectedAgent?.ragKnowledgeBases;
-    const legacyStepSkills = selectedAgentName === data?.agent && Array.isArray(data?.skills) ? data.skills : [];
-    const legacyStepMcp = selectedAgentName === data?.agent && Array.isArray(data?.mcpServers) ? data.mcpServers : [];
-    const legacyStepRag = selectedAgentName === data?.agent && Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : [];
-    setValue('skills', Array.isArray(agentSkills) ? agentSkills : legacyStepSkills);
-    setValue('mcpServers', Array.isArray(agentMcpServers) ? agentMcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean) : legacyStepMcp);
-    setValue('ragKnowledgeBases', Array.isArray(agentRagKnowledgeBases) ? agentRagKnowledgeBases : legacyStepRag);
+    const preRuntimeStepSkills = selectedAgentName === data?.agent && Array.isArray(data?.skills) ? data.skills : [];
+    const preRuntimeStepMcp = selectedAgentName === data?.agent && Array.isArray(data?.mcpServers) ? data.mcpServers : [];
+    const preRuntimeStepRag = selectedAgentName === data?.agent && Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : [];
+    setValue('skills', Array.isArray(agentSkills) ? agentSkills : preRuntimeStepSkills);
+    setValue('mcpServers', Array.isArray(agentMcpServers) ? agentMcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean) : preRuntimeStepMcp);
+    setValue('ragKnowledgeBases', Array.isArray(agentRagKnowledgeBases) ? agentRagKnowledgeBases : preRuntimeStepRag);
   }, [data?.agent, data?.mcpServers, data?.ragKnowledgeBases, data?.skills, isPhase, selectedAgent?.mcpServers, selectedAgent?.ragKnowledgeBases, selectedAgent?.skills, selectedAgentName, setValue]);
 
   const handleCopyFrom = (sourceName: string) => {

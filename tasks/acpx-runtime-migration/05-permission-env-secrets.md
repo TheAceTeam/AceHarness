@@ -1,24 +1,27 @@
 # Task 5: Permission, Env, And Secret Profiles
 
-Progress: 45%
-Status: In Progress
+Progress: 100%
+Status: Done
 
 ## Goal
 
 Implement unrestricted-by-default permission policy, env profiles, secret profiles, readiness checks, redaction, and audit events.
 
-## Current State
+## Completed
 
-- Existing env API exists, but the new profile/secret schema and runtime snapshot contract do not.
 - The user explicitly chose maximum default permissions.
-- Spec requires secret values never enter logs, ordinary DTOs, React Query cache, or TanStack DB.
+- Default permission policy is `unrestricted`.
+- Permission policy persistence covers `unrestricted`, `approve-reads`, `ask`, `deny-destructive`, and `deny-all`.
+- `unrestricted` auto-approves read, write, delete, shell, network, MCP, outside-workspace, and destructive command requests.
+- Permission approvals produce redacted runtime events and traces.
+- Env and secret profile persistence covers owner/private/workspace visibility, encryption key readiness, required secret missing checks, misconfigured secret refs, and conflict detection.
+- Runtime env resolution returns backend-only `adapterEnv` while snapshots contain only source/readiness metadata.
+- Secret values are absent from public DTOs, runtime snapshots, diagnostics/redaction output, and tested TanStack/ordinary DTO-facing shapes.
+- `AcpxRuntimeClient` now translates ACEHarness permission policies into acpx runtime mode/approval behavior instead of passing internal policy ids through to `acpx/runtime`.
 
 ## Follow-Up Work
 
-- Implement permission policy service with `unrestricted`, `approve-reads`, `ask`, `deny-destructive`, and `deny-all`.
-- Implement env/secret profile schema, encryption key checks, readiness checks, and conflict detection.
-- Implement redaction utilities for prompts, tool IO, raw events, bindings, permission raw payloads, commands, diffs, stderr, and diagnostic bundles.
-- Add audit events for every permission request and auto approval.
+- Add HTTP management routes later if Task 10 UI needs direct profile administration. The runtime store/service API is complete for backend use.
 
 ## Acceptance
 
@@ -29,7 +32,10 @@ Implement unrestricted-by-default permission policy, env profiles, secret profil
 
 ## Verification Record
 
-- Assigned to subagent for permission/redaction/env-secret skeleton; result pending.
 - `npx vitest run tests/runtime-security-profiles.test.ts tests/runtime-contracts.test.ts`: pass.
 - `npx vitest run tests/model-routes-sqlite.test.ts tests/runtime-security-profiles.test.ts tests/runtime-client-state.test.ts tests/runtime-contracts.test.ts tests/runtime-sqlite-schema.test.ts tests/agent-registry.test.ts`: pass, 33 tests.
-- `npx tsc --noEmit --pretty false`: fail only on remaining baseline gaps in `WorkbenchClient.tsx` and `src/start.ts`.
+- `npx vitest run tests/runtime-adapters.test.ts`: pass, 11 tests, including permission/profile translation into acpx runtime options.
+- `npx tsc --noEmit --pretty false`: pass.
+- 2026-07-09 Task 5 worker: `npx vitest run tests/runtime-security-profiles.test.ts tests/runtime-adapters.test.ts`: pass, 20 tests.
+- 2026-07-09 Task 5 worker: `npx vitest run tests/runtime-sqlite-schema.test.ts`: pass, 10 tests.
+- 2026-07-09 Task 5 worker: `npx tsc --noEmit --pretty false`: pass.

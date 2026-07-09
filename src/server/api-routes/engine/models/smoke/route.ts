@@ -1,11 +1,14 @@
-import { ClaudeCodeEngineWrapper } from '@/lib/engines/claude-code-wrapper';
-import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
 export const dynamic = 'force-dynamic';
 
 const DEFAULT_MODELS = ['default', 'best', 'sonnet', 'opus', 'haiku', 'opusplan'];
 
+/**
+ * Migration-only smoke route. New model metadata and routing should use
+ * /api/models plus runtime model routes and /api/models/probes. No old-architecture
+ * wrapper smoke execution is performed here.
+ */
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody<Record<string, any>>(request, {});
@@ -19,53 +22,21 @@ export async function POST(request: Request) {
       return jsonError('models is required', 400);
     }
 
-    const engine = new ClaudeCodeEngineWrapper();
-    const available = await engine.isAvailable();
-    if (!available) {
-      return jsonError('Claude Code engine is not available', 400);
-    }
+    const results = models.map((model) => ({
+      model,
+      ok: false,
+      error: 'Pre-runtime engine smoke tests have moved to runtime model probes.',
+      durationMs: 0,
+      skipped: true,
+    }));
 
-    const results: Array<{
-      model: string;
-      ok: boolean;
-      resolvedModel?: string;
-      error?: string;
-      durationMs: number;
-      preview?: string;
-    }> = [];
-
-    for (const model of models) {
-      const startedAt = Date.now();
-      try {
-        const result = await executeEngineWithContextRecovery(engine, {
-          agent: 'engine-model-smoke-test',
-          step: 'model-smoke-test',
-          prompt: 'Reply with exactly OK.',
-          systemPrompt: 'You are running a model availability smoke test. Reply with exactly OK.',
-          model,
-          workingDirectory: process.cwd(),
-          timeoutMs: 20_000,
-        });
-
-        results.push({
-          model,
-          ok: result.success,
-          resolvedModel: result.metadata?.resolvedModel,
-          error: result.success ? undefined : (result.error || 'Unknown error'),
-          durationMs: Date.now() - startedAt,
-          preview: result.output?.trim().slice(0, 120) || undefined,
-        });
-      } catch (error) {
-        results.push({
-          model,
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          durationMs: Date.now() - startedAt,
-        });
-      }
-    }
-
-    return jsonOk({ engine: 'claude-code', results });
+    return jsonOk({
+      engine: '',
+      migrationOnly: true,
+      canonicalRoute: '/api/models/probes',
+      source: 'migration-only-empty-compat',
+      results,
+    });
   } catch (error) {
     return jsonError(errorMessage(error), 500);
   }

@@ -290,6 +290,38 @@ export function listModelRoutes(db: RuntimeSqliteDatabase): ModelRouteEntry[] {
     .map(routeFromRow);
 }
 
+export function listModelCatalogEntries(db: RuntimeSqliteDatabase): ModelCatalogEntry[] {
+  ensureModelRouteSchema(db);
+  return db.prepare('SELECT * FROM model_catalog ORDER BY id ASC')
+    .all()
+    .map((row: any) => ({
+      id: String(row.id),
+      displayName: String(row.display_name),
+      family: optionalString(row.family),
+      contextWindow: typeof row.context_window === 'number' ? row.context_window : undefined,
+      capabilities: parseJson<JsonObject>(row.capabilities_json, {}),
+      metadata: parseJson<JsonObject>(row.metadata_json, {}),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    }));
+}
+
+export function listModelProviders(db: RuntimeSqliteDatabase): ModelProviderEntry[] {
+  ensureModelRouteSchema(db);
+  return db.prepare('SELECT * FROM model_providers ORDER BY id ASC')
+    .all()
+    .map((row: any) => ({
+      id: String(row.id),
+      kind: row.kind,
+      displayName: String(row.display_name),
+      baseUrl: optionalString(row.base_url),
+      envRequirements: parseJson<unknown[]>(row.env_requirements_json, []),
+      metadata: parseJson<JsonObject>(row.metadata_json, {}),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    }));
+}
+
 export interface ImportModelRoutesInput {
   catalog: UpsertModelCatalogInput[];
   providers?: UpsertModelProviderInput[];
@@ -305,6 +337,26 @@ export interface ImportModelRoutesResult {
 export function importModelRoutes(db: RuntimeSqliteDatabase, input: ImportModelRoutesInput): ImportModelRoutesResult {
   ensureModelRouteSchema(db);
   return withImmediateTransaction(db, () => {
+    for (const provider of input.providers ?? []) upsertModelProvider(db, provider);
+    for (const model of input.catalog) upsertModelCatalogEntry(db, model);
+    for (const route of input.routes) upsertModelRoute(db, route);
+
+    return {
+      catalogCount: input.catalog.length,
+      providerCount: input.providers?.length ?? 0,
+      routeCount: input.routes.length,
+    };
+  });
+}
+
+export function replaceModelRoutes(db: RuntimeSqliteDatabase, input: ImportModelRoutesInput): ImportModelRoutesResult {
+  ensureModelRouteSchema(db);
+  return withImmediateTransaction(db, () => {
+    db.prepare('DELETE FROM model_routes').run();
+    db.prepare('DELETE FROM model_pricing').run();
+    db.prepare('DELETE FROM model_catalog').run();
+    db.prepare('DELETE FROM model_providers').run();
+
     for (const provider of input.providers ?? []) upsertModelProvider(db, provider);
     for (const model of input.catalog) upsertModelCatalogEntry(db, model);
     for (const route of input.routes) upsertModelRoute(db, route);

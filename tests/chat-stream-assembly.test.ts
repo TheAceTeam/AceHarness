@@ -78,6 +78,26 @@ describe('chat stream assembly', () => {
     expect(raw.length).toBeLessThan(5000);
   });
 
+  test('formats ACPX formatted_output tool results with visible expandable output', () => {
+    const raw = formatAceToolResult({
+      toolName: 'read',
+      title: '📖 读取文件',
+      rawOutput: {
+        formatted_output: '# Werewolf Tabletalk\n\n- `SKILL.md`\n- `references/speech-templates.md`',
+        exit_code: 0,
+      },
+      toolId: 'call_skill_read',
+    });
+    const parsed = extractAceProcessBlocks(raw);
+
+    expect(parsed.blocks).toHaveLength(1);
+    expect(parsed.blocks[0].kind).toBe('tool-result');
+    expect(raw).toContain('Werewolf Tabletalk');
+    expect(raw).toContain('speech-templates.md');
+    expect(raw).toContain('"exitCode":0');
+    expect(raw).toContain('"toolId":"call_skill_read"');
+  });
+
   test('serializes object-array tool call content without leaking object Object text', () => {
     const raw = formatAceToolCall({
       toolName: 'write',

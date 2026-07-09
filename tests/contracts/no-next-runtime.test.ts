@@ -63,7 +63,7 @@ describe('no Next runtime contract', () => {
     expect(dependencyNames.has('eslint-config-next'), 'package.json must not depend on eslint-config-next').toBe(false);
   });
 
-  test('published files do not include the legacy Next custom server entry', async () => {
+  test('published files do not include the preRuntime Next custom server entry', async () => {
     const packageJson = await readJson<PackageJson>('package.json');
     const files = new Set(packageJson.files ?? []);
 
@@ -83,11 +83,11 @@ describe('no Next runtime contract', () => {
     expect(nextIncludes, 'tsconfig include must not reference .next generated types').toEqual([]);
   });
 
-  test('CLI does not retain the ACE_LEGACY_NEXT fallback path', async () => {
+  test('CLI does not retain the ACE_preRuntime_NEXT fallback path', async () => {
     const cliSource = await readFile(resolve(projectRoot, 'src/cli.ts'), 'utf8');
 
-    expect(cliSource, 'src/cli.ts must not branch on ACE_LEGACY_NEXT').not.toContain('ACE_LEGACY_NEXT');
-    expect(cliSource, 'src/cli.ts must not require the legacy server.js entry').not.toMatch(/require\(['"]\.\.\/server\.js['"]\)/);
+    expect(cliSource, 'src/cli.ts must not branch on ACE_preRuntime_NEXT').not.toContain('ACE_preRuntime_NEXT');
+    expect(cliSource, 'src/cli.ts must not require the preRuntime server.js entry').not.toMatch(/require\(['"]\.\.\/server\.js['"]\)/);
   });
 
   test('source files do not import next or next/* modules', async () => {
@@ -104,11 +104,11 @@ describe('no Next runtime contract', () => {
     expect(offenders, 'source files must not import next or next/* modules').toEqual([]);
   });
 
-  test('legacy Next app directory has been removed', () => {
+  test('preRuntime Next app directory has been removed', () => {
     expect(existsSync(resolve(projectRoot, 'src/app')), 'src/app must not remain after the Start migration').toBe(false);
   });
 
-  test('Start server routes do not load API handlers from the legacy app api tree', async () => {
+  test('Start server routes do not load API handlers from the preRuntime app api tree', async () => {
     const files = [
       ...await listSourceFiles(resolve(projectRoot, 'src/routes')),
       ...await listSourceFiles(resolve(projectRoot, 'src/server')),
@@ -125,14 +125,14 @@ describe('no Next runtime contract', () => {
     expect(offenders, 'Start routes/server code must use src/server/api-routes instead of src/app/api').toEqual([]);
   });
 
-  test('Start page routes do not import page components from the legacy app tree', async () => {
+  test('Start page routes do not import page components from the preRuntime app tree', async () => {
     const files = await listSourceFiles(resolve(projectRoot, 'src/routes'));
     const offenders: string[] = [];
-    const legacyPageImport = /from\s+['"]@\/app\/[^'"]*\/page['"]/;
+    const preRuntimePageImport = /from\s+['"]@\/app\/[^'"]*\/page['"]/;
 
     for (const file of files) {
       const source = await readFile(file, 'utf8');
-      if (legacyPageImport.test(source)) {
+      if (preRuntimePageImport.test(source)) {
         offenders.push(relative(projectRoot, file).replace(/\\/g, '/'));
       }
     }

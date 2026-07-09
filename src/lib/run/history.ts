@@ -161,15 +161,15 @@ function stringValue(value: unknown): string {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
-function getRunOwnerName(state: any, ownerNameById: Record<string, string>, legacyDefaultOwnerName = ''): string {
+function getRunOwnerName(state: any, ownerNameById: Record<string, string>, preRuntimeDefaultOwnerName = ''): string {
   const explicitName = stringValue(state?.runOwnerName) || stringValue(state?.createdByName);
   if (explicitName) return explicitName;
 
   const ownerId = stringValue(state?.runOwnerId) || stringValue(state?.createdBy);
   if (ownerId && ownerNameById[ownerId]) return ownerNameById[ownerId];
 
-  const legacyOwner = stringValue(state?.createdBy) || stringValue(state?.runOwnerId);
-  return legacyOwner || legacyDefaultOwnerName || '未知用户';
+  const preRuntimeOwner = stringValue(state?.createdBy) || stringValue(state?.runOwnerId);
+  return preRuntimeOwner || preRuntimeDefaultOwnerName || '未知用户';
 }
 
 export async function readAccessibleConfigNameMap(userId: string, role: 'admin' | 'user'): Promise<Record<string, string>> {
@@ -343,7 +343,7 @@ export async function readAllRunsSummary() {
   const agentUsage: Record<string, { calls: number; cost: number }> = {};
   const users = await loadUsers().catch(() => []);
   const ownerNameById = Object.fromEntries(users.map((user) => [user.id, user.username]));
-  const legacyDefaultOwnerName = users.length === 1 ? users[0]?.username || '' : '';
+  const preRuntimeDefaultOwnerName = users.length === 1 ? users[0]?.username || '' : '';
   const configMetaMap: Record<string, { createdBy?: string }> = await listConfigsWithMeta('workflow').catch(() => ({}));
   const configNameMap: Record<string, string> = await readAccessibleConfigNameMap('', 'admin').catch(() => ({}));
 
@@ -365,7 +365,7 @@ export async function readAllRunsSummary() {
         createdBy: stateOwnerId || configMetaOwnerId,
       },
       ownerNameById,
-      legacyDefaultOwnerName
+      preRuntimeDefaultOwnerName
     );
     const workflowName = configNameMap[configFile] || configFile || '未知工作流';
 

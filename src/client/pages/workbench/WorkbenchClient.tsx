@@ -14,6 +14,7 @@ import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, works
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import { fetchWorkflowEvents, fetchWorkflowStateHistory, fetchWorkflowStatusCompact, fetchWorkflowStepLogs } from '@/client/query/workflow-runtime';
+import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { queryKeys } from '@/client/query/query-keys';
 import {
   syncDocumentsMetadataToDb,
@@ -819,6 +820,11 @@ function addAggregatedTokenUsage(target: AggregatedTokenUsage, source?: Partial<
 function formatTokenCount(value: number): string {
   if (!Number.isFinite(value)) return '0';
   return new Intl.NumberFormat('zh-CN').format(Math.max(0, Math.round(value)));
+}
+
+function formatTokenPercent(part: number, total: number): string {
+  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return '0%';
+  return `${Math.round(Math.max(0, (part / total) * 100))}%`;
 }
 
 function flattenRuntimeSpecTasks(tasks: RuntimeSpecTask[]): RuntimeSpecTask[] {
@@ -1820,6 +1826,7 @@ export default function WorkbenchPage({
   const [rehearsalMode, setRehearsalMode] = useState(false);
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
   const [workflowDefaultModel, setWorkflowDefaultModel] = useState('');
   const [workflowAutoCompactOnStepChange, setWorkflowAutoCompactOnStepChange] = useState(false);
   const [workflowAgentOverrides, setWorkflowAgentOverrides] = useState<Record<string, WorkflowAgentExecutionOverride>>({});
@@ -2746,6 +2753,18 @@ export default function WorkbenchPage({
     workflowDefaultModel,
     workspaceMode,
   ]);
+  const [timeoutMinutesInput, setTimeoutMinutesInput] = useState(() => String(timeoutMinutes ?? 30));
+  const maxTransitionsValue = editingConfig?.workflow?.maxTransitions ?? workflowConfig?.workflow?.maxTransitions ?? 50;
+  const [maxTransitionsInput, setMaxTransitionsInput] = useState(() => String(maxTransitionsValue));
+
+  useEffect(() => {
+    setTimeoutMinutesInput(String(timeoutMinutes ?? 30));
+  }, [timeoutMinutes]);
+
+  useEffect(() => {
+    setMaxTransitionsInput(String(maxTransitionsValue));
+  }, [maxTransitionsValue]);
+
   const persistedWorkflowDesignDraftState = useMemo<WorkflowDesignDraftState | null>(() => {
     if (!workflowConfig) return null;
     const persistedExecutionPolicy = resolveWorkflowExecutionPolicy(workflowConfig.context);
@@ -2848,14 +2867,11 @@ export default function WorkbenchPage({
   }, [dispatch, runId, updateUrl]);
 
   useEffect(() => {
-    fetch('/api/engine')
-      .then((res) => res.json())
-      .then((data) => {
-        setGlobalEngine(data.engine || '');
-        setGlobalDefaultModel(data.defaultModel || '');
-      })
-      .catch(() => {});
-  }, []);
+    const data = runtimeSelectionQuery.data;
+    if (!data) return;
+    setGlobalEngine(typeof data.engine === 'string' ? data.engine : '');
+    setGlobalDefaultModel(typeof data.defaultModel === 'string' ? data.defaultModel : '');
+  }, [runtimeSelectionQuery.data]);
 
   // Resolve projectRoot to absolute path using user's personalDir
   const resolvedProjectRoot = useMemo(() => {
@@ -8881,7 +8897,7 @@ export default function WorkbenchPage({
     const renderLiveThinkingIndicator = () => {
       const lastChunk = liveStream[liveStream.length - 1] || '';
       const isExecuting = /\*\*🔧 .+?\*\*[^]*$/.test(lastChunk) && !/<\/details>\s*$/.test(lastChunk.trim());
-      const statusText = isExecuting ? '执行中...' : '思考中...';
+      const statusText = isExecuting ? '执行中' : '思考中';
       return (
         <div className={cn(styles.thinkingBot, 'mx-4 mb-3 mt-1')} aria-live="polite">
           <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
@@ -9645,7 +9661,7 @@ export default function WorkbenchPage({
     }
     if (bestKey) return bestKey;
 
-    // 4. Fallback: direct key match in stepResults (legacy, no UUID)
+    // 4. Fallback: direct key match in stepResults (preRuntime, no UUID)
     if (stepResults[baseName]) return baseName;
 
     // 5. If currently running this step, return baseName for stream display
@@ -12289,7 +12305,11 @@ export default function WorkbenchPage({
     );
   };
 
-  const renderRunOverviewPanel = () => (
+  const renderRunOverviewPanel = () => {
+    const totalTokenUsage = workflowTokenAnalytics.total;
+    const cacheHitTokens = totalTokenUsage.cacheReadInputTokens;
+    const cacheHitRatio = formatTokenPercent(cacheHitTokens, totalTokenUsage.inputTokens + cacheHitTokens);
+    return (
     <div className={styles.workbenchPreviewPanel}>
       <div className={styles.workbenchPreviewCard}>
         <div className={styles.workbenchPreviewKicker}>运行总览</div>
@@ -12299,13 +12319,23 @@ export default function WorkbenchPage({
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           汇总当前运行状态、当前位置和关键执行数据。状态图和工作区通过左侧运行记录子菜单进入。
         </p>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <div className={styles.workbenchMetric}><span>状态</span><strong>{formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}</strong></div>
-          <div className={styles.workbenchMetric}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
-          <div className={styles.workbenchMetric}><span>运行时长</span><strong>{runElapsedLabel}</strong></div>
-          <div className={styles.workbenchMetric}><span>已完成</span><strong>{completedSteps.length}</strong></div>
-          <div className={styles.workbenchMetric}><span>转移次数</span><strong>{smTransitionCount}</strong></div>
-          <div className={styles.workbenchMetric}><span>变更</span><strong>{workspaceChangeCount}</strong></div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
+          <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>状态</span><strong>{formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}</strong></div>
+          <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
+          <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>运行时长</span><strong>{runElapsedLabel}</strong></div>
+          <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>已完成</span><strong>{completedSteps.length}</strong></div>
+          <div className={`${styles.workbenchMetric} lg:col-span-4`}><span>转移次数</span><strong>{smTransitionCount}</strong></div>
+          <div className={`${styles.workbenchMetric} lg:col-span-4`}><span>变更</span><strong>{workspaceChangeCount}</strong></div>
+          <div className={`${styles.workbenchTokenMetric} ${styles.workbenchTokenMetricGridItem} lg:col-span-4`}>
+            <div className={styles.workbenchTokenMetricHeader}>
+              <span>Token 消耗</span>
+              <strong>{formatTokenCount(totalTokenUsage.totalTokens)}</strong>
+            </div>
+            <div className={styles.workbenchTokenMetricRows}>
+              <div>输入 {formatTokenCount(totalTokenUsage.inputTokens)} · 输出 {formatTokenCount(totalTokenUsage.outputTokens)}</div>
+              <div>缓存命中 {formatTokenCount(cacheHitTokens)} / {cacheHitRatio}</div>
+            </div>
+          </div>
         </div>
         <div className={styles.workbenchTransitionSection}>
           <div className={styles.workbenchTransitionHeader}>
@@ -12346,7 +12376,8 @@ export default function WorkbenchPage({
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
   if (pageLoading && isDesignMode) {
     return <BrandLoadingScreen message="加载工作流配置..." />;
@@ -13196,8 +13227,22 @@ export default function WorkbenchPage({
                         <div>
                           <Label className="text-sm font-medium">步骤超时（分钟）</Label>
                           <Input
-                            value={timeoutMinutes}
-                            onChange={(e) => dispatch({ type: 'SET_TIMEOUT_MINUTES', payload: Math.max(1, parseInt(e.target.value) || 1) })}
+                            value={timeoutMinutesInput}
+                            onChange={(e) => {
+                              const nextValue = e.target.value;
+                              setTimeoutMinutesInput(nextValue);
+                              if (nextValue === '') return;
+                              const parsedValue = Number.parseInt(nextValue, 10);
+                              if (Number.isFinite(parsedValue)) {
+                                dispatch({ type: 'SET_TIMEOUT_MINUTES', payload: Math.max(1, parsedValue) });
+                              }
+                            }}
+                            onBlur={() => {
+                              const parsedValue = Number.parseInt(timeoutMinutesInput, 10);
+                              const nextValue = Number.isFinite(parsedValue) ? Math.max(1, parsedValue) : Math.max(1, timeoutMinutes || 30);
+                              setTimeoutMinutesInput(String(nextValue));
+                              dispatch({ type: 'SET_TIMEOUT_MINUTES', payload: nextValue });
+                            }}
                             type="number"
                             min={1}
                             className="mt-2"
@@ -13208,11 +13253,38 @@ export default function WorkbenchPage({
                         <div>
                           <Label className="text-sm font-medium">最大转移次数</Label>
                           <Input
-                            value={editingConfig?.workflow?.maxTransitions ?? workflowConfig?.workflow?.maxTransitions ?? 50}
+                            value={maxTransitionsInput}
                             onChange={(e) => {
+                              const nextValue = e.target.value;
+                              setMaxTransitionsInput(nextValue);
+                              if (nextValue === '') return;
                               const baseConfig = editingConfig || workflowConfig;
                               if (!baseConfig?.workflow) return;
-                              const val = Math.max(1, Math.min(200, parseInt(e.target.value) || 1));
+                              const parsedValue = Number.parseInt(nextValue, 10);
+                              if (!Number.isFinite(parsedValue)) return;
+                              const val = Math.max(1, Math.min(200, parsedValue));
+                              dispatch({
+                                type: 'SET_EDITING_CONFIG',
+                                payload: {
+                                  ...baseConfig,
+                                  workflow: {
+                                    ...baseConfig.workflow,
+                                    maxTransitions: val,
+                                  },
+                                },
+                              });
+                            }}
+                            onBlur={() => {
+                              const baseConfig = editingConfig || workflowConfig;
+                              if (!baseConfig?.workflow) {
+                                setMaxTransitionsInput(String(maxTransitionsValue));
+                                return;
+                              }
+                              const parsedValue = Number.parseInt(maxTransitionsInput, 10);
+                              const val = Number.isFinite(parsedValue)
+                                ? Math.max(1, Math.min(200, parsedValue))
+                                : Math.max(1, Math.min(200, maxTransitionsValue || 50));
+                              setMaxTransitionsInput(String(val));
                               dispatch({
                                 type: 'SET_EDITING_CONFIG',
                                 payload: {

@@ -9,6 +9,7 @@ import type {
   AdapterCancelInput,
   AdapterCapabilitiesInput,
   AdapterRuntimeEvent,
+  AdapterRuntimeStatus,
   AdapterSessionInput,
   AdapterTurnInput,
   RuntimeAdapter,
@@ -19,6 +20,7 @@ import type {
   TokenUsage,
   CostUsage,
 } from '../contracts';
+import { writeAcpxDebugTrace } from '../acpx-debug-trace';
 
 const RUNTIME_EVENT_TYPES = new Set<RuntimeEventType>([
   'turn.started',
@@ -45,24 +47,34 @@ const RUNTIME_EVENT_TYPES = new Set<RuntimeEventType>([
 ]);
 
 const EVENT_TYPE_ALIASES: Record<string, RuntimeEventType> = {
+  agent_message_chunk: 'message.delta',
+  agent_thought_chunk: 'thought.delta',
   message_delta: 'message.delta',
   message_completed: 'message.completed',
   thought_delta: 'thought.delta',
+  status: 'status.changed',
+  tool_call: 'tool.updated',
+  tool_call_update: 'tool.updated',
   tool_started: 'tool.started',
   tool_updated: 'tool.updated',
   tool_output: 'tool.output',
   tool_completed: 'tool.completed',
   tool_failed: 'tool.failed',
   usage: 'usage.updated',
+  usage_update: 'usage.updated',
   usage_updated: 'usage.updated',
   permission_requested: 'permission.requested',
   permission_resolved: 'permission.resolved',
   command_available: 'command.available',
   command_invoked: 'command.invoked',
   status_changed: 'status.changed',
+  done: 'turn.completed',
+  error: 'turn.failed',
   turn_started: 'turn.started',
   turn_completed: 'turn.completed',
   turn_failed: 'turn.failed',
+  turn_cancelled: 'turn.cancelled',
+  turn_canceled: 'turn.cancelled',
 };
 
 const NATIVE_ID_KEYS = new Set([
@@ -105,8 +117,11 @@ export interface AcpxRuntimeClient {
    * ACEHarness binding/turn input to AcpRuntimeTurnInput internally.
    */
   runTurn?(binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<AcpRuntimeEvent | unknown>;
-  startTurn?: AcpRuntime['startTurn'];
-  ensureSession?: AcpRuntime['ensureSession'];
+  ensureSession?(input: {
+    session: AdapterSessionInput;
+    command: AcpxCommandResolution;
+    existingHandle?: AcpRuntimeHandle;
+  }): Promise<AcpRuntimeHandle | undefined>;
   cancel?(binding: RuntimeBinding, input: AdapterCancelInput): Promise<void>;
   close?(binding: RuntimeBinding): Promise<void>;
   getStatus?(binding: RuntimeBinding): Promise<AcpRuntimeStatus | unknown>;
@@ -164,8 +179,12 @@ export function missingCostUsage(): CostUsage {
 
 export function normalizeAcpxRuntimeEvent(nativeEvent: unknown): AdapterRuntimeEvent {
   const event = asRecord(nativeEvent);
-  const type = normalizeEventType(event.type ?? event.event);
-  const payloadSource = event.payload ?? event.data ?? fallbackPayload(type, event);
+  const type = normalizeEventType(event.type ?? event.event, event);
+  const fallback = fallbackPayload(type, event);
+  const explicitPayload = event.payload ?? event.data;
+  const payloadSource = type.startsWith('tool.')
+    ? mergeToolPayload(fallback, explicitPayload)
+    : (explicitPayload ?? fallback);
   const usage = normalizeTokenUsage(event.usage);
   const cost = normalizeCostUsage(event.cost);
 
@@ -178,7 +197,7 @@ export function normalizeAcpxRuntimeEvent(nativeEvent: unknown): AdapterRuntimeE
     toolCallId: asString(event.toolCallId),
     usage,
     cost,
-    error: normalizeError(event.error),
+    error: normalizeError(event.error ?? (type === 'turn.failed' ? event : undefined)),
     redacted: true,
     raw: nativeEvent,
     createdAt: asString(event.createdAt),
@@ -212,10 +231,11 @@ export class AcpxAdapter implements RuntimeAdapter {
   async createOrLoadSession(input: AdapterSessionInput): Promise<RuntimeBinding> {
     const now = new Date().toISOString();
     const command = resolveAcpxCommand(input.agentId);
-    const nativeBinding = await this.client?.createOrLoadSession?.({
-      session: input,
-      command,
-    });
+    const nativeBinding =
+      (await this.client?.createOrLoadSession?.({
+        session: input,
+        command,
+      })) ?? (await this.ensureNativeSession(input, command));
 
     return {
       id: input.existingBinding?.id ?? `${input.runtimeSessionId}:acpx:${input.agentId}:1`,
@@ -239,18 +259,45 @@ export class AcpxAdapter implements RuntimeAdapter {
       redacted: true,
     };
 
-    if (!this.client?.runTurn) {
+    const nativeEvents = await this.startNativeTurn(binding, input);
+    if (!nativeEvents) {
       yield createAdapterUnavailableEvent('acpx', input.turnId);
       return;
     }
 
-    for await (const event of this.client.runTurn(binding, input)) {
-      yield normalizeAcpxRuntimeEvent(event);
+    for await (const event of nativeEvents) {
+      writeAcpxDebugTrace({
+        stage: 'acpx.raw_event',
+        context: {
+          runtimeSessionId: binding.runtimeSessionId,
+          turnId: input.turnId,
+          requestId: input.requestId,
+          traceId: input.traceId,
+          runtime: binding.runtime,
+        },
+        payload: event,
+      });
+      const normalized = normalizeAcpxRuntimeEvent(event);
+      writeAcpxDebugTrace({
+        stage: 'adapter.normalized_event',
+        context: {
+          runtimeSessionId: binding.runtimeSessionId,
+          turnId: input.turnId,
+          requestId: input.requestId,
+          traceId: input.traceId,
+          runtime: binding.runtime,
+        },
+        payload: normalized,
+      });
+      yield normalized;
     }
   }
 
   async cancel(binding: RuntimeBinding, input: AdapterCancelInput): Promise<void> {
-    await this.client?.cancel?.(binding, input);
+    if (!this.client?.cancel) {
+      throw createAdapterUnavailableError('acpx', 'cancel');
+    }
+    await this.client.cancel(binding, input);
   }
 
   async close(binding: RuntimeBinding): Promise<void> {
@@ -276,20 +323,77 @@ export class AcpxAdapter implements RuntimeAdapter {
     };
   }
 
-  async getStatus() {
+  async getStatus(binding: RuntimeBinding) {
+    if (!this.client) {
+      return {
+        runtime: 'acpx' as const,
+        status: 'failed' as const,
+        error: createAdapterUnavailableError('acpx', 'status'),
+      };
+    }
+
+    if (!this.client.getStatus) {
+      return {
+        runtime: 'acpx' as const,
+        status: 'unknown' as const,
+        metadata: {
+          reason: 'status-method-missing',
+        },
+      };
+    }
+
+    const status = await this.client.getStatus(binding);
+    return normalizeAcpxStatus(status);
+  }
+
+  private async ensureNativeSession(
+    input: AdapterSessionInput,
+    command: AcpxCommandResolution,
+  ): Promise<AcpxRuntimeSessionBinding | undefined> {
+    if (!this.client?.ensureSession) {
+      return undefined;
+    }
+
+    const handle = await this.client.ensureSession({
+      session: input,
+      command,
+      existingHandle: extractAcpRuntimeHandle(input.existingBinding),
+    });
+
     return {
-      runtime: 'acpx' as const,
-      status: this.client ? ('unknown' as const) : ('failed' as const),
-      error: this.client
-        ? undefined
-        : {
-            code: 'ADAPTER_UNAVAILABLE' as const,
-            message: 'acpx runtime package is not installed; adapter skeleton is not executable yet.',
-            retryable: true,
-            redacted: true,
-          },
+      handle,
+      externalIds: extractExternalIds(handle),
+      raw: {
+        agentId: input.agentId,
+        command,
+        handle,
+      },
     };
   }
+
+  private async startNativeTurn(
+    binding: RuntimeBinding,
+    input: AdapterTurnInput,
+  ): Promise<AsyncIterable<AcpRuntimeEvent | unknown> | undefined> {
+    if (this.client?.runTurn) {
+      return this.client.runTurn(binding, input);
+    }
+
+    return undefined;
+  }
+}
+
+function mergeToolPayload(fallback: unknown, explicitPayload: unknown): unknown {
+  if (!isPlainRecord(fallback)) {
+    return explicitPayload ?? fallback;
+  }
+  if (!isPlainRecord(explicitPayload)) {
+    return fallback;
+  }
+  return {
+    ...fallback,
+    ...explicitPayload,
+  };
 }
 
 function createAdapterUnavailableEvent(runtime: 'acpx' | 'magic', turnId: string): AdapterRuntimeEvent {
@@ -302,18 +406,71 @@ function createAdapterUnavailableEvent(runtime: 'acpx' | 'magic', turnId: string
     },
     usage: missingTokenUsage(),
     cost: missingCostUsage(),
-    error: {
-      code: 'ADAPTER_UNAVAILABLE',
-      message: `${runtime} runtime client is not configured.`,
-      retryable: true,
-      redacted: true,
-    },
+    error: createAdapterUnavailableError(runtime, 'turn'),
     redacted: true,
   };
 }
 
-function normalizeEventType(value: unknown): RuntimeEventType {
+export function createAdapterUnavailableError(runtime: 'acpx' | 'magic', operation: string) {
+  return {
+    code: 'ADAPTER_UNAVAILABLE' as const,
+    message: `${runtime} runtime client cannot execute ${operation}.`,
+    retryable: true,
+    redacted: true,
+  };
+}
+
+function normalizeAcpxStatus(value: unknown): AdapterRuntimeStatus {
+  const status = asRecord(value);
+  const nativeStatus = asString(status.status);
+  const normalizedStatus: AdapterRuntimeStatus['status'] =
+    nativeStatus === 'idle' ||
+    nativeStatus === 'running' ||
+    nativeStatus === 'canceling' ||
+    nativeStatus === 'closed' ||
+    nativeStatus === 'failed'
+      ? nativeStatus
+      : 'unknown';
+
+  return {
+    runtime: 'acpx' as const,
+    status: normalizedStatus,
+    activeTurnId: asString(status.activeTurnId),
+    lastEventAt: asString(status.lastEventAt),
+    error: normalizeError(status.error),
+    metadata: isPlainRecord(status.metadata) ? status.metadata : undefined,
+  };
+}
+
+function extractAcpRuntimeHandle(binding?: RuntimeBinding): AcpRuntimeHandle | undefined {
+  if (!binding) {
+    return undefined;
+  }
+
+  if (isPlainRecord(binding.raw) && isPlainRecord(binding.raw.handle)) {
+    return binding.raw.handle as unknown as AcpRuntimeHandle;
+  }
+
+  return undefined;
+}
+
+function extractExternalIds(handle: unknown): RuntimeBinding['externalIds'] {
+  if (!isPlainRecord(handle)) {
+    return {};
+  }
+
+  return {
+    externalRecordId: asString(handle.acpxRecordId ?? handle.recordId ?? handle.externalRecordId),
+    externalSessionId: asString(handle.backendSessionId ?? handle.sessionId ?? handle.externalSessionId),
+    providerSessionId: asString(handle.agentSessionId ?? handle.providerSessionId),
+  };
+}
+
+function normalizeEventType(value: unknown, event?: Record<string, unknown>): RuntimeEventType {
   const rawType = asString(value);
+  if (rawType === 'text_delta') {
+    return event?.stream === 'thought' ? 'thought.delta' : 'message.delta';
+  }
   if (rawType && RUNTIME_EVENT_TYPES.has(rawType as RuntimeEventType)) {
     return rawType as RuntimeEventType;
   }
@@ -321,13 +478,71 @@ function normalizeEventType(value: unknown): RuntimeEventType {
 }
 
 function fallbackPayload(type: RuntimeEventType, event: Record<string, unknown>): unknown {
-  if (type === 'message.delta' && typeof event.text === 'string') {
+  if ((type === 'message.delta' || type === 'thought.delta') && typeof event.text === 'string') {
     return { text: event.text };
+  }
+  if (type === 'message.delta' || type === 'thought.delta') {
+    const content = isPlainRecord(event.content) ? event.content : undefined;
+    if ((content?.type === undefined || content.type === 'text') && typeof content?.text === 'string') {
+      return { text: content.text };
+    }
   }
   if (type === 'diagnostic' && typeof event.message === 'string') {
     return { message: event.message, source: 'adapter' satisfies RuntimeTraceSource };
   }
+  if (type.startsWith('tool.')) {
+    const payload = pickDefined(event, [
+      'id',
+      'name',
+      'tool',
+      'toolName',
+      'tool_name',
+      'text',
+      'title',
+      'status',
+      'toolCallId',
+      'kind',
+      'command',
+      'rawInput',
+      'rawOutput',
+      'content',
+      'output',
+      'stdout',
+      'stderr',
+      'exitCode',
+      'exit_code',
+      'aggregated_output',
+    ]);
+    return Object.keys(payload).length > 0 ? payload : {};
+  }
+  if (type === 'status.changed') {
+    const payload = pickDefined(event, ['tag', 'used', 'size', 'cost', 'breakdown']);
+    const usage = normalizeUsageBreakdown(event.breakdown);
+    if (usage) {
+      payload.usage = usage;
+    }
+    if (typeof event.text === 'string') {
+      payload.message = event.text;
+    }
+    return Object.keys(payload).length > 0 ? payload : {};
+  }
+  if (type === 'turn.completed' && typeof event.stopReason === 'string') {
+    return { stopReason: event.stopReason };
+  }
+  if (type === 'turn.failed' && typeof event.message === 'string') {
+    return { message: event.message, source: 'adapter' satisfies RuntimeTraceSource };
+  }
   return {};
+}
+
+function pickDefined(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      picked[key] = record[key];
+    }
+  }
+  return picked;
 }
 
 function normalizeTokenUsage(value: unknown): TokenUsage {
@@ -338,13 +553,29 @@ function normalizeTokenUsage(value: unknown): TokenUsage {
   return {
     inputTokens: asNumber(value.inputTokens ?? value.input_tokens),
     outputTokens: asNumber(value.outputTokens ?? value.output_tokens),
-    cacheCreationInputTokens: asNumber(value.cacheCreationInputTokens ?? value.cache_creation_input_tokens),
-    cacheReadInputTokens: asNumber(value.cacheReadInputTokens ?? value.cache_read_input_tokens),
+    cacheCreationInputTokens: asNumber(value.cacheCreationInputTokens ?? value.cache_creation_input_tokens ?? value.cachedWriteTokens),
+    cacheReadInputTokens: asNumber(value.cacheReadInputTokens ?? value.cache_read_input_tokens ?? value.cachedReadTokens),
     thoughtTokens: asNumber(value.thoughtTokens ?? value.thought_tokens),
     totalTokens: asNumber(value.totalTokens ?? value.total_tokens),
     missing: false,
     sourceStatus: 'reported',
   };
+}
+
+function normalizeUsageBreakdown(value: unknown): TokenUsage | undefined {
+  if (!isPlainRecord(value)) {
+    return undefined;
+  }
+  const usage = normalizeTokenUsage(value);
+  const hasAnyValue = [
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cacheCreationInputTokens,
+    usage.cacheReadInputTokens,
+    usage.thoughtTokens,
+    usage.totalTokens,
+  ].some((item) => item !== undefined);
+  return hasAnyValue ? usage : undefined;
 }
 
 function normalizeCostUsage(value: unknown): CostUsage {

@@ -3,6 +3,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ChatProvider, useChat } from '@/contexts/ChatContext';
+import { buildForkSessionOptions, createForkedCollaborationWorkbenchState } from '@/lib/chat/fork-session';
 
 const ACTIVE_SESSION_STORAGE_KEY = 'aceharness:chat:active-session-id';
 let sessionSummaries: any[] = [];
@@ -49,6 +50,20 @@ vi.mock('@/lib/workflow/live-store', async () => {
     ),
   };
 });
+
+vi.mock('@/client/query/engines', () => ({
+  useRuntimeEngineSelectionQuery: () => ({
+    data: {
+      engine: 'claude-code',
+      model: 'claude-sonnet-4-20250514',
+      defaultModel: 'claude-sonnet-4-20250514',
+      isReady: true,
+    },
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+  }),
+}));
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -208,6 +223,51 @@ describe('ChatProvider', () => {
       expect(screen.getByTestId('active-session').textContent).toBe('sess-2');
     });
     expect(sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY)).toBe('sess-2');
+  });
+
+  test('reloads session summaries after login completes in an already mounted provider', async () => {
+    localStorage.removeItem('auth-token');
+    let sessionListCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/engine') {
+        return jsonResponse({ engine: 'claude-code', defaultModel: 'claude-sonnet-4-20250514' });
+      }
+      if (url === '/api/chat/settings') {
+        return jsonResponse({ skills: {}, discoveredSkills: [], workingDirectory: '/tmp/project' });
+      }
+      if (url === '/api/chat/sessions') {
+        sessionListCalls += 1;
+        if (!localStorage.getItem('auth-token')) {
+          return jsonResponse({ error: '未登录或登录已过期' }, false);
+        }
+        return jsonResponse({ sessions: sessionSummaries });
+      }
+      if (url.startsWith('/api/chat/stream?checkActive=')) {
+        return jsonResponse({ active: false });
+      }
+      return jsonResponse({});
+    }));
+
+    render(
+      <ChatProvider>
+        <ContextProbe />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(sessionListCalls).toBe(1);
+    });
+    expect(screen.getByTestId('session-count').textContent).toBe('0');
+
+    act(() => {
+      localStorage.setItem('auth-token', 'token-after-login');
+      window.dispatchEvent(new CustomEvent('auth:changed'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-count').textContent).toBe('2');
+    });
   });
 
   test('drops a stale stored active session id when it no longer exists', async () => {
@@ -638,7 +698,7 @@ describe('ChatProvider', () => {
 
     agentResponse.resolve(jsonResponse({
       output: 'reply bound to sess-1',
-      sessionId: 'backend-sess-1',
+      runtimeSessionId: 'runtime-sess-1',
       engine: 'claude-code',
       model: 'claude-sonnet-4-20250514',
     }) as Response);
@@ -791,7 +851,7 @@ describe('ChatProvider', () => {
         id: 'sess-1',
         title: 'Agent 会话',
         model: 'claude-sonnet-4-20250514',
-        backendSessionId: 'backend-sess-1',
+        runtimeSessionId: 'runtime-sess-1',
         agentBinding: {
           agentName: 'dev-agent',
           createdAt: 1,
@@ -818,7 +878,7 @@ describe('ChatProvider', () => {
 
     agentResponse.resolve(jsonResponse({
       output: 'reply still on sess-1',
-      sessionId: 'backend-sess-1',
+      runtimeSessionId: 'runtime-sess-1',
       engine: 'claude-code',
       model: 'claude-sonnet-4-20250514',
     }) as Response);
@@ -979,5 +1039,132 @@ describe('ChatProvider', () => {
       expect(screen.getByTestId('session-count').textContent).toBe('1');
     });
     expect(screen.getByTestId('active-session').textContent).toBe('sess-2');
+  });
+
+  test('builds a group chat fork without reusing agent runtime sessions or writable workspace', () => {
+    const sourceWorkbenchState = {
+      conversationMode: 'agent-chat' as const,
+      chatWorkspace: {
+        workingDirectory: 'C:/workspaces/original-chat',
+        sourceWorkspace: 'C:/repo',
+        autoCreated: true,
+        gitBaselineReady: true,
+        updatedAt: 100,
+      },
+      collaborationRoom: {
+        roomId: 'room-1',
+        topic: '是否发布新版本',
+        selectedAgents: ['alice', 'bob'],
+        mode: 'group-chat' as const,
+        agentSessions: {
+          alice: 'runtime-agent-session-a',
+          bob: 'runtime-agent-session-b',
+        },
+        messages: [
+          {
+            id: 'room-message-1',
+            speakerType: 'human' as const,
+            speakerName: '主持人',
+            content: '请讨论发布风险',
+            createdAt: 10,
+          },
+        ],
+        rounds: [
+          {
+            id: 'round-1',
+            topic: '是否发布新版本',
+            participants: ['alice', 'bob'],
+            status: 'completed' as const,
+            startedAt: 11,
+            completedAt: 12,
+          },
+        ],
+        chatroom: {
+          status: 'running' as const,
+          topic: '是否发布新版本',
+          participants: ['alice', 'bob'],
+          rounds: [],
+          voteHistory: [],
+          summaries: [],
+          settings: {
+            responseMode: 'mention-driven' as const,
+            maxTurnsPerRound: 4,
+            maxRepliesPerAgent: 1,
+            autoSummarize: true,
+            workspacePath: 'C:/workspaces/original-chat',
+          },
+          participantRoster: [
+            {
+              id: 'p-alice',
+              name: 'alice',
+              sourceType: 'agent' as const,
+              sourceAgent: 'alice',
+              createdAt: 1,
+            },
+            {
+              id: 'p-bob',
+              name: 'bob',
+              sourceType: 'agent' as const,
+              sourceAgent: 'bob',
+              createdAt: 2,
+            },
+          ],
+        },
+      },
+    };
+    const activeSession = {
+      title: '议场讨论',
+      agentBinding: undefined,
+      sessionWorkbenchState: sourceWorkbenchState,
+      messages: [
+        { id: 'u-1', role: 'user' as const, content: '开始议题', timestamp: 1 },
+        { id: 'a-1', role: 'assistant' as const, content: '已进入议场', timestamp: 2 },
+      ],
+    };
+    const forkOptions = {
+      ...buildForkSessionOptions(activeSession),
+      sessionWorkbenchState: createForkedCollaborationWorkbenchState(sourceWorkbenchState),
+    };
+
+    expect(forkOptions.title).toBe('议场讨论 分支');
+    expect(forkOptions.sessionWorkbenchState?.conversationMode).toBe('agent-chat');
+    expect(forkOptions.sessionWorkbenchState?.collaborationRoom?.topic).toBe('是否发布新版本');
+    expect(forkOptions.sessionWorkbenchState?.collaborationRoom?.selectedAgents).toEqual(['alice', 'bob']);
+    expect(forkOptions.sessionWorkbenchState?.collaborationRoom?.chatroom?.participants).toEqual(['alice', 'bob']);
+    expect(forkOptions.sessionWorkbenchState?.collaborationRoom?.chatroom?.participantRoster?.map((item) => item.name)).toEqual(['alice', 'bob']);
+    expect(forkOptions.sessionWorkbenchState?.collaborationRoom?.messages.map((message) => message.content)).toEqual(['请讨论发布风险']);
+    expect(forkOptions.messages.map((message) => message.content)).toEqual(['开始议题', '已进入议场']);
+    expect(forkOptions.sessionWorkbenchState?.collaborationRoom?.agentSessions).toEqual({});
+    expect(forkOptions.sessionWorkbenchState?.chatWorkspace?.workingDirectory).not.toBe('C:/workspaces/original-chat');
+    expect(forkOptions.sessionWorkbenchState?.collaborationRoom?.chatroom?.settings.workspacePath).not.toBe('C:/workspaces/original-chat');
+  });
+
+  test('builds a plain agent chat fork with messages and agent binding intact', () => {
+    const agentBinding = {
+      agentName: 'dev-agent',
+      team: 'blue' as const,
+      roleType: 'normal' as const,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const forkOptions = buildForkSessionOptions({
+      title: '普通 Agent 对话',
+      agentBinding,
+      sessionWorkbenchState: {
+        conversationMode: 'agent-chat',
+      },
+      messages: [
+        { id: 'u-1', role: 'user' as const, content: '修一个测试', timestamp: 10 },
+        { id: 'a-1', role: 'assistant' as const, content: '测试已补充', timestamp: 20, model: 'model-a' },
+      ],
+    });
+
+    expect(forkOptions.title).toBe('普通 Agent 对话 分支');
+    expect(forkOptions.agentBinding).toEqual(agentBinding);
+    expect(forkOptions.sessionWorkbenchState).toEqual({ conversationMode: 'agent-chat' });
+    expect(forkOptions.messages).toEqual([
+      { role: 'user', content: '修一个测试' },
+      { role: 'assistant', content: '测试已补充', model: 'model-a' },
+    ]);
   });
 });

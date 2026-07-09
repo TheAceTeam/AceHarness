@@ -411,7 +411,7 @@ describe('workflow creation item protocol', () => {
                 { to: '完成', condition: { verdict: 'pass' }, label: '第一条通过' },
                 { to: '处理', condition: { verdict: 'pass' }, label: '重复通过应被忽略' },
                 { to: '未知状态', condition: { verdict: 'fail' }, label: '非法目标应回到默认目标' },
-                { to: '完成', condition: { custom: 'legacy-extra-rule' }, label: '无 verdict 的旧规则应被忽略' },
+                { to: '完成', condition: { custom: 'preRuntime-extra-rule' }, label: '无 verdict 的旧规则应被忽略' },
               ],
             },
             { name: '完成', isFinal: true },

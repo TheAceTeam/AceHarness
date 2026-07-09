@@ -22,7 +22,7 @@ function minimalRunState(overrides: Record<string, any> = {}): any {
 }
 
 describe('runs detail route', () => {
-  test('backfills workflow agora session bindings for legacy event-store snapshots', async () => {
+  test('backfills workflow agora session bindings for preRuntime event-store snapshots', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
       const { saveRunState } = await import('@/lib/run/state-persistence');
@@ -30,12 +30,12 @@ describe('runs detail route', () => {
 
       const state = minimalRunState({
         supervisorAgent: 'default-supervisor',
-        supervisorSessionId: 'supervisor-session-legacy',
+        supervisorSessionId: 'supervisor-session-preRuntime',
         attachedAgentSessions: {
-          'default-supervisor': 'supervisor-session-legacy',
-          developer: 'developer-session-legacy',
+          'default-supervisor': 'supervisor-session-preRuntime',
+          developer: 'developer-session-preRuntime',
         },
-        workflowFrontendSessionId: 'workflow-frontend-legacy',
+        workflowFrontendSessionId: 'workflow-frontend-preRuntime',
         agents: [
           {
             name: 'default-supervisor',
@@ -45,7 +45,7 @@ describe('runs detail route', () => {
             completedTasks: 1,
             tokenUsage: { inputTokens: 10, outputTokens: 5 },
             costUsd: 0,
-            sessionId: 'supervisor-session-legacy',
+            sessionId: 'supervisor-session-preRuntime',
             iterationCount: 0,
             summary: 'done',
           },
@@ -57,7 +57,7 @@ describe('runs detail route', () => {
             completedTasks: 1,
             tokenUsage: { inputTokens: 20, outputTokens: 15 },
             costUsd: 0.01,
-            sessionId: 'developer-session-legacy',
+            sessionId: 'developer-session-preRuntime',
             iterationCount: 0,
             summary: 'done',
           },
@@ -92,15 +92,23 @@ describe('runs detail route', () => {
 
       expect(response.status).toBe(200);
       expect(body.__source).toBe('event-store');
-      expect(body.workflowFrontendSessionId).toBe('workflow-frontend-legacy');
-      expect(body.supervisorSessionId).toBe('supervisor-session-legacy');
+      expect(body.workflowFrontendSessionId).toBe('workflow-frontend-preRuntime');
+      expect(body.supervisorSessionId).toBe('supervisor-session-preRuntime');
       expect(body.attachedAgentSessions).toEqual({
-        'default-supervisor': 'supervisor-session-legacy',
-        developer: 'developer-session-legacy',
+        'default-supervisor': 'supervisor-session-preRuntime',
+        developer: 'developer-session-preRuntime',
       });
       expect(body.agents).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: 'default-supervisor', sessionId: 'supervisor-session-legacy' }),
-        expect.objectContaining({ name: 'developer', sessionId: 'developer-session-legacy' }),
+        expect.objectContaining({
+          name: 'default-supervisor',
+          sessionId: 'supervisor-session-preRuntime',
+          tokenUsage: { inputTokens: 10, outputTokens: 5 },
+        }),
+        expect.objectContaining({
+          name: 'developer',
+          sessionId: 'developer-session-preRuntime',
+          tokenUsage: { inputTokens: 20, outputTokens: 15 },
+        }),
       ]));
     });
   });

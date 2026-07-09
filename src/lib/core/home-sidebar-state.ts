@@ -396,7 +396,7 @@ export interface SessionWorkbenchState {
   lightweightWorkflowDraft?: {
     stage: 'discovery' | 'clarification' | 'draft' | 'confirming' | 'generating' | 'starting';
     busy?: boolean;
-    backendSessionId?: string;
+    runtimeSessionId?: string;
     creationContextSummary?: string;
     clarificationForm?: unknown;
     clarificationAnswers?: Record<string, unknown>;

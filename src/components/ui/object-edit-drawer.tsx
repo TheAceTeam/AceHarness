@@ -3,6 +3,7 @@
 import * as React from "react"
 import { cn } from "@/lib/core/utils"
 import { Button, type ButtonProps } from "@/components/ui/button"
+import { ComboboxPortalProvider } from "@/components/ui/combobox"
 import {
   DetailDrawer,
   DetailDrawerBody,
@@ -139,52 +140,54 @@ function ObjectEditDrawer({
   return (
     <DetailDrawer open={open} onOpenChange={handleOpenChange}>
       <DetailDrawerContent widthClassName={widthClassName} className={className}>
-        <DetailDrawerHeader>
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="mb-1 flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium uppercase text-muted-foreground">{mode}</span>
-                {dirty ? <StatusPill tone="warning">Unsaved</StatusPill> : null}
-                {status ? renderStatus(status) : null}
-              </div>
-              <DetailDrawerTitle>{title}</DetailDrawerTitle>
-              {typeof subtitle === "string" ? (
-                <DetailDrawerDescription>{subtitle}</DetailDrawerDescription>
-              ) : subtitle ? (
-                <div className="mt-1 text-sm leading-5 text-muted-foreground">{subtitle}</div>
-              ) : null}
-            </div>
-          </div>
-        </DetailDrawerHeader>
-
-        <DetailDrawerBody className={cn("pb-6", bodyClassName)}>
-          <div className="grid gap-0">
-            {sections?.map((section) => (
-              <DrawerFormSection key={section.id} title={section.title} description={section.description} actions={section.actions}>
-                {section.content}
-              </DrawerFormSection>
-            ))}
-            {children}
-          </div>
-          {dangerActions?.length ? (
-            <div className="mt-6 rounded-xl border border-destructive/20 bg-destructive/5 p-4">
-              <div className="text-sm font-semibold text-foreground">Danger zone</div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {dangerActions.map((action, index) => renderDrawerAction(action, index, "outline"))}
+        <ComboboxPortalProvider>
+          <DetailDrawerHeader>
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium uppercase text-muted-foreground">{mode}</span>
+                  {dirty ? <StatusPill tone="warning">Unsaved</StatusPill> : null}
+                  {status ? renderStatus(status) : null}
+                </div>
+                <DetailDrawerTitle>{title}</DetailDrawerTitle>
+                {typeof subtitle === "string" ? (
+                  <DetailDrawerDescription>{subtitle}</DetailDrawerDescription>
+                ) : subtitle ? (
+                  <div className="mt-1 text-sm leading-5 text-muted-foreground">{subtitle}</div>
+                ) : null}
               </div>
             </div>
-          ) : null}
-        </DetailDrawerBody>
+          </DetailDrawerHeader>
 
-        <DetailDrawerFooter className="sticky bottom-0 z-10 flex-wrap justify-between">
-          <div className="flex flex-wrap gap-2">
-            {secondaryActions?.map((action, index) => renderDrawerAction(action, index, "outline"))}
-          </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            {renderDrawerAction(resolvedCancelAction, -1, "outline")}
-            {resolvedSaveAction ? renderDrawerAction(resolvedSaveAction, -2, "primary") : null}
-          </div>
-        </DetailDrawerFooter>
+          <DetailDrawerBody className={cn("pb-6", bodyClassName)}>
+            <div className="grid gap-0">
+              {sections?.map((section) => (
+                <DrawerFormSection key={section.id} title={section.title} description={section.description} actions={section.actions}>
+                  {section.content}
+                </DrawerFormSection>
+              ))}
+              {children}
+            </div>
+            {dangerActions?.length ? (
+              <div className="mt-6 rounded-xl border border-destructive/20 bg-destructive/5 p-4">
+                <div className="text-sm font-semibold text-foreground">Danger zone</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {dangerActions.map((action, index) => renderDrawerAction(action, index, "outline"))}
+                </div>
+              </div>
+            ) : null}
+          </DetailDrawerBody>
+
+          <DetailDrawerFooter className="sticky bottom-0 z-10 flex-wrap justify-between">
+            <div className="flex flex-wrap gap-2">
+              {secondaryActions?.map((action, index) => renderDrawerAction(action, index, "outline"))}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              {renderDrawerAction(resolvedCancelAction, -1, "outline")}
+              {resolvedSaveAction ? renderDrawerAction(resolvedSaveAction, -2, "primary") : null}
+            </div>
+          </DetailDrawerFooter>
+        </ComboboxPortalProvider>
       </DetailDrawerContent>
     </DetailDrawer>
   )

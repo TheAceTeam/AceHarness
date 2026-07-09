@@ -60,6 +60,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SingleCombobox } from '@/components/ui/combobox';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useToast } from '@/components/ui/toast';
@@ -72,10 +73,7 @@ import { getAllPlugins, unregisterPlugin, type HomePlugin } from '@/lib/sidebar-
 import { cn } from '@/lib/core/utils';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import type { ReturnTarget } from '@/lib/navigation/return-target';
-import {
-  SkillSearch,
-  InstallProgress,
-} from '@/components/marketplace';
+import { InstallProgress } from '@/components/marketplace';
 import type { MarketplaceSkill, InstallProgress as InstallProgressType } from '@/types/marketplace';
 import type { ManagedMcpServer, McpTransportType } from '@/lib/mcp/types';
 import { DEFAULT_PAGE_SIZE } from '@/constants/marketplace';
@@ -1543,6 +1541,7 @@ export default function SkillsManager({
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineError, setOnlineError] = useState<string | null>(null);
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [onlineSearchDraft, setOnlineSearchDraft] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [onlineViewMode, setOnlineViewMode] = useState<ViewMode>('gallery');
   const [onlinePage, setOnlinePage] = useState(1);
@@ -1905,6 +1904,20 @@ export default function SkillsManager({
       return acc;
     }, {});
   }, [skills]);
+  const sourceOptions = useMemo(() => [
+    { value: 'all', label: `全部来源 (${skills.length})` },
+    ...sourceKeys.map((source) => ({
+      value: source,
+      label: `${getSourceLabel(source)} (${sourceCounts[source] || 0})`,
+    })),
+  ], [skills.length, sourceCounts, sourceKeys]);
+  const categoryOptions = useMemo(() => [
+    { value: 'all', label: '全部分类' },
+    ...categories.map((category) => ({
+      value: category.id,
+      label: `${category.cnName} (${category.count})`,
+    })),
+  ], [categories]);
 
   const installSkillPathSet = useMemo(() => new Set(installSkills.map((skill) => skill.path)), [installSkills]);
   const installedSkillKeySet = useMemo(() => {
@@ -1984,6 +1997,16 @@ export default function SkillsManager({
 
   const handleApplyLocalSearch = () => {
     setSearchQuery(embeddedSearchDraft);
+  };
+
+  const handleApplyOnlineSearch = () => {
+    setSearchKeyword(onlineSearchDraft);
+  };
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) => (
+      prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag]
+    ));
   };
 
   const handleLocalSort = (key: LocalSortKey) => {
@@ -2152,16 +2175,10 @@ export default function SkillsManager({
   );
 
   const renderLocalToolbar = (className: string) => (
-    <PageToolbar className={className}>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".zip"
-        className="hidden"
-        onChange={handleUploadZip}
-      />
-      <div className="flex min-w-0 flex-wrap items-center gap-3 xl:flex-nowrap">
-        <div className={cn('flex shrink-0 items-center gap-2', embedded ? 'min-w-0 flex-1' : 'w-full max-w-sm')}>
+    <PageToolbar
+      className={className}
+      search={(
+        <div className="flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -2174,128 +2191,198 @@ export default function SkillsManager({
                   handleApplyLocalSearch();
                 }
               }}
-              className="h-11 w-full rounded-2xl border-border/70 bg-background/80 pl-10 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+              className="h-10 bg-background pl-10"
             />
           </div>
-          <Button size="sm" onClick={handleApplyLocalSearch} className="h-11 shrink-0">
-            <Search className="mr-1 h-4 w-4" />
+          <Button size="sm" variant="outline" onClick={handleApplyLocalSearch} className="h-10 shrink-0">
+            <Search className="mr-2 h-4 w-4" />
             搜索
           </Button>
         </div>
-        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-          {!embedded && localViewMode === 'gallery' ? (
-            <>
-              <Select value={localSortKey} onValueChange={(value) => setLocalSortKey(value as LocalSortKey)}>
-                <SelectTrigger className="h-9 w-[140px] bg-background">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="updatedAt">按更新时间</SelectItem>
-                  <SelectItem value="name">按名称</SelectItem>
-                  <SelectItem value="source">按来源</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setLocalSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-              >
-                {localSortDirection === 'asc' ? '升序' : '降序'}
-              </Button>
-            </>
-          ) : null}
-          <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
+      )}
+      filters={(
+        <div className="flex flex-wrap items-center gap-2">
+          {sourceOptions.map((source) => (
             <Button
+              key={source.value}
               size="sm"
-              variant={localViewMode === 'gallery' ? 'default' : 'ghost'}
-              className="h-8 rounded-full px-3"
-              onClick={() => setLocalViewMode('gallery')}
+              variant={selectedSource === source.value ? 'secondary' : 'outline'}
+              onClick={() => setSelectedSource(source.value)}
             >
-              <span className="material-symbols-outlined text-sm">grid_view</span>
+              {source.label}
             </Button>
-            <Button
-              size="sm"
-              variant={localViewMode === 'table' ? 'default' : 'ghost'}
-              className="h-8 rounded-full px-3"
-              onClick={() => setLocalViewMode('table')}
-            >
-              <span className="material-symbols-outlined text-sm">table_rows</span>
-            </Button>
-          </div>
-          {!embedded ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              className="whitespace-nowrap"
-              onClick={handleSyncBuiltinAceharnessSkills}
-              disabled={syncingAllBuiltin || builtinAceharnessInstallCount === 0}
-            >
-              {syncingAllBuiltin ? '同步中...' : `同步内置 (${builtinAceharnessInstallCount})`}
-            </Button>
-          ) : null}
+          ))}
         </div>
-      </div>
-    </PageToolbar>
+      )}
+      sort={(
+        <div className="inline-flex items-center gap-2">
+          <Select value={localSortKey} onValueChange={(value) => setLocalSortKey(value as LocalSortKey)}>
+            <SelectTrigger className="h-9 w-[140px] bg-background">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="updatedAt">按更新时间</SelectItem>
+              <SelectItem value="name">按名称</SelectItem>
+              <SelectItem value="source">按来源</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-9"
+            onClick={() => setLocalSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+          >
+            {localSortDirection === 'asc' ? '升序' : '降序'}
+          </Button>
+        </div>
+      )}
+      viewToggle={(
+        <div className="inline-flex rounded-lg border border-border bg-background p-1">
+          <Button
+            size="sm"
+            variant={localViewMode === 'gallery' ? 'secondary' : 'ghost'}
+            className="h-8 px-3"
+            onClick={() => setLocalViewMode('gallery')}
+            title="卡片视图"
+          >
+            <span className="material-symbols-outlined text-sm">grid_view</span>
+          </Button>
+          <Button
+            size="sm"
+            variant={localViewMode === 'table' ? 'secondary' : 'ghost'}
+            className="h-8 px-3"
+            onClick={() => setLocalViewMode('table')}
+            title="表格视图"
+          >
+            <span className="material-symbols-outlined text-sm">table_rows</span>
+          </Button>
+        </div>
+      )}
+      refresh={(
+        <Button size="icon" variant="outline" onClick={() => void refreshSkills()} disabled={skillsQuery.isFetching} title="刷新 Skills">
+          <span className={cn('material-symbols-outlined text-base', skillsQuery.isFetching && 'animate-spin')}>refresh</span>
+        </Button>
+      )}
+      actions={isDashboardShell ? null : renderLocalHeaderActions()}
+      activeFilters={(
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">标签</span>
+            {allTags.length > 0 ? (
+              allTags.map((tag) => (
+                <Badge
+                  key={tag}
+                  variant={selectedTags.includes(tag) ? 'secondary' : 'outline'}
+                  className="cursor-pointer rounded-md px-3 py-1"
+                  onClick={() => toggleTag(tag)}
+                >
+                  {tag}
+                </Badge>
+              ))
+            ) : (
+              <span className="text-xs text-muted-foreground">暂无标签</span>
+            )}
+          </div>
+        </>
+      )}
+    />
   );
 
   const renderOnlineToolbar = (className: string) => (
-    <PageToolbar className={className}>
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex flex-1 flex-col gap-3">
-          <SkillSearch
-            onSearch={setSearchKeyword}
-            onCategoryChange={setSelectedCategory}
-            categories={categories}
-          />
-        </div>
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
-            <Button
-              size="sm"
-              variant={onlineViewMode === 'gallery' ? 'default' : 'ghost'}
-              className="h-8 rounded-full px-3"
-              onClick={() => setOnlineViewMode('gallery')}
-            >
-              <span className="material-symbols-outlined text-sm">grid_view</span>
-            </Button>
-            <Button
-              size="sm"
-              variant={onlineViewMode === 'table' ? 'default' : 'ghost'}
-              className="h-8 rounded-full px-3"
-              onClick={() => setOnlineViewMode('table')}
-            >
-              <span className="material-symbols-outlined text-sm">table_rows</span>
-            </Button>
+    <PageToolbar
+      className={className}
+      search={(
+        <div className="flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="搜索 Skill 广场..."
+              value={onlineSearchDraft}
+              onChange={(event) => setOnlineSearchDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleApplyOnlineSearch();
+                }
+              }}
+              className="h-10 bg-background pl-10"
+            />
           </div>
+          <Button size="sm" variant="outline" onClick={handleApplyOnlineSearch} className="h-10 shrink-0">
+            <Search className="mr-2 h-4 w-4" />
+            搜索
+          </Button>
         </div>
-      </div>
-    </PageToolbar>
+      )}
+      filters={(
+        <SingleCombobox
+          value={selectedCategory || 'all'}
+          onValueChange={(value) => setSelectedCategory(value === 'all' ? '' : value)}
+          options={categoryOptions}
+          triggerIcon={<span className="material-symbols-outlined text-sm">category</span>}
+          placeholder="分类"
+          triggerClassName="h-9 w-[180px] rounded-lg bg-background text-sm"
+          emptyText="无匹配分类"
+        />
+      )}
+      viewToggle={(
+        <div className="inline-flex rounded-lg border border-border bg-background p-1">
+          <Button
+            size="sm"
+            variant={onlineViewMode === 'gallery' ? 'secondary' : 'ghost'}
+            className="h-8 px-3"
+            onClick={() => setOnlineViewMode('gallery')}
+            title="卡片视图"
+          >
+            <span className="material-symbols-outlined text-sm">grid_view</span>
+          </Button>
+          <Button
+            size="sm"
+            variant={onlineViewMode === 'table' ? 'secondary' : 'ghost'}
+            className="h-8 px-3"
+            onClick={() => setOnlineViewMode('table')}
+            title="表格视图"
+          >
+            <span className="material-symbols-outlined text-sm">table_rows</span>
+          </Button>
+        </div>
+      )}
+    />
+  );
+  const renderLocalHeaderActions = () => (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
+        <FolderOpen className="mr-2 h-4 w-4" />
+        工作目录
+      </Button>
+      <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+        <Upload className={cn('mr-2 h-4 w-4', uploading && 'animate-bounce')} />
+        {uploading ? '上传中' : '上传 Skill'}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleExport}
+        disabled={exporting || selectedForExport.size === 0}
+      >
+        <Download className={cn('mr-2 h-4 w-4', exporting && 'animate-bounce')} />
+        {exporting ? '导出中' : '导出'}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleSyncBuiltinAceharnessSkills}
+        disabled={syncingAllBuiltin || builtinAceharnessInstallCount === 0}
+      >
+        {syncingAllBuiltin ? '同步中...' : `同步内置 (${builtinAceharnessInstallCount})`}
+      </Button>
+    </>
   );
   const { isDashboardShell } = useDashboardShellHeader({
     title: 'Skills/MCP 管理',
     subtitle: '统一管理本地 Skills、MCP 与应用市场安装',
-    actions: activeTab === 'local' ? (
-      <>
-        <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-          <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
-          <span className="hidden xl:inline">{uploading ? '导入中...' : '上传 Skill'}</span>
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleExport}
-          disabled={exporting || selectedForExport.size === 0}
-        >
-          <Download className={`w-4 h-4 mr-1 ${exporting ? 'animate-bounce' : ''}`} />
-          <span className="hidden xl:inline">{exporting ? '导出中...' : '导出'}</span>
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
-          <FolderOpen className="w-4 h-4 mr-1" />
-          <span className="hidden xl:inline">工作目录</span>
-        </Button>
-      </>
-    ) : null,
-  }, [activeTab, uploading, exporting, selectedForExport, runtimeSkillsDir]);
+    actions: activeTab === 'local' ? renderLocalHeaderActions() : null,
+  }, [activeTab, runtimeSkillsDir, uploading, exporting, selectedForExport.size, syncingAllBuiltin, builtinAceharnessInstallCount]);
 
   return (
     <div
@@ -2304,6 +2391,13 @@ export default function SkillsManager({
         embedded ? 'flex h-full min-h-0 flex-col overflow-hidden' : 'min-h-screen',
       )}
     >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".zip"
+        className="hidden"
+        onChange={handleUploadZip}
+      />
       {!embedded && !isDashboardShell ? (
         <PageHeader
           className="sticky top-0 z-40 bg-card"
@@ -2319,29 +2413,7 @@ export default function SkillsManager({
               </Link>
             </Button>
           )}
-          secondaryActions={(
-            <>
-              {activeTab === 'local' ? (
-                <>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".zip"
-                    className="hidden"
-                    onChange={handleUploadZip}
-                  />
-                  <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                    <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
-                    {uploading ? '导入中...' : '上传 Skill'}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
-                    <FolderOpen className="w-4 h-4 mr-1" />
-                    工作目录
-                  </Button>
-                </>
-              ) : null}
-            </>
-          )}
+          secondaryActions={null}
           overflowActions={(
             <>
             <LanguageToggle />
@@ -2392,32 +2464,6 @@ export default function SkillsManager({
         {activeTab === 'local' ? (
           <>
             {embedded ? renderLocalToolbar('sticky top-0 z-20 rounded-xl border border-border bg-card p-4 shadow-none') : null}
-
-            <section className="rounded-xl border border-border bg-card p-4 shadow-none">
-              <div className="rounded-xl border border-border bg-background p-4">
-                <div className="flex flex-wrap items-center gap-2 overflow-x-hidden">
-                  <span className="shrink-0 text-sm text-muted-foreground">标签筛选</span>
-                  {allTags.length > 0 ? (
-                    allTags.map((tag) => (
-                      <Badge
-                        key={tag}
-                        variant={selectedTags.includes(tag) ? 'default' : 'outline'}
-                        className="shrink-0 cursor-pointer whitespace-nowrap px-3 py-1"
-                        onClick={() => {
-                          setSelectedTags((prev) =>
-                            prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
-                          );
-                        }}
-                      >
-                        {tag}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="shrink-0 text-xs text-muted-foreground">暂无标签</span>
-                  )}
-                </div>
-              </div>
-            </section>
 
             {runtimeSkillsDir ? (
               <WorkspaceEditor

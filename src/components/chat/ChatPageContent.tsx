@@ -9,6 +9,12 @@ import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   PromptInputCommand,
   PromptInputCommandEmpty,
   PromptInputCommandGroup,
@@ -37,6 +43,7 @@ import ChatSidebar, { readStoredSessionDirectoryOrder, type SessionDirectoryView
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
 import ChatMessage from '@/components/chat/ChatMessage';
 import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
+import { apiFetch } from '@/client/query/api-client';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
@@ -75,7 +82,9 @@ import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
 import { createPlainConversationRoomState, extractAgentMentions, useCollaborationRoom } from '@/lib/collaboration/room-core';
 import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
+import { buildForkSessionOptions, createForkedCollaborationWorkbenchState } from '@/lib/chat/fork-session';
 import { cn } from '@/lib/core/utils';
+import { fetchRuntimeCommandMetadataCompat } from '@/client/query/engines';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, storeWorkflowSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
@@ -225,7 +234,7 @@ const WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE = 'workflow-lightweight-planning';
 const MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS = 2;
 const SPEC_LANGUAGE_RULE = '语言一致性规则：先判断用户原始需求、补充说明和澄清回答的主语言；所有 summary、clarification、requirements.md、design.md、tasks.md 必须统一使用该主语言。';
 
-function normalizeBackendSessionId(value: unknown): string | undefined {
+function normalizeRuntimeSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
@@ -957,20 +966,20 @@ async function runLightweightWorkflowCreationItem(input: {
   message: string;
   systemPrompt: string;
   frontendSessionId: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
   workingDirectory?: string;
   engine?: string;
   model?: string;
   maxAttempts?: number;
   validationContext?: WorkflowCreationItemValidationContext;
   onRetry?: (notice: { title: string; attempt: number; maxAttempts: number; reason: string }) => Promise<void> | void;
-}): Promise<{ result: WorkflowCreationItemResult; finalContent: string; backendSessionId?: string }> {
-  let activeBackendSessionId = input.backendSessionId;
+}): Promise<{ result: WorkflowCreationItemResult; finalContent: string; runtimeSessionId?: string }> {
+  let activeRuntimeSessionId = input.runtimeSessionId;
   const maxAttempts = input.maxAttempts ?? MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS;
 
-  const runAttempt = async (message: string, attempt: number): Promise<{ result: WorkflowCreationItemResult; finalContent: string; backendSessionId?: string }> => {
+  const runAttempt = async (message: string, attempt: number): Promise<{ result: WorkflowCreationItemResult; finalContent: string; runtimeSessionId?: string }> => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const startRes = await fetch('/api/chat/stream', {
+    const startRes = await apiFetch('/api/chat/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -980,7 +989,7 @@ async function runLightweightWorkflowCreationItem(input: {
         message,
         model: input.model,
         engine: input.engine,
-        sessionId: activeBackendSessionId || undefined,
+        sessionId: activeRuntimeSessionId || undefined,
         frontendSessionId: input.frontendSessionId,
         streamScope: WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE,
         mode: 'dashboard',
@@ -1043,7 +1052,7 @@ async function runLightweightWorkflowCreationItem(input: {
           }, aiPrevious);
           aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
           if (Object.prototype.hasOwnProperty.call(data, 'sessionId')) {
-            activeBackendSessionId = normalizeBackendSessionId(data.sessionId);
+            activeRuntimeSessionId = normalizeRuntimeSessionId(data.sessionId);
           }
           const decision = resolveWorkflowCreationItemAttempt({
             finalContent,
@@ -1070,7 +1079,7 @@ async function runLightweightWorkflowCreationItem(input: {
           resolve({
             result: decision.result,
             finalContent,
-            backendSessionId: activeBackendSessionId,
+            runtimeSessionId: activeRuntimeSessionId,
           });
         } catch (error) {
           reject(error);
@@ -1102,9 +1111,9 @@ async function generateLightweightWorkflowClarification(input: {
     state: WorkflowCreationState;
     clarification: ClarificationFormResult;
   }) => Promise<void> | void;
-}): Promise<{ clarification: ClarificationFormResult; backendSessionId?: string; creationContextSummary: string }> {
+}): Promise<{ clarification: ClarificationFormResult; runtimeSessionId?: string; creationContextSummary: string }> {
   let creationState = createEmptyWorkflowCreationState();
-  let backendSessionId: string | undefined;
+  let runtimeSessionId: string | undefined;
   const completedSteps: WorkflowCreationItemStep[] = [];
   const baseContext = [
     `工作流名称：${input.workflowName}`,
@@ -1169,14 +1178,14 @@ async function generateLightweightWorkflowClarification(input: {
     const output = await runLightweightWorkflowCreationItem({
       step,
       frontendSessionId: input.frontendSessionId,
-      backendSessionId,
+      runtimeSessionId,
       systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
       message: buildWorkflowCreationItemUserMessage(step, creationState),
       workingDirectory: input.workingDirectory,
       engine: input.engine,
       model: input.model,
     });
-    backendSessionId = output.backendSessionId;
+    runtimeSessionId = output.runtimeSessionId;
     creationState = applyWorkflowCreationItem(creationState, output.result);
     completedSteps.push(step);
     await input.onProgress?.({
@@ -1197,7 +1206,7 @@ async function generateLightweightWorkflowClarification(input: {
     clarification.missingFields?.length ? `待补信息：\n${clarification.missingFields.map((item) => `- ${item}`).join('\n')}` : '',
     clarification.questions?.length ? `澄清问题：\n${clarification.questions.map((item) => `- ${item.label || item.id}: ${item.question}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
-  return { clarification, backendSessionId, creationContextSummary };
+  return { clarification, runtimeSessionId, creationContextSummary };
 }
 
 function extractWorkflowStepPlan(configDraft: any): NonNullable<LightweightWorkflowDraft['stepPlan']> {
@@ -1302,7 +1311,7 @@ function buildWorkflowAgoraRoom(input: {
 async function generateLightweightWorkflowDraft(input: {
   answers: LightweightWorkflowAnswers;
   frontendSessionId: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
   creationContextSummary?: string;
   conversationContext?: string;
   workingDirectory: string;
@@ -1313,7 +1322,7 @@ async function generateLightweightWorkflowDraft(input: {
   onProgress?: (progress: LightweightWorkflowDraftProgress) => Promise<void> | void;
 }): Promise<LightweightWorkflowDraft> {
   const fallbackDraft = buildLightweightWorkflowDraft(input.answers);
-  let backendSessionId: string | undefined = normalizeBackendSessionId(input.backendSessionId);
+  let runtimeSessionId: string | undefined = normalizeRuntimeSessionId(input.runtimeSessionId);
   const requirements = fallbackDraft.requirements;
   const availableStepAgents = (input.availableAgents || [])
     .map((name) => String(name || '').trim())
@@ -1360,7 +1369,7 @@ async function generateLightweightWorkflowDraft(input: {
     const outlineOutput = await runLightweightWorkflowCreationItem({
       step: outlineStep,
       frontendSessionId: input.frontendSessionId,
-      backendSessionId,
+      runtimeSessionId,
       systemPrompt: buildWorkflowCreationItemSystemPrompt(outlineStep, baseContext),
       message: buildWorkflowCreationItemUserMessage(outlineStep, creationState),
       workingDirectory: input.workingDirectory,
@@ -1373,7 +1382,7 @@ async function generateLightweightWorkflowDraft(input: {
         retryNotice,
       }),
     });
-    backendSessionId = outlineOutput.backendSessionId;
+    runtimeSessionId = outlineOutput.runtimeSessionId;
     creationState = applyWorkflowCreationItem(creationState, outlineOutput.result);
     completedTitles.push(outlineStep.title);
     await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
@@ -1391,7 +1400,7 @@ async function generateLightweightWorkflowDraft(input: {
       const output = await runLightweightWorkflowCreationItem({
         step,
         frontendSessionId: input.frontendSessionId,
-        backendSessionId,
+        runtimeSessionId,
         systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
         message: [buildWorkflowCreationItemUserMessage(step, creationState), '', `当前必须补全的 stateName：${stateName}`].join('\n'),
         workingDirectory: input.workingDirectory,
@@ -1404,7 +1413,7 @@ async function generateLightweightWorkflowDraft(input: {
         },
         onRetry: (retryNotice) => input.onProgress?.({ activeTitle: step.title, completedTitles, state: creationState, retryNotice }),
       });
-      backendSessionId = output.backendSessionId;
+      runtimeSessionId = output.runtimeSessionId;
       creationState = applyWorkflowCreationItem(creationState, output.result);
       completedTitles.push(step.title);
       await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
@@ -1857,7 +1866,7 @@ export function ChatPageContent({
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model, setModel, engine, effectiveEngine, isModelSelectionReady, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
-    skillSettings, mcpSettings, setSessionWorkbenchState,
+    skillSettings, mcpSettings, setSessionWorkbenchState, updateSessionWorkbenchState,
     appendSessionMessage,
     updateSessionMessage,
     workingDirectory,
@@ -2406,20 +2415,20 @@ export function ChatPageContent({
 
   const homepageSlashCommands = useMemo<HomepageSlashCommand[]>(() => ([
     {
-      id: 'compact',
-      command: '/compact',
-      title: '压缩上下文',
-      subtext: '刷新当前会话的 session 上下文容量',
-      icon: 'compress',
-      aliases: ['compact', 'context'],
-    },
-    {
       id: 'workflow',
       command: '/workflow',
       title: '创建工作流',
       subtext: '在当前对话里启动 AI 引导的工作流创建',
       icon: 'account_tree',
       aliases: ['workflow', '工作流', 'plan'],
+    },
+    {
+      id: 'compact',
+      command: '/compact',
+      title: '压缩上下文',
+      subtext: '压缩当前会话上下文，保留关键信息继续对话',
+      icon: 'compress',
+      aliases: ['compact', '压缩', '上下文'],
     },
     ...engineSlashCommands,
   ]), [engineSlashCommands]);
@@ -2463,13 +2472,10 @@ export function ChatPageContent({
     }
 
     let cancelled = false;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const params = new URLSearchParams({ engine: activeEngine });
-    if (effectiveWorkingDirectory) params.set('cwd', effectiveWorkingDirectory);
-    fetch(`/api/engine/commands?${params.toString()}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    fetchRuntimeCommandMetadataCompat({
+      engine: activeEngine,
+      cwd: effectiveWorkingDirectory,
     })
-      .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (cancelled) return;
         const rows = Array.isArray(data?.commands) ? data.commands : [];
@@ -3105,7 +3111,7 @@ export function ChatPageContent({
           ...(prev?.lightweightWorkflowDraft || {}),
           stage: 'clarification',
           busy: false,
-          backendSessionId: clarificationResult.backendSessionId,
+          runtimeSessionId: clarificationResult.runtimeSessionId,
           creationContextSummary: clarificationResult.creationContextSummary,
           clarificationForm: clarification,
           clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
@@ -3300,7 +3306,7 @@ export function ChatPageContent({
           ...(prev?.lightweightWorkflowDraft || {}),
           stage: 'generating',
           busy: true,
-          backendSessionId: currentDraftState?.backendSessionId,
+          runtimeSessionId: currentDraftState?.runtimeSessionId,
           creationContextSummary: currentDraftState?.creationContextSummary,
           clarificationForm: currentDraftState?.clarificationForm,
           draft: currentDraftState?.draft,
@@ -3329,7 +3335,7 @@ export function ChatPageContent({
         draft = await generateLightweightWorkflowDraft({
           answers,
           frontendSessionId: sessionId,
-          backendSessionId: currentDraftState?.backendSessionId,
+          runtimeSessionId: currentDraftState?.runtimeSessionId,
           creationContextSummary: [
             currentDraftState?.creationContextSummary,
             answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
@@ -3364,7 +3370,7 @@ export function ChatPageContent({
             ...(prev?.lightweightWorkflowDraft || {}),
             stage: 'clarification',
             busy: false,
-            backendSessionId: currentDraftState?.backendSessionId,
+            runtimeSessionId: currentDraftState?.runtimeSessionId,
             creationContextSummary: currentDraftState?.creationContextSummary,
             clarificationForm: currentDraftState?.clarificationForm,
             clarificationAnswers: answers,
@@ -3398,7 +3404,7 @@ export function ChatPageContent({
           ...(prev?.lightweightWorkflowDraft || {}),
           stage: 'draft',
           busy: false,
-          backendSessionId: currentDraftState?.backendSessionId,
+          runtimeSessionId: currentDraftState?.runtimeSessionId,
           creationContextSummary: [
             currentDraftState?.creationContextSummary,
             answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
@@ -4054,7 +4060,7 @@ export function ChatPageContent({
       editorRef.current?.focus();
       return;
     }
-    // Route to legacy collaboration handler only when one is explicitly mounted.
+    // Route to the collaboration handler only when one is explicitly mounted.
     if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
       collaborationMessageHandlerRef.current(messageToSend);
       editorRef.current?.focus();
@@ -4943,8 +4949,25 @@ export function ChatPageContent({
         roleType: activeAgentBinding.roleType || 'normal',
       })
     : null;
-  const chatHeaderStatus = activeAiBusy
-    ? <StatusPill tone="accent">生成中</StatusPill>
+  const handleForkFromSessionMenu = useCallback(() => {
+    if (!activeSession) return;
+    if (loading) {
+      toast('warning', '当前正在生成，请稍后创建 Fork');
+      return;
+    }
+    const sourceWorkbenchState = activeSession.sessionWorkbenchState;
+    const forkOptions = {
+      ...buildForkSessionOptions(activeSession),
+      ...(sourceWorkbenchState?.collaborationRoom
+        ? { sessionWorkbenchState: createForkedCollaborationWorkbenchState(sourceWorkbenchState) }
+        : {}),
+    };
+    const sessionId = createAndActivateSession(forkOptions);
+    toast('success', '已创建 Fork');
+    return sessionId;
+  }, [activeSession, createAndActivateSession, loading, toast]);
+  const chatHeaderStatus = activeAiBusy || isCurrentSessionLoading
+    ? <StatusPill tone="neutral">生成中</StatusPill>
     : activeWeChatBinding
       ? <StatusPill tone="success">微信已绑定</StatusPill>
       : activeSession
@@ -5008,6 +5031,19 @@ export function ChatPageContent({
           <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
           <span className="hidden xl:inline">保存为 Notebook</span>
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="outline" disabled={!activeSession} title="会话菜单">
+              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>more_horiz</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40">
+            <DropdownMenuItem onSelect={() => { handleForkFromSessionMenu(); }} disabled={!activeSession || loading}>
+              <span className="material-symbols-outlined mr-2 text-sm">call_split</span>
+              Fork 对话
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </>
     ),
   }, [
@@ -5017,9 +5053,13 @@ export function ChatPageContent({
     activeAgentBinding?.team,
     activeSession?.id,
     activeWeChatBinding?.externalConversationId,
+    activeAiBusy,
     chatTitle,
     handleCreateNewConversation,
+    handleForkFromSessionMenu,
     handleSaveConversationAsNotebook,
+    isCurrentSessionLoading,
+    loading,
     messages.length,
     notebookExporting,
   ]);
@@ -5460,23 +5500,38 @@ export function ChatPageContent({
             <PageHeader
               className="h-auto shrink-0 bg-card px-5 py-3"
               title={chatWorkspaceTitle}
-              status={<StatusPill tone={activeAiBusy ? 'accent' : 'neutral'}>{activeAiBusy ? '生成中' : `${messages.length} 消息`}</StatusPill>}
+              status={chatHeaderStatus}
               leading={<span className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-[#EEE7FF] text-[#8B5CF6] dark:bg-violet-500/10 dark:text-violet-300">#</span>}
               secondaryActions={(
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-md px-2.5 text-xs"
-                title="切换工作区"
-                aria-label="切换工作区"
-                onClick={() => {
-                  setChatWorkspaceDraft(pinnedChatWorkspacePath || defaultChatWorkspacePath);
-                  setChatWorkspaceDialogOpen(true);
-                }}
-              >
-                <Settings2 className="mr-1.5 h-4 w-4" />
-                切换工作区
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 rounded-md px-2.5 text-xs"
+                  title="切换工作区"
+                  aria-label="切换工作区"
+                  onClick={() => {
+                    setChatWorkspaceDraft(pinnedChatWorkspacePath || defaultChatWorkspacePath);
+                    setChatWorkspaceDialogOpen(true);
+                  }}
+                >
+                  <Settings2 className="mr-1.5 h-4 w-4" />
+                  切换工作区
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" disabled={!activeSession} title="会话菜单" className="h-8 rounded-md px-2.5 text-xs">
+                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>more_horiz</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuItem onSelect={() => { handleForkFromSessionMenu(); }} disabled={!activeSession || loading}>
+                      <span className="material-symbols-outlined mr-2 text-sm">call_split</span>
+                      Fork 对话
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
               )}
             />
             ) : null}
@@ -5777,7 +5832,7 @@ export function ChatPageContent({
                     session={activeSession}
                     setSessionWorkbenchState={setSessionWorkbenchState}
                     onCollapse={closeHomeSidebar}
-                    legacyPanel={hasWorkflowRuntimeRightRailContext ? null : (
+                    fallbackPanel={hasWorkflowRuntimeRightRailContext ? null : (
                       <HomeCommandSidebar
                         engine={effectiveEngine || engine}
                         model={model}

@@ -1,8 +1,14 @@
 import { errorMessage, jsonError, jsonOk, readJsonBody, requestUrl } from '@/server/api-route-runtime/request-utils';
 import { processManager } from '@/lib/core/process-manager';
-import { getOrCreateEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
-import { isAceTimingDebug } from '@/lib/engines/acp-engine';
-import type { Engine, EngineResultMetadata, EngineTokenUsage } from '@/lib/engines/engine-interface';
+import {
+  executeChatRuntimeWithContextRecovery,
+  getOrCreateChatRuntimeEngine,
+  isChatRuntimeTimingDebug,
+  resolveRecoveredRuntimeSessionId,
+  resolveRequestedChatRuntimeEngineType,
+  type ChatRuntimeResultMetadata,
+  type ChatRuntimeTokenUsage,
+} from '@/lib/chat/chat-engine-runtime';
 import {
   registerEngineStream,
   appendEngineStreamContent,
@@ -12,7 +18,7 @@ import {
   updateEngineStreamLiveSession,
   getEngineStream,
   getEngineStreamByFrontendSessionId,
-  getBackendSessionIdByFrontendSessionId,
+  getRuntimeSessionIdByFrontendSessionId,
   removeEngineStream,
 } from '@/lib/chat/stream-state';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
@@ -24,7 +30,6 @@ import {
   type RequestedMcpServersInput,
   type RequestedSkillsInput,
 } from '@/lib/chat/request-options';
-import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
@@ -40,7 +45,7 @@ function numberOrUndefined(value: unknown): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
-function normalizeUsage(metadata?: EngineResultMetadata): Partial<EngineTokenUsage> | undefined {
+function normalizeUsage(metadata?: ChatRuntimeResultMetadata): Partial<ChatRuntimeTokenUsage> | undefined {
   const usage = metadata?.usage;
   if (!usage) return undefined;
   const input = numberOrUndefined((usage as any).input_tokens ?? (usage as any).inputTokens);
@@ -59,7 +64,7 @@ function normalizeUsage(metadata?: EngineResultMetadata): Partial<EngineTokenUsa
   };
 }
 
-function metadataNumber(metadata: EngineResultMetadata | undefined, ...keys: string[]): number | undefined {
+function metadataNumber(metadata: ChatRuntimeResultMetadata | undefined, ...keys: string[]): number | undefined {
   for (const key of keys) {
     const value = metadata?.[key];
     const numeric = numberOrUndefined(value);
@@ -95,13 +100,19 @@ function getMessageById(messages: PersistedMessage[], messageId: string): Persis
   return messages.find((message) => message.id === messageId);
 }
 
+function toPublicLiveSession(session: PersistedChatSession | undefined | null): PersistedChatSession | null {
+  if (!session) return null;
+  const { backendSessionId: _backendSessionId, ...publicSession } = session;
+  return publicSession as PersistedChatSession;
+}
+
 function buildInitialLiveSessionSnapshot(input: {
   frontendSessionId: string;
   message: string;
   displayMessage?: string;
   engine?: string;
   model: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
   existingSession?: PersistedChatSession | null;
   userId: string;
   userMessageId?: string;
@@ -139,7 +150,7 @@ function buildInitialLiveSessionSnapshot(input: {
     title: existing?.messages?.length ? existing.title : (visibleUserMessage.slice(0, 30) || existing?.title || '新对话'),
     model: input.model || existing?.model || '',
     engine: input.engine || existing?.engine,
-    backendSessionId: input.backendSessionId || existing?.backendSessionId,
+    runtimeSessionId: input.runtimeSessionId || existing?.runtimeSessionId || existing?.backendSessionId,
     workflowBinding: existing?.workflowBinding,
     creationSession: existing?.creationSession,
     agentBinding: existing?.agentBinding,
@@ -223,23 +234,20 @@ export async function POST(request: Request) {
       personalDir: auth.personalDir,
     });
 
-    // If resuming, trust the session ID directly — don't waste 10s on a probe.
-    // If the session is actually expired, Claude CLI will fail fast and we retry
-    // as a new session with history injection.
-    let validResumeSid: string | undefined = undefined;
+    let validRuntimeSessionId: string | undefined = undefined;
     if (isResume) {
-      validResumeSid = sessionId;
+      validRuntimeSessionId = sessionId;
     }
     const engineRuntimeDirectory = typeof workingDirectory === 'string' && workingDirectory.trim()
       ? workingDirectory.trim()
       : getWorkspaceRoot();
-    const configuredEngine = await resolveRequestedEngineType(perChatEngine);
+    const configuredEngine = await resolveRequestedChatRuntimeEngineType(perChatEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, configuredEngine);
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
-    if (!validResumeSid && streamRecoveryKey) {
-      validResumeSid = getBackendSessionIdByFrontendSessionId(streamRecoveryKey);
+    if (!validRuntimeSessionId && streamRecoveryKey) {
+      validRuntimeSessionId = getRuntimeSessionIdByFrontendSessionId(streamRecoveryKey);
     }
-    const engine = await getOrCreateEngine(configuredEngine, streamRecoveryKey || frontendSessionId, auth.id);
+    const engine = await getOrCreateChatRuntimeEngine(configuredEngine, streamRecoveryKey || frontendSessionId, auth.id);
     const shouldTrackLiveSession = Boolean(frontendSessionId && !streamScope);
     const existingSession = shouldTrackLiveSession
       ? await loadChatSession(frontendSessionId).catch(() => null)
@@ -251,7 +259,7 @@ export async function POST(request: Request) {
           displayMessage: typeof displayMessage === 'string' ? displayMessage : undefined,
           engine: configuredEngine,
           model: useModel,
-          backendSessionId: validResumeSid,
+          runtimeSessionId: validRuntimeSessionId,
           existingSession: canUsePersistedSession(existingSession, auth.id) ? existingSession : null,
           userId: auth.id,
           userMessageId: typeof userMessageId === 'string' ? userMessageId : undefined,
@@ -263,7 +271,7 @@ export async function POST(request: Request) {
       ? assistantMessageId.trim()
       : baseLiveSession?.messages.at(-1)?.id;
 
-    if (isAceTimingDebug()) {
+    if (isChatRuntimeTimingDebug()) {
       console.log(
         `[ACE_TIMING][chat/stream][${chatId}] S0_auth_prompts_pool: ${Date.now() - streamPrepT0}ms (engine=${configuredEngine})`
       );
@@ -274,7 +282,7 @@ export async function POST(request: Request) {
       await ensureEngineRuntimeSkillsAvailable(configuredEngine, engineRuntimeDirectory, runtimeSkillNames);
     }
 
-    if (engine && isAceTimingDebug()) {
+    if (engine && isChatRuntimeTimingDebug()) {
       console.log(
         `[ACE_TIMING][chat/stream][${chatId}] S1_ready_before_execute: ${Date.now() - streamPrepT0}ms (symlink+pool)`
       );
@@ -309,7 +317,7 @@ export async function POST(request: Request) {
               const visibleText = normalizeAssistantDisplay(nextRawContent, true).visibleText || parseActions(nextRawContent).text;
               return {
                 ...session,
-                backendSessionId: getEngineStream(chatId)?.backendSessionId || session.backendSessionId,
+                runtimeSessionId: getEngineStream(chatId)?.runtimeSessionId || session.runtimeSessionId,
                 updatedAt: Date.now(),
                 engine: configuredEngine || session.engine,
                 model: useModel || session.model,
@@ -333,13 +341,13 @@ export async function POST(request: Request) {
               if (!session) return session;
               return {
                 ...session,
-                backendSessionId: String(evt.content),
+                runtimeSessionId: String(evt.content),
                 updatedAt: Date.now(),
               };
             });
             saveLiveSessionSnapshot(nextLiveSession, { force: true });
           }
-          engineStreamEvents.emit(chatId, { type: 'session', sessionId: evt.content });
+          engineStreamEvents.emit(chatId, { type: 'session', runtimeSessionId: evt.content, sessionId: evt.content });
         } else if (evt?.type === 'thought' && evt.content) {
           if (baseLiveSession && liveAssistantMessageId) {
             const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
@@ -369,15 +377,15 @@ export async function POST(request: Request) {
       engine.on('stream', onEngineStream);
 
       const startedAt = Date.now();
-      const execPromise = executeEngineWithContextRecovery(engine, {
+      const execPromise = executeChatRuntimeWithContextRecovery(engine, {
         agent: 'chat',
         step: 'chat',
         prompt: engineCommand.prompt,
         systemPrompt,
         model: useModel,
         workingDirectory: engineRuntimeDirectory,
-        sessionId: validResumeSid,
-        appendSystemPrompt: !!validResumeSid && !!systemPrompt,
+        sessionId: validRuntimeSessionId,
+        appendSystemPrompt: !!validRuntimeSessionId && !!systemPrompt,
         mcpServers: enabledMcpServers,
         userId: auth.id,
         rawPrompt: engineCommand.rawPrompt,
@@ -387,14 +395,14 @@ export async function POST(request: Request) {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
         },
       }).then((result) => {
-        if (isAceTimingDebug()) {
+        if (isChatRuntimeTimingDebug()) {
           console.log(
             `[ACE_TIMING][chat/stream][${chatId}] S2_engine_execute_wall: ${Date.now() - startedAt}ms (platform overhead ≈ S1; agent+ACP ≈ wrap.W4 / acp.6)`
           );
         }
-        const resolvedSessionId = resolveRecoveredSessionId(result, validResumeSid);
-        setEngineStreamSessionId(chatId, resolvedSessionId || undefined);
-        if (proc) proc.sessionId = resolvedSessionId || undefined;
+        const resolvedRuntimeSessionId = resolveRecoveredRuntimeSessionId(result, validRuntimeSessionId);
+        setEngineStreamSessionId(chatId, resolvedRuntimeSessionId || undefined);
+        if (proc) proc.sessionId = resolvedRuntimeSessionId || undefined;
         const state = getEngineStream(chatId);
         const output = result.output || state?.streamContent || '';
 
@@ -412,7 +420,8 @@ export async function POST(request: Request) {
         const metadata = result.metadata;
         const responsePayload = {
           result: output,
-          session_id: resolvedSessionId ?? null,
+          runtimeSessionId: resolvedRuntimeSessionId ?? null,
+          session_id: resolvedRuntimeSessionId ?? null,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd') ?? 0,
           duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs') ?? (Date.now() - startedAt),
           usage: normalizeUsage(metadata),
@@ -436,7 +445,7 @@ export async function POST(request: Request) {
                 : `请求失败：${failureMessage}`;
               return {
                 ...session,
-                backendSessionId: resolvedSessionId || session.backendSessionId,
+                runtimeSessionId: resolvedRuntimeSessionId || session.runtimeSessionId,
                 updatedAt: now,
                 engine: configuredEngine || session.engine,
                 model: useModel || session.model,
@@ -464,7 +473,7 @@ export async function POST(request: Request) {
             }));
             return {
               ...session,
-              backendSessionId: resolvedSessionId || session.backendSessionId,
+              runtimeSessionId: resolvedRuntimeSessionId || session.runtimeSessionId,
               updatedAt: now,
               engine: configuredEngine || session.engine,
               model: useModel || session.model,
@@ -500,13 +509,13 @@ export async function POST(request: Request) {
             if (!currentAssistant) return session;
             const message = String(error?.message || '请求失败');
             const partial = String(currentAssistant.content || '').trim();
-            const failedBackendSessionId = getEngineStream(chatId)?.backendSessionId || proc?.sessionId || validResumeSid || session.backendSessionId;
+            const failedRuntimeSessionId = getEngineStream(chatId)?.runtimeSessionId || proc?.sessionId || validRuntimeSessionId || session.runtimeSessionId;
             const errorContent = partial
               ? `请求失败：${message}\n\n已返回部分内容：\n${partial}`
               : `请求失败：${message}`;
             return {
               ...session,
-              backendSessionId: failedBackendSessionId,
+              runtimeSessionId: failedRuntimeSessionId,
               updatedAt: Date.now(),
               messages: updateMessageById(session.messages, liveAssistantMessageId, (item) => ({
                 ...item,
@@ -553,7 +562,7 @@ export async function POST(request: Request) {
       return jsonOk({ chatId });
     }
 
-    // All engines (including claude-code) should be handled above via getOrCreateEngine.
+    // All engines (including claude-code) should be handled above via the chat runtime bridge.
     // If engine is null, it means the engine is not available.
     return jsonError('引擎不可用，请检查配置', 500);
   } catch (error: any) {
@@ -578,8 +587,10 @@ export async function GET(request: Request) {
         status: engineState.status,
         engine: engineState.engine || '',
         model: engineState.model || '',
-        backendSessionId: engineState.backendSessionId || '',
-        liveSession: engineState.liveSession || null,
+        runtimeSessionId: engineState.runtimeSessionId || '',
+        turnId: engineState.turnId || '',
+        traceId: engineState.traceId || '',
+        liveSession: toPublicLiveSession(engineState.liveSession),
       });
     }
 
@@ -634,19 +645,19 @@ export async function GET(request: Request) {
         if (evt.type === 'delta') {
           send('delta', { content: evt.content });
         } else if (evt.type === 'session') {
-          send('session', { sessionId: evt.sessionId });
+          send('session', { runtimeSessionId: evt.runtimeSessionId || evt.sessionId, sessionId: evt.runtimeSessionId || evt.sessionId });
         } else if (evt.type === 'thinking') {
           send('thinking', { content: evt.content });
         } else if (evt.type === 'engine_error') {
           const state = getEngineStream(chatId);
-          send('engine_error', { message: evt.content || '执行失败', sessionId: state?.backendSessionId || null });
+          send('engine_error', { message: evt.content || '执行失败', runtimeSessionId: state?.runtimeSessionId || null });
         }
       };
 
       send('connected', { chatId });
       const state = getEngineStream(chatId);
-      if (state?.backendSessionId) {
-        send('session', { sessionId: state.backendSessionId });
+      if (state?.runtimeSessionId) {
+        send('session', { runtimeSessionId: state.runtimeSessionId, sessionId: state.runtimeSessionId });
       }
       engineStreamEvents.on(chatId, onEngineStream);
 
@@ -655,7 +666,8 @@ export async function GET(request: Request) {
         .then((result: any) => {
           send('done', {
             result: result.result,
-            sessionId: result.session_id ?? null,
+            runtimeSessionId: result.runtimeSessionId ?? result.session_id ?? null,
+            sessionId: result.runtimeSessionId ?? result.session_id ?? null,
             costUsd: result.cost_usd,
             durationMs: result.duration_ms,
             usage: result.usage,
@@ -665,7 +677,7 @@ export async function GET(request: Request) {
         })
         .catch((err: any) => {
           const state = getEngineStream(chatId);
-          send('failed', { message: err.message || '执行失败', sessionId: state?.backendSessionId || null });
+          send('failed', { message: err.message || '执行失败', runtimeSessionId: state?.runtimeSessionId || null });
         })
         .finally(() => {
           cleanup();

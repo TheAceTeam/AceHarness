@@ -1,11 +1,20 @@
 import { parse, stringify } from 'yaml';
+import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
 import type { RuntimeSqliteDatabase } from '../sqlite/database';
-import { importModelRoutes, listModelRoutes, type ImportModelRoutesInput, type ImportModelRoutesResult } from './model-routes';
+import {
+  importModelRoutes,
+  listModelCatalogEntries,
+  listModelProviders,
+  listModelRoutes,
+  type ImportModelRoutesInput,
+  type ImportModelRoutesResult,
+} from './model-routes';
 
-type LegacyYamlModel = {
+type PreRuntimeYamlModel = {
   value?: unknown;
   label?: unknown;
   costMultiplier?: unknown;
+  contextWindow?: unknown;
   endpoints?: unknown;
   engines?: unknown;
 };
@@ -46,7 +55,7 @@ type RuntimeYamlRoute = {
   verifiedAt?: unknown;
 };
 
-const legacyAgentIdBySourceName: Record<string, string> = {
+const preRuntimeAgentIdBySourceName: Record<string, string> = {
   'claude-code': 'claude',
   'kiro-cli': 'kiro',
   codex: 'codex',
@@ -79,6 +88,18 @@ function asNumber(input: unknown): number | undefined {
   return typeof input === 'number' && Number.isFinite(input) ? input : undefined;
 }
 
+function contextWindowOrDefault(input: unknown): number {
+  const value = asNumber(input);
+  return typeof value === 'number' && value > 0 ? value : DEFAULT_MODEL_CONTEXT_WINDOW;
+}
+
+function endpointsOrDefault(input: unknown): string[] {
+  const endpoints = Array.from(
+    new Set(asArray(input).map(normalizeProviderId).filter(Boolean) as string[]),
+  );
+  return endpoints.length > 0 ? endpoints : [...DEFAULT_MODEL_ENDPOINTS];
+}
+
 function slug(input: string): string {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
 }
@@ -88,6 +109,7 @@ function parseProviderModel(value: string): { providerModel: string; configOptio
   if (!match) return { providerModel: value, configOptions: {} };
 
   const [, providerModel, rawOptions] = match;
+  if (!rawOptions.includes('=')) return { providerModel: value, configOptions: {} };
   const configOptions: Record<string, unknown> = {};
   for (const part of rawOptions.split(',').map((item) => item.trim()).filter(Boolean)) {
     const [rawKey, ...rawValueParts] = part.split('=');
@@ -125,7 +147,7 @@ export function parseModelRoutesYamlSeed(source: string, now = new Date().toISOS
     return parseRuntimeYamlSeed(parsed, now);
   }
 
-  return parseLegacyModelsYamlSeed(parsed, now);
+  return parsePreRuntimeModelsYamlSeed(parsed, now);
 }
 
 function parseRuntimeYamlSeed(parsed: Record<string, unknown>, now: string): ImportModelRoutesInput {
@@ -137,7 +159,7 @@ function parseRuntimeYamlSeed(parsed: Record<string, unknown>, now: string): Imp
       id,
       displayName: asString(model.displayName) ?? id,
       family: asString(model.family),
-      contextWindow: asNumber(model.contextWindow),
+      contextWindow: contextWindowOrDefault(model.contextWindow),
       capabilities: asRecord(model.capabilities),
       metadata: asRecord(model.metadata),
       now,
@@ -188,8 +210,8 @@ function parseRuntimeYamlSeed(parsed: Record<string, unknown>, now: string): Imp
   return { catalog, providers, routes };
 }
 
-function parseLegacyModelsYamlSeed(parsed: Record<string, unknown>, now: string): ImportModelRoutesInput {
-  const models = asArray(parsed.models) as LegacyYamlModel[];
+function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: string): ImportModelRoutesInput {
+  const models = asArray(parsed.models) as PreRuntimeYamlModel[];
   const providerIds = new Set<string>();
   const catalog: ImportModelRoutesInput['catalog'] = [];
   const routes: ImportModelRoutesInput['routes'] = [];
@@ -202,21 +224,22 @@ function parseLegacyModelsYamlSeed(parsed: Record<string, unknown>, now: string)
     catalog.push({
       id: modelId,
       displayName: asString(model.label) ?? modelId,
+      contextWindow: contextWindowOrDefault(model.contextWindow),
       metadata: {
-        seedSource: 'legacy-models-yaml',
+        seedSource: 'preRuntime-models-yaml',
         costMultiplier: asNumber(model.costMultiplier),
       },
       now,
     });
 
-    const endpoints = asArray(model.endpoints).map(normalizeProviderId).filter(Boolean) as string[];
+    const endpoints = endpointsOrDefault(model.endpoints);
     for (const endpoint of endpoints) providerIds.add(endpoint);
 
     const providerChoices = endpoints.length > 0 ? endpoints : [undefined];
     const agentIds = asArray(model.engines)
       .map(asString)
       .filter(Boolean)
-      .map((sourceName) => legacyAgentIdBySourceName[sourceName!] ?? sourceName!)
+      .map((sourceName) => preRuntimeAgentIdBySourceName[sourceName!] ?? sourceName!)
       .filter((agentId, index, all) => all.indexOf(agentId) === index);
 
     for (const agentId of agentIds) {
@@ -258,6 +281,22 @@ export function importModelRoutesYamlSeed(
 }
 
 export function exportModelRoutesYamlSeed(db: RuntimeSqliteDatabase): string {
+  const catalog = listModelCatalogEntries(db).map((model) => ({
+    id: model.id,
+    displayName: model.displayName,
+    family: model.family,
+    contextWindow: model.contextWindow,
+    capabilities: model.capabilities ?? {},
+    metadata: model.metadata ?? {},
+  }));
+  const providers = listModelProviders(db).map((provider) => ({
+    id: provider.id,
+    kind: provider.kind,
+    displayName: provider.displayName,
+    baseUrl: provider.baseUrl,
+    envRequirements: provider.envRequirements ?? [],
+    metadata: provider.metadata ?? {},
+  }));
   const routes = listModelRoutes(db).map((route) => ({
     modelRouteId: route.id,
     modelId: route.modelId,
@@ -274,5 +313,5 @@ export function exportModelRoutesYamlSeed(db: RuntimeSqliteDatabase): string {
     verifiedAt: route.verifiedAt,
   }));
 
-  return stringify({ routes });
+  return stringify({ catalog, providers, routes });
 }

@@ -1,35 +1,54 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import type { EngineDriver, EngineType } from '@/lib/engines/engine-factory';
-import { MockEngine } from './helpers/mock-engine';
+import { withIsolatedAceHome } from './helpers/module-helpers';
+import type { RuntimeDiagnosticPromptOptions, RuntimeDiagnosticPromptResult } from '@/lib/models/diagnostics-runtime-bridge';
 
-const createEngine = vi.fn();
-const createEngineForDriver = vi.fn();
-const getEngineAvailabilityReport = vi.fn();
-const resolveEffectiveEngine = vi.fn();
+const getRuntimeDiagnosticAvailability = vi.fn();
+const runRuntimeDiagnosticPrompt = vi.fn();
 
-vi.mock('@/lib/engines/engine-factory', () => ({
-  createEngine: (...args: unknown[]) => createEngine(...args),
-  createEngineForDriver: (...args: unknown[]) => createEngineForDriver(...args),
-  getEngineAvailabilityReport: (...args: unknown[]) => getEngineAvailabilityReport(...args),
-  resolveEffectiveEngine: (...args: unknown[]) => resolveEffectiveEngine(...args),
-}));
+vi.mock('@/lib/models/diagnostics-runtime-bridge', async () => {
+  const actual = await vi.importActual<any>('@/lib/models/diagnostics-runtime-bridge');
+  return {
+    ...actual,
+    getRuntimeDiagnosticAvailability: (...args: unknown[]) => getRuntimeDiagnosticAvailability(...args),
+    runRuntimeDiagnosticPrompt: (...args: unknown[]) => runRuntimeDiagnosticPrompt(...args),
+  };
+});
+
+function promptResult(output: string, options: Partial<RuntimeDiagnosticPromptResult> = {}): RuntimeDiagnosticPromptResult {
+  return {
+    success: options.success ?? true,
+    output,
+    sessionId: options.sessionId ?? 'ses-diagnostic',
+    stopReason: options.stopReason,
+    error: options.error,
+    metadata: options.metadata,
+    events: options.events ?? [
+      { type: 'session', content: options.sessionId ?? 'ses-diagnostic' },
+      { type: 'text', content: output },
+    ],
+  };
+}
 
 describe('model diagnostics', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    getEngineAvailabilityReport.mockResolvedValue({
+    getRuntimeDiagnosticAvailability.mockResolvedValue({
       available: true,
       drivers: {
         sdk: true,
         stdio: true,
       },
+      detail: 'runtime=acpx, route=test-route',
     });
-    resolveEffectiveEngine.mockImplementation((engineId: string) => `${engineId}-effective`);
+    runRuntimeDiagnosticPrompt.mockImplementation(async (options: RuntimeDiagnosticPromptOptions) => {
+      const output = options.step === 'multi-turn' ? 'MEMORY=ACE_MEMORY_7319' : 'ACE_OK';
+      return promptResult(output);
+    });
   });
 
-  test('returns structured diagnostics when wrapper initialization fails', async () => {
-    createEngine.mockRejectedValue(new Error('connect refused during wrapper init'));
+  test('returns structured diagnostics when runtime availability fails', async () => {
+    getRuntimeDiagnosticAvailability.mockRejectedValue(new Error('connect refused during runtime availability'));
 
     const { runModelDiagnostics } = await import('@/lib/models/diagnostics');
     const result = await runModelDiagnostics({
@@ -38,43 +57,32 @@ describe('model diagnostics', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('connect refused during wrapper init');
+    expect(result.error).toContain('connect refused during runtime availability');
     expect(result.engineDebug?.stages.map((stage) => [stage.id, stage.status])).toEqual([
-      ['availability', 'passed'],
-      ['create-engine', 'failed'],
+      ['availability', 'failed'],
     ]);
-    expect(result.logs?.some((log) => log.message === '引擎 wrapper 初始化失败' && log.detail?.includes('connect refused'))).toBe(true);
+    expect(result.logs?.some((log) => log.message === '环境可用性检查失败' && log.detail?.includes('connect refused'))).toBe(true);
   });
 
-  test('captures wrapper log stream events into diagnostic logs', async () => {
-    const engine = new MockEngine();
-    engine.setName('mock-diagnostic-engine');
-    engine.executeImpl = async (options) => {
-      engine.emit('stream', {
-        type: 'log',
-        content: 'Raw SSE connected',
-        metadata: {
-          detail: `step=${options.step}`,
-          level: 'info',
-          verbose: true,
-        },
-      });
-      engine.emit('stream', {
-        type: 'session',
-        content: 'ses-diagnostic',
-      });
+  test('captures runtime log stream events into diagnostic logs', async () => {
+    runRuntimeDiagnosticPrompt.mockImplementation(async (options: RuntimeDiagnosticPromptOptions) => {
       const output = options.step === 'multi-turn' ? 'MEMORY=ACE_MEMORY_7319' : 'ACE_OK';
-      engine.emit('stream', {
-        type: 'text',
-        content: output,
+      return promptResult(output, {
+        events: [
+          {
+            type: 'log',
+            content: 'Raw SSE connected',
+            metadata: {
+              detail: `step=${options.step}`,
+              level: 'info',
+              verbose: true,
+            },
+          },
+          { type: 'session', content: 'ses-diagnostic' },
+          { type: 'text', content: output },
+        ],
       });
-      return {
-        success: true,
-        output,
-        sessionId: 'ses-diagnostic',
-      };
-    };
-    createEngine.mockResolvedValue(engine);
+    });
 
     const { runModelDiagnostics } = await import('@/lib/models/diagnostics');
     const result = await runModelDiagnostics({
@@ -88,36 +96,66 @@ describe('model diagnostics', () => {
     expect(result.logs?.some((log) => log.message === 'Raw SSE connected' && log.detail?.includes('multi-turn'))).toBe(true);
   });
 
-  test('uses createEngineForDriver when diagnostics pins a driver', async () => {
-    const engine = new MockEngine({
-      success: true,
-      output: 'ACE_OK',
-      sessionId: 'ses-driver',
-    });
-    engine.executeImpl = async () => {
-      engine.emit('stream', { type: 'session', content: 'ses-driver' });
-      engine.emit('stream', { type: 'text', content: 'ACE_OK' });
-      return {
-        success: true,
-        output: 'ACE_OK',
-        sessionId: 'ses-driver',
-      };
-    };
-    createEngineForDriver.mockResolvedValue(engine);
-
+  test('preserves pinned diagnostic driver while using runtime availability', async () => {
     const { runModelDiagnostics } = await import('@/lib/models/diagnostics');
-    await runModelDiagnostics({
+    const result = await runModelDiagnostics({
       engine: 'opencode',
       driver: 'sdk',
       includeModelScore: false,
     });
 
-    expect(createEngineForDriver).toHaveBeenCalledWith('opencode' as EngineType, 'sdk' as EngineDriver);
+    expect(result.driver).toBe('sdk');
+    expect(getRuntimeDiagnosticAvailability).toHaveBeenCalledWith(expect.objectContaining({
+      engineId: 'opencode',
+    }));
+  });
+
+  test('resolves diagnostics identity from modelRouteId before preRuntime engine/model inputs', async () => {
+    await withIsolatedAceHome(async () => {
+      vi.resetModules();
+      runRuntimeDiagnosticPrompt.mockImplementation(async (options: RuntimeDiagnosticPromptOptions) => {
+        const output = options.step === 'multi-turn' ? 'MEMORY=ACE_MEMORY_7319' : `MODEL=${options.model}`;
+        return promptResult(output, { sessionId: 'ses-route' });
+      });
+
+      const { getWorkspaceDataFile } = await import('@/lib/core/app-paths');
+      const { openRuntimeSqliteDatabase } = await import('@/lib/runtime-agent/sqlite/database');
+      const { upsertModelCatalogEntry, upsertModelProvider, upsertModelRoute } = await import('@/lib/runtime-agent/models/model-routes');
+      const db = openRuntimeSqliteDatabase(getWorkspaceDataFile('runtime-agent.sqlite'));
+      try {
+        upsertModelCatalogEntry(db, { id: 'gpt-5.3-codex', displayName: 'GPT 5.3 Codex' });
+        upsertModelProvider(db, { id: 'openai', kind: 'openai', displayName: 'OpenAI' });
+        upsertModelRoute(db, {
+          id: 'route-codex-gpt',
+          modelId: 'gpt-5.3-codex',
+          agentId: 'codex',
+          providerId: 'openai',
+          providerModel: 'gpt-5.3-codex-provider',
+        });
+      } finally {
+        db.close();
+      }
+
+      const { runModelDiagnostics } = await import('@/lib/models/diagnostics');
+      const result = await runModelDiagnostics({
+        modelRouteId: 'route-codex-gpt',
+        engine: 'wrong-engine',
+        model: 'wrong-model',
+        includeModelScore: false,
+      });
+
+      expect(result.engine).toBe('codex');
+      expect(result.model).toBe('gpt-5.3-codex-provider');
+      expect(runRuntimeDiagnosticPrompt).toHaveBeenCalledWith(expect.objectContaining({
+        engineId: 'codex',
+        model: 'gpt-5.3-codex-provider',
+      }));
+      expect(result.logs?.[0]?.detail).toContain('route=route-codex-gpt');
+    });
   });
 
   test('scores the harder pelican, math, reasoning, and consistency probes from exact answers', async () => {
-    const engine = new MockEngine();
-    engine.executeImpl = async (options) => {
+    runRuntimeDiagnosticPrompt.mockImplementation(async (options: RuntimeDiagnosticPromptOptions) => {
       const outputs: Record<string, string> = {
         'single-turn': 'ACE_OK',
         'multi-turn': 'MEMORY=ACE_MEMORY_7319',
@@ -147,16 +185,9 @@ describe('model diagnostics', () => {
         'cap-consistency': 'BC_OVER_AD=1/3',
         'cap-consistency-repeat': 'BC_OVER_AD = 1 / 3',
       };
-      const output = outputs[options.step] || 'ACE_OK';
-      engine.emit('stream', { type: 'session', content: 'ses-scored' });
-      engine.emit('stream', { type: 'text', content: output });
-      return {
-        success: true,
-        output,
-        sessionId: 'ses-scored',
-      };
-    };
-    createEngine.mockResolvedValue(engine);
+      const output = outputs[options.step || ''] || 'ACE_OK';
+      return promptResult(output, { sessionId: 'ses-scored' });
+    });
 
     const { runModelDiagnostics } = await import('@/lib/models/diagnostics');
     const result = await runModelDiagnostics({
@@ -180,22 +211,14 @@ describe('model diagnostics', () => {
   });
 
   test('does not let the old relay topology svg pass as a pelican drawing', async () => {
-    const engine = new MockEngine();
-    engine.executeImpl = async (options) => {
+    runRuntimeDiagnosticPrompt.mockImplementation(async (options: RuntimeDiagnosticPromptOptions) => {
       const output = options.step === 'cap-drawing-pelican'
         ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 240"><title>relay audit topology</title><rect x="12" y="16" width="88" height="40"/><rect x="132" y="16" width="88" height="40"/><rect x="252" y="16" width="88" height="40"/><line x1="100" y1="36" x2="132" y2="36"/><line x1="220" y1="36" x2="252" y2="36"/><text x="26" y="40">gateway</text><text x="150" y="40">provider</text><text x="266" y="40">relay</text></svg>'
         : options.step === 'multi-turn'
           ? 'MEMORY=ACE_MEMORY_7319'
           : 'ACE_OK';
-      engine.emit('stream', { type: 'session', content: 'ses-topology' });
-      engine.emit('stream', { type: 'text', content: output });
-      return {
-        success: true,
-        output,
-        sessionId: 'ses-topology',
-      };
-    };
-    createEngine.mockResolvedValue(engine);
+      return promptResult(output, { sessionId: 'ses-topology' });
+    });
 
     const { runModelDiagnostics } = await import('@/lib/models/diagnostics');
     const result = await runModelDiagnostics({

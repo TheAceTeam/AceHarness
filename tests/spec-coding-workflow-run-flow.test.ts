@@ -9,13 +9,15 @@ const engineState = vi.hoisted(() => ({
   engine: null as MockEngine | null,
 }));
 
-vi.mock('@/lib/engines', () => ({
-  createEngine: vi.fn().mockImplementation(async () => engineState.engine),
-  getConfiguredEngine: vi.fn().mockResolvedValue('mock-engine'),
-}));
-
-vi.mock('@/lib/engines/engine-config', () => ({
-  getEngineSkillsSubdir: vi.fn().mockReturnValue('.agent/skills'),
+vi.mock('@/lib/workflow/runtime-facade', () => ({
+  createWorkflowRuntime: vi.fn().mockImplementation(async () => engineState.engine),
+  getConfiguredWorkflowRuntime: vi.fn().mockResolvedValue('mock-engine'),
+  getWorkflowRuntimeSkillsSubdir: vi.fn().mockReturnValue('.agent/skills'),
+  getLogicalEngineId: vi.fn((engine) => engine),
+  resolveRequestedWorkflowRuntimeType: vi.fn((engine) => engine || 'mock-engine'),
+  compactWorkflowRuntimeContextManually: vi.fn().mockResolvedValue(null),
+  executeWorkflowRuntimeWithContextRecovery: vi.fn((engine, options) => engine.execute(options)),
+  resolveRecoveredWorkflowRuntimeSessionId: vi.fn((result, fallback) => result.sessionId || fallback || null),
 }));
 
 async function createAuthToken(): Promise<{ token: string; userId: string }> {

@@ -1,24 +1,22 @@
 # Task 2: SQLite Runtime Schema And Stores
 
-Progress: 45%
-Status: In Progress
+Progress: 100%
+Status: Done
 
 ## Goal
 
 Implement SQLite schema and store APIs for runtime sessions, bindings, turns, events, traces, operations, edges, projection cache, and agent runtime state.
 
-## Current State
+## Completed
 
 - `better-sqlite3` is already a dependency.
-- The spec requires WAL, foreign keys, busy timeout, `BEGIN IMMEDIATE`, lease fields, partial unique indexes, and projection cache.
-- Existing runtime SQLite routes exist under `src/server/api-routes/runtime/sqlite`, but they are generic database tooling, not the new runtime source of truth.
+- Runtime schema bootstrap covers the runtime source-of-truth tables: sessions, snapshots, bindings, turns, events, traces, operations, edges, projection cache, and agent runtime state.
+- Store APIs cover sessions, bindings, turns, events, traces, operations, edges, projection cache, and agent runtime state.
+- Tests cover WAL, foreign keys, busy timeout, required tables, key indexes, enqueue idempotency, lease claim, duplicate running protection, event seq monotonicity, cancel transitions, expired lease recovery, explicit lease reclaimer, projection rollback, and core store read/write APIs.
 
 ## Follow-Up Work
 
-- Add schema migration files or schema bootstrap for runtime tables.
-- Implement store modules for sessions, turns, events, traces, operations, edges, projections, and agent runtime state.
-- Implement transaction helpers for turn enqueue, lease claim, event append, completion, cancel, and projection update.
-- Add reclaimer logic for expired leases.
+- Keep `claimNextTurn` expired lease compatibility in mind when Task 7 refines worker scheduling. The explicit `reclaimExpiredLeases` method now exists for stricter orchestration.
 
 ## Acceptance
 
@@ -34,3 +32,6 @@ Implement SQLite schema and store APIs for runtime sessions, bindings, turns, ev
 - `npx vitest run tests/runtime-sqlite-schema.test.ts`: pass.
 - `npx vitest run tests/runtime-contracts.test.ts tests/runtime-sqlite-schema.test.ts tests/agent-registry.test.ts`: pass, 17 tests.
 - `npx tsc --noEmit --pretty false`: fail only on existing/non-Task-2 errors in `WorkbenchClient.tsx` and `src/start.ts`.
+- 2026-07-09 Task 2 closeout worker: added store read APIs for bindings/traces/operations/edges/projection cache/agent runtime state, explicit `reclaimExpiredLeases`, and projection rollback coverage.
+- 2026-07-09 `npx vitest run tests/runtime-sqlite-schema.test.ts`: pass, 10 tests.
+- 2026-07-09 `npx tsc --noEmit --pretty false`: pass.

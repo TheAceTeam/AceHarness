@@ -15,12 +15,11 @@ import {
   normalizeUpdateTarget,
   resolveNpmCommand,
 } from '@/lib/core/self-update';
-import { resolveBinary as resolveMagicCliBinary } from './lib/engines/magic-cli-wrapper';
 import { isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { parse, stringify } from 'yaml';
-import { getModelOptions } from '@/lib/core/models';
-import { ACPEngine } from './lib/engines/acp-engine';
-import { isCursorAgentCommandAvailable, resolveCursorAgentCommand } from './lib/engines/cursor-wrapper';
+import { getModelOptions, modelSupportsEngine } from '@/lib/core/models';
+import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
+import { listRuntimeModelsFromSqlite } from '@/lib/runtime-agent/models/model-routes-api';
 import {
   getWorkspaceDirectory,
   getEngineConfigPath,
@@ -36,6 +35,7 @@ refreshBundledAceHarnessSkillsOnStartup();
 
 type Locale = 'zh' | 'en';
 type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli';
+type RuntimeAgentId = 'claude' | 'kiro' | 'codex' | 'cursor' | 'opencode' | 'nga' | 'codegenie' | 'trae' | 'cangjie-magic';
 
 interface ConfiguredEngine {
   engine?: EngineType;
@@ -192,6 +192,18 @@ const ENGINE_META: Array<{ id: EngineType; name: string }> = [
   { id: 'trae-cli', name: 'Trae CLI' },
   { id: 'magic-cli', name: 'Magic CLI' },
 ];
+
+const ENGINE_TO_AGENT_ID: Record<EngineType, RuntimeAgentId> = {
+  'claude-code': 'claude',
+  'kiro-cli': 'kiro',
+  codex: 'codex',
+  cursor: 'cursor',
+  opencode: 'opencode',
+  nga: 'nga',
+  codegenie: 'codegenie',
+  'trae-cli': 'trae',
+  'magic-cli': 'cangjie-magic',
+};
 
 const CLI_MESSAGES: Record<Locale, CliMessages> = {
   zh: {
@@ -683,58 +695,52 @@ async function moduleExists(moduleName: string): Promise<boolean> {
 }
 
 async function detectEngines() {
-  const availability = await Promise.all(ENGINE_META.map(async (engine) => ({
-    ...engine,
-    available:
-      engine.id === 'claude-code' ? await moduleExists('@anthropic-ai/claude-agent-sdk')
-        : engine.id === 'codex' ? (await moduleExists('@openai/codex-sdk')) || commandExists('codex')
-          : engine.id === 'magic-cli' ? resolveMagicCliBinary() !== null
-            : engine.id === 'cursor' ? isCursorAgentCommandAvailable() : commandExists(engine.id),
-  })));
+  const availability = await Promise.all(ENGINE_META.map(async (engine) => {
+    const definition = getBuiltinAgentDefinition(ENGINE_TO_AGENT_ID[engine.id]);
+    const commands = [
+      definition?.availabilityProbe?.resolver.primaryCommand,
+      ...(definition?.availabilityProbe?.resolver.fallbackCommands ?? []),
+      definition?.command,
+      ...(definition?.fallbackCommands ?? []),
+    ].filter((command): command is string => Boolean(command));
+
+    return {
+      ...engine,
+      available:
+        engine.id === 'claude-code' ? (await moduleExists('@anthropic-ai/claude-agent-sdk')) || commands.some((command) => commandExists(command))
+          : commands.some((command) => commandExists(command)),
+    };
+  }));
 
   return availability;
 }
 
-async function discoverAcpModels(engineType: EngineType): Promise<Array<{ value: string; title: string }>> {
-  const commandMap: Partial<Record<EngineType, string>> = {
-    opencode: 'opencode',
-    // Some distributions expose a separate `ngagent` intended for ACP stdio.
-    nga: commandExists('ngagent') ? 'ngagent' : 'nga',
-    codegenie: 'codegenie',
-    'kiro-cli': 'kiro-cli',
-    cursor: resolveCursorAgentCommand(),
-    'trae-cli': 'trae-cli',
-  };
-  const command = commandMap[engineType];
-  if (!command) return [];
-
-  const engine = new ACPEngine({
-    engineType,
-    command,
-    workingDirectory: process.cwd(),
-  });
-
+async function getRuntimeModelRouteChoices(engineType: EngineType): Promise<Array<{ value: string; title: string }>> {
   try {
-    await engine.start();
-    await engine.createSession();
-    const models = await engine.getAvailableModels();
-    return models.map((item) => ({
-      value: item.modelId,
-      title: item.name || item.modelId,
+    const agentId = ENGINE_TO_AGENT_ID[engineType];
+    const models = listRuntimeModelsFromSqlite().routes
+      .filter((model) => model.agentId === agentId && model.status !== 'inactive');
+    return models.map((model) => ({
+      value: model.modelRouteId || model.value,
+      title: model.modelRouteId
+        ? `${model.label} (${model.modelRouteId})`
+        : model.label,
     }));
-  } finally {
-    engine.stop();
+  } catch {
+    return [];
   }
 }
 
 async function getEngineModelChoices(engineType: EngineType): Promise<Array<{ value: string; title: string }>> {
-  if (['opencode', 'nga', 'codegenie', 'kiro-cli', 'cursor', 'trae-cli'].includes(engineType)) {
-    return discoverAcpModels(engineType);
+  const routeChoices = await getRuntimeModelRouteChoices(engineType);
+  if (routeChoices.length > 0) {
+    return routeChoices;
   }
 
   const models = await getModelOptions();
   return models
-    .filter((model) => !model.engines || model.engines.length === 0 || model.engines.includes(engineType))
+    .filter((model) => model.status !== 'inactive')
+    .filter((model) => modelSupportsEngine(model, engineType) || modelSupportsEngine(model, ENGINE_TO_AGENT_ID[engineType]))
     .map((model) => ({
       value: model.value,
       title: `${model.label} (${model.costMultiplier}x)`,

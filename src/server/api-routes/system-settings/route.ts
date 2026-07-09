@@ -1,17 +1,128 @@
 import { requireAdmin, requireAuth } from '@/lib/auth/middleware';
+import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import {
   loadSystemSettings,
   normalizeAgentMemorySettings,
   normalizeWorkspaceExperienceSettings,
   saveSystemSettings,
 } from '@/lib/config/system-settings';
+import {
+  defaultPermissionPolicy,
+  type RuntimePermissionPolicyId,
+  type RuntimeReadiness,
+} from '@/lib/runtime-agent/contracts';
+import { checkSecretProfileReadiness } from '@/lib/runtime-agent/security/env-secret-profiles';
+import { openRuntimeSqliteDatabase } from '@/lib/runtime-agent/sqlite/database';
+import {
+  RuntimeSqliteStore,
+  type RuntimeEnvProfileRecord,
+  type RuntimeSecretProfileRecord,
+} from '@/lib/runtime-agent/sqlite/runtime-store';
 import { jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
+
+const RUNTIME_PERMISSION_POLICIES = new Set<RuntimePermissionPolicyId>([
+  'unrestricted',
+  'approve-reads',
+  'ask',
+  'deny-destructive',
+  'deny-all',
+]);
+
+function normalizeRuntimePermissionPolicyId(value: unknown): RuntimePermissionPolicyId {
+  return typeof value === 'string' && RUNTIME_PERMISSION_POLICIES.has(value as RuntimePermissionPolicyId)
+    ? value as RuntimePermissionPolicyId
+    : defaultPermissionPolicy;
+}
+
+function summarizeEnvProfile(profile: RuntimeEnvProfileRecord) {
+  const missing = new Set<string>();
+  const seen = new Map<string, number>();
+  for (const variable of profile.variables || []) {
+    const key = variable.key.trim();
+    if (!key) continue;
+    seen.set(key, (seen.get(key) || 0) + 1);
+    if (variable.required && !variable.value && !variable.secretRef) {
+      missing.add(key);
+    }
+  }
+  const duplicateKeys = [...seen.entries()].filter(([, count]) => count > 1).map(([key]) => key);
+  const readiness: RuntimeReadiness = missing.size > 0 ? 'missing' : duplicateKeys.length > 0 ? 'misconfigured' : profile.variables.length > 0 ? 'ready' : 'unknown';
+  return {
+    displayName: profile.displayName,
+    agentId: profile.agentId,
+    visibility: profile.visibility,
+    variableCount: profile.variables.length,
+    readiness,
+    missing: [...missing].sort(),
+    conflicts: duplicateKeys.map((key) => ({
+      key,
+      sources: ['env-profile', 'env-profile'],
+      selectedSource: 'env-profile',
+    })),
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function summarizeSecretProfile(profile: RuntimeSecretProfileRecord) {
+  const readiness = checkSecretProfileReadiness(profile);
+  return {
+    displayName: profile.displayName,
+    agentId: profile.agentId,
+    visibility: profile.visibility,
+    encrypted: profile.encrypted,
+    encryptionKeyReady: profile.encryptionKeyReady,
+    secretCount: profile.secrets.length,
+    readiness,
+    missing: profile.secrets
+      .filter((secret) => secret.required && secret.readiness !== 'ready')
+      .map((secret) => secret.key)
+      .sort(),
+    conflicts: [],
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function loadRuntimeControlsSummary(ownerUserId: string) {
+  const db = openRuntimeSqliteDatabase(getWorkspaceDataFile('runtime-agent.sqlite'));
+  try {
+    const store = new RuntimeSqliteStore(db);
+    const envProfiles = store.listEnvProfiles({ ownerUserId });
+    const secretProfiles = store.listSecretProfiles({ ownerUserId });
+    const profileConflicts = new Map<string, Set<string>>();
+    for (const envProfile of envProfiles) {
+      for (const variable of envProfile.variables || []) {
+        const key = variable.key.trim();
+        if (!key) continue;
+        const hasSecretProfileKey = secretProfiles.some((profile) => profile.secrets.some((secret) => secret.key.trim() === key));
+        if (hasSecretProfileKey) {
+          const sources = profileConflicts.get(key) ?? new Set<string>();
+          sources.add('env-profile');
+          sources.add('secret-profile');
+          profileConflicts.set(key, sources);
+        }
+      }
+    }
+    return {
+      envProfiles: envProfiles.map(summarizeEnvProfile),
+      secretProfiles: secretProfiles.map(summarizeSecretProfile),
+      conflicts: [...profileConflicts.entries()].map(([key, sources]) => ({
+        key,
+        sources: [...sources],
+        selectedSource: 'env-profile',
+      })),
+    };
+  } finally {
+    db.close();
+  }
+}
 
 export async function GET(request: Request) {
   const auth = await requireAuth(request);
   if (auth instanceof Response) return auth;
 
   const settings = await loadSystemSettings();
+  const runtimeControls = settings.runtimeControls || {};
+  const runtimeSummary = loadRuntimeControlsSummary(auth.id);
   return jsonOk({
     gitcodeTokenConfigured: Boolean(settings.gitcodeToken),
     locale: settings.locale || 'zh',
@@ -20,6 +131,14 @@ export async function GET(request: Request) {
       : 30,
     workspaceExperience: normalizeWorkspaceExperienceSettings(settings.workspaceExperience),
     agentMemory: normalizeAgentMemorySettings(settings.agentMemory),
+    runtimeControls: {
+      defaultPermissionPolicyId: normalizeRuntimePermissionPolicyId(runtimeControls.defaultPermissionPolicyId),
+      ...runtimeSummary,
+    },
+    runtimeDebug: {
+      acpxTraceEnabled: Boolean(settings.runtimeDebug?.acpxTraceEnabled),
+      acpxTraceDirectory: getWorkspaceDataFile('acpx-debug-traces'),
+    },
     emailNotifications: {
       enabled: Boolean(settings.emailNotifications?.enabled),
       smtpHost: settings.emailNotifications?.smtpHost || '',
@@ -83,6 +202,19 @@ export async function PUT(request: Request) {
         persistMode: body.agentMemory.persistMode,
       })
       : settings.agentMemory;
+    const currentRuntimeControls = settings.runtimeControls || {};
+    const nextRuntimeControls = body.runtimeControls && typeof body.runtimeControls === 'object'
+      ? {
+        ...currentRuntimeControls,
+        defaultPermissionPolicyId: normalizeRuntimePermissionPolicyId(body.runtimeControls.defaultPermissionPolicyId),
+      }
+      : currentRuntimeControls;
+    const nextRuntimeDebug = body.runtimeDebug && typeof body.runtimeDebug === 'object'
+      ? {
+        ...settings.runtimeDebug,
+        acpxTraceEnabled: body.runtimeDebug.acpxTraceEnabled === true,
+      }
+      : settings.runtimeDebug;
     await saveSystemSettings({
       ...settings,
       gitcodeToken: typeof body.gitcodeToken === 'string' ? body.gitcodeToken.trim() : settings.gitcodeToken,
@@ -90,6 +222,8 @@ export async function PUT(request: Request) {
       engineAvailabilityCacheMinutes: nextEngineAvailabilityCacheMinutes,
       workspaceExperience: nextWorkspaceExperience,
       agentMemory: nextAgentMemory,
+      runtimeControls: nextRuntimeControls,
+      runtimeDebug: nextRuntimeDebug,
       emailNotifications: nextEmailSettings,
     });
     return jsonOk({ success: true });

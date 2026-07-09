@@ -149,6 +149,18 @@ function hasAgentSessionIds(agents: unknown): boolean {
   return Array.isArray(agents) && agents.some((agent) => nonEmptyString(agent?.sessionId));
 }
 
+function hasAgentTokenUsage(agents: unknown): boolean {
+  return Array.isArray(agents) && agents.some((agent) => {
+    const usage = agent?.tokenUsage;
+    return isRecord(usage) && (
+      typeof usage.inputTokens === 'number'
+      || typeof usage.outputTokens === 'number'
+      || typeof usage.cacheCreationInputTokens === 'number'
+      || typeof usage.cacheReadInputTokens === 'number'
+    );
+  });
+}
+
 function shouldBackfillRunSnapshot(snapshot: any): boolean {
   if (!isRecord(snapshot)) return false;
   const attachedAgentSessions = normalizeSessionMap(snapshot.attachedAgentSessions);
@@ -159,6 +171,7 @@ function shouldBackfillRunSnapshot(snapshot: any): boolean {
     || Object.keys(attachedAgentSessions).length === 0
     || !Array.isArray(snapshot.agents)
     || !hasAgentSessionIds(snapshot.agents)
+    || !hasAgentTokenUsage(snapshot.agents)
   );
 }
 
@@ -193,6 +206,7 @@ function mergeAgentsWithSessionIds(
     return {
       ...agent,
       sessionId,
+      tokenUsage: isRecord(agent?.tokenUsage) ? agent.tokenUsage : stateAgent?.tokenUsage,
     };
   });
 

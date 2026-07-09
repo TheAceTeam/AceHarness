@@ -35,6 +35,7 @@ import { Route as ApiUsersRouteImport } from './routes/api.users'
 import { Route as ApiSystemSettingsRouteImport } from './routes/api.system-settings'
 import { Route as ApiSkillsRouteImport } from './routes/api.skills'
 import { Route as ApiSchedulesRouteImport } from './routes/api.schedules'
+import { Route as ApiRuntimeAgentsRouteImport } from './routes/api.runtime-agents'
 import { Route as ApiRunsRouteImport } from './routes/api.runs'
 import { Route as ApiRunHistoryRouteImport } from './routes/api.run-history'
 import { Route as ApiPromptAnalysisRouteImport } from './routes/api.prompt-analysis'
@@ -351,6 +352,11 @@ const ApiSkillsRoute = ApiSkillsRouteImport.update({
 const ApiSchedulesRoute = ApiSchedulesRouteImport.update({
   id: '/api/schedules',
   path: '/api/schedules',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRuntimeAgentsRoute = ApiRuntimeAgentsRouteImport.update({
+  id: '/api/runtime-agents',
+  path: '/api/runtime-agents',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiRunsRoute = ApiRunsRouteImport.update({
@@ -1368,6 +1374,7 @@ export interface FileRoutesByFullPath {
   '/api/prompt-analysis': typeof ApiPromptAnalysisRoute
   '/api/run-history': typeof ApiRunHistoryRoute
   '/api/runs': typeof ApiRunsRouteWithChildren
+  '/api/runtime-agents': typeof ApiRuntimeAgentsRoute
   '/api/schedules': typeof ApiSchedulesRouteWithChildren
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
@@ -1583,6 +1590,7 @@ export interface FileRoutesByTo {
   '/api/prompt-analysis': typeof ApiPromptAnalysisRoute
   '/api/run-history': typeof ApiRunHistoryRoute
   '/api/runs': typeof ApiRunsRouteWithChildren
+  '/api/runtime-agents': typeof ApiRuntimeAgentsRoute
   '/api/schedules': typeof ApiSchedulesRouteWithChildren
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
@@ -1799,6 +1807,7 @@ export interface FileRoutesById {
   '/api/prompt-analysis': typeof ApiPromptAnalysisRoute
   '/api/run-history': typeof ApiRunHistoryRoute
   '/api/runs': typeof ApiRunsRouteWithChildren
+  '/api/runtime-agents': typeof ApiRuntimeAgentsRoute
   '/api/schedules': typeof ApiSchedulesRouteWithChildren
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
@@ -2016,6 +2025,7 @@ export interface FileRouteTypes {
     | '/api/prompt-analysis'
     | '/api/run-history'
     | '/api/runs'
+    | '/api/runtime-agents'
     | '/api/schedules'
     | '/api/skills'
     | '/api/system-settings'
@@ -2231,6 +2241,7 @@ export interface FileRouteTypes {
     | '/api/prompt-analysis'
     | '/api/run-history'
     | '/api/runs'
+    | '/api/runtime-agents'
     | '/api/schedules'
     | '/api/skills'
     | '/api/system-settings'
@@ -2446,6 +2457,7 @@ export interface FileRouteTypes {
     | '/api/prompt-analysis'
     | '/api/run-history'
     | '/api/runs'
+    | '/api/runtime-agents'
     | '/api/schedules'
     | '/api/skills'
     | '/api/system-settings'
@@ -2660,6 +2672,7 @@ export interface RootRouteChildren {
   ApiPromptAnalysisRoute: typeof ApiPromptAnalysisRoute
   ApiRunHistoryRoute: typeof ApiRunHistoryRoute
   ApiRunsRoute: typeof ApiRunsRouteWithChildren
+  ApiRuntimeAgentsRoute: typeof ApiRuntimeAgentsRoute
   ApiSchedulesRoute: typeof ApiSchedulesRouteWithChildren
   ApiSkillsRoute: typeof ApiSkillsRoute
   ApiSystemSettingsRoute: typeof ApiSystemSettingsRoute
@@ -2940,6 +2953,13 @@ declare module '@tanstack/react-router' {
       path: '/api/schedules'
       fullPath: '/api/schedules'
       preLoaderRoute: typeof ApiSchedulesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/runtime-agents': {
+      id: '/api/runtime-agents'
+      path: '/api/runtime-agents'
+      fullPath: '/api/runtime-agents'
+      preLoaderRoute: typeof ApiRuntimeAgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/runs': {
@@ -4876,6 +4896,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPromptAnalysisRoute: ApiPromptAnalysisRoute,
   ApiRunHistoryRoute: ApiRunHistoryRoute,
   ApiRunsRoute: ApiRunsRouteWithChildren,
+  ApiRuntimeAgentsRoute: ApiRuntimeAgentsRoute,
   ApiSchedulesRoute: ApiSchedulesRouteWithChildren,
   ApiSkillsRoute: ApiSkillsRoute,
   ApiSystemSettingsRoute: ApiSystemSettingsRoute,

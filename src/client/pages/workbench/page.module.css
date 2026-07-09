@@ -827,6 +827,49 @@
   font-weight: 750;
 }
 
+.workbenchTokenMetric {
+  border: 1px solid var(--workbench-line, #e3e3df);
+  border-radius: 11px;
+  background: var(--workbench-soft, #f7f7f4);
+  padding: 14px;
+}
+
+.workbenchTokenMetricGridItem {
+  margin-top: 0;
+}
+
+.workbenchTokenMetricHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workbenchTokenMetricHeader span {
+  color: var(--workbench-muted, #8a8a84);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.workbenchTokenMetricHeader strong {
+  color: var(--workbench-text, #151515);
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.workbenchTokenMetricRows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 14px;
+  margin-top: 8px;
+  color: var(--workbench-muted, #8a8a84);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .workbenchTransitionSection {
   margin-top: 18px;
   border: 1px solid var(--workbench-line, #e3e3df);
@@ -959,6 +1002,7 @@
 :global(.dark) .workbenchBackButton,
 :global(.dark) .workbenchPreviewCard,
 :global(.dark) .workbenchMetric,
+:global(.dark) .workbenchTokenMetric,
 :global(.dark) .workbenchEmptyHint {
   border-color: var(--workbench-line);
 }
@@ -988,6 +1032,10 @@
   background: var(--workbench-soft);
 }
 
+:global(.dark) .workbenchTokenMetric {
+  background: var(--workbench-soft);
+}
+
 :global(.dark) .workbenchMetric:hover {
   background: rgba(255, 255, 255, 0.06);
 }
@@ -995,11 +1043,14 @@
 :global(.dark) .workbenchNavHint,
 :global(.dark) .workbenchBackButton,
 :global(.dark) .workbenchEmptyHint,
-:global(.dark) .workbenchMetric span {
+:global(.dark) .workbenchMetric span,
+:global(.dark) .workbenchTokenMetricHeader span,
+:global(.dark) .workbenchTokenMetricRows {
   color: var(--workbench-muted);
 }
 
-:global(.dark) .workbenchMetric strong {
+:global(.dark) .workbenchMetric strong,
+:global(.dark) .workbenchTokenMetricHeader strong {
   color: var(--workbench-text);
 }
 
@@ -1020,6 +1071,14 @@
   .runContextInspector,
   .designInspectorRail {
     display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .workbenchTokenMetricHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
   }
 }
 

@@ -378,9 +378,6 @@ export function AccountContent({
             <Button variant="outline" size="sm" onClick={openSystemSettings}>
               <Settings className="mr-2 h-4 w-4" />系统设置
             </Button>
-            <Button variant="outline" size="sm" onClick={openChannelIntegrations}>
-              <RadioTower className="mr-2 h-4 w-4" />Channels
-            </Button>
           </>
         }
         activeFilters={
@@ -404,10 +401,11 @@ export function AccountContent({
             description="头像会用于个人菜单、协作和账户上下文。"
             control={
               <div className="flex flex-wrap items-center gap-3">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => { setSelectedAvatar(displayedAvatar); setAvatarOpen(true); }}
-                  className="group relative rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35 focus-visible:ring-offset-2"
+                  className="group relative h-16 w-16 rounded-full p-0 focus-visible:ring-2 focus-visible:ring-ring/35 focus-visible:ring-offset-2"
                 >
                   <SpriteAvatar
                     avatar={displayedAvatar}
@@ -421,7 +419,7 @@ export function AccountContent({
                   <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 text-xs font-medium text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100">
                     编辑
                   </span>
-                </button>
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => { setSelectedAvatar(displayedAvatar); setAvatarOpen(true); }}>选择头像</Button>
               </div>
             }
@@ -540,13 +538,13 @@ export function AccountContent({
                   </div>
                   <div className="min-w-0">
                     <DataCardTitle>个人环境变量</DataCardTitle>
-                    <DataCardDescription>管理用户级密钥和本地偏好，不影响系统级设置。</DataCardDescription>
+                    <DataCardDescription>只保存当前用户的 Claude、Codex、OpenCode 或其他已支持 CLI 变量，不影响系统级设置。</DataCardDescription>
                   </div>
                 </div>
               </DataCardHeader>
               <DataCardActions>
                 <Button variant="outline" size="sm" onClick={() => setShowUserEnvVars(true)}>
-                  <KeyRound className="mr-2 h-4 w-4" />打开
+                  <KeyRound className="mr-2 h-4 w-4" />编辑个人环境变量
                 </Button>
               </DataCardActions>
             </DataCard>

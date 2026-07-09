@@ -12,7 +12,7 @@ import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { ObjectEditDrawer } from '@/components/ui/object-edit-drawer';
 import { FormField } from '@/components/ui/form-section';
-import { SingleCombobox, ComboboxPortalProvider } from '@/components/ui/combobox';
+import { SingleCombobox } from '@/components/ui/combobox';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -398,8 +398,7 @@ export default function SchedulesPage() {
         />
       </main>
 
-      <ComboboxPortalProvider>
-        <ObjectEditDrawer
+      <ObjectEditDrawer
           open={drawerOpen}
           mode={editingJob ? 'edit' : 'create'}
           title={editingJob ? t('schedules.dialog.editTitle') : t('schedules.dialog.createTitle')}
@@ -529,8 +528,7 @@ export default function SchedulesPage() {
               ),
             },
           ]}
-        />
-      </ComboboxPortalProvider>
+      />
 
       <ConfirmModal
         open={Boolean(deletingJob)}

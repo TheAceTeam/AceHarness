@@ -215,12 +215,27 @@ const API_DATA: ApiCategory[] = [
     ],
   },
   {
-    name: 'Engine', icon: 'memory',
+    name: 'Runtime', icon: 'memory',
     endpoints: [
-      { method: 'GET', path: '/api/engine', description: '获取当前执行引擎', response: '{ engine, defaultModel }' },
-      { method: 'POST', path: '/api/engine', description: '设置执行引擎', requestBody: '{ engine, defaultModel? }', response: '{ success, engine, defaultModel }' },
-      { method: 'GET', path: '/api/engine/availability?engine=type', description: '检查引擎是否可用', response: '{ engine, available }' },
-      { method: 'GET', path: '/api/engine/models?engine=opencode', description: '获取指定引擎支持的模型列表', response: '{ engine, models }' },
+      {
+        method: 'GET',
+        path: '/api/agents',
+        description: '列出可用 Runtime Agent 和运行状态',
+        response: '{ agents: RuntimeAgent[] }',
+      },
+      {
+        method: 'GET',
+        path: '/api/models',
+        description: '列出模型路由与默认 Runtime 选择',
+        response: '{ models: ModelOption[] }',
+      },
+      {
+        method: 'POST',
+        path: '/api/models',
+        description: '保存模型路由配置',
+        requestBody: '{ models: ModelOption[] }',
+        response: '{ models: ModelOption[] }',
+      },
     ],
   },
   {

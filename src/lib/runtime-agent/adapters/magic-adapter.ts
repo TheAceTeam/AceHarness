@@ -7,15 +7,17 @@ import type {
   RuntimeAdapter,
   RuntimeBinding,
   RuntimeCapabilities,
+  AdapterRuntimeStatus,
   RuntimeEventType,
 } from '../contracts';
-import { missingCostUsage, missingTokenUsage, stripNativeIds } from './acpx-adapter';
+import { createAdapterUnavailableError, missingCostUsage, missingTokenUsage, stripNativeIds } from './acpx-adapter';
 
 export interface MagicRuntimeClient {
   createOrLoadSession?(input: AdapterSessionInput): Promise<Partial<Pick<RuntimeBinding, 'externalIds' | 'raw'>> | undefined>;
   runTurn?(binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<unknown>;
   cancel?(binding: RuntimeBinding, input: AdapterCancelInput): Promise<void>;
   close?(binding: RuntimeBinding): Promise<void>;
+  getStatus?(binding: RuntimeBinding): Promise<unknown>;
 }
 
 const MAGIC_EVENT_TYPES: Record<string, RuntimeEventType> = {
@@ -27,6 +29,13 @@ const MAGIC_EVENT_TYPES: Record<string, RuntimeEventType> = {
   command_failed: 'tool.failed',
   permission: 'permission.requested',
   status: 'status.changed',
+  done: 'turn.completed',
+  error: 'turn.failed',
+  turn_started: 'turn.started',
+  turn_completed: 'turn.completed',
+  turn_failed: 'turn.failed',
+  turn_cancelled: 'turn.cancelled',
+  turn_canceled: 'turn.cancelled',
 };
 
 export class MagicAdapter implements RuntimeAdapter {
@@ -87,11 +96,17 @@ export class MagicAdapter implements RuntimeAdapter {
   }
 
   async cancel(binding: RuntimeBinding, input: AdapterCancelInput): Promise<void> {
-    await this.client?.cancel?.(binding, input);
+    if (!this.client?.cancel) {
+      throw createAdapterUnavailableError('magic', 'cancel');
+    }
+    await this.client.cancel(binding, input);
   }
 
   async close(binding: RuntimeBinding): Promise<void> {
-    await this.client?.close?.(binding);
+    if (!this.client?.close) {
+      throw createAdapterUnavailableError('magic', 'close');
+    }
+    await this.client.close(binding);
   }
 
   async getCapabilities(input: AdapterCapabilitiesInput): Promise<RuntimeCapabilities> {
@@ -113,19 +128,16 @@ export class MagicAdapter implements RuntimeAdapter {
     };
   }
 
-  async getStatus() {
-    return {
-      runtime: 'magic' as const,
-      status: this.client ? ('unknown' as const) : ('failed' as const),
-      error: this.client
-        ? undefined
-        : {
-            code: 'ADAPTER_UNAVAILABLE' as const,
-            message: 'magic runtime client is not configured.',
-            retryable: true,
-            redacted: true,
-          },
-    };
+  async getStatus(binding: RuntimeBinding): Promise<AdapterRuntimeStatus> {
+    if (!this.client?.getStatus) {
+      return {
+        runtime: 'magic' as const,
+        status: this.client ? ('unknown' as const) : ('failed' as const),
+        error: createAdapterUnavailableError('magic', 'status'),
+      };
+    }
+
+    return normalizeMagicStatus(await this.client.getStatus(binding));
   }
 }
 
@@ -143,9 +155,52 @@ export function normalizeMagicRuntimeEvent(nativeEvent: unknown): AdapterRuntime
     toolCallId: asString(event.toolCallId),
     usage: missingTokenUsage(),
     cost: missingCostUsage(),
+    error: normalizeMagicError(event.error ?? (type === 'turn.failed' ? event : undefined)),
     redacted: true,
     raw: nativeEvent,
     createdAt: asString(event.createdAt),
+  };
+}
+
+function normalizeMagicStatus(value: unknown): AdapterRuntimeStatus {
+  const status = asRecord(value);
+  const rawStatus = asString(status.status);
+  const normalizedStatus: AdapterRuntimeStatus['status'] =
+    rawStatus === 'idle' ||
+    rawStatus === 'running' ||
+    rawStatus === 'canceling' ||
+    rawStatus === 'closed' ||
+    rawStatus === 'failed'
+      ? rawStatus
+      : 'unknown';
+
+  return {
+    runtime: 'magic',
+    status: normalizedStatus,
+    activeTurnId: asString(status.activeTurnId),
+    lastEventAt: asString(status.lastEventAt),
+    error: normalizeMagicError(status.error),
+    metadata: isRecord(status.metadata) ? stripNativeIds(status.metadata) as Record<string, unknown> : undefined,
+  };
+}
+
+function normalizeMagicError(value: unknown): AdapterRuntimeEvent['error'] {
+  const error = asRecord(value);
+  if (!Object.keys(error).length) {
+    return undefined;
+  }
+
+  return {
+    code: 'ADAPTER_FAILED',
+    message: asString(error.message) ?? 'Magic runtime reported an error.',
+    retryable: Boolean(error.retryable),
+    redacted: true,
+    cause: asString(error.code)
+      ? {
+          code: asString(error.code),
+          message: asString(error.message) ?? 'Magic runtime error',
+        }
+      : undefined,
   };
 }
 

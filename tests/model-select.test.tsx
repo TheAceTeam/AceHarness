@@ -114,20 +114,29 @@ describe('ModelSelect', () => {
           }),
         } as Response;
       }
-      if (url.includes('/api/engine/availability')) {
+      if (url.includes('/api/agents')) {
         return {
           ok: true,
           status: 200,
           headers: new Headers({ 'Content-Type': 'application/json' }),
-          json: async () => ({ available: true, cacheTtlMs: 300000 }),
-        } as Response;
-      }
-      if (url.includes('/api/engine')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'Content-Type': 'application/json' }),
-          json: async () => ({ engine: 'nga', driver: 'stdio', defaultModel: '' }),
+          json: async () => ({
+            agents: [
+              {
+                id: 'opencode',
+                name: 'opencode',
+                title: 'OpenCode',
+                activeEngine: 'opencode',
+                runtimeState: { enabled: true, hidden: false, availability: { status: 'available' } },
+              },
+              {
+                id: 'nga',
+                name: 'nga',
+                title: 'NGA',
+                activeEngine: 'nga',
+                runtimeState: { enabled: true, hidden: false, availability: { status: 'available' } },
+              },
+            ],
+          }),
         } as Response;
       }
       return {
@@ -171,20 +180,29 @@ describe('ModelSelect', () => {
           }),
         } as Response;
       }
-      if (url.includes('/api/engine/availability')) {
+      if (url.includes('/api/agents')) {
         return {
           ok: true,
           status: 200,
           headers: new Headers({ 'Content-Type': 'application/json' }),
-          json: async () => ({ available: true, cacheTtlMs: 300000 }),
-        } as Response;
-      }
-      if (url.includes('/api/engine')) {
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'Content-Type': 'application/json' }),
-          json: async () => ({ engine: 'nga', driver: 'stdio', defaultModel: '' }),
+          json: async () => ({
+            agents: [
+              {
+                id: 'opencode',
+                name: 'opencode',
+                title: 'OpenCode',
+                activeEngine: 'opencode',
+                runtimeState: { enabled: true, hidden: false, availability: { status: 'available' } },
+              },
+              {
+                id: 'nga',
+                name: 'nga',
+                title: 'NGA',
+                activeEngine: 'nga',
+                runtimeState: { enabled: true, hidden: false, availability: { status: 'available' } },
+              },
+            ],
+          }),
         } as Response;
       }
       return {

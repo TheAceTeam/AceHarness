@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { openRuntimeSqliteDatabase, type RuntimeSqliteDatabase } from '@/lib/runtime-agent/sqlite/database';
 import { ensureModelRouteSchema } from '@/lib/runtime-agent/models/model-route-schema';
@@ -159,7 +161,7 @@ describe('model routes sqlite migration', () => {
     }
   });
 
-  test('imports legacy models yaml as seed data using agentId and modelRouteId', () => {
+  test('imports preRuntime models yaml as seed data using agentId and modelRouteId', () => {
     const yaml = `
 models:
   - value: gpt-5.3-codex[reasoning=medium,fast=false]
@@ -198,7 +200,39 @@ models:
     }
   });
 
-  test('exports model routes yaml without legacy engine fields', () => {
+  test('keeps advertised bracket model ids without key-value options intact', () => {
+    const yaml = `
+models:
+  - value: gpt-5.5[low]
+    label: GPT 5.5 Low
+    endpoints:
+      - openai
+    engines:
+      - codex
+`;
+    const parsed = parseModelRoutesYamlSeed(yaml, '2026-07-09T00:00:00.000Z');
+    expect(parsed.catalog[0]).toMatchObject({
+      id: 'gpt-5.5[low]',
+      displayName: 'GPT 5.5 Low',
+    });
+    expect(parsed.routes[0]).toMatchObject({
+      modelId: 'gpt-5.5[low]',
+      agentId: 'codex',
+      providerId: 'openai',
+      providerModel: 'gpt-5.5[low]',
+      configOptions: {},
+    });
+  });
+
+  test('bundled default model catalog is empty until users import available models', async () => {
+    const source = await readFile(path.join(process.cwd(), 'configs', 'models', 'models.yaml'), 'utf-8');
+    const parsed = parseModelRoutesYamlSeed(source, '2026-07-09T00:00:00.000Z');
+    expect(parsed.catalog).toEqual([]);
+    expect(parsed.providers).toEqual([]);
+    expect(parsed.routes).toEqual([]);
+  });
+
+  test('exports model routes yaml without preRuntime engine fields', () => {
     const db = makeDb();
     try {
       seedBasicCatalog(db);

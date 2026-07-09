@@ -82,6 +82,7 @@ export interface ModelEvaluationSummary {
 }
 
 export interface ModelDiagnosticsRequest {
+  modelRouteId?: string;
   engine?: string;
   driver?: DiagnosticDriver;
   model?: string;

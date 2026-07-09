@@ -12,7 +12,6 @@ import { cpus } from 'os';
 import { parse } from 'yaml';
 import { fenced } from '@/lib/core/markdown-utils';
 import { processManager } from '@/lib/core/process-manager';
-import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from '@/lib/engines/engine-interface';
 import { createRun, updateRun } from '@/lib/run/store';
 import type { RunRecord } from '@/lib/run/store';
 import {
@@ -23,10 +22,21 @@ import { appendRuntimeOutputPreview, compactRuntimeOutputPreview } from '@/lib/r
 import type { WorkflowConfig, WorkflowPhase, WorkflowStep, RoleConfig, IterationConfig } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
 import { isWindows } from '@/lib/core/runtime-platform';
-import { createEngine, getConfiguredEngine, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
-import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
-import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
-import { compactEngineContextManually, executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import {
+  compactWorkflowRuntimeContextManually,
+  createWorkflowRuntime,
+  executeWorkflowRuntimeWithContextRecovery,
+  getConfiguredWorkflowRuntime,
+  getWorkflowRuntimeSkillsSubdir,
+  resolveRecoveredWorkflowRuntimeSessionId,
+  resolveRequestedWorkflowRuntimeType,
+  type WorkflowRuntime,
+  type WorkflowRuntimeJsonResult,
+  type WorkflowRuntimeResultMetadata,
+  type WorkflowRuntimeStreamEvent,
+  type WorkflowRuntimeTokenUsage,
+  type WorkflowRuntimeType,
+} from '@/lib/workflow/runtime-facade';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getEngineConfigPath, getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
@@ -102,7 +112,7 @@ export interface TokenUsage {
   cacheReadInputTokens?: number;
 }
 
-const ZERO_ENGINE_USAGE: EngineTokenUsage = {
+const ZERO_ENGINE_USAGE: WorkflowRuntimeTokenUsage = {
   input_tokens: 0,
   output_tokens: 0,
   cache_creation_input_tokens: 0,
@@ -131,7 +141,7 @@ function replaceAgentSessionId(agentSessions: Map<string, string>, agentName: st
   }
 }
 
-function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage {
+function normalizeEngineUsage(metadata?: WorkflowRuntimeResultMetadata): WorkflowRuntimeTokenUsage {
   const usage = metadata?.usage;
   return {
     input_tokens: numberOrZero(usage?.input_tokens),
@@ -141,11 +151,11 @@ function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage
   };
 }
 
-function metadataNumber(metadata: EngineResultMetadata | undefined, snakeKey: string, camelKey: string): number {
+function metadataNumber(metadata: WorkflowRuntimeResultMetadata | undefined, snakeKey: string, camelKey: string): number {
   return numberOrZero(metadata?.[snakeKey] ?? metadata?.[camelKey]);
 }
 
-function toPersistedTokenUsage(usage: EngineTokenUsage): TokenUsage {
+function toPersistedTokenUsage(usage: WorkflowRuntimeTokenUsage): TokenUsage {
   return {
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
@@ -265,7 +275,7 @@ export class WorkflowManager extends EventEmitter {
   private accumulatedWaitMs: number = 0;
   /** 本次等待开始时刻（ISO），未在等待时为 null。 */
   private waitStartedAt: string | null = null;
-  /** Agent name → session_id for --resume in iterative phases */
+  /** Agent name → runtimeSessionId for --resume in iterative phases */
   private agentSessionIds: Map<string, string> = new Map();
   private statusReason: string | null = null;
   private pendingCheckpoint: { phase: string; checkpoint: string; message: string; isIterativePhase: boolean } | null = null;
@@ -308,14 +318,14 @@ export class WorkflowManager extends EventEmitter {
   /** Per-agent prompt memory for omitting unchanged repeated context within one run session. */
   private promptMemos: Map<string, AgentPromptMemo> = new Map();
   /** Current engine instance (Kiro CLI, Codex, etc.) */
-  private currentEngine: Engine | null = null;
+  private currentRuntime: WorkflowRuntime | null = null;
   /** Current engine type */
-  private engineType: EngineType = 'claude-code';
+  private engineType: WorkflowRuntimeType = 'claude-code';
   private workflowGit: WorkflowGitState | null = null;
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
-    return getEngineSkillsSubdir(this.engineType);
+    return getWorkflowRuntimeSkillsSubdir(this.engineType);
   }
 
   private resolveProjectRootPath(projectRoot?: string | null): string {
@@ -376,7 +386,7 @@ export class WorkflowManager extends EventEmitter {
   }): Promise<{ prompt: string; sessionId?: string }> {
     const policy = resolveWorkflowExecutionPolicy(input.workflowConfig.context);
     const existingSessionId = this.agentSessionIds.get(input.agentName);
-    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentEngine) {
+    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentRuntime) {
       return { prompt: input.prompt, sessionId: existingSessionId };
     }
     if (!this.stepLogs.some((log) => log.agent === input.agentName)) {
@@ -389,7 +399,7 @@ export class WorkflowManager extends EventEmitter {
         level: 'info',
         message: `步骤切换前自动压缩 ${input.agentName} 的上下文：${input.stepName}`,
       });
-      const compacted = await compactEngineContextManually(this.currentEngine, {
+      const compacted = await compactWorkflowRuntimeContextManually(this.currentRuntime, {
         agent: input.agentName,
         step: input.stepName,
         prompt: input.prompt,
@@ -862,10 +872,10 @@ export class WorkflowManager extends EventEmitter {
       const requestedEngine = workflowEngine?.trim();
 try {
         this.engineType = requestedEngine
-          ? await resolveRequestedEngineType(requestedEngine)
-          : await getConfiguredEngine();
+          ? await resolveRequestedWorkflowRuntimeType(requestedEngine)
+          : await getConfiguredWorkflowRuntime();
       } catch {
-        const globalEngine = await getConfiguredEngine();
+        const globalEngine = await getConfiguredWorkflowRuntime();
         console.warn(`[WorkflowManager] 工作流配置的引擎无效: ${requestedEngine}，回退到全局引擎 ${globalEngine}`);
         this.emit('log', `工作流配置的引擎无效: ${requestedEngine}，回退到全局引擎 ${globalEngine}`);
         this.engineType = globalEngine;
@@ -873,9 +883,9 @@ try {
       console.log(`[WorkflowManager] 使用引擎: ${this.engineType}`);
       this.emit('log', `使用引擎: ${this.engineType}`);
 
-      // Always initialize currentEngine for the selected engine, including claude-code.
-      this.currentEngine = await createEngine(this.engineType);
-      if (!this.currentEngine) {
+      // Always initialize currentRuntime for the selected engine, including claude-code.
+      this.currentRuntime = await createWorkflowRuntime(this.engineType);
+      if (!this.currentRuntime) {
         throw new Error(`引擎 ${this.engineType} 不可用`);
       } else {
         console.log(`[WorkflowManager] 引擎 ${this.engineType} 初始化成功`);
@@ -900,8 +910,8 @@ try {
     systemPrompt: string,
     model: string,
     options: any
-  ): Promise<EngineJsonResult> {
-    if (!this.currentEngine) {
+  ): Promise<WorkflowRuntimeJsonResult> {
+    if (!this.currentRuntime) {
       throw new Error(`引擎未初始化 (engineType=${this.engineType})`);
     }
 
@@ -912,7 +922,7 @@ try {
     const proc = processManager.registerExternalProcess(processId, agent, step, options.runId);
     (proc as any)._cancelFn = () => {
       try {
-        this.currentEngine?.cancel();
+        this.currentRuntime?.cancel();
       } catch {
         // Best-effort cancellation; process state is still marked as killed.
       }
@@ -921,7 +931,7 @@ try {
     let fullStreamContent = '';
 
     // Set up stream handler for the engine
-    const streamHandler = (event: EngineStreamEvent) => {
+    const streamHandler = (event: WorkflowRuntimeStreamEvent) => {
       if (event.type !== 'text') return;
       fullStreamContent += event.content;
       const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
@@ -933,10 +943,10 @@ try {
       });
     };
 
-    this.currentEngine.on('stream', streamHandler);
+    this.currentRuntime.on('stream', streamHandler);
 
     try {
-      const result = await executeEngineWithContextRecovery(this.currentEngine, {
+      const result = await executeWorkflowRuntimeWithContextRecovery(this.currentRuntime, {
         agent,
         step,
         prompt,
@@ -962,7 +972,7 @@ try {
       });
 
       // Mark process as completed
-      const resolvedSessionId = resolveRecoveredSessionId(result, options.resumeSessionId);
+      const resolvedSessionId = resolveRecoveredWorkflowRuntimeSessionId(result, options.resumeSessionId);
       const rawProc = processManager.getProcessRaw(processId);
       if (rawProc) {
         rawProc.status = result.success ? 'completed' : 'failed';
@@ -975,10 +985,10 @@ try {
       const metadata = result.metadata;
       const usage = normalizeEngineUsage(metadata);
 
-      // Convert engine result to EngineJsonResult format
+      // Convert engine result to WorkflowRuntimeJsonResult format
       return {
         result: result.success ? result.output : (result.error || result.output),
-        session_id: resolvedSessionId || '',
+        runtimeSessionId: resolvedSessionId || '',
         is_error: !result.success,
         cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
         duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
@@ -987,7 +997,7 @@ try {
         usage,
       };
     } finally {
-      this.currentEngine.off('stream', streamHandler);
+      this.currentRuntime.off('stream', streamHandler);
     }
   }
 
@@ -1513,7 +1523,7 @@ try {
   }
 
   private cleanupCurrentEngine(): void {
-    const engine = this.currentEngine;
+    const engine = this.currentRuntime;
     if (!engine) return;
     try {
       engine.cancel();
@@ -1525,7 +1535,7 @@ try {
     } catch {
       // best-effort cleanup
     }
-    this.currentEngine = null;
+    this.currentRuntime = null;
   }
 
   initializeAgents(workflowConfig: WorkflowConfig): void {
@@ -1601,7 +1611,7 @@ try {
 
   /**
    * Parse structured JSON verdict from attacker/judge output.
-   * Expects a structured JSON object in bare or legacy fenced form:
+   * Expects a structured JSON object in bare or preRuntime fenced form:
    *   { "verdict": "pass"|"conditional_pass"|"fail", "remaining_issues": N, "summary": "..." }
    * Falls back to parseBugCount if no JSON found.
    */
@@ -2021,7 +2031,7 @@ try {
         break;
       }
 
-      // Check exit conditions (legacy: consecutive clean rounds etc.)
+      // Check exit conditions (preRuntime: consecutive clean rounds etc.)
       // Only auto-exit if judge explicitly passed; conditional_pass requires human checkpoint
       if (!judgeVerdict || judgeVerdict.verdict !== 'fail') {
         const shouldExit = this.checkExitCondition(iterConfig, iterState);
@@ -2119,14 +2129,14 @@ try {
 
     try {
       let resultText: string;
-      let jsonResult: EngineJsonResult;
+      let jsonResult: WorkflowRuntimeJsonResult;
       jsonResult = await this.executeStep(step, workflowConfig);
       resultText = jsonResult.result;
 
       const tokenUsage: TokenUsage = toPersistedTokenUsage(jsonResult.usage);
       this.updateAgentTokenUsage(step.agent, tokenUsage);
 
-      replaceAgentSessionId(this.agentSessionIds, step.agent, jsonResult.session_id);
+      replaceAgentSessionId(this.agentSessionIds, step.agent, jsonResult.runtimeSessionId);
 
       const displayOutput = this.deriveStepDisplayOutput(resultText) || resultText;
 
@@ -2134,7 +2144,7 @@ try {
         agent.lastOutput = displayOutput;
         agent.summary = this.deriveStepDisplayOutput(resultText) || this.parseSummary(resultText);
         agent.costUsd += jsonResult.cost_usd || 0;
-        agent.sessionId = jsonResult.session_id || null;
+        agent.sessionId = jsonResult.runtimeSessionId || null;
         const newChanges = this.parseChanges(resultText);
         agent.changes = [...agent.changes, ...newChanges];
       }
@@ -2164,7 +2174,7 @@ try {
         durationMs: jsonResult.duration_ms || 0,
         timestamp: new Date().toISOString(),
         tokenUsage,
-        sessionId: jsonResult.session_id || null,
+        sessionId: jsonResult.runtimeSessionId || null,
         engineName: this.engineType,
         gitStepDiffId: `git-step-${stepId}`,
         gitBeforeSnapshotId: beforeSnapshotId,
@@ -2180,7 +2190,7 @@ try {
         outputTruncated: compactLogOutput.truncated,
         role: step.role,
         costUsd: jsonResult.cost_usd,
-        sessionId: jsonResult.session_id,
+        sessionId: jsonResult.runtimeSessionId,
         numTurns: jsonResult.num_turns,
         durationMs: jsonResult.duration_ms,
       });
@@ -2356,7 +2366,7 @@ try {
     return !last || last.status !== 'failed';
   }
 
-  async executeStep(step: WorkflowStep, workflowConfig: WorkflowConfig, extraContext?: string): Promise<EngineJsonResult> {
+  async executeStep(step: WorkflowStep, workflowConfig: WorkflowConfig, extraContext?: string): Promise<WorkflowRuntimeJsonResult> {
     const roleConfig = this.agentConfigs.find((r) => r.name === step.agent)
       || workflowConfig.roles?.find((r) => r.name === step.agent);
     if (!roleConfig) {
@@ -2380,7 +2390,7 @@ try {
     workflowConfig: WorkflowConfig,
     roleConfig: RoleConfig,
     extraContext?: string
-  ): Promise<EngineJsonResult> {
+  ): Promise<WorkflowRuntimeJsonResult> {
     const subAgents = roleConfig.reviewPanel!.subAgents;
     const subAgentNames = Object.keys(subAgents);
 
@@ -2508,7 +2518,7 @@ try {
     workflowConfig: WorkflowConfig,
     roleConfig: RoleConfig,
     extraContext?: string
-  ): Promise<EngineJsonResult> {
+  ): Promise<WorkflowRuntimeJsonResult> {
     // Load previous step outputs for context injection — only completed steps
     let previousOutputs: Record<string, string> = {};
     if (this.currentRunId) {
@@ -2624,13 +2634,13 @@ try {
     let currentProcessId = processId;
     let currentPrompt = compactedExecution.prompt;
     let currentSessionId = compactedExecution.sessionId;
-    let lastResult: EngineJsonResult;
+    let lastResult: WorkflowRuntimeJsonResult;
     let accumulatedOutput = ''; // Accumulate result output across feedback rounds
 
     try {
       // Execute loop: run agent, then check for pending feedback and resume if any
       while (true) {
-        let result: EngineJsonResult;
+        let result: WorkflowRuntimeJsonResult;
         try {
           result = await this.executeWithEngine(
             currentProcessId,
@@ -2690,7 +2700,7 @@ try {
         }
 
         // Save or clear session ID for potential resume
-        replaceAgentSessionId(this.agentSessionIds, step.agent, result.session_id);
+        replaceAgentSessionId(this.agentSessionIds, step.agent, result.runtimeSessionId);
 
         // Accumulate stream content from this round
         const proc = processManager.getProcess(currentProcessId);
@@ -2706,7 +2716,7 @@ try {
           const feedbackPrompt = this.liveFeedback.map((fb, i) => `${i + 1}. ${fb}`).join('\n');
           this.liveFeedback = [];
 
-          const sessionId = result.session_id;
+          const sessionId = result.runtimeSessionId;
           if (!sessionId) break; // Can't resume without session ID
 
           // Append feedback marker to accumulated stream so it shows inline
@@ -3275,9 +3285,9 @@ try {
       }
     }
     // Cancel current engine if using alternative engine
-    if (this.currentEngine) {
+    if (this.currentRuntime) {
       try {
-        this.currentEngine.cancel();
+        this.currentRuntime.cancel();
       } catch (error) {
         this.emit('log', `引擎取消失败: ${error}`);
       }

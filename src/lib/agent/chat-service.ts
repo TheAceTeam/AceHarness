@@ -2,12 +2,17 @@ import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { existsSync, readFileSync } from 'fs';
 import { getRuntimeAgentConfigPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
-import { getConfiguredEngine, getOrCreateEngine, type EngineType } from '@/lib/engines/engine-factory';
 import { resolveAgentSelection } from '@/lib/agent/engine-selection';
 import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
 import type { RoleConfig } from '@/lib/core/schemas';
-import type { Engine } from '@/lib/engines/engine-interface';
-import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import {
+  executeChatRuntimeWithContextRecovery,
+  getConfiguredChatRuntimeEngine,
+  getOrCreateChatRuntimeEngine,
+  resolveRecoveredRuntimeSessionId,
+  type ChatRuntimeEngine,
+  type ChatRuntimeEngineType,
+} from '@/lib/chat/chat-engine-runtime';
 import {
   appendSpecCodingRevision,
 } from '@/lib/spec/coding-store';
@@ -83,8 +88,8 @@ export interface PreparedAgentChat {
   resumeSessionId: string;
   workingDirectory: string;
   workflowContext: Record<string, any> | null;
-  engine: Engine;
-  engineType: EngineType;
+  engine: ChatRuntimeEngine;
+  engineType: ChatRuntimeEngineType;
   model: string;
   prompt: string;
   sessionReuseKey: string;
@@ -246,7 +251,7 @@ async function executeWerewolfTurnWithResultEnforcement(input: {
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const isRetry = attempt > 0;
-    const result = await executeEngineWithContextRecovery(input.prepared.engine, {
+    const result = await executeChatRuntimeWithContextRecovery(input.prepared.engine, {
       agent: input.prepared.roleConfig.name,
       step: isRetry ? `${input.prepared.mode}-result-retry-${attempt}` : input.prepared.mode,
       prompt: isRetry
@@ -271,7 +276,7 @@ async function executeWerewolfTurnWithResultEnforcement(input: {
       },
     });
     lastResult = result;
-    latestSessionId = resolveRecoveredSessionId(result, latestSessionId) || undefined;
+    latestSessionId = resolveRecoveredRuntimeSessionId(result, latestSessionId) || undefined;
     if (hasWerewolfResult(result.output || '')) return result;
   }
 
@@ -299,7 +304,7 @@ async function executeAgoraTurnWithResultEnforcement(input: {
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const isRetry = attempt > 0;
-    const result = await executeEngineWithContextRecovery(input.prepared.engine, {
+    const result = await executeChatRuntimeWithContextRecovery(input.prepared.engine, {
       agent: input.prepared.roleConfig.name,
       step: isRetry ? `${input.prepared.mode}-agora-result-retry-${attempt}` : input.prepared.mode,
       prompt: isRetry ? buildAgoraResultRetryPrompt(expectedType) : input.prompt,
@@ -317,7 +322,7 @@ async function executeAgoraTurnWithResultEnforcement(input: {
       },
     });
     lastResult = result;
-    latestSessionId = resolveRecoveredSessionId(result, latestSessionId) || undefined;
+    latestSessionId = resolveRecoveredRuntimeSessionId(result, latestSessionId) || undefined;
     if (hasAgoraResult(result.output || '', expectedType)) return result;
   }
 
@@ -519,7 +524,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
           prepared,
           prompt: prepared.prompt,
         })
-    : await executeEngineWithContextRecovery(prepared.engine, {
+    : await executeChatRuntimeWithContextRecovery(prepared.engine, {
         agent: prepared.roleConfig.name,
         step: prepared.mode,
         prompt: prepared.prompt,
@@ -540,7 +545,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
       rawOutput: '',
       success: false,
       error: result.error || 'Agent 对话失败',
-      sessionId: resolveRecoveredSessionId(result, prepared.resumeSessionId),
+      sessionId: resolveRecoveredRuntimeSessionId(result, prepared.resumeSessionId),
     });
   }
   return finalizeAgentChatExecution({
@@ -549,7 +554,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
     rawOutput: result.output || '',
     success: result.success,
     error: result.error || null,
-    sessionId: resolveRecoveredSessionId(result, prepared.resumeSessionId),
+    sessionId: resolveRecoveredRuntimeSessionId(result, prepared.resumeSessionId),
   });
 }
 
@@ -627,9 +632,9 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
   }
 
   const globalSelection = readGlobalEngineSelection();
-  const configuredEngine = (await getConfiguredEngine().catch(() => globalSelection.engine || 'claude-code')) as EngineType;
+  const configuredEngine = (await getConfiguredChatRuntimeEngine().catch(() => globalSelection.engine || 'claude-code')) as ChatRuntimeEngineType;
   const selection = resolveAgentSelection(effectiveRoleConfig, globalSelection, undefined);
-  const effectiveEngine = (selection.effectiveEngine || configuredEngine) as EngineType;
+  const effectiveEngine = (selection.effectiveEngine || configuredEngine) as ChatRuntimeEngineType;
   const effectiveModel = selection.effectiveModel || globalSelection.defaultModel || '';
   if (!effectiveModel) {
     throw new Error('Agent 未配置可用模型');
@@ -644,7 +649,7 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
   await ensureEngineRuntimeSkillsAvailable(effectiveEngine, workingDirectory, effectiveSkillNames);
 
   const sessionReuseKey = `agent-chat:${input.userContext.id}:${input.agentName}:${mode}:${workflowContext?.runId || 'default'}`;
-  const engine = await getOrCreateEngine(effectiveEngine, sessionReuseKey, input.userContext.id);
+  const engine = await getOrCreateChatRuntimeEngine(effectiveEngine, sessionReuseKey, input.userContext.id);
   if (!engine) {
     const temporaryLabel = input.temporaryRoleConfig ? '临时 Agent' : '业务 Agent';
     throw new Error(`Agent 对话引擎不可用：${effectiveEngine}${effectiveModel ? ` / ${effectiveModel}` : ''}（${temporaryLabel}：${effectiveRoleConfig.name}）`);

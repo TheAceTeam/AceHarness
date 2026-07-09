@@ -1,7 +1,7 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DataCard,
@@ -19,15 +19,13 @@ import { ConfirmModal, type ConfirmModalVariant } from '@/components/ui/confirm-
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Switch } from '@/components/ui/switch';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
-import { EnvironmentVariables } from '@/components/ai-elements/environment-variables';
 import { Progress } from '@/components/ui/progress';
-import { copyText } from '@/lib/core/clipboard';
-import { Download, RefreshCw, TerminalSquare } from 'lucide-react';
+import { Download, RefreshCw } from 'lucide-react';
 import {
   cangjieSdkApi,
-  envApi,
   systemSettingsApi,
   type InstalledSdk,
   type SdkCatalogEntry,
@@ -35,28 +33,61 @@ import {
   type SdkOverviewResponse,
 } from '@/lib/core/api';
 
-interface EnvVar {
-  key: string;
-  value: string;
-  enabled: boolean;
-}
-
-interface EnvVarRow extends EnvVar {
-  id: string;
-}
-
-interface EnvVarError {
-  key?: string;
-}
-
-const AI_ENV_PRESETS = [
-  { key: 'ANTHROPIC_AUTH_TOKEN', description: 'Anthropic API 密钥，Claude/Anthropic 兼容调用会读取。' },
-  { key: 'ANTHROPIC_BASE_URL', description: 'Anthropic 自定义 API 地址，用于代理或自建网关。' },
-  { key: 'OPENAI_API_KEY', description: 'OpenAI API 密钥，Codex/OpenAI 兼容调用会读取。' },
-  { key: 'OPENAI_BASE_URL', description: 'OpenAI 兼容 API 地址，Codex 会显式传给 SDK。' },
-];
-
-const AI_ENV_DESCRIPTION_BY_KEY = new Map(AI_ENV_PRESETS.map((item) => [item.key, item.description]));
+const ENGINE_ENV_DESCRIPTIONS = [
+  {
+    id: 'claude',
+    label: 'Claude',
+    description: 'Claude wrapper 会把这些值传给 Claude Code 进程；这里仅说明真实读取的变量，不提供编辑入口。',
+    vars: [
+      { key: 'ANTHROPIC_AUTH_TOKEN', description: 'Claude Code 使用的认证令牌。' },
+      { key: 'ANTHROPIC_BASE_URL', description: 'Claude Code 请求地址；设置后会同步写入 Claude Code base URL。' },
+      { key: 'CLAUDE_CODE_BASE_URL', description: 'Claude Code base URL 兼容变量，代码会归一化为 ANTHROPIC_BASE_URL。' },
+      { key: 'CLAUDE_CODE_API_BASE_URL', description: 'Claude Code API base URL 兼容变量，代码会归一化为 ANTHROPIC_BASE_URL。' },
+      { key: 'ACE_CLAUDE_CODE_EXECUTABLE', description: '指定 ACEHarness 使用的 Claude Code 可执行文件。' },
+      { key: 'CLAUDE_CODE_EXECUTABLE', description: 'Claude Code 可执行文件备用变量。' },
+    ],
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    description: 'Codex wrapper 会把这些值传给 Codex SDK；这里仅说明真实读取的变量，不提供编辑入口。',
+    vars: [
+      { key: 'OPENAI_API_KEY', description: 'Codex SDK 使用的 API 密钥。' },
+      { key: 'OPENAI_BASE_URL', description: 'Codex SDK 使用的 base URL；设置后会写入 Codex model provider 配置。' },
+    ],
+  },
+  {
+    id: 'opencode',
+    label: 'OpenCode',
+    description: 'OpenCode 相关代码读取这些运行参数和配置目录变量；模型密钥通常由 OpenCode 自身配置或模型路由处理。',
+    vars: [
+      { key: 'OPENCODE_CONFIG_DIR', description: '指定 OpenCode 全局配置目录。' },
+      { key: 'ACE_OPENCODE_STREAM_TIMEOUT_MS', description: 'OpenCode HTTP stream 总超时时间，单位毫秒。' },
+      { key: 'ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS', description: 'OpenCode HTTP stream 空闲超时时间，单位毫秒。' },
+    ],
+  },
+  {
+    id: 'kiro',
+    label: 'Kiro',
+    description: '当前项目的 Kiro wrapper 只启动 kiro-cli 并传入模型参数，代码里没有定义专属 Kiro 环境变量 schema。',
+    vars: [],
+  },
+  {
+    id: 'other-cli',
+    label: '其他 CLI',
+    description: '这里只列当前代码或配置中明确出现的其他 CLI 相关变量。',
+    vars: [
+      { key: 'GEMINI_MODEL', description: 'Gemini CLI 模型覆盖变量，见模型默认配置注释。' },
+      { key: 'MAGIC_CLI_PATH', description: '指定 Magic CLI 可执行文件路径。' },
+      { key: 'ACE_NGA_SDK_BASE_URL', description: 'NGA SDK 连接外部服务地址；未设置时启动本地 serve。' },
+      { key: 'ACE_NGA_SDK_COMMAND', description: '指定 NGA SDK 启动命令。' },
+      { key: 'ACE_NGA_BIN', description: 'NGA SDK 启动命令备用变量。' },
+      { key: 'ACE_CODEGENIE_SDK_BASE_URL', description: 'CodeGenie SDK 连接外部服务地址；未设置时启动本地 serve。' },
+      { key: 'ACE_CODEGENIE_SDK_COMMAND', description: '指定 CodeGenie SDK 启动命令。' },
+      { key: 'ACE_CODEGENIE_BIN', description: 'CodeGenie SDK 启动命令备用变量。' },
+    ],
+  },
+] as const;
 
 interface EmailNotificationForm {
   enabled: boolean;
@@ -84,6 +115,11 @@ interface AgentMemoryForm {
   persistMode: 'manual' | 'review' | 'auto';
 }
 
+interface RuntimeDebugForm {
+  acpxTraceEnabled: boolean;
+  acpxTraceDirectory: string;
+}
+
 type SettingsSectionId = 'system' | 'runtime' | 'security' | 'advanced';
 
 type ConfirmRequest = {
@@ -98,7 +134,7 @@ type ConfirmRequest = {
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSectionId; label: string; description: string }> = [
   { id: 'system', label: 'System', description: 'Workspace defaults, notifications, and cache parameters.' },
-  { id: 'runtime', label: 'Runtime', description: 'Managed SDK and process environment.' },
+  { id: 'runtime', label: '工具链', description: '托管 SDK 与系统环境。' },
   { id: 'security', label: 'Security', description: 'Tokens and secret-bearing notification settings.' },
   { id: 'advanced', label: 'Advanced', description: 'Reference material and lower-frequency controls.' },
 ];
@@ -114,84 +150,12 @@ function getChannelLabel(channel: SdkChannel) {
   return 'LTS';
 }
 
-function makeEnvVarRowId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function createEnvVarRow(input?: Partial<EnvVar>): EnvVarRow {
-  return {
-    id: makeEnvVarRowId(),
-    key: input?.key || '',
-    value: input?.value || '',
-    enabled: input?.enabled ?? true,
-  };
-}
-
-function stripEnvVarRow(item: EnvVarRow): EnvVar {
-  return {
-    key: item.key,
-    value: item.value,
-    enabled: item.enabled,
-  };
-}
-
-function normalizeEnvVarsForCompare(items: EnvVarRow[]) {
-  return JSON.stringify(items.map((item) => stripEnvVarRow({ ...item, key: item.key.trim() })));
-}
-
 function normalizeEmailFormForCompare(form: EmailNotificationForm) {
   return JSON.stringify({ ...form, smtpPassword: '' });
 }
 
-function validateEnvVars(vars: EnvVar[]) {
-  const errors: EnvVarError[] = vars.map(() => ({}));
-  const keyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  const keyMap = new Map<string, number[]>();
-
-  vars.forEach((item, index) => {
-    const trimmedKey = item.key.trim();
-    const isEmptyRow = !trimmedKey && !item.value.trim() && item.enabled;
-
-    if (!trimmedKey) {
-      if (!isEmptyRow) {
-        errors[index].key = '请输入变量名';
-      }
-      return;
-    }
-
-    if (!keyPattern.test(trimmedKey)) {
-      errors[index].key = '仅支持字母、数字和下划线，且不能以数字开头';
-      return;
-    }
-
-    const indexes = keyMap.get(trimmedKey) || [];
-    indexes.push(index);
-    keyMap.set(trimmedKey, indexes);
-  });
-
-  for (const indexes of keyMap.values()) {
-    if (indexes.length > 1) {
-      for (const index of indexes) {
-        errors[index].key = '变量名不能重复';
-      }
-    }
-  }
-
-  return {
-    errors,
-    hasErrors: errors.some((item) => Boolean(item.key)),
-  };
-}
-
 export default function SystemSettingsContent() {
   const { toast } = useToast();
-
-  const [vars, setVars] = useState<EnvVarRow[]>([]);
-  const [envBaseline, setEnvBaseline] = useState('');
-  const [varErrors, setVarErrors] = useState<EnvVarError[]>([]);
-  const [envLoading, setEnvLoading] = useState(true);
-  const [envSaving, setEnvSaving] = useState(false);
-  const [envError, setEnvError] = useState<string | null>(null);
 
   const [sdkOverview, setSdkOverview] = useState<SdkOverviewResponse | null>(null);
   const [sdkLoading, setSdkLoading] = useState(true);
@@ -232,6 +196,10 @@ export default function SystemSettingsContent() {
     runtimeEnabled: false,
     persistMode: 'review',
   });
+  const [runtimeDebugForm, setRuntimeDebugForm] = useState<RuntimeDebugForm>({
+    acpxTraceEnabled: false,
+    acpxTraceDirectory: '',
+  });
   const [experienceBaseline, setExperienceBaseline] = useState('');
   const [experienceSaving, setExperienceSaving] = useState(false);
   const [experienceError, setExperienceError] = useState<string | null>(null);
@@ -240,31 +208,6 @@ export default function SystemSettingsContent() {
 
   const managedHomeActive = sdkOverview?.effective.source === 'managed';
 
-  const displayVars = useMemo(() => {
-    if (!managedHomeActive) return vars;
-    return vars.map((item) => (
-      item.key.trim() === 'CANGJIE_HOME'
-        ? { ...item, value: sdkOverview?.effective.cangjieHome || '' }
-        : item
-    ));
-  }, [managedHomeActive, sdkOverview?.effective.cangjieHome, vars]);
-
-  const environmentVariableItems = useMemo(() => displayVars.map((item, index) => ({
-    id: item.id,
-    key: item.key,
-    value: item.value,
-    enabled: item.enabled,
-    required: item.key.trim() === 'CANGJIE_HOME',
-    description: AI_ENV_DESCRIPTION_BY_KEY.get(item.key.trim()),
-    maskValue: /(TOKEN|SECRET|PASSWORD|KEY)/iu.test(item.key.trim()),
-    disableValueEdit: managedHomeActive && item.key.trim() === 'CANGJIE_HOME',
-    keyError: varErrors[index]?.key,
-    valueHint: managedHomeActive && item.key.trim() === 'CANGJIE_HOME'
-      ? '当前已启用托管 SDK，此处展示有效路径，原始环境变量回退值保持可用。'
-      : undefined,
-  })), [displayVars, managedHomeActive, varErrors]);
-
-  const envDirty = envBaseline !== '' && normalizeEnvVarsForCompare(vars) !== envBaseline;
   const tokenDirty = Boolean(gitcodeToken.trim());
   const emailDirty = emailBaseline !== '' && (
     normalizeEmailFormForCompare(emailForm) !== emailBaseline || Boolean(emailForm.smtpPassword.trim())
@@ -272,10 +215,10 @@ export default function SystemSettingsContent() {
   const experienceDirty = experienceBaseline !== '' && JSON.stringify({
     workspaceExperience: workspaceExperienceForm,
     agentMemory: agentMemoryForm,
+    runtimeDebug: runtimeDebugForm,
   }) !== experienceBaseline;
   const engineCacheDirty = engineAvailabilityCacheMinutes !== engineAvailabilityCacheBaseline;
-  const systemDirty = envDirty || tokenDirty || emailDirty || experienceDirty || engineCacheDirty;
-  const systemSaving = envSaving || tokenSaving || emailSaving || experienceSaving || sdkActionKey !== null;
+  const systemSaving = tokenSaving || emailSaving || experienceSaving || sdkActionKey !== null;
 
   const groupedCatalog = useMemo(() => {
     const groups: Record<SdkChannel, SdkCatalogEntry[]> = { nightly: [], sts: [], lts: [] };
@@ -298,28 +241,6 @@ export default function SystemSettingsContent() {
         && item.arch === sdkOverview.host.arch,
     );
   };
-
-  const syncVarErrors = (nextVars: EnvVarRow[]) => {
-    setVarErrors((prev) => nextVars.map((_, index) => prev[index] || {}));
-  };
-
-  const loadEnvVars = useCallback(async () => {
-    setEnvLoading(true);
-    setEnvError(null);
-    try {
-      const data = await envApi.get('system');
-      const nextVars = (data.vars || []).map((item) => createEnvVarRow(item));
-      setVars(nextVars);
-      setEnvBaseline(normalizeEnvVarsForCompare(nextVars));
-      setVarErrors(nextVars.map(() => ({})));
-    } catch (error: any) {
-      const message = error?.message || '加载环境变量失败';
-      setEnvError(message);
-      toast('error', message);
-    } finally {
-      setEnvLoading(false);
-    }
-  }, [toast]);
 
   const loadSdkOverview = useCallback(async () => {
     setSdkLoading(true);
@@ -350,6 +271,10 @@ export default function SystemSettingsContent() {
         runtimeEnabled: Boolean(settings.agentMemory?.runtimeEnabled),
         persistMode: settings.agentMemory?.persistMode || 'review',
       } satisfies AgentMemoryForm;
+      const nextRuntimeDebugForm = {
+        acpxTraceEnabled: Boolean(settings.runtimeDebug?.acpxTraceEnabled),
+        acpxTraceDirectory: settings.runtimeDebug?.acpxTraceDirectory || '',
+      } satisfies RuntimeDebugForm;
       const nextEmailForm = {
         enabled: Boolean(settings.emailNotifications?.enabled),
         smtpHost: settings.emailNotifications?.smtpHost || '',
@@ -369,7 +294,8 @@ export default function SystemSettingsContent() {
       setEngineAvailabilityCacheBaseline(String(settings.engineAvailabilityCacheMinutes || 30));
       setWorkspaceExperienceForm(nextWorkspaceExperienceForm);
       setAgentMemoryForm(nextAgentMemoryForm);
-      setExperienceBaseline(JSON.stringify({ workspaceExperience: nextWorkspaceExperienceForm, agentMemory: nextAgentMemoryForm }));
+      setRuntimeDebugForm(nextRuntimeDebugForm);
+      setExperienceBaseline(JSON.stringify({ workspaceExperience: nextWorkspaceExperienceForm, agentMemory: nextAgentMemoryForm, runtimeDebug: nextRuntimeDebugForm }));
       setEmailForm(nextEmailForm);
       setEmailBaseline(normalizeEmailFormForCompare(nextEmailForm));
     } catch (error: any) {
@@ -382,97 +308,9 @@ export default function SystemSettingsContent() {
   }, [toast]);
 
   useEffect(() => {
-    void loadEnvVars();
     void loadSdkOverview();
     void loadTokenSettings();
-  }, [loadEnvVars, loadSdkOverview, loadTokenSettings]);
-
-  const updateVar = (index: number, patch: Partial<EnvVar>) => {
-    setVars((prev) => {
-      const next = prev.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item));
-      syncVarErrors(next);
-      return next;
-    });
-
-    if (patch.key !== undefined) {
-      setVarErrors((prev) => prev.map((item, itemIndex) => (itemIndex === index ? { ...item, key: undefined } : item)));
-    }
-  };
-
-  const addRow = () => {
-    setVars((prev) => {
-      const next = [...prev, createEnvVarRow()];
-      syncVarErrors(next);
-      return next;
-    });
-  };
-
-  const addPresetEnvVar = (key: string) => {
-    setVars((prev) => {
-      if (prev.some((item) => item.key.trim() === key)) return prev;
-      const next = [...prev, createEnvVarRow({ key })];
-      syncVarErrors(next);
-      return next;
-    });
-  };
-
-  const removeVar = (index: number) => {
-    setVars((prev) => {
-      const next = prev.filter((_, itemIndex) => itemIndex !== index);
-      syncVarErrors(next);
-      return next;
-    });
-    setVarErrors((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
-  };
-
-  const handleRemoveVar = (index: number) => {
-    const item = vars[index];
-    setConfirmRequest({
-      open: true,
-      variant: 'delete',
-      title: '删除环境变量',
-      objectName: item?.key.trim() || '这条环境变量',
-      consequence: '保存后将从系统运行时回退配置中移除。',
-      confirmLabel: '删除',
-      onConfirm: () => {
-        removeVar(index);
-        setConfirmRequest(null);
-      },
-    });
-  };
-
-  const saveEnvVars = async () => {
-    const normalizedVars = vars.map((item) => ({ ...item, key: item.key.trim() }));
-    const validation = validateEnvVars(normalizedVars);
-    setVarErrors(validation.errors);
-    if (validation.hasErrors) {
-      setEnvError('请先修正环境变量中的错误后再保存');
-      toast('error', '请先修正环境变量中的错误后再保存');
-      return;
-    }
-
-    setEnvSaving(true);
-    setEnvError(null);
-    try {
-      await envApi.save('system', normalizedVars.filter((item) => item.key).map(stripEnvVarRow));
-      setVars(normalizedVars);
-      setEnvBaseline(normalizeEnvVarsForCompare(normalizedVars));
-      toast('success', '环境变量保存成功');
-    } catch (error: any) {
-      const message = error?.message || '保存环境变量失败';
-      setEnvError(message);
-      toast('error', message);
-    } finally {
-      setEnvSaving(false);
-    }
-  };
-
-  const copyEnvVar = async (index: number) => {
-    const item = vars[index];
-    if (!item) return;
-    const ok = await copyText(`export ${item.key.trim()}="${item.value}"`);
-    toast(ok ? 'success' : 'error', ok ? `已复制 ${item.key.trim() || '环境变量'} 导出命令` : '复制失败');
-  };
+  }, [loadSdkOverview, loadTokenSettings]);
 
   const saveGitcodeToken = async () => {
     const trimmed = gitcodeToken.trim();
@@ -577,8 +415,11 @@ export default function SystemSettingsContent() {
       await systemSettingsApi.save({
         workspaceExperience: workspaceExperienceForm,
         agentMemory: agentMemoryForm,
+        runtimeDebug: {
+          acpxTraceEnabled: runtimeDebugForm.acpxTraceEnabled,
+        },
       });
-      setExperienceBaseline(JSON.stringify({ workspaceExperience: workspaceExperienceForm, agentMemory: agentMemoryForm }));
+      setExperienceBaseline(JSON.stringify({ workspaceExperience: workspaceExperienceForm, agentMemory: agentMemoryForm, runtimeDebug: runtimeDebugForm }));
       toast('success', '体验与记忆设置已保存');
       await loadTokenSettings();
     } catch (error: any) {
@@ -691,7 +532,7 @@ export default function SystemSettingsContent() {
     });
   };
 
-  const pageLoading = envLoading && sdkLoading && tokenLoading;
+  const pageLoading = sdkLoading && tokenLoading;
 
   return (
     <>
@@ -717,7 +558,9 @@ export default function SystemSettingsContent() {
           }
           activeFilters={
             <div className="flex flex-wrap gap-2">
-              <StatusPill tone={systemDirty ? 'warning' : 'neutral'}>{systemDirty ? '有未保存更改' : '无未保存更改'}</StatusPill>
+              <StatusPill tone={experienceDirty || engineCacheDirty || tokenDirty || emailDirty ? 'warning' : 'neutral'}>
+                {experienceDirty || engineCacheDirty || tokenDirty || emailDirty ? '有未保存更改' : '无未保存更改'}
+              </StatusPill>
               <StatusPill tone="neutral" dot={false}>
                 {SETTINGS_SECTIONS.find((section) => section.id === activeSection)?.description}
               </StatusPill>
@@ -729,7 +572,7 @@ export default function SystemSettingsContent() {
           <EmptyState
             icon={<RefreshCw className="h-5 w-5" />}
             title="正在加载系统设置"
-            description="环境变量、托管 SDK 和系统参数会并行读取。"
+            description="托管 SDK 和系统参数会并行读取。"
           />
         ) : null}
 
@@ -826,6 +669,27 @@ export default function SystemSettingsContent() {
                   )}
                 />
               </div>
+              <FormField
+                label="ACPX 调试日志"
+                description="开启后记录 AI 调用原始事件、归一化事件和对话渲染片段；悬浮入口会打开日志目录。"
+                control={(
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Switch
+                      checked={runtimeDebugForm.acpxTraceEnabled}
+                      onCheckedChange={(checked) => setRuntimeDebugForm((prev) => ({ ...prev, acpxTraceEnabled: checked }))}
+                      disabled={experienceSaving}
+                    />
+                    <StatusPill tone={runtimeDebugForm.acpxTraceEnabled ? 'info' : 'neutral'}>
+                      {runtimeDebugForm.acpxTraceEnabled ? '已开启' : '已关闭'}
+                    </StatusPill>
+                    {runtimeDebugForm.acpxTraceDirectory ? (
+                      <code className="break-all rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                        {runtimeDebugForm.acpxTraceDirectory}
+                      </code>
+                    ) : null}
+                  </div>
+                )}
+              />
             </FormSection>
 
             <FormSection
@@ -872,7 +736,7 @@ export default function SystemSettingsContent() {
               <FormSection
                 className="px-5"
                 title="托管 Cangjie SDK"
-                description="托管 SDK 独立于账号资料。安装、激活和删除会影响系统运行时解析到的 CANGJIE_HOME。"
+                description="统一管理本机 Cangjie SDK。安装、激活和删除会影响系统使用的 CANGJIE_HOME。"
                 actions={(
                   <div className="flex flex-wrap gap-2">
                     {sdkOverview?.active ? (
@@ -1002,63 +866,6 @@ export default function SystemSettingsContent() {
               </FormSection>
             </DataCard>
 
-            <DataCard className="p-0">
-              <FormSection
-                className="px-5"
-                title="系统环境变量"
-                description="系统级环境变量会作为运行时回退配置参与解析，敏感命名会默认以密码模式展示。"
-                actions={(
-                  <Button size="sm" onClick={saveEnvVars} disabled={envSaving || envLoading}>
-                    {envSaving ? '保存中...' : '保存'}
-                  </Button>
-                )}
-              >
-                {envError && !envLoading ? (
-                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{envError}</div>
-                ) : null}
-                {envLoading ? (
-                  <EmptyState icon={<TerminalSquare className="h-5 w-5" />} title="环境变量加载中" />
-                ) : (
-                  <div className="space-y-4">
-                    <div className="rounded-lg border bg-muted/20 px-3 py-3">
-                      <div className="mb-2 text-xs font-medium text-muted-foreground">常用 AI 凭据</div>
-                      <div className="flex flex-wrap gap-2">
-                        {AI_ENV_PRESETS.map((preset) => {
-                          const exists = displayVars.some((item) => item.key.trim() === preset.key);
-                          return (
-                            <Button
-                              key={preset.key}
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 font-mono text-xs"
-                              onClick={() => addPresetEnvVar(preset.key)}
-                              disabled={envSaving || exists}
-                              title={preset.description}
-                            >
-                              {preset.key}
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <EnvironmentVariables
-                      items={environmentVariableItems}
-                      disabled={envSaving}
-                      onAdd={addRow}
-                      onRemove={(index) => void handleRemoveVar(index)}
-                      onChange={(index, patch) => updateVar(index, {
-                        ...(patch.key !== undefined ? { key: patch.key } : {}),
-                        ...(patch.value !== undefined ? { value: patch.value } : {}),
-                        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-                      })}
-                      onCopy={copyEnvVar}
-                      emptyMessage="暂无环境变量"
-                    />
-                  </div>
-                )}
-              </FormSection>
-            </DataCard>
           </div>
         ) : null}
 
@@ -1071,7 +878,7 @@ export default function SystemSettingsContent() {
                 description="配置此系统 Token 后即可检测和下载托管 SDK；留空会保留已保存值。"
                 actions={(
                   <Button size="sm" onClick={saveGitcodeToken} disabled={tokenSaving || !gitcodeToken.trim()}>
-                    {tokenSaving ? '保存中...' : '保存 Token'}
+                    {tokenSaving ? '保存中...' : '保存 GitCode Token'}
                   </Button>
                 )}
               >
@@ -1177,7 +984,7 @@ export default function SystemSettingsContent() {
               <DataCardHeader>
                 <div>
                   <DataCardTitle>高级设置边界</DataCardTitle>
-                  <DataCardDescription>第一批实现保留原有功能，并把低频参考信息放在 Advanced，避免挤占常用 System/Runtime/Security 配置。</DataCardDescription>
+                  <DataCardDescription>第一批实现保留原有功能，并把低频参考信息放在 Advanced，避免挤占常用系统、安全与工具链配置。</DataCardDescription>
                 </div>
                 <StatusPill tone="accent">Advanced</StatusPill>
               </DataCardHeader>
@@ -1191,38 +998,39 @@ export default function SystemSettingsContent() {
               <FormSection
                 className="px-5"
                 title="环境变量说明"
-                description="这些系统运行时变量会影响 Claude、Codex 与 OpenAI/Anthropic 兼容网关调用。"
+                description="这里只展示说明；环境变量由宿主系统或运行环境提供，系统设置页不提供编辑、保存或删除入口。"
               >
-                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm text-muted-foreground">
-                  {AI_ENV_PRESETS.map((preset) => (
-                    <Fragment key={preset.key}>
-                      <code className="font-mono text-primary">{preset.key}</code>
-                      <span>{preset.description}</span>
-                    </Fragment>
+                <Tabs defaultValue="claude" className="space-y-4">
+                  <TabsList className="flex h-auto flex-wrap justify-start">
+                    {ENGINE_ENV_DESCRIPTIONS.map((engine) => (
+                      <TabsTrigger key={engine.id} value={engine.id}>
+                        {engine.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                  {ENGINE_ENV_DESCRIPTIONS.map((engine) => (
+                    <TabsContent key={engine.id} value={engine.id} className="mt-0 space-y-3">
+                      <p className="text-sm text-muted-foreground">{engine.description}</p>
+                      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm text-muted-foreground">
+                        {engine.vars.length > 0 ? engine.vars.map((item) => (
+                          <div key={item.key} className="contents">
+                            <code className="font-mono text-primary">{item.key}</code>
+                            <span>{item.description}</span>
+                          </div>
+                        )) : (
+                          <div className="col-span-2 rounded-md border border-border bg-muted/20 px-3 py-2">
+                            当前代码未声明可配置的专属环境变量。
+                          </div>
+                        )}
+                      </div>
+                    </TabsContent>
                   ))}
-                </div>
+                </Tabs>
               </FormSection>
             </DataCard>
           </div>
         ) : null}
 
-        <div className="sticky bottom-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-none">
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusPill tone={systemDirty ? 'warning' : 'neutral'}>{systemDirty ? '有未保存更改' : '无未保存更改'}</StatusPill>
-            {envDirty ? <StatusPill tone="warning" dot={false}>环境变量</StatusPill> : null}
-            {experienceDirty ? <StatusPill tone="warning" dot={false}>体验/记忆</StatusPill> : null}
-            {engineCacheDirty ? <StatusPill tone="warning" dot={false}>缓存时长</StatusPill> : null}
-            {tokenDirty ? <StatusPill tone="warning" dot={false}>GitCode Token</StatusPill> : null}
-            {emailDirty ? <StatusPill tone="warning" dot={false}>邮件配置</StatusPill> : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={saveWorkspaceExperience} disabled={!experienceDirty || systemSaving || tokenLoading}>保存体验</Button>
-            <Button variant="outline" size="sm" onClick={saveEngineAvailabilityCache} disabled={!engineCacheDirty || systemSaving || tokenLoading}>保存缓存</Button>
-            <Button variant="outline" size="sm" onClick={saveEnvVars} disabled={!envDirty || systemSaving || envLoading}>保存环境变量</Button>
-            <Button variant="outline" size="sm" onClick={saveGitcodeToken} disabled={!tokenDirty || systemSaving || tokenLoading}>保存 Token</Button>
-            <Button size="sm" onClick={saveEmailNotifications} disabled={!emailDirty || systemSaving || tokenLoading}>保存邮件</Button>
-          </div>
-        </div>
       </div>
 
       <ConfirmModal

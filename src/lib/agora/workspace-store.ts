@@ -3,9 +3,8 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { getWorkspaceDataFile, SHARED_AGENT_CONFIG_DIR } from '@/lib/core/app-paths';
 import { ensureDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
-import { SHARED_AGENT_CONFIG_DIR } from '@/lib/engines/engine-config';
 import { getRuntimeSkillsDirPath, syncInstalledSkillsToRuntime } from '@/lib/run/runtime-skills';
 
 const execFileAsync = promisify(execFile);

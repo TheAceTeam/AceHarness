@@ -7,8 +7,7 @@ import {
 } from '@/lib/spec/coding-store';
 import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
 import { loadChatSettings } from '@/lib/chat/settings';
-import { createEngine, getConfiguredEngine, type EngineType } from '@/lib/engines/engine-factory';
-import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
+import { createWorkflowRuntime, executeWorkflowRuntimeWithContextRecovery, getConfiguredWorkflowRuntime, type WorkflowRuntimeType } from '@/lib/workflow/runtime-facade';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import {
   extractJsonObject,
@@ -173,8 +172,8 @@ export async function POST(request: Request) {
         : [...enabledSkills, 'aceharness-spec-coding', 'aceharness-workflow-creator']
     );
 
-    const engineType = await getConfiguredEngine();
-    const engine = await createEngine(engineType as EngineType);
+    const engineType = await getConfiguredWorkflowRuntime();
+    const engine = await createWorkflowRuntime(engineType as WorkflowRuntimeType);
     if (!engine) {
       const qualityValidation = buildQualityPayload(baseSpecCoding);
       return jsonOk({
@@ -254,7 +253,7 @@ export async function POST(request: Request) {
       '- 如果信息不足，也要先给出当前最佳草案，并把缺口写入 clarification。',
     ].filter(Boolean).join('\n');
 
-    const result = await executeEngineWithContextRecovery(engine, {
+    const result = await executeWorkflowRuntimeWithContextRecovery(engine, {
       agent: 'aceharness-spec-coding',
       step: 'draft-spec-coding',
       prompt,

@@ -3,29 +3,26 @@ import { makeRequest, responseJson } from './helpers/route-helpers';
 import { MockEngine } from './helpers/mock-engine';
 
 const routeMocks = vi.hoisted(() => ({
-  createEngine: vi.fn(),
-  resolveRequestedEngineType: vi.fn(),
+  createChatRuntimeEngine: vi.fn(),
+  resolveRequestedChatRuntimeEngineType: vi.fn(),
   buildChatRequestContext: vi.fn(),
   ensureEngineRuntimeSkillsAvailable: vi.fn(),
-  executeEngineWithContextRecovery: vi.fn(),
-  resolveRecoveredSessionId: vi.fn(),
+  executeChatRuntimeWithContextRecovery: vi.fn(),
+  resolveRecoveredRuntimeSessionId: vi.fn(),
   getWorkspaceRoot: vi.fn(),
   requireAuth: vi.fn(),
 }));
 
-vi.mock('@/lib/engines/engine-factory', () => ({
-  createEngine: routeMocks.createEngine,
-  resolveRequestedEngineType: routeMocks.resolveRequestedEngineType,
+vi.mock('@/lib/chat/chat-engine-runtime', () => ({
+  createChatRuntimeEngine: routeMocks.createChatRuntimeEngine,
+  executeChatRuntimeWithContextRecovery: routeMocks.executeChatRuntimeWithContextRecovery,
+  resolveRecoveredRuntimeSessionId: routeMocks.resolveRecoveredRuntimeSessionId,
+  resolveRequestedChatRuntimeEngineType: routeMocks.resolveRequestedChatRuntimeEngineType,
 }));
 
 vi.mock('@/lib/chat/request-options', () => ({
   buildChatRequestContext: routeMocks.buildChatRequestContext,
   ensureEngineRuntimeSkillsAvailable: routeMocks.ensureEngineRuntimeSkillsAvailable,
-}));
-
-vi.mock('@/lib/engines/context-recovery', () => ({
-  executeEngineWithContextRecovery: routeMocks.executeEngineWithContextRecovery,
-  resolveRecoveredSessionId: routeMocks.resolveRecoveredSessionId,
 }));
 
 vi.mock('@/lib/core/app-paths', () => ({
@@ -41,10 +38,10 @@ describe('/api/chat route', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
 
-    routeMocks.resolveRequestedEngineType.mockResolvedValue('opencode-sdk');
+    routeMocks.resolveRequestedChatRuntimeEngineType.mockResolvedValue('opencode');
     routeMocks.buildChatRequestContext.mockResolvedValue({ systemPrompt: 'system prompt' });
     routeMocks.ensureEngineRuntimeSkillsAvailable.mockResolvedValue(undefined);
-    routeMocks.resolveRecoveredSessionId.mockImplementation((result: { sessionId?: string }, sessionId?: string) => result.sessionId || sessionId || undefined);
+    routeMocks.resolveRecoveredRuntimeSessionId.mockImplementation((result: { sessionId?: string }, sessionId?: string) => result.sessionId || sessionId || undefined);
     routeMocks.getWorkspaceRoot.mockReturnValue('/tmp/workspace');
     routeMocks.requireAuth.mockResolvedValue({
       id: 'user-1',
@@ -63,14 +60,14 @@ describe('/api/chat route', () => {
     const engine = new MockEngine();
     const partialRaw = '\n<ace-process>{"kind":"tool-call","toolName":"glob","title":"🔍 搜索文件","pattern":"*","path":"C:\\\\workspace\\\\bin","body":"","toolId":"tool-1"}</ace-process>\n';
 
-    routeMocks.createEngine.mockResolvedValue(engine);
-    routeMocks.executeEngineWithContextRecovery.mockImplementation(async (target: MockEngine) => {
+    routeMocks.createChatRuntimeEngine.mockResolvedValue(engine);
+    routeMocks.executeChatRuntimeWithContextRecovery.mockImplementation(async (target: MockEngine) => {
       target.emit('stream', { type: 'text', content: partialRaw });
       return {
         success: false,
         output: '',
         error: 'child exited early code=1',
-        sessionId: 'ses_failure_1',
+        sessionId: 'runtime-session-failure-1',
         metadata: {},
       };
     });
@@ -92,15 +89,15 @@ describe('/api/chat route', () => {
     const json = await responseJson(response);
     expect(json).toMatchObject({
       result: partialRaw,
-      sessionId: 'ses_failure_1',
-      engine: 'opencode-sdk',
+      sessionId: 'runtime-session-failure-1',
+      engine: 'opencode',
       isError: true,
       error: 'child exited early code=1',
     });
     expect(routeMocks.buildChatRequestContext).toHaveBeenCalledWith(expect.objectContaining({
       personalDir: '/tmp/personal',
     }));
-    expect(routeMocks.executeEngineWithContextRecovery).toHaveBeenCalledWith(engine, expect.objectContaining({
+    expect(routeMocks.executeChatRuntimeWithContextRecovery).toHaveBeenCalledWith(engine, expect.objectContaining({
       userId: 'user-1',
     }));
   });
@@ -120,7 +117,7 @@ describe('/api/chat route', () => {
     expect(response.status).toBe(401);
     const json = await responseJson(response);
     expect(json).toEqual({ error: '未登录或登录已过期' });
-    expect(routeMocks.createEngine).not.toHaveBeenCalled();
-    expect(routeMocks.executeEngineWithContextRecovery).not.toHaveBeenCalled();
+    expect(routeMocks.createChatRuntimeEngine).not.toHaveBeenCalled();
+    expect(routeMocks.executeChatRuntimeWithContextRecovery).not.toHaveBeenCalled();
   });
 });

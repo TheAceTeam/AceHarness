@@ -55,6 +55,9 @@ export type {
 
 export { defaultPermissionPolicy } from './contracts';
 
+export { createRuntimeOrchestrator } from './orchestrator';
+export type { RuntimeOrchestratorOptions } from './orchestrator';
+
 export {
   createPermissionAuditEvents,
   createPermissionTraceEvents,

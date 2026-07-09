@@ -132,7 +132,13 @@ function sortCandidates(candidates: ResolvedRuntimeEnvVar[]): ResolvedRuntimeEnv
 
 export function toPublicSecretProfileDto(profile: RuntimeSecretProfileDto): RuntimeSecretProfileDto {
   return {
-    ...profile,
+    id: profile.id,
+    displayName: profile.displayName,
+    agentId: profile.agentId,
+    encrypted: profile.encrypted,
+    encryptionKeyReady: profile.encryptionKeyReady,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
     secrets: profile.secrets.map((secret) => ({
       key: secret.key,
       secretRef: secret.secretRef,
@@ -174,28 +180,42 @@ export function resolveRuntimeEnv(input: RuntimeEnvResolutionInput): RuntimeEnvR
     secretValuesByKey.set(normalizeKey(secretValue.key), secretValue);
   }
 
-  for (const secret of input.secretProfile?.secrets ?? []) {
-    const key = normalizeKey(secret.key);
-    const secretValue = secretValuesByKey.get(key);
-    setCandidate(candidates, {
-      key,
-      value: secretValue?.value,
-      source: 'secret-profile',
-      secret: true,
-      readiness: input.secretProfile?.encryptionKeyReady === false ? 'misconfigured' : secretValue?.value ? 'ready' : secret.readiness,
-    });
+  const secretProfile = input.secretProfile;
+  if (secretProfile) {
+    for (const secret of secretProfile.secrets) {
+      const key = normalizeKey(secret.key);
+      const secretValue = secretValuesByKey.get(key);
+      const secretReadiness = !secretProfile.encrypted || !secretProfile.encryptionKeyReady
+        ? 'misconfigured'
+        : secretValue?.value
+          ? 'ready'
+          : secret.required
+            ? 'missing'
+            : secret.readiness;
+      setCandidate(candidates, {
+        key,
+        value: secretValue?.value,
+        source: 'secret-profile',
+        secret: true,
+        readiness: secretReadiness,
+      });
+    }
   }
 
   for (const variable of input.envProfile?.variables ?? []) {
     const key = normalizeKey(variable.key);
     const requirement = requirements.get(key);
     const secretValue = variable.secretRef ? [...secretValuesByKey.values()].find((secret) => secret.secretRef === variable.secretRef) : undefined;
+    const value = secretValue?.value ?? variable.value;
+    const required = Boolean(variable.required ?? requirement?.required);
     setCandidate(candidates, {
       key,
-      value: secretValue?.value ?? variable.value,
+      value,
       source: 'env-profile',
       secret: Boolean(variable.secret ?? variable.secretRef ?? requirement?.secret),
-      readiness: readinessForValue(secretValue?.value ?? variable.value, Boolean(variable.required ?? requirement?.required)),
+      readiness: variable.secretRef && !secretValue
+        ? required ? 'missing' : 'misconfigured'
+        : readinessForValue(value, required),
     });
   }
 

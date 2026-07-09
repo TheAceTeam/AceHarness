@@ -1,70 +1,90 @@
 import fs from 'fs/promises';
 import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
-import { getEngineConfigDir } from '@/lib/engines/engine-config';
-import { getDefaultDriver, normalizeDriverSelection, supportsDriverSelection, type EngineDriver } from '@/lib/engines/engine-factory';
-import { normalizeEngineRuntime, type CangjieRuntimeConfig, type EngineRuntime } from '@/lib/engines/cangjie-runtime-config';
-import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
+import { getEngineConfigPath, getWorkspaceAgentConfigDir, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
 const ENGINE_CONFIG_FILE = getEngineConfigPath();
+const migrationOnlyHeaders = {
+  headers: {
+    'x-ace-migration-only': 'pre-runtime-engine-api',
+  },
+};
+
+type EngineRuntime = 'js' | 'cangjie' | 'auto';
+
+interface CangjieRuntimeLibraryConfig {
+  name?: string;
+  path?: string;
+  initJson?: string;
+}
+
+interface CangjieRuntimeConfig {
+  enabled?: boolean;
+  fallbackToJs?: boolean;
+  library?: CangjieRuntimeLibraryConfig;
+  engines?: Partial<Record<string, EngineRuntime>>;
+}
 
 interface EngineConfig {
   engine: string;
   defaultModel?: string;
-  driver?: EngineDriver;
-  drivers?: Partial<Record<'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>>;
   engineRuntime?: EngineRuntime;
   cangjieRuntime?: CangjieRuntimeConfig;
   updatedAt: string;
 }
 
-function getConfiguredDriver(config: EngineConfig, engine?: string | null): EngineDriver | undefined {
-  const normalizedEngine = String(engine || '').trim();
-  if (!supportsDriverSelection(normalizedEngine)) return undefined;
-  const driverKey = normalizedEngine as 'claude-code' | 'opencode' | 'nga' | 'codegenie';
-  return normalizeDriverSelection(normalizedEngine, config.drivers?.[driverKey] || config.driver);
+function normalizeEngineRuntime(value?: string | null): EngineRuntime | undefined {
+  if (value === 'js' || value === 'cangjie' || value === 'auto') return value;
+  return undefined;
+}
+
+function stripDriverConfig(config: Record<string, any>): Partial<EngineConfig> {
+  const { driver: _driver, drivers: _drivers, ...rest } = config;
+  return rest;
 }
 
 export async function GET() {
   try {
+    // Migration-only endpoint. New runtime code must use runtime/agent APIs.
     const exists = await fs.access(ENGINE_CONFIG_FILE).then(() => true).catch(() => false);
 
     if (!exists) {
-      return jsonOk({ engine: '', defaultModel: '' });
+      return jsonOk({ engine: '', defaultModel: '', migrationOnly: true }, migrationOnlyHeaders);
     }
 
     const content = await fs.readFile(ENGINE_CONFIG_FILE, 'utf-8');
-    const config: EngineConfig = JSON.parse(content);
+    const config = stripDriverConfig(JSON.parse(content));
 
     return jsonOk({
       engine: config.engine,
       defaultModel: config.defaultModel || '',
-      driver: getConfiguredDriver(config, config.engine) || getDefaultDriver(config.engine),
-      drivers: config.drivers || {},
       engineRuntime: normalizeEngineRuntime(config.engineRuntime) || 'auto',
       cangjieRuntime: config.cangjieRuntime || {},
-    });
+      migrationOnly: true,
+    }, migrationOnlyHeaders);
   } catch (error) {
     console.error('Failed to read engine config:', error);
-    return jsonOk({ engine: '', defaultModel: '', driver: 'sdk', drivers: {}, engineRuntime: 'auto', cangjieRuntime: {} });
+    return jsonOk({ engine: '', defaultModel: '', engineRuntime: 'auto', cangjieRuntime: {}, migrationOnly: true }, migrationOnlyHeaders);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const { engine, targetEngine, defaultModel, driver, engineRuntime, cangjieRuntime } = await readJsonBody<Record<string, any>>(request, {});
+    // Migration-only endpoint. New runtime code must not persist pre-runtime driver config here.
+    const body = await readJsonBody<Record<string, any>>(request, {});
+    const { engine, defaultModel, engineRuntime, cangjieRuntime } = body;
+    const ignoredFields = ['driver', 'drivers'].filter((field) => Object.prototype.hasOwnProperty.call(body, field));
 
     // Read existing config to preserve fields
     let existing: Partial<EngineConfig> = {};
     try {
       const content = await fs.readFile(ENGINE_CONFIG_FILE, 'utf-8');
-      existing = JSON.parse(content);
+      existing = stripDriverConfig(JSON.parse(content));
     } catch { /* new file */ }
 
     const nextEngine = String(engine || existing.engine || '').trim();
-    const driverTarget = String(targetEngine || engine || existing.engine || '').trim();
-    if (!nextEngine && !driverTarget) {
+    if (!nextEngine) {
       return jsonError('Engine is required', 400);
     }
 
@@ -90,42 +110,6 @@ export async function POST(request: Request) {
       }
       config.cangjieRuntime = cangjieRuntime as CangjieRuntimeConfig;
     }
-    // Only update driver if explicitly provided
-    if (driver !== undefined) {
-      const normalizedDriver = normalizeDriverSelection(driverTarget, driver);
-      if (normalizedDriver) {
-        config.drivers = {
-          ...(config.drivers || {}),
-          [driverTarget]: normalizedDriver,
-        };
-        if (config.engine === driverTarget) {
-          config.driver = normalizedDriver;
-        }
-      }
-    } else if (!supportsDriverSelection(driverTarget)) {
-      if (config.engine === driverTarget) {
-        delete config.driver;
-      }
-    } else {
-      // No driver provided — preserve existing; only set default if nothing stored
-      const existingDriver = config.drivers?.[driverTarget as 'claude-code' | 'opencode' | 'nga' | 'codegenie'];
-      if (!existingDriver) {
-        const fallbackDriver = getDefaultDriver(driverTarget);
-        if (fallbackDriver) {
-          config.drivers = {
-            ...(config.drivers || {}),
-            [driverTarget]: fallbackDriver,
-          };
-          if (config.engine === driverTarget && !config.driver) {
-            config.driver = fallbackDriver;
-          }
-        }
-      }
-      // Sync top-level driver field to match stored per-engine driver
-      if (config.engine === driverTarget && !config.driver && config.drivers?.[driverTarget as 'claude-code' | 'opencode' | 'nga' | 'codegenie']) {
-        config.driver = config.drivers[driverTarget as 'claude-code' | 'opencode' | 'nga' | 'codegenie'];
-      }
-    }
 
     await fs.writeFile(ENGINE_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
 
@@ -133,7 +117,7 @@ export async function POST(request: Request) {
     // based on the enabled skill list, not as a full runtime directory mirror.
     try {
       if (config.engine) {
-        const engineConfigDir = getEngineConfigDir(config.engine);
+        const engineConfigDir = getWorkspaceAgentConfigDir(config.engine);
         const configDir = path.join(getWorkspaceRoot(), engineConfigDir);
         if (!existsSync(configDir)) {
           mkdirSync(configDir, { recursive: true });
@@ -149,7 +133,10 @@ export async function POST(request: Request) {
       defaultModel: config.defaultModel,
       engineRuntime: config.engineRuntime || 'auto',
       cangjieRuntime: config.cangjieRuntime || {},
-    });
+      ignoredFields,
+      notice: ignoredFields.length ? 'Pre-runtime driver settings are ignored by this one-time migration endpoint.' : undefined,
+      migrationOnly: true,
+    }, migrationOnlyHeaders);
   } catch (error) {
     console.error('Failed to save engine config:', error);
     return jsonError('Failed to save engine config', 500);

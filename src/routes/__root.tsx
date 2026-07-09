@@ -12,6 +12,8 @@ import { AceQueryProvider } from '../client/query/query-client';
 import { ThemeProvider } from '../components/theme-provider';
 import { ToastProvider } from '../components/ui/toast';
 import { ChatProvider } from '../contexts/ChatContext';
+import ChatModalWrapper from '../components/ChatModalWrapper';
+import OnboardingPortal from '../components/onboarding/OnboardingPortal';
 
 export const Route = createRootRoute({
   head: () => ({
@@ -37,6 +39,8 @@ function RootComponent() {
           <ToastProvider>
             <ChatProvider>
               <Outlet />
+              <ChatModalWrapper />
+              <OnboardingPortal />
             </ChatProvider>
           </ToastProvider>
         </ThemeProvider>

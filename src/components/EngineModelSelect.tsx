@@ -8,10 +8,9 @@ import { AiModelSelectorField, type AiModelSelectorGroup } from '@/components/Ai
 import { useToast } from '@/components/ui/toast';
 import { Button } from '@/components/ui/button';
 import { EngineIcon } from '@/components/EngineIcon';
-import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
-import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
-import { useEngineAvailabilityQuery, useEngineConfigQuery, useModelsQuery } from '@/client/query/engines';
+import { useEngineAvailabilityQuery, useModelsQuery, useRuntimeEngineOptionsQuery, useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { queryKeys } from '@/client/query/query-keys';
 
 interface Props {
@@ -25,15 +24,16 @@ interface Props {
 export function EngineModelSelect({ engine, model, onEngineChange, onModelChange, className = '' }: Props) {
   const queryClient = useQueryClient();
   const modelsQuery = useModelsQuery();
-  const engineConfigQuery = useEngineConfigQuery();
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
+  const runtimeOptionsQuery = useRuntimeEngineOptionsQuery();
   const engineAvailabilityQuery = useEngineAvailabilityQuery();
   const models = modelsQuery.data?.models || [];
-  const globalEngine = typeof engineConfigQuery.data?.engine === 'string' ? engineConfigQuery.data.engine : '';
-  const globalDriver = typeof engineConfigQuery.data?.driver === 'string' ? engineConfigQuery.data.driver : '';
-  const globalDefaultModel = typeof engineConfigQuery.data?.defaultModel === 'string' ? engineConfigQuery.data.defaultModel : '';
+  const runtimeEngineOptions = runtimeOptionsQuery.data || [];
+  const globalEngine = typeof runtimeSelectionQuery.data?.engine === 'string' ? runtimeSelectionQuery.data.engine : '';
+  const globalDefaultModel = typeof runtimeSelectionQuery.data?.defaultModel === 'string' ? runtimeSelectionQuery.data.defaultModel : '';
   const engineAvailability = engineAvailabilityQuery.data || {};
   const hasLoadedModels = !modelsQuery.isLoading;
-  const hasLoadedConfig = !engineConfigQuery.isLoading;
+  const hasLoadedConfig = !runtimeSelectionQuery.isLoading && !runtimeOptionsQuery.isLoading;
   const { toast } = useToast();
 
   const isModelCompatible = useMemo(() => {
@@ -45,7 +45,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   useEffect(() => {
     const refresh = () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.models() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.engines() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.engineAvailability() });
     };
     const onEngineUpdated = () => {
@@ -65,14 +65,16 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   }, [queryClient]);
 
   const isInitialLoading = !hasLoadedModels || !hasLoadedConfig;
-  const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
+  const effectiveGlobalEngine = globalEngine;
   const effectiveEngine = engine || effectiveGlobalEngine;
   const selectedModel = useMemo(
     () => models.find((item) => item.value === model),
     [models, model]
   );
-  const globalEngineInfo = getEngineMeta(effectiveGlobalEngine) || getEngineMeta(globalEngine);
-  const globalLabel = globalEngineInfo?.name || globalEngine || '系统默认';
+  const globalLabel = runtimeEngineOptions.find((item) => item.id === effectiveGlobalEngine)?.name
+    || getEngineMeta(effectiveGlobalEngine)?.name
+    || globalEngine
+    || '系统默认';
   const defaultModelLabel = models.find(m => m.value === globalDefaultModel)?.label || globalDefaultModel;
   const followSystemDescription = [globalLabel, defaultModelLabel].filter(Boolean).join(' / ');
   const followSystemLabel = followSystemDescription ? `跟随系统 (${followSystemDescription})` : '跟随系统';
@@ -111,6 +113,14 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
 
   const groups: AiModelSelectorGroup[] = useMemo(() => {
     const result: AiModelSelectorGroup[] = [];
+    const emptyEngineModels = (eng: { id: string; name: string; iconPath?: string }) => [{
+      value: `__empty__::${eng.id}`,
+      label: '暂无已导入模型',
+      icon: <EngineIcon engineId={eng.id} iconPath={eng.iconPath} className="h-4 w-4 opacity-60" />,
+      description: '请先在模型管理中导入或添加模型',
+      keywords: [eng.id, eng.name],
+      disabled: true,
+    }];
 
     // "跟随系统" group — uses the global engine's compatible models
     const sysModels = isEngineSelectable(effectiveGlobalEngine)
@@ -140,22 +150,22 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     }
 
     // Concrete engine groups
-    for (const eng of getConcreteEngines()) {
+    for (const eng of runtimeEngineOptions) {
       if (!isEngineSelectable(eng.id)) continue;
       const engineModels = models.filter((m) => isModelCompatible(m, eng.id));
-      if (engineModels.length > 0) {
-        result.push({
-          label: eng.name,
-          icon: <EngineIcon engineId={eng.id} className="h-4 w-4" />,
-          items: engineModels.map(m => ({
+      result.push({
+        label: eng.name,
+        icon: <EngineIcon engineId={eng.id} iconPath={eng.iconPath} className="h-4 w-4" />,
+        items: engineModels.length > 0
+          ? engineModels.map(m => ({
             value: `${eng.id}::${m.value}`,
             label: m.label,
-            icon: <EngineIcon engineId={eng.id} className="h-4 w-4" />,
+            icon: <EngineIcon engineId={eng.id} iconPath={eng.iconPath} className="h-4 w-4" />,
             description: m.value,
             keywords: [m.value, eng.id, eng.name],
-          })),
-        });
-      }
+          }))
+          : emptyEngineModels(eng),
+      });
     }
 
     if (result.length === 0) {
@@ -195,6 +205,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     isUsingGlobalSelection,
     followSystemDescription,
     globalDefaultModel,
+    runtimeEngineOptions,
   ]);
 
   const modelLabel = selectedModel?.label || model;
@@ -246,6 +257,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
       placeholder="选择模型"
       searchPlaceholder="搜索模型或引擎..."
       className={`h-8 text-xs ${className}`}
+      forceSidebar
     />
   );
 }

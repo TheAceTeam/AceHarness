@@ -14,10 +14,6 @@ export type AgentId =
   | 'openclaw'
   | 'gemini'
   | 'copilot'
-  | 'droid'
-  | 'fast-agent'
-  | 'grok-build'
-  | 'iflow'
   | 'kilocode'
   | 'kimi'
   | 'mux'
@@ -26,7 +22,7 @@ export type AgentId =
   | (string & {});
 
 export type AgentRuntime = 'acpx' | 'magic';
-export type AgentTier = 'core' | 'verified' | 'experimental' | 'hidden';
+export type AgentTier = 'core' | 'verified' | 'hidden';
 export type AgentCapabilityValue = boolean | string | number | string[];
 
 export interface AgentCapabilities {
@@ -61,6 +57,10 @@ export interface AvailabilityProbeSpec {
   kind: 'command';
   command: string;
   args: string[];
+  resolver: {
+    primaryCommand: string;
+    fallbackCommands: string[];
+  };
 }
 
 export interface AgentDefinition {
@@ -130,6 +130,18 @@ export interface AgentRuntimeStateDto {
   capabilityProbe?: Partial<AgentCapabilities>;
 }
 
+export interface AgentRuntimeStateRecordLike {
+  agentId: string;
+  enabled: boolean;
+  hidden: boolean;
+  override: unknown;
+  availabilityStatus?: string;
+  availabilityCheckedAt?: string;
+  envReadiness: unknown;
+  capabilityProbe: unknown;
+  discovery: unknown;
+}
+
 export interface MergedAgentRuntimeState {
   enabled: boolean;
   hidden: boolean;
@@ -176,11 +188,19 @@ const MODEL_ROUTE_SCHEMA: ModelConfigSchema = {
   supportsModelRoute: true,
 };
 
-function commandProbe(command: string, args: string[] = ['--version']): AvailabilityProbeSpec {
+function commandProbe(
+  command: string,
+  args: string[] = ['--version'],
+  fallbackCommands: string[] = [],
+): AvailabilityProbeSpec {
   return {
     kind: 'command',
     command,
     args,
+    resolver: {
+      primaryCommand: command,
+      fallbackCommands,
+    },
   };
 }
 
@@ -208,18 +228,8 @@ function acpxAgent(input: {
     capabilities: input.capabilities ?? FULL_ACPX_CAPABILITIES,
     envSchema: EMPTY_ENV_SCHEMA,
     modelConfigSchema: MODEL_ROUTE_SCHEMA,
-    availabilityProbe: commandProbe(input.command),
+    availabilityProbe: commandProbe(input.command, ['--version'], input.fallbackCommands ?? []),
   };
-}
-
-function experimentalAgent(id: AgentId, displayName: string, command = id): AgentDefinition {
-  return acpxAgent({
-    id,
-    displayName,
-    tier: 'experimental',
-    command,
-    iconPath: AGENT_ICON_PATHS.genericProvider,
-  });
 }
 
 export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
@@ -256,7 +266,7 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
     capabilities: MAGIC_CAPABILITIES,
     envSchema: EMPTY_ENV_SCHEMA,
     modelConfigSchema: MODEL_ROUTE_SCHEMA,
-    availabilityProbe: commandProbe('magic'),
+    availabilityProbe: commandProbe('magic', ['--version'], ['cangjie-magic', 'magic-cli']),
   },
   acpxAgent({
     id: 'cursor',
@@ -300,19 +310,15 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
     family: 'opencode-compatible',
     capabilities: OPENCODE_COMPATIBLE_CAPABILITIES,
   }),
-  experimentalAgent('pi', 'Pi'),
-  experimentalAgent('openclaw', 'OpenClaw'),
-  experimentalAgent('gemini', 'Gemini'),
-  experimentalAgent('copilot', 'Copilot'),
-  experimentalAgent('droid', 'Droid'),
-  experimentalAgent('fast-agent', 'Fast Agent'),
-  experimentalAgent('grok-build', 'Grok Build'),
-  experimentalAgent('iflow', 'iFlow'),
-  experimentalAgent('kilocode', 'Kilo Code'),
-  experimentalAgent('kimi', 'Kimi'),
-  experimentalAgent('mux', 'Mux'),
-  experimentalAgent('qoder', 'Qoder'),
-  experimentalAgent('qwen', 'Qwen'),
+  acpxAgent({ id: 'pi', displayName: 'Pi', tier: 'verified', command: 'pi', iconPath: AGENT_ICON_PATHS.pi }),
+  acpxAgent({ id: 'openclaw', displayName: 'OpenClaw', tier: 'verified', command: 'openclaw', iconPath: AGENT_ICON_PATHS.openclaw }),
+  acpxAgent({ id: 'gemini', displayName: 'Gemini', tier: 'verified', command: 'gemini', iconPath: AGENT_ICON_PATHS.gemini }),
+  acpxAgent({ id: 'copilot', displayName: 'Copilot', tier: 'verified', command: 'copilot', iconPath: AGENT_ICON_PATHS.copilot }),
+  acpxAgent({ id: 'kilocode', displayName: 'Kilo Code', tier: 'verified', command: 'kilocode', iconPath: AGENT_ICON_PATHS.kilocode }),
+  acpxAgent({ id: 'kimi', displayName: 'Kimi', tier: 'verified', command: 'kimi', iconPath: AGENT_ICON_PATHS.kimi }),
+  acpxAgent({ id: 'mux', displayName: 'Mux', tier: 'verified', command: 'mux', iconPath: AGENT_ICON_PATHS.mux }),
+  acpxAgent({ id: 'qoder', displayName: 'Qoder', tier: 'verified', command: 'qoder', iconPath: AGENT_ICON_PATHS.genericProvider }),
+  acpxAgent({ id: 'qwen', displayName: 'Qwen', tier: 'verified', command: 'qwen', iconPath: AGENT_ICON_PATHS.qwen }),
 ] as const;
 
 export const BUILTIN_AGENT_DEFINITIONS_BY_ID: ReadonlyMap<AgentId, AgentDefinition> = new Map(
@@ -346,6 +352,24 @@ export function mergeAgentRuntimeState(
     .map(createDiscoveredAgentEntry);
 
   return [...builtinEntries, ...discoveredEntries];
+}
+
+export function runtimeStateRecordsToDtos(records: readonly AgentRuntimeStateRecordLike[]): AgentRuntimeStateDto[] {
+  return records.map(runtimeStateRecordToDto);
+}
+
+export function runtimeStateRecordToDto(record: AgentRuntimeStateRecordLike): AgentRuntimeStateDto {
+  const availability = normalizeAvailability(record.availabilityStatus, record.availabilityCheckedAt);
+  return {
+    agentId: record.agentId,
+    enabled: record.enabled,
+    hidden: record.hidden,
+    override: isObject(record.override) ? record.override : undefined,
+    availability,
+    envReadiness: isEnvReadiness(record.envReadiness) ? record.envReadiness : undefined,
+    discovery: isObject(record.discovery) ? record.discovery : undefined,
+    capabilityProbe: isCapabilitiesPatch(record.capabilityProbe) ? record.capabilityProbe : undefined,
+  };
 }
 
 function mergeDefinitionWithState(
@@ -483,6 +507,50 @@ function cloneAgentDefinition(definition: AgentDefinition): AgentDefinition {
     availabilityProbe: {
       ...definition.availabilityProbe,
       args: [...definition.availabilityProbe.args],
+      resolver: {
+        primaryCommand: definition.availabilityProbe.resolver.primaryCommand,
+        fallbackCommands: [...definition.availabilityProbe.resolver.fallbackCommands],
+      },
     },
   };
+}
+
+function normalizeAvailability(
+  status: string | undefined,
+  checkedAt: string | undefined,
+): Omit<AgentAvailabilityState, 'source'> | undefined {
+  if (!status || status === 'unknown') {
+    return undefined;
+  }
+
+  if (status === 'available' || status === 'missing' || status === 'error') {
+    return { status, checkedAt };
+  }
+
+  return {
+    status: 'error',
+    checkedAt,
+    message: `Runtime availability probe reported ${status}`,
+  };
+}
+
+function isObject<T extends Record<string, unknown>>(value: unknown): value is T {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isEnvReadiness(value: unknown): value is Omit<AgentEnvReadinessState, 'source'> {
+  return isObject(value) && typeof value.status === 'string';
+}
+
+function isCapabilitiesPatch(value: unknown): value is Partial<AgentCapabilities> {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => (
+    typeof entry === 'boolean'
+    || typeof entry === 'string'
+    || typeof entry === 'number'
+    || (Array.isArray(entry) && entry.every((item) => typeof item === 'string'))
+  ));
 }

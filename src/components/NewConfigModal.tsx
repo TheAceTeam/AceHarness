@@ -97,7 +97,7 @@ function hasOwnKey<T extends object>(value: T | null | undefined, key: PropertyK
   return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
 }
 
-function normalizeBackendSessionId(value: unknown): string | undefined {
+function normalizeRuntimeSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
@@ -2726,7 +2726,7 @@ export default function NewConfigModal({
   const [workflowDraftPreview, setWorkflowDraftPreview] = useState<WorkflowDraftPreviewState | null>(null);
   const [workflowDraftContinueReason, setWorkflowDraftContinueReason] = useState('');
   const [isSavingWorkflowDraft, setIsSavingWorkflowDraft] = useState(false);
-  const [backendSessionId, setBackendSessionId] = useState<string | undefined>();
+  const [runtimeSessionId, setRuntimeSessionId] = useState<string | undefined>();
   const streamContentRef = useRef<HTMLDivElement>(null);
   const streamAutoScrollLockedRef = useRef(false);
   const streamProgrammaticScrollRef = useRef(false);
@@ -2767,8 +2767,8 @@ export default function NewConfigModal({
   // Refs to always read latest engine/model in sendToAi
   const aiEngineRef = useRef(inheritEngine);
   const aiModelRef = useRef(inheritModel);
-  const backendSessionEngineRef = useRef(inheritEngine);
-  const backendSessionModelRef = useRef(inheritModel);
+  const runtimeSessionEngineRef = useRef(inheritEngine);
+  const runtimeSessionModelRef = useRef(inheritModel);
 
   const resolveFormStepFromSession = useCallback((session: any): 1 | 2 | 3 | 4 | 5 => {
     if (session.mode === 'ai-guided' && session.status === 'confirmed') {
@@ -2900,7 +2900,7 @@ export default function NewConfigModal({
       setPreviewConfigValidation(null);
       setPlanningFrontendSessionId(null);
       setDraftCreationSessionId(null);
-      setBackendSessionId(undefined);
+      setRuntimeSessionId(undefined);
     }
   }, [isOpen, resumeCreationSessionId]);
 
@@ -3003,10 +3003,10 @@ export default function NewConfigModal({
     setAiModel(session.planningModel || inheritModel);
     aiModelRef.current = session.planningModel || inheritModel;
     const latestStageSession = session.stageSessions?.workflowDraft || session.stageSessions?.specPlanning || session.stageSessions?.clarification;
-    if (latestStageSession?.backendSessionId) {
-      setBackendSessionId(latestStageSession.backendSessionId);
-      backendSessionEngineRef.current = session.planningEngine || inheritEngine;
-      backendSessionModelRef.current = session.planningModel || inheritModel;
+    if (latestStageSession?.runtimeSessionId) {
+      setRuntimeSessionId(latestStageSession.runtimeSessionId);
+      runtimeSessionEngineRef.current = session.planningEngine || inheritEngine;
+      runtimeSessionModelRef.current = session.planningModel || inheritModel;
     }
     reset({
       mode: session.mode || 'ai-guided',
@@ -3408,7 +3408,7 @@ export default function NewConfigModal({
       rawContent: content,
       engine: aiEngineRef.current || undefined,
       model: aiModelRef.current || undefined,
-    }, { backendSessionId: backendSid });
+    }, { runtimeSessionId: backendSid });
   }, [appendSessionMessage, frontendSessionId]);
 
   const appendCreationSessionTag = useCallback(async (
@@ -3471,10 +3471,10 @@ export default function NewConfigModal({
   const handleAiEngineChange = (engine: string) => {
     setAiEngine(engine);
     aiEngineRef.current = engine;
-    if (backendSessionId && engine !== backendSessionEngineRef.current) {
-      setBackendSessionId(undefined);
-      backendSessionEngineRef.current = engine;
-      backendSessionModelRef.current = aiModelRef.current;
+    if (runtimeSessionId && engine !== runtimeSessionEngineRef.current) {
+      setRuntimeSessionId(undefined);
+      runtimeSessionEngineRef.current = engine;
+      runtimeSessionModelRef.current = aiModelRef.current;
     }
     void restartPlanningConversation();
     if (formStep === 5) {
@@ -3484,10 +3484,10 @@ export default function NewConfigModal({
   const handleAiModelChange = (model: string) => {
     setAiModel(model);
     aiModelRef.current = model;
-    if (backendSessionId && model !== backendSessionModelRef.current) {
-      setBackendSessionId(undefined);
-      backendSessionEngineRef.current = aiEngineRef.current;
-      backendSessionModelRef.current = model;
+    if (runtimeSessionId && model !== runtimeSessionModelRef.current) {
+      setRuntimeSessionId(undefined);
+      runtimeSessionEngineRef.current = aiEngineRef.current;
+      runtimeSessionModelRef.current = model;
     }
     void restartPlanningConversation();
     if (formStep === 5) {
@@ -3587,18 +3587,18 @@ export default function NewConfigModal({
     stage: CreationStageKey,
     input: {
       frontendSessionId?: string | null;
-      backendSessionId?: string | null;
+      runtimeSessionId?: string | null;
     }
   ) => {
-    const hasBackendSessionId = hasOwnKey(input, 'backendSessionId');
+    const hasRuntimeSessionId = hasOwnKey(input, 'runtimeSessionId');
     const nextStageSessions = {
       ...stageSessionsRef.current,
       [stage]: {
         ...(stageSessionsRef.current?.[stage] || {}),
         frontendSessionId: input.frontendSessionId || stageSessionsRef.current?.[stage]?.frontendSessionId,
-        backendSessionId: hasBackendSessionId
-          ? (input.backendSessionId || undefined)
-          : stageSessionsRef.current?.[stage]?.backendSessionId,
+        runtimeSessionId: hasRuntimeSessionId
+          ? (input.runtimeSessionId || undefined)
+          : stageSessionsRef.current?.[stage]?.runtimeSessionId,
         engine: aiEngineRef.current || undefined,
         model: aiModelRef.current || undefined,
         updatedAt: Date.now(),
@@ -3654,7 +3654,7 @@ export default function NewConfigModal({
     setWorkflowDraftConfig(null);
     setWorkflowDraftValidation(null);
     setWorkflowDraftPreview(null);
-    setBackendSessionId(undefined);
+    setRuntimeSessionId(undefined);
     restoredPlanningSessionRef.current = null;
     reconnectingPlanningChatIdRef.current = null;
     const nextPlanningSessionId = await ensurePlanningChatSession(true);
@@ -4190,7 +4190,7 @@ export default function NewConfigModal({
     step: WorkflowCreationItemStep;
     stage: CreationStageKey;
     frontendSessionId: string;
-    backendSessionId?: string;
+    runtimeSessionId?: string;
     systemPrompt: string;
     message: string;
     workingDirectory?: string;
@@ -4199,9 +4199,9 @@ export default function NewConfigModal({
   }): Promise<{
     result: WorkflowCreationItemResult;
     finalContent: string;
-    backendSessionId?: string;
+    runtimeSessionId?: string;
   }> => {
-    let activeBackendSessionId = input.backendSessionId;
+    let activeRuntimeSessionId = input.runtimeSessionId;
     const maxAttempts = input.maxAttempts ?? MAX_CREATION_AI_REPAIR_ATTEMPTS;
     setWorkflowCreationProgressStage(input.stage);
     setWorkflowCreationActiveStep({
@@ -4214,14 +4214,14 @@ export default function NewConfigModal({
     const runAttempt = async (message: string, attempt: number): Promise<{
       result: WorkflowCreationItemResult;
       finalContent: string;
-      backendSessionId?: string;
+      runtimeSessionId?: string;
     }> => {
       setAiPhase('streaming');
       setCurrentStream('');
       setCurrentThinking('');
       await persistStageSessionBinding(input.stage, {
         frontendSessionId: input.frontendSessionId,
-        backendSessionId: activeBackendSessionId,
+        runtimeSessionId: activeRuntimeSessionId,
       });
 
       const startRes = await modalAuthFetch('/api/chat/stream', {
@@ -4231,7 +4231,7 @@ export default function NewConfigModal({
           message,
           model: aiModelRef.current,
           engine: aiEngineRef.current,
-          sessionId: activeBackendSessionId || undefined,
+          sessionId: activeRuntimeSessionId || undefined,
           frontendSessionId: input.frontendSessionId,
           streamScope: PLANNING_STREAM_SCOPE,
           mode: 'dashboard',
@@ -4248,7 +4248,7 @@ export default function NewConfigModal({
           `engine=${aiEngineRef.current || '(empty)'}`,
           `model=${aiModelRef.current || '(empty)'}`,
           `frontendSessionId=${input.frontendSessionId}`,
-          `backendSessionId=${activeBackendSessionId || '(new session)'}`,
+          `runtimeSessionId=${activeRuntimeSessionId || '(new session)'}`,
           '服务端响应：',
           formatStreamPayloadPreview(startData ? JSON.stringify(startData, null, 2) : '<non-json response>'),
           '修改方式：根据上面的 HTTP 状态和服务端响应修正引擎、模型、会话或后端错误后，再重试当前小点；不要从头生成整个 workflow。',
@@ -4274,7 +4274,7 @@ export default function NewConfigModal({
               stepKey: input.step.name,
               provider: aiEngineRef.current,
               model: aiModelRef.current,
-              sessionId: activeBackendSessionId || undefined,
+              sessionId: activeRuntimeSessionId || undefined,
               frontendSessionId: input.frontendSessionId,
               streamScope: PLANNING_STREAM_SCOPE,
             }, aiPrevious);
@@ -4302,7 +4302,7 @@ export default function NewConfigModal({
               stepKey: input.step.name,
               provider: aiEngineRef.current,
               model: aiModelRef.current,
-              sessionId: activeBackendSessionId || undefined,
+              sessionId: activeRuntimeSessionId || undefined,
               frontendSessionId: input.frontendSessionId,
               streamScope: PLANNING_STREAM_SCOPE,
             }, aiPrevious);
@@ -4337,20 +4337,20 @@ export default function NewConfigModal({
               stepKey: input.step.name,
               provider: aiEngineRef.current,
               model: aiModelRef.current,
-              sessionId: data.sessionId || activeBackendSessionId || undefined,
+              sessionId: data.sessionId || activeRuntimeSessionId || undefined,
               frontendSessionId: input.frontendSessionId,
               streamScope: PLANNING_STREAM_SCOPE,
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             if (hasOwnKey(data, 'sessionId')) {
-              activeBackendSessionId = normalizeBackendSessionId(data.sessionId);
-              setBackendSessionId(activeBackendSessionId);
-              backendSessionEngineRef.current = aiEngineRef.current;
-              backendSessionModelRef.current = aiModelRef.current;
+              activeRuntimeSessionId = normalizeRuntimeSessionId(data.sessionId);
+              setRuntimeSessionId(activeRuntimeSessionId);
+              runtimeSessionEngineRef.current = aiEngineRef.current;
+              runtimeSessionModelRef.current = aiModelRef.current;
             }
             await persistStageSessionBinding(input.stage, {
               frontendSessionId: input.frontendSessionId,
-              backendSessionId: activeBackendSessionId,
+              runtimeSessionId: activeRuntimeSessionId,
             });
 
             const decision = resolveWorkflowCreationItemAttempt({
@@ -4388,14 +4388,14 @@ export default function NewConfigModal({
               next.push({ role: 'ai', content: finalContent });
               return next;
             });
-            await appendPlanningAssistantMessage(input.frontendSessionId, finalContent, activeBackendSessionId);
+            await appendPlanningAssistantMessage(input.frontendSessionId, finalContent, activeRuntimeSessionId);
             setCurrentStream('');
             setCurrentThinking('');
             setWorkflowCreationRetryNotice(null);
             resolve({
               result: decision.result,
               finalContent,
-              backendSessionId: activeBackendSessionId,
+              runtimeSessionId: activeRuntimeSessionId,
             });
           } catch (error) {
             reject(new Error([
@@ -4418,7 +4418,7 @@ export default function NewConfigModal({
           reject(new Error([
             `小点「${input.step.title}」生成流中断。`,
             `chatId=${chatId}`,
-            `backendSessionId=${activeBackendSessionId || '(new session)'}`,
+            `runtimeSessionId=${activeRuntimeSessionId || '(new session)'}`,
             `readyState=${es.readyState}`,
             'EventSource error event：',
             formatStreamPayloadPreview((event as MessageEvent).data || JSON.stringify({
@@ -4461,10 +4461,10 @@ export default function NewConfigModal({
     const activeDraftSessionId = await ensureDraftCreationSession(targetFrontendSessionId);
     await persistStageSessionBinding('clarification', {
       frontendSessionId: targetFrontendSessionId,
-      backendSessionId: backendSessionId,
+      runtimeSessionId: runtimeSessionId,
     });
 
-    let activeBackendSessionId = backendSessionId;
+    let activeRuntimeSessionId = runtimeSessionId;
     let creationState = emptyCreationState;
     const reqs = values.requirements || values.description || '';
     const referenceContext = values.referenceWorkflow && referenceConfig
@@ -4538,12 +4538,12 @@ export default function NewConfigModal({
           step,
           stage: 'clarification',
           frontendSessionId: targetFrontendSessionId,
-          backendSessionId: activeBackendSessionId,
+          runtimeSessionId: activeRuntimeSessionId,
           systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
           message: buildWorkflowCreationItemUserMessage(step, creationState),
           workingDirectory: values.workingDirectory,
         });
-        activeBackendSessionId = output.backendSessionId;
+        activeRuntimeSessionId = output.runtimeSessionId;
         creationState = applyWorkflowCreationItem(creationState, output.result);
         setWorkflowCreationProgressState(creationState);
         const partialClarification = assembleClarificationForm(creationState);
@@ -4594,7 +4594,7 @@ export default function NewConfigModal({
       setPlanningStage('idle');
       throw error;
     }
-  }, [appendCreationSessionTags, backendSessionId, clarificationAnswers, effectiveCreationRecommendations, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding, referenceConfig, runWorkflowCreationItemStream]);
+  }, [appendCreationSessionTags, runtimeSessionId, clarificationAnswers, effectiveCreationRecommendations, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding, referenceConfig, runWorkflowCreationItemStream]);
 
   const generatePlanWithChatSession = useCallback(async () => {
     const values = getValues();
@@ -4620,10 +4620,10 @@ export default function NewConfigModal({
     });
     await persistStageSessionBinding('specPlanning', {
       frontendSessionId: targetFrontendSessionId,
-      backendSessionId: backendSessionId,
+      runtimeSessionId: runtimeSessionId,
     });
 
-    let activeBackendSessionId = backendSessionId;
+    let activeRuntimeSessionId = runtimeSessionId;
     let creationState = createEmptyWorkflowCreationState();
     if (clarificationForm) {
       creationState.clarification = {
@@ -4722,12 +4722,12 @@ export default function NewConfigModal({
           step,
           stage: 'specPlanning',
           frontendSessionId: targetFrontendSessionId,
-          backendSessionId: activeBackendSessionId,
+          runtimeSessionId: activeRuntimeSessionId,
           systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
           message: buildWorkflowCreationItemUserMessage(step, creationState),
           workingDirectory: values.workingDirectory,
         });
-        activeBackendSessionId = output.backendSessionId;
+        activeRuntimeSessionId = output.runtimeSessionId;
         creationState = applyWorkflowCreationItem(creationState, output.result);
         setWorkflowCreationProgressState(creationState);
       }
@@ -4761,7 +4761,7 @@ export default function NewConfigModal({
       setPlanningStage('awaiting-answers');
       throw error;
     }
-  }, [backendSessionId, clarificationAnswers, clarificationForm, createPreviewSession, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding, runWorkflowCreationItemStream]);
+  }, [runtimeSessionId, clarificationAnswers, clarificationForm, createPreviewSession, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding, runWorkflowCreationItemStream]);
 
   const applyRecoveredPlanningOutput = useCallback(async (
     stage: CreationStageKey,
@@ -4769,10 +4769,10 @@ export default function NewConfigModal({
     targetFrontendSessionId: string,
     recoveredSessionId?: string
   ) => {
-    setBackendSessionId(recoveredSessionId);
+    setRuntimeSessionId(recoveredSessionId);
     await persistStageSessionBinding(stage, {
       frontendSessionId: targetFrontendSessionId,
-      backendSessionId: recoveredSessionId || null,
+      runtimeSessionId: recoveredSessionId || null,
     });
     setAiMessages((prev) => {
       if (!finalContent) return prev;
@@ -4800,8 +4800,8 @@ export default function NewConfigModal({
       .then(async (data) => {
         if (cancelled || !data?.session) return;
         restoredPlanningSessionRef.current = planningFrontendSessionId;
-        if (data.session.backendSessionId) {
-          setBackendSessionId(data.session.backendSessionId);
+        if (data.session.runtimeSessionId) {
+          setRuntimeSessionId(data.session.runtimeSessionId);
         }
         const restoredMessages = mapPlanningChatMessages(data.session.messages || []);
         if (restoredMessages.length > 0) {
@@ -4851,7 +4851,7 @@ export default function NewConfigModal({
 
       if (!checkData.active) {
         if (checkData.status === 'completed' && checkData.streamContent) {
-          await recoverFinalState(checkData.streamContent, checkData.backendSessionId || undefined);
+          await recoverFinalState(checkData.streamContent, checkData.runtimeSessionId || undefined);
         } else if (checkData.status === 'failed' || checkData.status === 'killed') {
           setCurrentStream('');
           setCurrentThinking('');
@@ -4879,8 +4879,8 @@ export default function NewConfigModal({
       if (checkData.streamContent) {
         setCurrentStream(checkData.streamContent);
       }
-      if (checkData.backendSessionId) {
-        setBackendSessionId(checkData.backendSessionId);
+      if (checkData.runtimeSessionId) {
+        setRuntimeSessionId(checkData.runtimeSessionId);
       }
 
       const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(checkData.chatId)}`);
@@ -4899,7 +4899,7 @@ export default function NewConfigModal({
           stepKey: stageKey,
           provider: aiEngineRef.current,
           model: aiModelRef.current,
-          sessionId: checkData.backendSessionId || undefined,
+          sessionId: checkData.runtimeSessionId || undefined,
           frontendSessionId: planningFrontendSessionId,
           streamScope: PLANNING_STREAM_SCOPE,
         }, aiPrevious);
@@ -4915,7 +4915,7 @@ export default function NewConfigModal({
           stepKey: stageKey,
           provider: aiEngineRef.current,
           model: aiModelRef.current,
-          sessionId: checkData.backendSessionId || undefined,
+          sessionId: checkData.runtimeSessionId || undefined,
           frontendSessionId: planningFrontendSessionId,
           streamScope: PLANNING_STREAM_SCOPE,
         }, aiPrevious);
@@ -4940,7 +4940,7 @@ export default function NewConfigModal({
             stepKey: stageKey,
             provider: aiEngineRef.current,
             model: aiModelRef.current,
-            sessionId: data.sessionId || checkData.backendSessionId || undefined,
+            sessionId: data.sessionId || checkData.runtimeSessionId || undefined,
             frontendSessionId: planningFrontendSessionId,
             streamScope: PLANNING_STREAM_SCOPE,
           }, aiPrevious);
@@ -4951,10 +4951,10 @@ export default function NewConfigModal({
             return next;
           });
           await appendPlanningAssistantMessage(planningFrontendSessionId, finalContent, data.sessionId);
-          const recoveredBackendSessionId = hasOwnKey(data, 'sessionId')
-            ? normalizeBackendSessionId(data.sessionId)
-            : (checkData.backendSessionId || undefined);
-          await recoverFinalState(finalContent, recoveredBackendSessionId);
+          const recoveredRuntimeSessionId = hasOwnKey(data, 'sessionId')
+            ? normalizeRuntimeSessionId(data.sessionId)
+            : (checkData.runtimeSessionId || undefined);
+          await recoverFinalState(finalContent, recoveredRuntimeSessionId);
         } catch {
           setAiPhase('waiting');
           setIsGeneratingPlan(false);
@@ -5050,7 +5050,7 @@ export default function NewConfigModal({
       setWorkflowCreationActiveStep(null);
       setWorkflowCreationRetryNotice(null);
 
-      let activeBackendSessionId = backendSessionId;
+      let activeRuntimeSessionId = runtimeSessionId;
       let creationState = createEmptyWorkflowCreationState();
       if (clarificationForm) {
         creationState.clarification = {
@@ -5174,12 +5174,12 @@ export default function NewConfigModal({
           step,
           stage: 'specPlanning',
           frontendSessionId: targetFrontendSessionId,
-          backendSessionId: activeBackendSessionId,
+          runtimeSessionId: activeRuntimeSessionId,
           systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
           message: buildWorkflowCreationItemUserMessage(step, creationState, revisionSummary),
           workingDirectory: values.workingDirectory,
         });
-        activeBackendSessionId = output.backendSessionId;
+        activeRuntimeSessionId = output.runtimeSessionId;
         creationState = applyWorkflowCreationItem(creationState, output.result);
         setWorkflowCreationProgressState(creationState);
       }
@@ -5212,7 +5212,7 @@ export default function NewConfigModal({
       setCurrentStream('');
       setCurrentThinking('');
     }
-  }, [backendSessionId, clarificationForm, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, previewSession, revisionImpactArea, revisionNotes, revisionTarget, runWorkflowCreationItemStream, toast, updatePreviewSessionFromPlanDraft]);
+  }, [runtimeSessionId, clarificationForm, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, previewSession, revisionImpactArea, revisionNotes, revisionTarget, runWorkflowCreationItemStream, toast, updatePreviewSessionFromPlanDraft]);
 
   const saveArtifactEdits = useCallback(async () => {
     if (!previewSession?.id || !previewSession?.specCoding) return;
@@ -5293,17 +5293,17 @@ export default function NewConfigModal({
     setWorkflowDraftValidation(null);
     setWorkflowDraftPreview(null);
     setWorkflowDraftContinueReason('');
-    setBackendSessionId(undefined);
+    setRuntimeSessionId(undefined);
     setAiPhase('streaming');
     setWorkflowCreationProgressStage('workflowDraft');
     setWorkflowCreationActiveStep(null);
     setWorkflowCreationRetryNotice(null);
     await persistStageSessionBinding('workflowDraft', {
       frontendSessionId: targetFrontendSessionId,
-      backendSessionId,
+      runtimeSessionId,
     });
 
-    let activeBackendSessionId = backendSessionId;
+    let activeRuntimeSessionId = runtimeSessionId;
     let creationState = createEmptyWorkflowCreationState();
     creationState.spec.summary = specCoding.summary || activePreviewSession?.workflowDraftSummary?.summary || '';
     creationState.spec.goals = Array.isArray(specCoding.goals) ? specCoding.goals : [];
@@ -5392,12 +5392,12 @@ export default function NewConfigModal({
         step: outlineStep,
         stage: 'workflowDraft',
         frontendSessionId: targetFrontendSessionId,
-        backendSessionId: activeBackendSessionId,
+        runtimeSessionId: activeRuntimeSessionId,
         systemPrompt: buildWorkflowCreationItemSystemPrompt(outlineStep, baseContext),
         message: buildWorkflowCreationItemUserMessage(outlineStep, creationState),
         workingDirectory: values.workingDirectory,
       });
-      activeBackendSessionId = outlineOutput.backendSessionId;
+      activeRuntimeSessionId = outlineOutput.runtimeSessionId;
       creationState = applyWorkflowCreationItem(creationState, outlineOutput.result);
       setWorkflowCreationProgressState(creationState);
 
@@ -5420,7 +5420,7 @@ export default function NewConfigModal({
           step,
           stage: 'workflowDraft',
           frontendSessionId: targetFrontendSessionId,
-          backendSessionId: activeBackendSessionId,
+          runtimeSessionId: activeRuntimeSessionId,
           systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
           message: buildWorkflowCreationItemUserMessage(step, creationState),
           workingDirectory: values.workingDirectory,
@@ -5430,7 +5430,7 @@ export default function NewConfigModal({
             recommendedSupervisorAgent,
           ),
         });
-        activeBackendSessionId = output.backendSessionId;
+        activeRuntimeSessionId = output.runtimeSessionId;
         creationState = applyWorkflowCreationItem(creationState, output.result);
         setWorkflowCreationProgressState(creationState);
         const partialConfig = assembleWorkflowConfigFromItems(creationState, {
@@ -5501,7 +5501,7 @@ export default function NewConfigModal({
       setCurrentStream('');
       setCurrentThinking('');
     }
-  }, [backendSessionId, clarificationAnswers, clarificationForm, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, specPlanningEnabled, toast, validateWorkflowDraftConfig]);
+  }, [runtimeSessionId, clarificationAnswers, clarificationForm, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, specPlanningEnabled, toast, validateWorkflowDraftConfig]);
 
   // Re-trigger AI stream after engine/model change
   useEffect(() => {
@@ -5619,7 +5619,7 @@ export default function NewConfigModal({
       setWorkflowDraftConfig(null);
       setWorkflowDraftValidation(null);
       setWorkflowDraftPreview(null);
-      setBackendSessionId(undefined);
+      setRuntimeSessionId(undefined);
       await persistDraftUiState({
         formStep: 5,
         planningStage: 'idle',
@@ -5651,7 +5651,7 @@ export default function NewConfigModal({
 	        setWorkflowDraftConfig(null);
 	        setWorkflowDraftValidation(null);
 	        setWorkflowDraftPreview(null);
-	        setBackendSessionId(undefined);
+	        setRuntimeSessionId(undefined);
 	        await persistDraftUiState({
 	          formStep: 5,
 	          planningStage: 'idle',

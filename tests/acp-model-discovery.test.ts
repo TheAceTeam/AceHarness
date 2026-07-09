@@ -15,7 +15,7 @@ function resolveModelIdForTest(
 }
 
 describe('ACP model discovery normalization', () => {
-  test('reads legacy models.availableModels', () => {
+  test('reads preRuntime models.availableModels', () => {
     const models = normalizeAcpModelsFromSessionResult({
       models: {
         availableModels: [
@@ -70,7 +70,7 @@ describe('ACP model discovery normalization', () => {
     ]);
   });
 
-  test('deduplicates models across legacy and config option sources', () => {
+  test('deduplicates models across preRuntime and config option sources', () => {
     const models = normalizeAcpModelsFromSessionResult({
       models: {
         availableModels: [{ modelId: 'opencode/big-pickle', name: 'Big Pickle' }],

@@ -7,7 +7,10 @@ import {
   type ExecuteAgentChatInput,
 } from '@/lib/agent/chat-service';
 import { extractStructuredResult } from '@/lib/ai/result-channel';
-import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import {
+  executeChatRuntimeWithContextRecovery,
+  resolveRecoveredRuntimeSessionId,
+} from '@/lib/chat/chat-engine-runtime';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 1200;
@@ -26,6 +29,7 @@ agentStreamEvents.setMaxListeners(200);
 type StreamBody = {
   message?: string;
   mode?: 'standalone-chat' | 'workflow-chat';
+  runtimeSessionId?: string | null;
   sessionId?: string | null;
   frontendSessionId?: string | null;
   workingDirectory?: string;
@@ -89,11 +93,15 @@ export async function POST(
       : (typeof body?.workflowContext?.frontendSessionId === 'string' && body.workflowContext.frontendSessionId.trim()
         ? body.workflowContext.frontendSessionId.trim()
         : null);
+    const requestedRuntimeSessionId = typeof body?.runtimeSessionId === 'string' && body.runtimeSessionId.trim()
+      ? body.runtimeSessionId.trim()
+      // 旧字段别名，仅用于读取未迁移调用方的输入。
+      : (typeof body?.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : null);
     const prepared = await prepareAgentChat({
       agentName: name,
       message: String(body?.message || ''),
       mode: body?.mode === 'workflow-chat' ? 'workflow-chat' : 'standalone-chat',
-      sessionId: typeof body?.sessionId === 'string' ? body.sessionId : null,
+      sessionId: requestedRuntimeSessionId,
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
       workflowContext: body?.workflowContext && typeof body.workflowContext === 'object'
         ? body.workflowContext as Record<string, any>
@@ -126,7 +134,7 @@ export async function POST(
 
     const execPromise = (async () => {
       if (!prepared.isTemporaryWerewolf && !prepared.isTemporaryAgora) {
-        return executeEngineWithContextRecovery(prepared.engine, {
+        return executeChatRuntimeWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
           step: prepared.mode,
           prompt: prepared.prompt,
@@ -151,7 +159,7 @@ export async function POST(
       let lastResult: any = null;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const isRetry = attempt > 0;
-        const result = await executeEngineWithContextRecovery(prepared.engine, {
+        const result = await executeChatRuntimeWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
           step: isRetry
             ? `${prepared.mode}-${prepared.isTemporaryWerewolf ? 'result' : 'agora-result'}-retry-${attempt}`
@@ -183,7 +191,7 @@ export async function POST(
           },
         });
         lastResult = result;
-        latestSessionId = resolveRecoveredSessionId(result, latestSessionId) || undefined;
+        latestSessionId = resolveRecoveredRuntimeSessionId(result, latestSessionId) || undefined;
         if (prepared.isTemporaryWerewolf) {
           if (hasWerewolfResult(result.output || '')) return result;
           continue;
@@ -198,9 +206,12 @@ export async function POST(
         rawOutput: result.output || '',
         success: result.success,
         error: result.error || null,
-        sessionId: resolveRecoveredSessionId(result, prepared.resumeSessionId),
+        sessionId: resolveRecoveredRuntimeSessionId(result, prepared.resumeSessionId),
       });
-      return finalResult;
+      return {
+        ...finalResult,
+        runtimeSessionId: finalResult.sessionId || resolveRecoveredRuntimeSessionId(result, prepared.resumeSessionId),
+      };
     }).finally(() => {
       prepared.engine.off('stream', onEngineStream);
     });

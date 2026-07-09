@@ -1,6 +1,7 @@
 import { errorMessage, jsonError, jsonOk, readJsonBody, requestUrl } from '@/server/api-route-runtime/request-utils';
 import { requireAdmin, requireAuth } from '@/lib/auth/middleware';
 import { deleteModelProbe, getModelProbe, updateModelProbe } from '@/lib/models/probes';
+import { attachModelRouteIdsToProbeResponse, normalizeProbeInputForModelRouteId } from '../model-route-probe-dto';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,7 @@ export async function GET(
     if (!probe) {
       return jsonError('Probe not found', 404);
     }
-    return jsonOk({ probe });
+    return jsonOk(attachModelRouteIdsToProbeResponse({ probe }));
   } catch (error) {
     return jsonError(errorMessage(error) || 'Failed to load model probe', 500);
   }
@@ -38,8 +39,8 @@ export async function PATCH(
   try {
     const { id } = await context.params;
     const body = await readJsonBody(request, {});
-    const probe = await updateModelProbe(id, body || {});
-    return jsonOk({ success: true, probe });
+    const probe = await updateModelProbe(id, normalizeProbeInputForModelRouteId(body || {}));
+    return jsonOk(attachModelRouteIdsToProbeResponse({ success: true, probe }));
   } catch (error) {
     const message = errorMessage(error) || 'Failed to update model probe';
     return jsonError(message, message.includes('不存在') || message.includes('not found') ? 404 : 400);

@@ -5,9 +5,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Globe } from 'lucide-react';
 import { AiModelSelectorField, type AiModelSelectorOption } from '@/components/AiModelSelectorField';
 import { EngineIcon } from '@/components/EngineIcon';
-import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
-import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
-import { useEngineConfigQuery } from '@/client/query/engines';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
+import { useRuntimeEngineOptionsQuery, useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { queryKeys } from '@/client/query/query-keys';
 
 interface EngineSelectProps {
@@ -20,13 +19,16 @@ interface EngineSelectProps {
 
 export function EngineSelect({ value, onChange, className = '', allowGlobal = false }: EngineSelectProps) {
   const queryClient = useQueryClient();
-  const engineConfigQuery = useEngineConfigQuery();
-  const globalEngine = typeof engineConfigQuery.data?.engine === 'string' ? engineConfigQuery.data.engine : '';
-  const globalDriver = typeof engineConfigQuery.data?.driver === 'string' ? engineConfigQuery.data.driver : '';
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
+  const runtimeOptionsQuery = useRuntimeEngineOptionsQuery();
+  const globalEngine = typeof runtimeSelectionQuery.data?.engine === 'string' ? runtimeSelectionQuery.data.engine : '';
 
   useEffect(() => {
     if (!allowGlobal) return;
-    const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.engines() });
+    const refresh = () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.models() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents() });
+    };
     const onEngineUpdated = () => { void refresh(); };
     const onStorage = (e: StorageEvent) => {
       if (e.key === 'engine-config-updated-at') void refresh();
@@ -39,8 +41,9 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
     };
   }, [allowGlobal, queryClient]);
 
-  const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
-  const globalLabel = getEngineMeta(effectiveGlobalEngine)?.name || getEngineMeta(globalEngine)?.name || globalEngine;
+  const globalLabel = runtimeOptionsQuery.data?.find((engine) => engine.id === globalEngine)?.name
+    || getEngineMeta(globalEngine)?.name
+    || globalEngine;
 
   const options: AiModelSelectorOption[] = useMemo(() => {
     const items: AiModelSelectorOption[] = [];
@@ -51,13 +54,13 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
         icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
       });
     }
-    items.push(...getConcreteEngines().map((eng) => ({
+    items.push(...(runtimeOptionsQuery.data || []).map((eng) => ({
       value: eng.id,
       label: eng.name,
-      icon: <EngineIcon engineId={eng.id} className="h-4 w-4" />,
+      icon: <EngineIcon engineId={eng.id} iconPath={eng.iconPath} className="h-4 w-4" />,
     })));
     return items;
-  }, [allowGlobal, globalLabel]);
+  }, [allowGlobal, globalLabel, runtimeOptionsQuery.data]);
 
   return (
     <AiModelSelectorField
@@ -74,12 +77,14 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
 /** Hook to get the effective engine (per-chat override or global) */
 export function useCurrentEngine(override?: string): string {
   const queryClient = useQueryClient();
-  const engineConfigQuery = useEngineConfigQuery();
-  const globalEngine = typeof engineConfigQuery.data?.engine === 'string' ? engineConfigQuery.data.engine : '';
-  const globalDriver = typeof engineConfigQuery.data?.driver === 'string' ? engineConfigQuery.data.driver : '';
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
+  const globalEngine = typeof runtimeSelectionQuery.data?.engine === 'string' ? runtimeSelectionQuery.data.engine : '';
 
   useEffect(() => {
-    const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.engines() });
+    const refresh = () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.models() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents() });
+    };
     const onEngineUpdated = () => { void refresh(); };
     const onStorage = (e: StorageEvent) => {
       if (e.key === 'engine-config-updated-at') void refresh();
@@ -92,5 +97,5 @@ export function useCurrentEngine(override?: string): string {
     };
   }, [queryClient]);
 
-  return override || resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
+  return override || globalEngine;
 }

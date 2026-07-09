@@ -8,6 +8,7 @@ import type { RunHistoryItem, RunHistoryParams } from '../query/run-history';
 import type { TreeNode } from '@/lib/core/api';
 import type { ModelDiagnosticsResponse } from '@/lib/models/diagnostic-types';
 import type { ModelProbeListResponse, ModelProbeSummary } from '@/lib/models/probe-types';
+import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
 import type { RagDocument, RagKnowledgeBase, RagVectorChunk } from '@/lib/rag/types';
 
@@ -1032,11 +1033,13 @@ export function syncModelCatalogToDb(models: Array<ModelCatalogInput>) {
     upsertModelCatalogRow({
       id,
       name: String(model.name || model.label || id),
-      endpoints: Array.isArray(model.endpoints) ? model.endpoints : [],
+      endpoints: Array.isArray(model.endpoints) && model.endpoints.length > 0 ? model.endpoints : [...DEFAULT_MODEL_ENDPOINTS],
       engines: Array.isArray(model.engines) ? model.engines : [],
       status: model.status === 'inactive' ? 'inactive' : 'active',
       costMultiplier: Number.isFinite(Number(model.costMultiplier)) ? Number(model.costMultiplier) : 1,
-      contextWindow: Number.isFinite(Number(model.contextWindow)) ? Number(model.contextWindow) : undefined,
+      contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0
+        ? Number(model.contextWindow)
+        : DEFAULT_MODEL_CONTEXT_WINDOW,
       createdAt: model.createdAt,
       updatedAt: model.updatedAt,
       order: index,

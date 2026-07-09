@@ -133,7 +133,7 @@ export interface HomePluginIntent {
   description?: string;
 }
 
-// ─── Tab (legacy compat) ───
+// ─── Tab (preRuntime compat) ───
 
 export interface HomePluginTab {
   id: string;
@@ -142,7 +142,7 @@ export interface HomePluginTab {
   order?: number;
 }
 
-// ─── Plugin Context (legacy compat) ───
+// ─── Plugin Context (preRuntime compat) ───
 
 export interface HomePluginContext {
   hasWorkflow?: boolean;
@@ -152,7 +152,7 @@ export interface HomePluginContext {
   [key: string]: unknown;
 }
 
-// ─── Plugin Manifest (legacy JSON compat) ───
+// ─── Plugin Manifest (preRuntime JSON compat) ───
 
 export interface HomePluginManifest {
   id: string;

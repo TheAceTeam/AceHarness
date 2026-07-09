@@ -17,6 +17,8 @@ interface ModelSelectProps {
   engine?: string;
   /** Show a "use global" option */
   allowGlobal?: boolean;
+  /** Show an explicit empty option for optional model fields */
+  emptyOptionLabel?: string;
   /** Whether to show a toast when the selected model changes */
   showChangeToast?: boolean;
 }
@@ -27,6 +29,7 @@ export function ModelSelect({
   className = '',
   engine,
   allowGlobal = false,
+  emptyOptionLabel,
   showChangeToast = true,
 }: ModelSelectProps) {
   const queryClient = useQueryClient();
@@ -69,6 +72,13 @@ export function ModelSelect({
           icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
         });
       }
+      if (emptyOptionLabel && !allowGlobal) {
+        items.push({
+          value: '__empty__',
+          label: emptyOptionLabel,
+          icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
+        });
+      }
       items.push(...models.map(m => ({
         value: m.value,
         label: m.label,
@@ -77,7 +87,7 @@ export function ModelSelect({
       })));
       return items;
     },
-    [allowGlobal, globalDefaultModel, models],
+    [allowGlobal, emptyOptionLabel, globalDefaultModel, models],
   );
 
   const handleChange = (newValue: string) => {
@@ -85,6 +95,13 @@ export function ModelSelect({
       onChange('');
       if (showChangeToast) {
         toast('info', globalDefaultModel ? `模型已切换: 跟随全局 (${globalDefaultModel})` : '模型已切换: 跟随全局');
+      }
+      return;
+    }
+    if (emptyOptionLabel && newValue === '__empty__') {
+      onChange('');
+      if (showChangeToast) {
+        toast('info', `模型已切换: ${emptyOptionLabel}`);
       }
       return;
     }
@@ -97,7 +114,7 @@ export function ModelSelect({
 
   return (
     <AiModelSelectorField
-      value={value || (allowGlobal ? '__global__' : '')}
+      value={value || (allowGlobal ? '__global__' : emptyOptionLabel ? '__empty__' : '')}
       onValueChange={handleChange}
       options={options}
       placeholder="选择模型"

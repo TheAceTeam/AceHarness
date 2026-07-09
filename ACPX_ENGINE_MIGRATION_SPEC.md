@@ -155,9 +155,7 @@ interface AgentDefinition {
 
 ### Agent 分层
 
-默认 UI 只展示 `core` 和 `verified`。`experimental` 放高级区或实验区，`hidden` 只可通过配置或 discovery 使用。
-
-core / verified 初始建议：
+默认 UI 展示：
 
 - `codex`
 - `claude`
@@ -168,17 +166,10 @@ core / verified 初始建议：
 - `nga`
 - `codegenie`
 - `cangjie-magic`
-
-experimental 初始建议：
-
 - `pi`
 - `openclaw`
 - `gemini`
 - `copilot`
-- `droid`
-- `fast-agent`
-- `grok-build`
-- `iflow`
 - `kilocode`
 - `kimi`
 - `mux`

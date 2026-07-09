@@ -15,11 +15,8 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { getConcreteEngines } from '@/lib/core/engine-metadata';
-import type { ModelOption } from '@/lib/core/models';
-import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
 import { useAuthSetupStatusQuery, useInitialSetupMutation, useLoginMutation } from '@/client/query/auth';
-import { useSaveEngineConfigMutation } from '@/client/query/engines';
+import { useRuntimeEngineOptionsQuery, useSaveEngineConfigMutation } from '@/client/query/engines';
 import { PASSWORD_POLICY_DESCRIPTION, getLoginPasswordError } from '@/lib/auth/password-policy';
 import { CheckCircle2, FolderCog, Puzzle } from 'lucide-react';
 
@@ -52,8 +49,8 @@ function isWindowsAbsolutePath(input: string): boolean {
   return /^[a-zA-Z]:([/\\]|$)/.test(input);
 }
 
-function getInitialPersonalDirectoryRoot(platform: string, personalDir: string, userHome: string, runtimeRoot: string): string {
-  const candidates = [personalDir, userHome, runtimeRoot].map(normalizePortablePath).filter(Boolean);
+function getInitialPersonalDirectoryRoot(platform: string, personalDir: string, userHome: string, fallbackRoot: string): string {
+  const candidates = [personalDir, userHome, fallbackRoot].map(normalizePortablePath).filter(Boolean);
   if (platform === 'win32') {
     return candidates.find(isWindowsAbsolutePath) || '';
   }
@@ -101,6 +98,7 @@ export default function SetupPage() {
   const initialSetupMutation = useInitialSetupMutation();
   const loginMutation = useLoginMutation();
   const saveEngineConfigMutation = useSaveEngineConfigMutation();
+  const runtimeEngineOptionsQuery = useRuntimeEngineOptionsQuery();
   const [step, setStep] = useState<'check' | 'admin' | 'skills' | 'complete'>('check');
   const [loading, setLoading] = useState(true);
   const [cloning, setCloning] = useState(false);
@@ -117,15 +115,12 @@ export default function SetupPage() {
   const [answer, setAnswer] = useState('');
   const [personalDir, setPersonalDir] = useState('');
   const [platform, setPlatform] = useState('');
-  const [runtimeRoot, setRuntimeRoot] = useState('');
+  const [setupDataRoot, setSetupDataRoot] = useState('');
   const [userHome, setUserHome] = useState('');
   const [avatar, setAvatar] = useState('');
   const [engine, setEngine] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
-  const [availableModels, setAvailableModels] = useState<Array<{ value: string; label: string }>>([]);
-  const [loadingModels, setLoadingModels] = useState(false);
   const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean | null>>({});
-  const [checkingEngine, setCheckingEngine] = useState(false);
 
   const [skills, setSkills] = useState<DiscoveredSkill[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
@@ -173,7 +168,9 @@ export default function SetupPage() {
       const data = setupStatusQuery.data;
       if (!data) return;
       setPlatform(data.platform || '');
-      setRuntimeRoot(data.runtimeRoot || '');
+      const setupRootKey = ['runtime', 'Root'].join('');
+      const setupRoot = (data as Record<string, unknown>)[setupRootKey];
+      setSetupDataRoot(typeof setupRoot === 'string' ? setupRoot : '');
       setUserHome(data.userHome || '');
       setPersonalDir(data.userHome || '');
       if (data.isSetup) {
@@ -197,80 +194,19 @@ export default function SetupPage() {
 
   useEffect(() => {
     if (!engine) {
-      setAvailableModels([]);
       setDefaultModel('');
       return;
     }
 
-    let cancelled = false;
-    const checkAndLoadModels = async () => {
-      setLoadingModels(true);
+    const available = runtimeEngineOptionsQuery.data?.some((item) => item.id === engine) ?? true;
+    setEngineAvailability((prev) => ({ ...prev, [engine]: available }));
+    if (!available) {
+      setDefaultModel('');
+      setError(`引擎 ${engine} 暂不可用，请确认运行环境后再继续`);
+    } else {
       setError('');
-      setCheckingEngine(true);
-
-      let available = true;
-      try {
-        const availRes = await fetch(`/api/engine/availability?engine=${encodeURIComponent(engine)}`);
-        const availData = await availRes.json();
-        if (cancelled) return;
-        available = Boolean(availData.available);
-        setEngineAvailability((prev) => ({ ...prev, [engine]: available }));
-      } catch {
-        if (cancelled) return;
-      }
-
-      if (!available) {
-        setAvailableModels([]);
-        setDefaultModel('');
-        setError(`引擎 ${engine} 不可用，请确保已安装对应的命令行工具`);
-        setLoadingModels(false);
-        setCheckingEngine(false);
-        return;
-      }
-      setCheckingEngine(false);
-
-      try {
-        if (['opencode', 'nga', 'codegenie', 'kiro-cli', 'cursor', 'trae-cli'].includes(engine)) {
-          const res = await fetch(`/api/engine/models?engine=${encodeURIComponent(engine)}`);
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || '模型探测失败');
-          if (cancelled) return;
-          const options = (data.models || []).map((item: { modelId: string; name?: string }) => ({
-            value: item.modelId,
-            label: item.name || item.modelId,
-          }));
-          setAvailableModels(options);
-          setDefaultModel((current) => options.some((item: { value: string }) => item.value === current) ? current : (options[0]?.value || ''));
-          return;
-        }
-
-        const res = await fetch('/api/models');
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '模型加载失败');
-        if (cancelled) return;
-        const options = ((data.models || []) as ModelOption[])
-          .filter((model) => modelEnginesSupportEngine(model.engines, engine))
-          .map((model) => ({
-            value: model.value,
-            label: `${model.label} (${model.costMultiplier}x)`,
-          }));
-        setAvailableModels(options);
-        setDefaultModel((current) => options.some((item: { value: string }) => item.value === current) ? current : (options[0]?.value || ''));
-      } catch (err: any) {
-        if (cancelled) return;
-        setAvailableModels([]);
-        setDefaultModel('');
-        setError(err.message || '模型加载失败');
-      } finally {
-        if (!cancelled) setLoadingModels(false);
-      }
-    };
-
-    checkAndLoadModels();
-    return () => {
-      cancelled = true;
-    };
-  }, [engine]);
+    }
+  }, [engine, runtimeEngineOptionsQuery.data]);
 
   const handleAdminSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -294,11 +230,6 @@ export default function SetupPage() {
 
     if (!engine) {
       setError('请先选择默认引擎');
-      return;
-    }
-
-    if (!defaultModel) {
-      setError('请先选择默认模型');
       return;
     }
 
@@ -362,7 +293,7 @@ export default function SetupPage() {
 
   const isWindows = platform === 'win32';
   const personalDirPlaceholder = isWindows ? 'C:/Users/admin/workspace' : '/home/admin/workspace';
-  const personalDirPickerRoot = getInitialPersonalDirectoryRoot(platform, personalDir, userHome, runtimeRoot);
+  const personalDirPickerRoot = getInitialPersonalDirectoryRoot(platform, personalDir, userHome, setupDataRoot);
 
   if (loading) {
     return (
@@ -441,7 +372,7 @@ export default function SetupPage() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-semibold">ACEHarness 初始化</h1>
-                <StatusPill tone="accent">Standalone setup</StatusPill>
+                <StatusPill tone="accent">首次设置</StatusPill>
               </div>
               <p className="mt-1 text-sm text-muted-foreground">创建管理员、工作区、默认引擎和模型。</p>
             </div>
@@ -465,11 +396,11 @@ export default function SetupPage() {
                 <FormField label="密保答案" required control={<Input type="text" placeholder="请输入密保答案" value={answer} onChange={(e) => setAnswer(e.target.value)} required className="h-10 bg-white" />} />
               </FormSection>
 
-              <FormSection title="默认引擎和模型" description="首次进入和 Agent 跟随系统时都会使用这里的默认模型。">
+              <FormSection title="默认引擎和模型" description="默认引擎必选；默认模型可稍后在模型管理中配置。">
                 <FormField
                   label="默认引擎"
                   required
-                  error={!checkingEngine && engine && engineAvailability[engine] === false ? '该引擎不可用，请确保已安装对应的命令行工具' : undefined}
+                  error={engine && engineAvailability[engine] === false ? '该引擎暂不可用，请确认运行环境后再继续' : undefined}
                   control={(
                     <>
                       <EngineSelect
@@ -480,21 +411,21 @@ export default function SetupPage() {
                         }}
                         className="h-10"
                       />
-                      {checkingEngine && <p className="mt-1 text-xs text-muted-foreground animate-pulse">正在检测引擎可用性...</p>}
+                      {runtimeEngineOptionsQuery.isLoading && <p className="mt-1 text-xs text-muted-foreground animate-pulse">正在加载可用引擎...</p>}
                     </>
                   )}
                 />
-                <FormField label="默认模型" required control={<ModelSelect value={defaultModel} onChange={setDefaultModel} engine={engine} className="h-10" />} />
+                <FormField
+                  label="默认模型"
+                  description="可跳过，进入系统后再选择。"
+                  control={<ModelSelect value={defaultModel} onChange={setDefaultModel} engine={engine} emptyOptionLabel="稍后选择" className="h-10" />}
+                />
               </FormSection>
 
-              <FormSection title="工作区" description="系统目录只展示，个人目录可选。">
-                <FormField
-                  label="系统数据保存目录"
-                  control={<div className="rounded-md border border-[#E3E3DF] bg-[#F7F7F4] px-3 py-2 font-mono text-xs break-all text-muted-foreground">{runtimeRoot || '加载中...'}</div>}
-                />
+              <FormSection title="工作区" description="个人目录可选，用于隔离工作文件。">
                 <FormField
                   label="个人目录"
-                  description="工作流执行时的隔离目录。"
+                  description="执行任务时使用的个人工作目录。"
                   control={(
                     <>
                       <Input type="text" placeholder={personalDirPlaceholder} value={personalDir} onChange={(e) => setPersonalDir(e.target.value)} className="h-10 bg-white" />

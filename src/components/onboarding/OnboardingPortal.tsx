@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { startTransition, useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname, useSearchParams } from '@/lib/navigation/client';
 import { ModernOnboardingTour, type ModernOnboardingProgress } from '@/components/onboarding/ModernOnboardingTour';
 import { Button } from '@/components/ui/button';
@@ -11,45 +11,63 @@ type TourLaunchMode = 'resume' | 'current-route';
 export default function OnboardingPortal() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const isDashboardShell = pathname === '/' && (searchParams.has('panel') || searchParams.has('route'));
   const [open, setOpen] = useState(false);
   const [role, setRole] = useState<Role>('user');
   const [launchMode, setLaunchMode] = useState<TourLaunchMode>('resume');
   const [loadingProgress, setLoadingProgress] = useState(false);
   const [progress, setProgress] = useState<ModernOnboardingProgress | null>(null);
   const [dismissedForSession, setDismissedForSession] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const lastTourQueryRef = useRef<string | null>(null);
 
   const getAuthToken = useCallback(() => (typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null), []);
 
+  useEffect(() => {
+    startTransition(() => {
+      setMounted(true);
+    });
+  }, []);
+
   const loadProgress = useCallback(async () => {
     const token = getAuthToken();
     if (!token) return;
-    setLoadingProgress(true);
+    startTransition(() => {
+      setLoadingProgress(true);
+    });
     try {
       const res = await fetch('/api/onboarding/progress', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) return;
       const data = await res.json();
-      if (data?.role === 'admin' || data?.role === 'user') setRole(data.role);
-      if (data?.progress) {
-        setProgress(data.progress);
-        setLaunchMode('resume');
-        setOpen(!data.progress.done && !dismissedForSession && pathname !== '/' && pathname !== '/chat');
-      }
+      startTransition(() => {
+        if (data?.role === 'admin' || data?.role === 'user') setRole(data.role);
+        if (data?.progress) {
+          setProgress(data.progress);
+          setLaunchMode('resume');
+          setOpen(!data.progress.done && !dismissedForSession && (pathname !== '/' || isDashboardShell) && pathname !== '/chat');
+        }
+      });
     } catch {
       // ignore
     } finally {
-      setLoadingProgress(false);
+      startTransition(() => {
+        setLoadingProgress(false);
+      });
     }
-  }, [dismissedForSession, getAuthToken, pathname]);
+  }, [dismissedForSession, getAuthToken, isDashboardShell, pathname]);
 
   useEffect(() => {
     const stored = localStorage.getItem('auth-user');
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
-        if (parsed?.role === 'admin') setRole('admin');
+        if (parsed?.role === 'admin') {
+          startTransition(() => {
+            setRole('admin');
+          });
+        }
       } catch {
         // ignore
       }
@@ -98,6 +116,8 @@ export default function OnboardingPortal() {
       // ignore
     }
   };
+
+  if (!mounted) return null;
 
   return (
     <>

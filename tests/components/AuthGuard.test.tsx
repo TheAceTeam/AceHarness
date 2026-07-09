@@ -6,8 +6,9 @@ import React from 'react';
 import { queryKeys } from '@/client/query/query-keys';
 
 const mockPush = vi.fn();
+const mockReplace = vi.fn();
 vi.mock('@/lib/navigation/client', () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));
 
 import AuthGuard from '@/components/AuthGuard';
@@ -43,6 +44,8 @@ function renderAuthGuard() {
 describe('AuthGuard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPush.mockClear();
+    mockReplace.mockClear();
     localStorage.clear();
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ user: { id: 'u1', username: 'test' } }));
   });
@@ -77,7 +80,7 @@ describe('AuthGuard', () => {
     queryClient.setQueryData(queryKeys.auth.currentUser(), { id: 'stale', username: 'stale' });
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith('/login');
+      expect(mockReplace).toHaveBeenCalledWith('/login?returnTo=%2F');
     });
 
     await waitFor(() => {
@@ -136,19 +139,19 @@ describe('AuthGuard', () => {
     });
   });
 
-  test('redirects to /login when fetch throws a network error', async () => {
+  test('keeps the stored session when auth check hits a temporary network error', async () => {
     localStorage.setItem('auth-token', 'valid-token');
+    localStorage.setItem('auth-user', JSON.stringify({ id: 'u1', username: 'cached' }));
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Network error'));
 
     renderAuthGuard();
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith('/login');
+      expect(screen.getByText('加载中...')).toBeInTheDocument();
     });
-
-    await waitFor(() => {
-      expect(localStorage.getItem('auth-token')).toBeNull();
-    });
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(localStorage.getItem('auth-token')).toBe('valid-token');
+    expect(localStorage.getItem('auth-user')).toBe(JSON.stringify({ id: 'u1', username: 'cached' }));
   });
 
   test('listens for auth:expired event and redirects to /login', async () => {
@@ -167,7 +170,7 @@ describe('AuthGuard', () => {
     });
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith('/login');
+      expect(mockReplace).toHaveBeenCalledWith('/login?returnTo=%2F');
       expect(localStorage.getItem('auth-user')).toBeNull();
       expect(queryClient.getQueryData(queryKeys.auth.currentUser())).toBeUndefined();
     });

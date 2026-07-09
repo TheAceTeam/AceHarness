@@ -8,7 +8,7 @@ export async function GET() {
   try {
     const agentsDir = await getRuntimeAgentsDirPath();
     const files = await readdir(agentsDir);
-    const yamlFiles = files.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
+    const yamlFiles = files.filter((file) => file.endsWith('.yaml') || file.endsWith('.yml'));
 
     const agents = [];
     for (const file of yamlFiles) {

@@ -55,7 +55,7 @@ export function ConversationRightRailEmptyState({ text }: { text: string }) {
   );
 }
 
-export function createBuiltInConversationRightRailPlugins(legacyPanel?: ReactNode): ConversationRightRailPlugin[] {
+export function createBuiltInConversationRightRailPlugins(fallbackPanel?: ReactNode): ConversationRightRailPlugin[] {
   const plugins: ConversationRightRailPlugin[] = [
     {
       id: 'workflow-monitor',
@@ -100,16 +100,16 @@ export function createBuiltInConversationRightRailPlugins(legacyPanel?: ReactNod
     },
   ];
 
-  if (legacyPanel) {
+  if (fallbackPanel) {
     plugins.push({
-      id: 'legacy-command-tools',
+      id: 'command-tools',
       title: '工具',
       icon: 'right_panel_open',
       priority: 80,
-      modes: ['workflow-drafting', 'workflow-running', 'workflow-completed'],
+      modes: ['plain', 'agent-chat', 'workflow-drafting', 'workflow-running', 'workflow-completed'],
       permissions: ['read-chat', 'read-workflow', 'read-workspace'],
       shouldActivate: () => true,
-      render: () => legacyPanel,
+      render: () => fallbackPanel,
     });
   }
 

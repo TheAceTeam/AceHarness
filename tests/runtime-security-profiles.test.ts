@@ -14,6 +14,8 @@ import {
   type RuntimePermissionRequest,
   type RuntimeSecretProfileDto,
 } from '../src/lib/runtime-agent';
+import { openRuntimeSqliteDatabase } from '../src/lib/runtime-agent/sqlite/database';
+import { RuntimeSqliteStore } from '../src/lib/runtime-agent/sqlite/runtime-store';
 
 const permissionRequest = {
   id: 'permission-1',
@@ -132,6 +134,34 @@ describe('runtime security profiles', () => {
     });
   });
 
+  test('redaction covers diagnostic, command, diff, stderr, binding, tool IO, and private key shapes', () => {
+    const leakedSecret = 'super-secret-value';
+    const payload = {
+      prompt: `use token ${leakedSecret}`,
+      toolIo: {
+        input: { api_token: leakedSecret },
+        output: `Authorization: Bearer abcdefghijklmnop`,
+      },
+      rawBinding: {
+        providerSessionId: 'provider-private',
+        raw: { accessToken: leakedSecret },
+      },
+      command: `OPENAI_API_KEY=${leakedSecret} npm test`,
+      diff: `+ const token = "${leakedSecret}";`,
+      stderr: `private_key=${leakedSecret}`,
+      pem: '-----BEGIN PRIVATE KEY-----\nabcdef\n-----END PRIVATE KEY-----',
+    };
+
+    const redacted = redactRecord(payload, { secrets: [leakedSecret, 'abcdef'] });
+    const serialized = JSON.stringify(redacted.value);
+
+    expect(redacted.redacted).toBe(true);
+    expect(serialized).not.toContain(leakedSecret);
+    expect(serialized).not.toContain('abcdefghijklmnop');
+    expect(serialized).not.toContain('abcdef');
+    expect(serialized).toContain('[REDACTED]');
+  });
+
   test('env resolution uses turn, env profile, secret profile, agent default, process env priority without storing secret values in DTOs', () => {
     const secretProfile = {
       id: 'secret-profile-1',
@@ -213,6 +243,69 @@ describe('runtime security profiles', () => {
     });
   });
 
+  test('env resolution reports encryption readiness, required secret missing, misconfigured refs, and conflict metadata', () => {
+    const result = resolveRuntimeEnv({
+      agentId: 'codex',
+      modelRouteId: 'route-1',
+      cwd: '/workspace',
+      systemPromptHash: 'sha256:abc',
+      skillsRevision: 'skills-1',
+      mcpRevision: 'mcp-1',
+      requirements: [
+        { key: 'MISSING_TOKEN', required: true, secret: true },
+        { key: 'REF_TOKEN', required: false, secret: true },
+      ],
+      processEnv: {
+        MISSING_TOKEN: 'process-token',
+      },
+      secretProfile: {
+        id: 'secret-profile-2',
+        displayName: 'Broken Secrets',
+        encrypted: true,
+        encryptionKeyReady: true,
+        secrets: [
+          {
+            key: 'MISSING_TOKEN',
+            secretRef: 'vault://missing-token',
+            required: true,
+            readiness: 'unknown',
+          },
+        ],
+      },
+      envProfile: {
+        id: 'env-profile-2',
+        displayName: 'Broken Env',
+        variables: [
+          {
+            key: 'REF_TOKEN',
+            secretRef: 'vault://not-bound',
+          },
+        ],
+      },
+    });
+
+    expect(result.adapterEnv).toEqual({});
+    expect(result.missing).toEqual(['MISSING_TOKEN', 'REF_TOKEN']);
+    expect(result.snapshot.env).toContainEqual({
+      key: 'MISSING_TOKEN',
+      source: 'secret-profile',
+      secret: true,
+      readiness: 'missing',
+    });
+    expect(result.snapshot.env).toContainEqual({
+      key: 'REF_TOKEN',
+      source: 'env-profile',
+      secret: true,
+      readiness: 'misconfigured',
+    });
+    expect(result.conflicts).toContainEqual({
+      key: 'MISSING_TOKEN',
+      sources: ['secret-profile', 'process-env'],
+      selectedSource: 'secret-profile',
+    });
+    expect(JSON.stringify(result.snapshot)).not.toContain('process-token');
+  });
+
   test('secret profile DTOs expose readiness and refs without secret values', () => {
     const profile = {
       id: 'secret-profile-1',
@@ -234,5 +327,59 @@ describe('runtime security profiles', () => {
     expect(checkSecretProfileReadiness(profile)).toBe('ready');
     expect(checkSecretProfileReadiness({ ...profile, encryptionKeyReady: false })).toBe('misconfigured');
     expect(checkSecretProfileReadiness({ ...profile, secrets: [{ ...profile.secrets[0], readiness: 'missing' }] })).toBe('missing');
+  });
+
+  test('sqlite profile persistence preserves owner boundaries and never stores secret values in public profile rows', () => {
+    const db = openRuntimeSqliteDatabase(':memory:');
+    const store = new RuntimeSqliteStore(db);
+    try {
+      const policy = store.upsertPermissionPolicy({
+        policyId: 'deny-destructive',
+        displayName: 'Deny Destructive',
+        visibility: 'workspace',
+      });
+      const envProfile = store.upsertEnvProfile({
+        id: 'env-private',
+        ownerUserId: 'user-1',
+        visibility: 'private',
+        displayName: 'Private Env',
+        variables: [
+          { key: 'SAFE_MODE', value: '1' },
+          { key: 'API_TOKEN', secretRef: 'vault://api-token', secret: true, required: true },
+        ],
+      });
+      const secretProfile = store.upsertSecretProfile({
+        id: 'secret-private',
+        ownerUserId: 'user-1',
+        visibility: 'private',
+        displayName: 'Private Secrets',
+        encrypted: true,
+        encryptionKeyReady: true,
+        secrets: [
+          { key: 'API_TOKEN', secretRef: 'vault://api-token', required: true, readiness: 'ready' },
+        ],
+      });
+
+      expect(policy).toMatchObject({ policyId: 'deny-destructive', visibility: 'workspace' });
+      expect(envProfile).toMatchObject({ ownerUserId: 'user-1', visibility: 'private' });
+      expect(secretProfile).toMatchObject({ ownerUserId: 'user-1', visibility: 'private', encrypted: true });
+      expect(store.getEnvProfile('env-private', { ownerUserId: 'user-2' })).toBeNull();
+      expect(store.getSecretProfile('secret-private', { ownerUserId: 'user-2' })).toBeNull();
+      expect(store.getEnvProfile('env-private', { ownerUserId: 'user-1' })).toMatchObject({ id: 'env-private' });
+      expect(store.getSecretProfile('secret-private', { ownerUserId: 'user-1' })).toMatchObject({ id: 'secret-private' });
+      expect(store.listPermissionPolicies({ ownerUserId: 'user-2' })).toContainEqual(expect.objectContaining({ policyId: 'deny-destructive' }));
+
+      const publicDto = toPublicSecretProfileDto(secretProfile);
+      const serialized = JSON.stringify({
+        env: envProfile,
+        secret: publicDto,
+        rawRows: db.prepare('SELECT variables_json, secrets_json FROM env_profiles, secret_profiles').get(),
+      });
+      expect(serialized).not.toContain('super-secret-value');
+      expect(serialized).not.toContain('raw-secret');
+      expect(serialized).toContain('vault://api-token');
+    } finally {
+      db.close();
+    }
   });
 });

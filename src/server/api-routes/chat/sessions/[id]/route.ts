@@ -5,7 +5,7 @@ import { isProtectedRunningWorkflowSession } from '@/lib/chat/delete-protection'
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
 function isOwner(session: any, userId: string): boolean {
-  // Backward compatibility: legacy sessions without createdBy are treated as shared.
+  // Backward compatibility: preRuntime sessions without createdBy are treated as shared.
   if (!session) return false;
   if (!session.createdBy) return true;
   return session.createdBy === userId;

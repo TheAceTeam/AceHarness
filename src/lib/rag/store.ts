@@ -27,7 +27,7 @@ const DEFAULT_DIMENSION = 384;
 const CHUNK_SIZE = 900;
 const CHUNK_OVERLAP = 120;
 const nodeRequire = createRequire(typeof __filename !== 'undefined' ? __filename : join(process.cwd(), 'package.json'));
-const LEGACY_SAMPLE_SOURCE_SYSTEM = 'aceharness-sample-rag';
+const PRE_RUNTIME_SAMPLE_SOURCE_SYSTEM = 'aceharness-sample-rag';
 const DEFAULT_SAMPLE_SOURCE_SYSTEM = 'lancedb/vectordb-recipes';
 const DEFAULT_SAMPLE_RAG_DOCUMENTS = [
   {
@@ -358,17 +358,17 @@ async function deleteRowsBySourceSystem(kb: RagKnowledgeBase, sourceSystem: stri
   await table.delete(`knowledgeBaseId = '${kb.id.replace(/'/g, "''")}' AND sourceSystem = '${sourceSystem.replace(/'/g, "''")}'`);
 }
 
-async function replaceLegacyDefaultSample(meta: RagMetaStore): Promise<boolean> {
+async function replacePreRuntimeDefaultSample(meta: RagMetaStore): Promise<boolean> {
   const kb = meta.knowledgeBases.find((item) => item.id === DEFAULT_RAG_KNOWLEDGE_BASE_ID);
   if (!kb) return false;
-  const legacyDocumentIds = new Set(
+  const preRuntimeDocumentIds = new Set(
     meta.documents
-      .filter((item) => item.knowledgeBaseId === DEFAULT_RAG_KNOWLEDGE_BASE_ID && item.sourceSystem === LEGACY_SAMPLE_SOURCE_SYSTEM)
+      .filter((item) => item.knowledgeBaseId === DEFAULT_RAG_KNOWLEDGE_BASE_ID && item.sourceSystem === PRE_RUNTIME_SAMPLE_SOURCE_SYSTEM)
       .map((item) => item.id)
   );
-  if (legacyDocumentIds.size === 0) return false;
-  await deleteRowsBySourceSystem(kb, LEGACY_SAMPLE_SOURCE_SYSTEM);
-  meta.documents = meta.documents.filter((item) => !legacyDocumentIds.has(item.id));
+  if (preRuntimeDocumentIds.size === 0) return false;
+  await deleteRowsBySourceSystem(kb, PRE_RUNTIME_SAMPLE_SOURCE_SYSTEM);
+  meta.documents = meta.documents.filter((item) => !preRuntimeDocumentIds.has(item.id));
   await refreshStats(meta, DEFAULT_RAG_KNOWLEDGE_BASE_ID);
   await saveMeta(meta);
   return true;
@@ -377,7 +377,7 @@ async function replaceLegacyDefaultSample(meta: RagMetaStore): Promise<boolean> 
 export async function listRagKnowledgeBases(): Promise<RagKnowledgeBase[]> {
   let meta = await readMeta();
   if (ensureDefaultKnowledgeBase(meta)) await saveMeta(meta);
-  if (await replaceLegacyDefaultSample(meta)) {
+  if (await replacePreRuntimeDefaultSample(meta)) {
     meta = await readMeta();
   }
   if (!meta.documents.some((item) => item.knowledgeBaseId === DEFAULT_RAG_KNOWLEDGE_BASE_ID)) {

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type DragEvent, type PointerEvent, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from '@/lib/navigation/client';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, FileText, History, NotebookTabs, Layers3, Loader2, BarChart3, PanelLeftClose, PanelLeftOpen, MessageSquareText, Microchip, ServerCog, Grid2X2, Zap } from 'lucide-react';
+import { Activity, Building2, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, FileText, History, NotebookTabs, Layers3, Loader2, BarChart3, PanelLeftClose, PanelLeftOpen, MessageSquareText, Microchip, ServerCog, Grid2X2, Zap, Bug } from 'lucide-react';
 
 import { useTranslations } from '@/hooks/useTranslations';
 import { Button } from '@/components/ui/button';
@@ -36,6 +36,8 @@ import NewConfigModal from '@/components/NewConfigModal';
 import UserMenu from '@/components/UserMenu';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import ChatSidebar, { type SessionDirectoryView } from '@/components/chat/ChatSidebar';
+import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
+import { systemSettingsApi } from '@/lib/core/api';
 import {
   DASHBOARD_DOCK_DRAG_MIME,
   DashboardDockWorkspace,
@@ -48,6 +50,7 @@ import {
 } from '@/components/dashboard/DashboardShellHeader';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { cn } from '@/lib/core/utils';
+import { buildLoginHref, getCurrentAuthReturnTo } from '@/lib/navigation/return-target';
 import pkgJson from '../../../package.json';
 
 interface DashboardStats {
@@ -378,6 +381,9 @@ export default function DashboardPage() {
   const [dashboardSidebarResizing, setDashboardSidebarResizing] = useState(false);
   const [navigationMode, setNavigationModeState] = useState<DashboardNavigationMode>(readStoredNavigationMode);
   const [activeDockTab, setActiveDockTab] = useState<DashboardDockTab | null>({ id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' });
+  const [acpxTraceEnabled, setAcpxTraceEnabled] = useState(false);
+  const [acpxTraceDirectory, setAcpxTraceDirectory] = useState('');
+  const [acpxTraceWorkspaceOpen, setAcpxTraceWorkspaceOpen] = useState(false);
   const workspaceRef = useRef<DashboardDockWorkspaceHandle | null>(null);
   const suppressSidebarClickRef = useRef(false);
   const sidebarResizeFrameRef = useRef<number | null>(null);
@@ -402,6 +408,7 @@ export default function DashboardPage() {
   const buildShellUrlForDockTab = useCallback((tab: DashboardDockTab | null, baseSearch?: string) => {
     const params = new URLSearchParams(baseSearch ?? searchParams.toString());
     params.delete('reload');
+    params.delete('returnTo');
     if (tab?.kind !== 'workbench') {
       WORKBENCH_OUTER_QUERY_KEYS.forEach((key) => params.delete(key));
     }
@@ -590,6 +597,11 @@ export default function DashboardPage() {
     };
     return routeTabMap[basePath] || null;
   }, [searchParams, t]);
+
+  const openAcpxTraceWorkspace = useCallback(() => {
+    if (!acpxTraceDirectory) return;
+    setAcpxTraceWorkspaceOpen(true);
+  }, [acpxTraceDirectory]);
 
   const initialDockTab = useMemo<DashboardDockTab>(() => {
     if (activeEmbeddedRoute) {
@@ -812,7 +824,9 @@ export default function DashboardPage() {
       if (res.status === 401) {
         localStorage.removeItem('auth-token');
         localStorage.removeItem('auth-user');
-        router.push('/login');
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          router.replace(buildLoginHref(getCurrentAuthReturnTo('/')));
+        }
         return;
       }
       if (!res.ok) throw new Error('Dashboard API failed');
@@ -881,6 +895,30 @@ export default function DashboardPage() {
     } catch {}
     void loadDashboardData();
   }, [loadDashboardData]);
+
+  const loadAcpxTraceSettings = useCallback(async () => {
+    try {
+      const settings = await systemSettingsApi.get();
+      setAcpxTraceEnabled(Boolean(settings.runtimeDebug?.acpxTraceEnabled));
+      setAcpxTraceDirectory(settings.runtimeDebug?.acpxTraceDirectory || '');
+    } catch (error) {
+      console.warn('Failed to load ACPX trace settings:', error);
+      setAcpxTraceEnabled(false);
+      setAcpxTraceDirectory('');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAcpxTraceSettings();
+  }, [loadAcpxTraceSettings]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      void loadAcpxTraceSettings();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [loadAcpxTraceSettings]);
 
   useEffect(() => {
     workspaceRef.current?.refreshActiveTab();
@@ -1842,6 +1880,34 @@ export default function DashboardPage() {
           }}
         />
       )}
+      {acpxTraceEnabled && acpxTraceDirectory ? (
+        <div className="fixed bottom-44 right-0 z-[50] translate-x-[calc(100%-22px)] transition-transform duration-200 hover:translate-x-0 focus-within:translate-x-0">
+          <div className="relative flex items-center pl-4">
+            <div className="pointer-events-none absolute left-0 top-1/2 flex h-10 w-5 -translate-y-1/2 items-center justify-center rounded-l-full border border-r-0 border-border/70 bg-background/94 text-muted-foreground shadow-sm backdrop-blur">
+              <Bug className="h-3.5 w-3.5" />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-14 w-14 rounded-full border-violet-200 bg-background/94 text-violet-600 shadow-lg backdrop-blur hover:bg-violet-50 hover:text-violet-700 dark:border-white/10 dark:bg-[#191A20]/95 dark:text-violet-200 dark:hover:bg-[#22232B]"
+              onClick={openAcpxTraceWorkspace}
+              title="ACPX 调试日志"
+            >
+              <Bug className="h-5 w-5" />
+              <span className="sr-only">ACPX 调试日志</span>
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {acpxTraceEnabled && acpxTraceDirectory && acpxTraceWorkspaceOpen ? (
+        <WorkspaceEditor
+          open={acpxTraceWorkspaceOpen}
+          onOpenChange={setAcpxTraceWorkspaceOpen}
+          workspacePath={acpxTraceDirectory}
+          title="ACPX 调试日志"
+        />
+      ) : null}
     </SidebarProvider>
     </DashboardShellHeaderProvider>
   );

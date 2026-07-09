@@ -1,6 +1,7 @@
 import { requireAdmin, requireAuth } from '@/lib/auth/middleware';
 import { createModelProbe, listModelProbes } from '@/lib/models/probes';
 import { errorMessage, jsonError, jsonOk, readJsonBody, requestUrl } from '@/server/api-route-runtime/request-utils';
+import { attachModelRouteIdsToProbeResponse, normalizeProbeInputForModelRouteId } from './model-route-probe-dto';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
       forceRunAll,
       historyLimit: readHistoryLimit(searchParams.get('historyLimit')),
     });
-    return jsonOk(data);
+    return jsonOk(attachModelRouteIdsToProbeResponse(data));
   } catch (error) {
     return jsonError(errorMessage(error) || 'Failed to load model probes', 500);
   }
@@ -41,8 +42,8 @@ export async function POST(request: Request) {
 
   try {
     const body = await readJsonBody<any>(request, {});
-    const probe = await createModelProbe(body || {});
-    return jsonOk({ success: true, probe });
+    const probe = await createModelProbe(normalizeProbeInputForModelRouteId(body || {}));
+    return jsonOk(attachModelRouteIdsToProbeResponse({ success: true, probe }));
   } catch (error) {
     return jsonError(errorMessage(error) || 'Failed to create model probe', 400);
   }

@@ -12,6 +12,7 @@ import type {
 } from '@/lib/run/state-persistence';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
+import { buildLoginHref, getCurrentAuthReturnTo } from '@/lib/navigation/return-target';
 
 const API_BASE = '/api';
 
@@ -27,10 +28,10 @@ function authFetch(url: string, init?: RequestInit): Promise<Response> {
     if (res.status === 401 && typeof window !== 'undefined') {
       localStorage.removeItem('auth-token');
       localStorage.removeItem('auth-user');
-      // Dispatch a custom event so AuthGuard / page can react
-      window.dispatchEvent(new CustomEvent('auth:expired'));
       if (window.location.pathname !== '/login') {
-        window.location.replace('/login');
+        // Dispatch a custom event so AuthGuard / page can react outside login.
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+        window.location.replace(buildLoginHref(getCurrentAuthReturnTo('/')));
       }
     }
     return res;
@@ -2553,6 +2554,36 @@ export const systemSettingsApi = {
       runtimeEnabled: boolean;
       persistMode: 'manual' | 'review' | 'auto';
     };
+    runtimeControls?: {
+      defaultPermissionPolicyId: 'unrestricted' | 'approve-reads' | 'ask' | 'deny-destructive' | 'deny-all';
+      envProfiles: Array<{
+        displayName: string;
+        agentId?: string;
+        visibility: 'private' | 'workspace';
+        variableCount: number;
+        readiness: 'ready' | 'missing' | 'misconfigured' | 'unknown';
+        missing: string[];
+        conflicts: Array<{ key: string; sources: string[]; selectedSource: string }>;
+        updatedAt?: string;
+      }>;
+      secretProfiles: Array<{
+        displayName: string;
+        agentId?: string;
+        visibility: 'private' | 'workspace';
+        encrypted: boolean;
+        encryptionKeyReady: boolean;
+        secretCount: number;
+        readiness: 'ready' | 'missing' | 'misconfigured' | 'unknown';
+        missing: string[];
+        conflicts: Array<{ key: string; sources: string[]; selectedSource: string }>;
+        updatedAt?: string;
+      }>;
+      conflicts: Array<{ key: string; sources: string[]; selectedSource: string }>;
+    };
+    runtimeDebug?: {
+      acpxTraceEnabled: boolean;
+      acpxTraceDirectory: string;
+    };
     emailNotifications?: {
       enabled: boolean;
       smtpHost: string;
@@ -2583,6 +2614,12 @@ export const systemSettingsApi = {
     agentMemory?: {
       runtimeEnabled?: boolean;
       persistMode?: 'manual' | 'review' | 'auto';
+    };
+    runtimeControls?: {
+      defaultPermissionPolicyId?: 'unrestricted' | 'approve-reads' | 'ask' | 'deny-destructive' | 'deny-all';
+    };
+    runtimeDebug?: {
+      acpxTraceEnabled?: boolean;
     };
     emailNotifications?: {
       enabled?: boolean;

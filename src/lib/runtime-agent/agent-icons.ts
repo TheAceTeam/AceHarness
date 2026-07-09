@@ -10,6 +10,14 @@ export const AGENT_ICON_PATHS = {
   nga: `${ENGINE_ICON_BASE_PATH}/code-agent.svg`,
   codegenie: `${ENGINE_ICON_BASE_PATH}/code-genie.svg`,
   cangjieMagic: `${ENGINE_ICON_BASE_PATH}/magic-cli.svg`,
+  pi: `${ENGINE_ICON_BASE_PATH}/pi.svg`,
+  openclaw: `${ENGINE_ICON_BASE_PATH}/openclaw.svg`,
+  gemini: `${ENGINE_ICON_BASE_PATH}/gemini.svg`,
+  copilot: `${ENGINE_ICON_BASE_PATH}/copilot.svg`,
+  kilocode: `${ENGINE_ICON_BASE_PATH}/kilocode.svg`,
+  kimi: `${ENGINE_ICON_BASE_PATH}/kimi.svg`,
+  mux: `${ENGINE_ICON_BASE_PATH}/mux.svg`,
+  qwen: `${ENGINE_ICON_BASE_PATH}/qwen.svg`,
   genericProvider: `${ENGINE_ICON_BASE_PATH}/code-agent.svg`,
 } as const;
 

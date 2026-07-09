@@ -188,7 +188,7 @@ ACEHarness 的配置主要由启动向导、引擎管理页和环境变量共同
 | `ACE_HOST` | 服务监听地址 | `127.0.0.1` |
 | `ACE_PORT` | ACEHarness 服务端口 | `3000` |
 | `PORT` | 通用服务端口 | 优先级高于 `ACE_PORT` |
-| `BASEURL` / `BASE_URL` | 反向代理子路径或站点前缀，用于生成 Next.js `basePath` / `assetPrefix`，避免 `_next` CSS/JS 资源以根路径访问 | 未设置时为空；示例：`/ace` 或 `https://example.com/ace` |
+| `BASEURL` / `BASE_URL` | 反向代理子路径或站点前缀，用于生成应用路由和静态资源访问前缀 | 未设置时为空；示例：`/ace` 或 `https://example.com/ace` |
 | `ACE_HOME` | ACE 运行根目录，决定 `config/`、`data/`、`cache/`、`logs/`、`workspace/` 等运行时数据位置 | 未设置时按平台回退 |
 | `APPDATA` | Windows 下 `ACE_HOME` 的回退根目录 | `<APPDATA>/ACEHarness` |
 | `XDG_DATA_HOME` | Linux / macOS 下 `ACE_HOME` 的回退根目录 | `<XDG_DATA_HOME>/aceharness` |
@@ -230,39 +230,8 @@ npm run dev
 | 变量 | 说明 | 默认值 / 优先级 |
 |------|------|-----------------|
 | `ACE_PUBLIC_ORIGIN` | 对外访问的绝对地址；用于 webhook、回调 URL、官方微信桥接等场景 | 优先级最高 |
-| `NEXT_PUBLIC_ACE_ORIGIN` | 对外地址回退值 | 次于 `ACE_PUBLIC_ORIGIN` |
-| `NEXT_PUBLIC_APP_ORIGIN` | 对外地址回退值 | 次于 `NEXT_PUBLIC_ACE_ORIGIN` |
 | `ACE_WECHAT_AUTO_RESTORE` | 是否在服务启动后自动恢复官方微信 bridge | 默认开启；设为 `0` / `false` 可关闭 |
 | `ACE_WECHAT_RESTORE_DELAY_MS` | 官方微信 bridge 自动恢复延迟（毫秒） | `3000` |
-
-诊断与 ACP / 流式运行变量：
-
-| 变量 | 说明 | 默认值 / 优先级 |
-|------|------|-----------------|
-| `ACE_TIMING_DEBUG` | 打印服务与 ACP 阶段耗时日志 | 本地开发默认开，生产 / 测试默认关 |
-| `ACE_ACP_TIMING_DEBUG` | 同上，专门控制 ACP 耗时日志 | 可与 `ACE_TIMING_DEBUG` 叠加使用 |
-| `ACE_ACP_STREAM_DEBUG` | 打印 ACP stream 事件级调试信息 | 未设置时跟随引擎诊断开关 |
-| `ACE_ACP_INIT_TIMEOUT_MS` | ACP `connection.initialize` 超时（毫秒） | `30000` |
-| `ACE_ACP_NEW_SESSION_TIMEOUT_MS` | ACP `newSession` 超时（毫秒） | `60000` |
-| `ACE_ACP_LOAD_SESSION_TIMEOUT_MS` | ACP `session/load` 超时（毫秒） | `30000` |
-| `ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS` | 模型发现接口总超时（毫秒） | `init + newSession + 15000` |
-| `ACE_CHAT_STREAM_DEBUG` | Claude Code SDK 流式输出调试 | 默认关闭 |
-| `ACE_CLAUDE_CODE_EXECUTABLE` | 指定 Claude Code 可执行文件路径 | 未设置时回退到 `CLAUDE_CODE_EXECUTABLE` 或自动探测 |
-| `ACE_CLAUDE_API_RETRY_ATTEMPTS` | Claude Code SDK API 重试次数上限 | `12` |
-| `ACE_CLAUDE_API_RETRY_MIN_DELAY_MS` | Claude Code SDK API 最小重试间隔（毫秒） | `10000` |
-
-按引擎生效的 ACE 变量：
-
-| 变量 | 说明 | 默认值 / 优先级 |
-|------|------|-----------------|
-| `ACE_CODEGENIE_BIN` | CodeGenie 可执行文件路径 | 未设置时按 PATH / SDK 配置探测 |
-| `ACE_CODEGENIE_SDK_BASE_URL` | CodeGenie SDK 服务地址 | 未设置时使用内置默认 |
-| `ACE_CODEGENIE_SDK_COMMAND` | CodeGenie SDK 启动命令 | 未设置时按 PATH / SDK 配置探测 |
-| `ACE_CODEGENIE_SDK_TIMEOUT_MS` | CodeGenie SDK 请求超时（毫秒） | 未设置时使用内置默认 |
-| `ACE_NGA_BIN` | NGA 可执行文件路径 | 未设置时按 PATH / SDK 配置探测 |
-| `ACE_NGA_SDK_BASE_URL` | NGA SDK 服务地址 | 未设置时使用内置默认 |
-| `ACE_NGA_SDK_COMMAND` | NGA SDK 启动命令 | 未设置时按 PATH / SDK 配置探测 |
-| `ACE_NGA_SDK_TIMEOUT_MS` | NGA SDK 请求超时（毫秒） | 未设置时使用内置默认 |
 
 ## 渠道接入
 

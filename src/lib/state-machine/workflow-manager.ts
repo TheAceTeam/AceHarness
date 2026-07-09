@@ -14,7 +14,6 @@ import { parse } from 'yaml';
 import { resolveAgentEngineSelection, resolveAgentModel } from '@/lib/workflow/manager';
 import { resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { processManager } from '@/lib/core/process-manager';
-import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from '@/lib/engines/engine-interface';
 import { createRun, updateRun } from '@/lib/run/store';
 import {
   saveRunState, saveProcessOutput, appendStreamContent, appendFeedbackToStream,
@@ -49,10 +48,22 @@ import type {
   Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
 } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
-import { createEngine, getConfiguredEngine, getLogicalEngineId, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
-import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
-import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
-import { compactEngineContextManually, executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import {
+  compactWorkflowRuntimeContextManually,
+  createWorkflowRuntime,
+  executeWorkflowRuntimeWithContextRecovery,
+  getConfiguredWorkflowRuntime,
+  getWorkflowRuntimeSkillsSubdir,
+  getLogicalEngineId,
+  resolveRecoveredWorkflowRuntimeSessionId,
+  resolveRequestedWorkflowRuntimeType,
+  type WorkflowRuntime,
+  type WorkflowRuntimeJsonResult,
+  type WorkflowRuntimeResultMetadata,
+  type WorkflowRuntimeStreamEvent,
+  type WorkflowRuntimeTokenUsage,
+  type WorkflowRuntimeType,
+} from '@/lib/workflow/runtime-facade';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
@@ -129,7 +140,7 @@ export interface TokenUsage {
   cacheReadInputTokens?: number;
 }
 
-const ZERO_ENGINE_USAGE: EngineTokenUsage = {
+const ZERO_ENGINE_USAGE: WorkflowRuntimeTokenUsage = {
   input_tokens: 0,
   output_tokens: 0,
   cache_creation_input_tokens: 0,
@@ -174,7 +185,7 @@ function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage {
+function normalizeEngineUsage(metadata?: WorkflowRuntimeResultMetadata): WorkflowRuntimeTokenUsage {
   const usage = metadata?.usage;
   return {
     input_tokens: numberOrZero(usage?.input_tokens),
@@ -184,11 +195,11 @@ function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage
   };
 }
 
-function metadataNumber(metadata: EngineResultMetadata | undefined, snakeKey: string, camelKey: string): number {
+function metadataNumber(metadata: WorkflowRuntimeResultMetadata | undefined, snakeKey: string, camelKey: string): number {
   return numberOrZero(metadata?.[snakeKey] ?? metadata?.[camelKey]);
 }
 
-function toPersistedTokenUsage(usage: EngineTokenUsage): TokenUsage {
+function toPersistedTokenUsage(usage: WorkflowRuntimeTokenUsage): TokenUsage {
   return {
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
@@ -714,9 +725,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private stepLogs: PersistedStepLog[] = [];
   private qualityChecks: PersistedQualityCheck[] = [];
   /** Current engine instance (Kiro CLI, etc.) */
-  private currentEngine: Engine | null = null;
+  private currentRuntime: WorkflowRuntime | null = null;
   /** Current engine type */
-  private engineType: EngineType = 'claude-code';
+  private engineType: WorkflowRuntimeType = 'claude-code';
   private engineExecutionTail: Promise<void> = Promise.resolve();
   private workflowGit: WorkflowGitState | null = null;
   /** Resolved workflow-level MCP servers from context.mcpServers */
@@ -730,7 +741,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
-    return getEngineSkillsSubdir(this.engineType);
+    return getWorkflowRuntimeSkillsSubdir(this.engineType);
   }
 
   private resolveProjectRootPath(projectRoot?: string | null): string {
@@ -839,7 +850,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const policy = resolveWorkflowExecutionPolicy(input.workflowConfig.context);
     const agent = this.agents.find((item) => item.name === input.agentName);
     const existingSessionId = agent?.sessionId || undefined;
-    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentEngine) {
+    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentRuntime) {
       return { prompt: input.prompt, sessionId: existingSessionId };
     }
     if (!this.stepLogs.some((log) => log.agent === input.agentName)) {
@@ -852,7 +863,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         level: 'info',
         message: `步骤切换前自动压缩 ${input.agentName} 的上下文：${input.stepName}`,
       });
-      const compacted = await this.withEngineExecutionLock(() => compactEngineContextManually(this.currentEngine!, {
+      const compacted = await this.withEngineExecutionLock(() => compactWorkflowRuntimeContextManually(this.currentRuntime!, {
         agent: input.agentName,
         step: input.stepName,
         prompt: input.prompt,
@@ -1954,7 +1965,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private cleanupCurrentEngine(): void {
-    const engine = this.currentEngine;
+    const engine = this.currentRuntime;
     if (!engine) return;
     try {
       engine.cancel();
@@ -1966,7 +1977,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     } catch {
       // best-effort cleanup
     }
-    this.currentEngine = null;
+    this.currentRuntime = null;
   }
 
   forceTransition(targetState: string, instruction?: string, actor?: WorkflowActionActor): void {
@@ -2856,8 +2867,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         const rawProc = processManager.getProcessRaw(proc.id);
         if (rawProc?.childProcess) {
           try { rawProc.childProcess.kill('SIGTERM'); } catch { /* already dead */ }
-        } else if (this.currentEngine) {
-          this.currentEngine.cancel();
+        } else if (this.currentRuntime) {
+          this.currentRuntime.cancel();
         }
         if (rawProc) {
           rawProc.status = 'killed';
@@ -2867,8 +2878,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     let cancelledViaEngine = false;
-    if (running.length === 0 && this.currentEngine && this.currentProcesses.length > 0) {
-      this.currentEngine.cancel();
+    if (running.length === 0 && this.currentRuntime && this.currentProcesses.length > 0) {
+      this.currentRuntime.cancel();
       cancelledViaEngine = true;
     }
 
@@ -3853,18 +3864,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const requestedEngine = workflowEngine?.trim();
 try {
         this.engineType = requestedEngine
-          ? await resolveRequestedEngineType(requestedEngine)
-          : await getConfiguredEngine();
+          ? await resolveRequestedWorkflowRuntimeType(requestedEngine)
+          : await getConfiguredWorkflowRuntime();
       } catch {
-        const globalEngine = await getConfiguredEngine();
+        const globalEngine = await getConfiguredWorkflowRuntime();
         this.emit('log', `工作流配置的引擎无效: ${requestedEngine}，回退到全局引擎 ${globalEngine}`);
         this.engineType = globalEngine;
       }
       this.emit('log', `使用引擎: ${this.engineType}`);
 
-      // Always initialize currentEngine for the selected engine, including claude-code.
-      this.currentEngine = await createEngine(this.engineType);
-      if (!this.currentEngine) {
+      // Always initialize currentRuntime for the selected engine, including claude-code.
+      this.currentRuntime = await createWorkflowRuntime(this.engineType);
+      if (!this.currentRuntime) {
         throw new Error(`引擎初始化失败: ${this.engineType} 不可用`);
       }
 
@@ -3876,35 +3887,35 @@ try {
 
   private async ensureEngineForExecution(requestedEngine?: string): Promise<void> {
     const requested = String(requestedEngine || this.engineType || '').trim();
-    let resolvedEngine: EngineType;
+    let resolvedEngine: WorkflowRuntimeType;
     try {
       resolvedEngine = requested
-        ? await resolveRequestedEngineType(requested)
-        : await getConfiguredEngine();
+        ? await resolveRequestedWorkflowRuntimeType(requested)
+        : await getConfiguredWorkflowRuntime();
     } catch {
-      resolvedEngine = await getConfiguredEngine();
+      resolvedEngine = await getConfiguredWorkflowRuntime();
       this.emit('log', `Agent 配置的引擎无效: ${requested || '<empty>'}，回退到全局引擎 ${resolvedEngine}`);
     }
 
-    if (this.currentEngine && this.engineType === resolvedEngine) return;
+    if (this.currentRuntime && this.engineType === resolvedEngine) return;
 
-    if (this.currentEngine) {
+    if (this.currentRuntime) {
       try {
-        this.currentEngine.cancel();
+        this.currentRuntime.cancel();
       } catch {}
-      const cleanup = (this.currentEngine as any).cleanup;
+      const cleanup = (this.currentRuntime as any).cleanup;
       if (typeof cleanup === 'function') {
         try {
-          cleanup.call(this.currentEngine);
+          cleanup.call(this.currentRuntime);
         } catch {}
       }
     }
 
-    const nextEngine = await createEngine(resolvedEngine);
+    const nextEngine = await createWorkflowRuntime(resolvedEngine);
     if (!nextEngine) {
       throw new Error(`引擎初始化失败: ${resolvedEngine} 不可用`);
     }
-    this.currentEngine = nextEngine;
+    this.currentRuntime = nextEngine;
     this.engineType = resolvedEngine;
     this.emit('log', `使用引擎: ${this.engineType}`);
   }
@@ -3920,14 +3931,14 @@ try {
     systemPrompt: string,
     model: string,
     options: any
-  ): Promise<EngineJsonResult> {
+  ): Promise<WorkflowRuntimeJsonResult> {
     return this.withEngineExecutionLock(async () => {
       await this.ensureEngineForExecution(options.engineType);
-      if (!this.currentEngine) {
+      if (!this.currentRuntime) {
         throw new Error(`引擎未初始化 (engineType=${this.engineType})`);
       }
 
-      const engine = this.currentEngine;
+      const engine = this.currentRuntime;
       const displayStep =
         options.streamStepName || options.streamStepLabel || step;
 
@@ -3949,7 +3960,7 @@ try {
 
       let fullStreamContent = '';
 
-      const streamHandler = (event: EngineStreamEvent) => {
+      const streamHandler = (event: WorkflowRuntimeStreamEvent) => {
         // 'thought' events are forwarded separately (matching Claude Code's { thinking } field),
         // not accumulated into streamContent.
         if (event.type === 'thought') {
@@ -3977,7 +3988,7 @@ try {
       engine.on('stream', streamHandler);
 
       try {
-        const result = await executeEngineWithContextRecovery(engine, {
+        const result = await executeWorkflowRuntimeWithContextRecovery(engine, {
           agent, step, prompt, systemPrompt, model,
           workingDirectory: options.workingDirectory,
           allowedTools: options.allowedTools,
@@ -3999,7 +4010,7 @@ try {
         });
 
         // Mark process as completed
-        const resolvedSessionId = resolveRecoveredSessionId(result, options.resumeSessionId);
+        const resolvedSessionId = resolveRecoveredWorkflowRuntimeSessionId(result, options.resumeSessionId);
         const rawProc = processManager.getProcessRaw(processId);
         if (rawProc) {
           rawProc.status = result.success ? 'completed' : 'failed';
@@ -4017,7 +4028,7 @@ try {
         const fallbackOutput = result.output || fullStreamContent || rawProc?.streamContent || '';
         return {
           result: result.success ? fallbackOutput : (result.error || fallbackOutput || '引擎执行失败（无输出）'),
-          session_id: resolvedSessionId || '',
+          runtimeSessionId: resolvedSessionId || '',
           is_error: !result.success,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
           duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
@@ -6227,6 +6238,9 @@ try {
       // Execute step (reuse existing process manager logic)
       let stepResult = await this.runAgentStep(step, context, config, stepId);
       let output = stepResult.output;
+      if (isEngineLevelFailure(output)) {
+        throw new Error(output.trim() || '引擎返回致命错误输出');
+      }
       if (this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
         this.emit('log', {
           level: 'warning',
@@ -6247,9 +6261,6 @@ try {
         if (!this.hasRequiredVerdictJson(output)) {
           throw new Error(`步骤 "${state.name}/${step.name}" 补交后仍缺少严格最终裁决 JSON`);
         }
-      }
-      if (isEngineLevelFailure(output)) {
-        throw new Error(output.trim() || '引擎返回致命错误输出');
       }
       this.assertStepOutputIsNotSupervisorReview(step, state, runtimeAgentName, output);
       const conclusion = compactStepConclusion(stepResult.lastRoundOutput || output);
@@ -7269,7 +7280,7 @@ try {
       if (this.shouldStop) {
         throw new Error('工作流已停止');
       }
-      let result: EngineJsonResult;
+      let result: WorkflowRuntimeJsonResult;
       try {
         result = await this.executeWithEngine(
           currentProcessId,
@@ -7368,7 +7379,7 @@ try {
         const { entries: feedbackEntries, prompt: feedbackPrompt } = this.consumeLiveFeedback();
         const feedbackTimestamp = new Date().toISOString();
         appendFeedbackMarker(feedbackPrompt);
-        const sessionId = result.session_id || currentSessionId;
+        const sessionId = result.runtimeSessionId || currentSessionId;
         currentSessionId = sessionId || undefined;
         currentPrompt = isFeedbackOnly
           ? `## 人工实时反馈\n用户在你执行过程中提供了补充反馈，请参考以下内容继续完成任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`
@@ -7435,7 +7446,7 @@ try {
         const recoveryTimestamp = new Date().toISOString();
         appendFeedbackMarker(recoveryPrompt);
 
-        const sessionId = result.session_id || currentSessionId;
+        const sessionId = result.runtimeSessionId || currentSessionId;
         currentSessionId = sessionId || undefined;
         currentPrompt = sessionId ? recoveryPrompt : `${context}\n\n${recoveryPrompt}`;
         currentProcessId = stepId || currentProcessId;
@@ -7478,8 +7489,8 @@ try {
       accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
       accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
 
-      // Always capture the latest session_id for reuse; clear if recovery could not produce one.
-      currentSessionId = result.session_id || undefined;
+      // Always capture the latest runtimeSessionId for reuse; clear if recovery could not produce one.
+      currentSessionId = result.runtimeSessionId || undefined;
 
       if (humanHelpRequests.length > 0 && !this.shouldStop) {
         const resumePrompt = await this.handleHumanHelpRequests({
@@ -7524,7 +7535,7 @@ try {
       // Check for pending live feedback after completion
       if (this.liveFeedback.length > 0 && !this.shouldStop) {
         const { entries: feedbackEntries, prompt: feedbackPrompt } = this.consumeLiveFeedback();
-        const sessionId = result.session_id;
+        const sessionId = result.runtimeSessionId;
         if (!sessionId) break;
 
         const feedbackTimestamp = new Date().toISOString();
@@ -8381,8 +8392,8 @@ try {
     if (!running) return null;
 
     // Kill the process
-    if (!processManager.killProcess(running.id) && this.currentEngine) {
-      this.currentEngine.cancel();
+    if (!processManager.killProcess(running.id) && this.currentRuntime) {
+      this.currentRuntime.cancel();
       const rawProc = processManager.getProcessRaw(running.id);
       if (rawProc) { rawProc.status = 'killed'; rawProc.endTime = new Date(); }
     }
@@ -8715,7 +8726,7 @@ try {
       if (result.is_error || isEngineLevelFailure(answer)) {
         throw new Error(answer.trim() || 'Agent 查询失败');
       }
-      replaceAgentStateSessionId(agentState, result.session_id);
+      replaceAgentStateSessionId(agentState, result.runtimeSessionId);
       
       this.agentFlow.push({
         id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,

@@ -1,4 +1,3 @@
-import { createEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import {
   buildChatRequestContext,
@@ -6,12 +5,43 @@ import {
   type RequestedMcpServersInput,
   type RequestedSkillsInput,
 } from '@/lib/chat/request-options';
-import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import {
+  createChatRuntimeEngine,
+  executeChatRuntimeWithContextRecovery,
+  resolveRecoveredRuntimeSessionId,
+  resolveRequestedChatRuntimeEngineType,
+  type ChatRuntimeResultMetadata,
+  type ChatRuntimeTokenUsage,
+} from '@/lib/chat/chat-engine-runtime';
 import { requireAuth } from '@/lib/auth/middleware';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
 export const maxDuration = 1200;
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function normalizeUsage(metadata?: ChatRuntimeResultMetadata): Partial<ChatRuntimeTokenUsage> | undefined {
+  const usage = metadata?.usage;
+  if (!usage) return undefined;
+  const input = numberOrUndefined((usage as any).input_tokens ?? (usage as any).inputTokens);
+  const output = numberOrUndefined((usage as any).output_tokens ?? (usage as any).outputTokens);
+  const cacheCreation = numberOrUndefined((usage as any).cache_creation_input_tokens ?? (usage as any).cacheCreationInputTokens);
+  const cacheRead = numberOrUndefined((usage as any).cache_read_input_tokens ?? (usage as any).cacheReadInputTokens);
+  const values = [input, output, cacheCreation, cacheRead].filter((value): value is number => value !== undefined);
+  if (values.length === 0 || values.every((value) => value === 0)) {
+    return undefined;
+  }
+  return {
+    ...(input !== undefined ? { input_tokens: input } : {}),
+    ...(output !== undefined ? { output_tokens: output } : {}),
+    ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
+    ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}),
+  };
+}
 
 export async function POST(request: Request) {
   const authResult = await requireAuth(request);
@@ -49,9 +79,9 @@ export async function POST(request: Request) {
       personalDir: auth?.personalDir,
     });
 
-    const engineType = await resolveRequestedEngineType(requestedEngine);
+    const engineType = await resolveRequestedChatRuntimeEngineType(requestedEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, engineType);
-    const engine = await createEngine(engineType);
+    const engine = await createChatRuntimeEngine(engineType);
 
     if (!engine) {
       return jsonError('引擎不可用，请检查配置', 500);
@@ -64,7 +94,7 @@ export async function POST(request: Request) {
       if (event.type === 'text') chunks.push(event.content);
     });
 
-    const result = await executeEngineWithContextRecovery(engine, {
+    const result = await executeChatRuntimeWithContextRecovery(engine, {
         agent: 'chat',
         step: 'chat',
         prompt: engineCommand.prompt,
@@ -78,10 +108,15 @@ export async function POST(request: Request) {
         env: runtimeDatabaseEnv,
     });
 
+    const runtimeSessionId = resolveRecoveredRuntimeSessionId(result, sessionId);
     return jsonOk({
       result: result.output || chunks.join(''),
-      sessionId: resolveRecoveredSessionId(result, sessionId),
+      runtimeSessionId,
+      sessionId: runtimeSessionId,
       engine: engineType,
+      usage: normalizeUsage(result.metadata),
+      costUsd: result.metadata?.costUsd ?? result.metadata?.cost_usd,
+      durationMs: result.metadata?.durationMs ?? result.metadata?.duration_ms,
       isError: !result.success,
       error: result.error || undefined,
     });

@@ -1023,12 +1023,12 @@ describe('NewConfigModal backend draft isolation', () => {
             stageSessions: {
               clarification: {
                 frontendSessionId: 'planning-stale',
-                backendSessionId: 'backend-1',
+                runtimeSessionId: 'runtime-1',
                 updatedAt: Date.now(),
               },
               specPlanning: {
                 frontendSessionId: 'planning-stale',
-                backendSessionId: 'backend-1',
+                runtimeSessionId: 'runtime-1',
                 updatedAt: Date.now(),
               },
             },
@@ -1110,8 +1110,8 @@ describe('NewConfigModal backend draft isolation', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             stageSessions: {
-              clarification: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
-              specPlanning: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
+              clarification: { frontendSessionId: 'planning-real', runtimeSessionId: 'runtime-1', updatedAt: Date.now() },
+              specPlanning: { frontendSessionId: 'planning-real', runtimeSessionId: 'runtime-1', updatedAt: Date.now() },
             },
             specCoding: {
               id: 'spec-real',
@@ -1206,7 +1206,7 @@ describe('NewConfigModal backend draft isolation', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             stageSessions: {
-              clarification: { frontendSessionId: 'planning-skel', backendSessionId: 'b1', updatedAt: Date.now() },
+              clarification: { frontendSessionId: 'planning-skel', runtimeSessionId: 'runtime-1', updatedAt: Date.now() },
             },
             specCoding: {
               id: 'spec-skel',

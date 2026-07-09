@@ -2,6 +2,7 @@ import { mkdir, rm } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { deleteChatSessionsByWorkflowRun } from '@/lib/chat/persistence';
 import {
   buildRunSummaryCacheFromRecord,
   ensureRunSummaryCache,
@@ -113,4 +114,5 @@ export async function deleteRun(id: string): Promise<void> {
   if (existsSync(runDir)) {
     await rm(runDir, { recursive: true, force: true });
   }
+  await deleteChatSessionsByWorkflowRun(id);
 }

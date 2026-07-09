@@ -68,11 +68,10 @@ import {
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
-import { SingleCombobox } from '@/components/ui/combobox';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
+import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { cn } from '@/lib/core/utils';
-import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import { syncModelDiagnosticsResultToDb, useModelDiagnosticsRows } from '@/client/db/collections';
 import type {
   DiagnosticDriver,
@@ -86,29 +85,15 @@ import type {
 interface ManagedModelReference {
   id: string;
   name: string;
+  modelRouteId?: string | null;
+  modelId?: string;
+  agentId?: string | null;
+  providerModel?: string | null;
+  runtime?: string | null;
+  isDefault?: boolean;
   endpoints: string[];
   engines: string[];
 }
-
-const ENGINE_OPTIONS = [
-  'claude-code',
-  'codex',
-  'opencode',
-  'kiro-cli',
-  'nga',
-  'codegenie',
-  'cursor',
-  'trae-cli',
-  'magic-cli',
-];
-
-const DRIVER_CAPABLE_ENGINES = new Set(['claude-code', 'opencode', 'nga', 'codegenie']);
-
-const DRIVER_OPTIONS: Array<{ value: DiagnosticDriver; label: string; description: string }> = [
-  { value: 'auto', label: '自动选择', description: '使用当前引擎配置中的默认 driver' },
-  { value: 'sdk', label: 'SDK / HTTP', description: '适用于支持 SDK driver 的引擎' },
-  { value: 'stdio', label: 'STDIO / ACP', description: '适用于 ACP stdio driver' },
-];
 
 const PIPELINE = [
   { id: 'probe', label: 'Probe 集合', icon: Boxes, detail: '引擎链路、JSON、代码、骑车鹈鹕、数学、推理、结构化、一致性' },
@@ -303,12 +288,13 @@ function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function supportsDriverSelection(engine: string): boolean {
-  return DRIVER_CAPABLE_ENGINES.has(engine);
+function getRouteId(model: ManagedModelReference | null | undefined): string {
+  return String(model?.modelRouteId || '').trim();
 }
 
-function modelSupportsEngine(model: ManagedModelReference, engine: string): boolean {
-  return model.engines.length === 0 || model.engines.includes(engine);
+function routeDisplayName(model: ManagedModelReference | null | undefined): string {
+  if (!model) return '默认模型';
+  return model.name || model.modelId || model.id;
 }
 
 function capabilitySummary(capability: ModelCapabilityScore) {
@@ -552,7 +538,7 @@ function formatJsonBlock(value: unknown): string {
 }
 
 function formatMetricValue(value: string | number | boolean | null): string {
-  if (value == null) return '--';
+  if (value == null) return '未返回';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2);
   return value;
@@ -848,7 +834,6 @@ function buildSummaryTerminalLines(
 export default function ModelDiagnosticsWorkbench({ managedModels }: { managedModels: ManagedModelReference[] }) {
   const { toast, updateToast, dismissToast } = useToast();
   const [engine, setEngine] = useState('claude-code');
-  const [driver, setDriver] = useState<DiagnosticDriver>('auto');
   const [model, setModel] = useState('');
   const [timeoutMs, setTimeoutMs] = useState(String(DEFAULT_TIMEOUT_MS));
   const [includeEngineDebug, setIncludeEngineDebug] = useState(true);
@@ -873,35 +858,10 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
   const diagnosticsRows = useModelDiagnosticsRows();
   const latestDiagnosticsRow = diagnosticsRows[0] || null;
 
-  const engineOptions = useMemo(() => ENGINE_OPTIONS.map((id) => ({
-    value: id,
-    label: getEngineDisplayName(id) || id,
-  })), []);
-
-  const driverOptions = useMemo(() => (
-    supportsDriverSelection(engine) ? DRIVER_OPTIONS : DRIVER_OPTIONS.filter((item) => item.value === 'auto')
-  ), [engine]);
-
-  const eligibleModels = useMemo(() => (
-    managedModels
-      .filter((item) => modelSupportsEngine(item, engine))
-      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'zh-CN'))
-  ), [engine, managedModels]);
-
-  const modelOptions = useMemo(() => {
-    return eligibleModels.map((item) => ({
-      value: item.id,
-      label: item.name || item.id,
-      description: [
-        item.id,
-        item.engines.length > 0 ? `engines: ${item.engines.join(', ')}` : '',
-        item.endpoints.length > 0 ? `endpoints: ${item.endpoints.join(', ')}` : '',
-      ].filter(Boolean).join(' · '),
-    }));
-  }, [eligibleModels]);
-
-  const selectedModel = useMemo(() => managedModels.find((item) => item.id === model), [managedModels, model]);
-  const selectedProviders = unique(selectedModel?.endpoints || []);
+  const selectedModel = useMemo(() => (
+    managedModels.find((item) => (getRouteId(item) || item.modelId || item.id) === model) || null
+  ), [managedModels, model]);
+  const selectedModelLabel = selectedModel ? routeDisplayName(selectedModel) : (model || '默认模型');
   const selectedModelCapabilitySet = useMemo(() => new Set(selectedModelCapabilityIds), [selectedModelCapabilityIds]);
   const selectedModelCapabilityLabel = useMemo(() => {
     if (selectedModelCapabilityIds.length === DEFAULT_MODEL_CAPABILITY_IDS.length) return '全部能力';
@@ -922,7 +882,6 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
 
   const applyRequestBodyToControls = useCallback((requestBody: ModelDiagnosticsRequestBody) => {
     setEngine(requestBody.engine);
-    setDriver(supportsDriverSelection(requestBody.engine) ? requestBody.driver : 'auto');
     setModel(requestBody.model);
     setTimeoutMs(String(requestBody.timeoutMs || DEFAULT_TIMEOUT_MS));
     setIncludeEngineDebug(requestBody.includeEngineDebug);
@@ -967,19 +926,6 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       window.clearTimeout(logScrollResetTimerRef.current);
     }
   }, []);
-
-  useEffect(() => {
-    if (!supportsDriverSelection(engine) && driver !== 'auto') {
-      setDriver('auto');
-    }
-  }, [driver, engine]);
-
-  useEffect(() => {
-    const selectedStillEligible = eligibleModels.some((item) => item.id === model);
-    if (!selectedStillEligible) {
-      setModel(eligibleModels[0]?.id || '');
-    }
-  }, [eligibleModels, model]);
 
   const saveDiagnosticResult = (nextResult: ModelDiagnosticsResponse) => {
     if (typeof window === 'undefined') return;
@@ -1091,7 +1037,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       });
       if (!response.ok) {
         const json = await response.json().catch(() => null);
-        throw new Error(json?.error || (options.action === 'resume' ? '诊断任务无法恢复' : '诊断评测失败'));
+        throw new Error(json?.error || (options.action === 'resume' ? '诊断任务无法恢复' : '模型诊断与能力打分失败'));
       }
       if (!response.body) {
         throw new Error('当前环境不支持诊断日志流');
@@ -1144,7 +1090,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
           } else if (payload.type === 'error') {
             clearActiveDiagnosticRun(payload.runId || streamRunId);
             setLastInterruptedRun({ runId: payload.runId || streamRunId, requestBody, startedAt: new Date().toISOString() });
-            throw new Error(payload.error || '诊断评测失败');
+            throw new Error(payload.error || '模型诊断与能力打分失败');
           }
         }
 
@@ -1152,13 +1098,13 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       }
 
       if (!finalResult) {
-        throw new Error('诊断评测没有返回结果');
+        throw new Error('模型诊断与能力打分没有返回结果');
       }
       if (toastId != null) {
         updateToast(
           toastId,
           finalResult.error?.includes('停止') ? 'warning' : finalResult.ok ? 'success' : 'warning',
-          finalResult.error?.includes('停止') ? '诊断任务已停止' : finalResult.ok ? '诊断评测完成' : '诊断完成，但存在风险项',
+          finalResult.error?.includes('停止') ? '诊断任务已停止' : finalResult.ok ? '模型诊断与能力打分完成' : '诊断完成，但存在风险项',
         );
         streamToastIdRef.current = null;
       }
@@ -1177,14 +1123,14 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
           elapsedMs: prev[prev.length - 1]?.elapsedMs || 0,
           level: error instanceof Error && error.message.includes('停止') ? 'warning' : 'error',
           message: error instanceof Error && error.message.includes('停止') ? '诊断任务已停止' : '诊断请求失败',
-          detail: error instanceof Error ? error.message : '诊断评测失败',
+          detail: error instanceof Error ? error.message : '模型诊断与能力打分失败',
         },
       ]);
       if (toastId != null) {
         updateToast(
           toastId,
           error instanceof Error && error.message.includes('停止') ? 'warning' : 'error',
-          error instanceof Error ? error.message : '诊断评测失败',
+          error instanceof Error ? error.message : '模型诊断与能力打分失败',
         );
         streamToastIdRef.current = null;
       } else if (options.restored) {
@@ -1211,7 +1157,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       initialLogs: [
         createClientLog(
           '已恢复诊断任务',
-          `runId=${active.runId}, engine=${active.requestBody.engine}, driver=${active.requestBody.driver}, model=${active.requestBody.model || '默认模型'}`,
+          `模型=${active.requestBody.model || '默认模型'}`,
         ),
       ],
     });
@@ -1223,16 +1169,8 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
   }, [clearStreamToast]);
 
   const runDiagnostics = async () => {
-    if (!engine) {
-      toast('warning', '请选择要诊断的引擎');
-      return;
-    }
     if (includeModelScore && !model) {
       toast('warning', '请选择要评测的模型');
-      return;
-    }
-    if (includeModelScore && selectedModel && !modelSupportsEngine(selectedModel, engine)) {
-      toast('warning', '当前模型不支持所选引擎，请重新选择');
       return;
     }
     if (includeModelScore && selectedModelCapabilityIds.length === 0) {
@@ -1242,7 +1180,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
 
     const requestBody = {
       engine,
-      driver: supportsDriverSelection(engine) ? driver : 'auto',
+      driver: 'auto' as DiagnosticDriver,
       model,
       timeoutMs: Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS,
       includeEngineDebug,
@@ -1253,11 +1191,11 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     setResult(null);
     await consumeDiagnosticStream(requestBody, {
       action: 'start',
-      toastMessage: '正在运行诊断评测...',
+      toastMessage: '正在运行模型诊断与能力打分...',
       initialLogs: [
         createClientLog(
           '已提交诊断任务',
-          `engine=${requestBody.engine}, driver=${requestBody.driver}, model=${requestBody.model || '默认模型'}, capabilities=${includeModelScore ? selectedModelCapabilityLabel : '跳过模型评分'}`,
+          `模型=${selectedModelLabel}, capabilities=${includeModelScore ? selectedModelCapabilityLabel : '跳过模型评分'}`,
         ),
       ],
     });
@@ -1283,7 +1221,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
         runId,
         requestBody: {
           engine,
-          driver: supportsDriverSelection(engine) ? driver : 'auto',
+          driver: 'auto',
           model,
           timeoutMs: Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS,
           includeEngineDebug,
@@ -1301,7 +1239,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
           elapsedMs: prev[prev.length - 1]?.elapsedMs || 0,
           level: 'warning',
           message: '已请求停止诊断任务',
-          detail: `runId=${runId}`,
+          detail: '诊断任务正在停止',
         },
       ]);
       clearStreamToast();
@@ -1311,7 +1249,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       setRunning(false);
       setActiveRunId(null);
     }
-  }, [activeRunId, clearStreamToast, driver, engine, includeEngineDebug, includeModelScore, model, selectedModelCapabilityIds, timeoutMs, toast]);
+  }, [activeRunId, clearStreamToast, engine, includeEngineDebug, includeModelScore, model, selectedModelCapabilityIds, timeoutMs, toast]);
 
   const failedCapabilityIds = useMemo(() => failedCapabilityIdsFromResult(result), [result]);
 
@@ -1322,7 +1260,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       || (result.engineDebug?.stages || []).some((stage) => stage.status === 'failed' || stage.status === 'warning');
     const requestBody: ModelDiagnosticsRequestBody = {
       engine: result.engine || engine,
-      driver: result.driver || (supportsDriverSelection(engine) ? driver : 'auto'),
+      driver: 'auto',
       model: result.model || model,
       timeoutMs: Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS,
       includeEngineDebug: shouldRetryEngineDebug,
@@ -1342,7 +1280,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
         ),
       ],
     });
-  }, [consumeDiagnosticStream, driver, engine, failedCapabilityIds, model, result, selectedModelCapabilityIds, timeoutMs]);
+  }, [consumeDiagnosticStream, engine, failedCapabilityIds, model, result, selectedModelCapabilityIds, timeoutMs]);
 
   const retrySingleCapability = useCallback(async (capabilityId: string) => {
     if (!result || capabilityId === 'output_speed') return;
@@ -1350,7 +1288,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     setSelectedCapabilityId(capabilityId);
     await consumeDiagnosticStream({
       engine: result.engine || engine,
-      driver: result.driver || (supportsDriverSelection(engine) ? driver : 'auto'),
+      driver: 'auto',
       model: result.model || model,
       timeoutMs: Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS,
       includeEngineDebug: false,
@@ -1366,7 +1304,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
         ),
       ],
     });
-  }, [consumeDiagnosticStream, driver, engine, model, result, timeoutMs]);
+  }, [consumeDiagnosticStream, engine, model, result, timeoutMs]);
 
   const continueInterruptedDiagnostics = useCallback(async () => {
     const interrupted = lastInterruptedRun;
@@ -1515,53 +1453,29 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="outline" className="border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300">
                   <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                  诊断评测
+                  模型诊断与能力打分
                 </Badge>
                 <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
                   Probe to Evidence
                 </Badge>
               </div>
-              <h2 className="mt-4 text-3xl font-semibold tracking-tight">引擎调试与模型能力打分</h2>
+              <h2 className="mt-4 text-3xl font-semibold tracking-tight">模型诊断与能力打分</h2>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
                 一次运行可覆盖环境可用性、单轮/多轮对话、流式事件，以及按需选择的 JSON、代码、骑车鹈鹕、数学、推理、结构化输出和一致性检查。
                 所有结论都保留原始输出预览与事件统计，方便复盘。
               </p>
 
-              <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-6 grid gap-3">
                 <label className="space-y-2">
-                  <span className="text-xs font-medium text-muted-foreground">引擎</span>
-                  <SingleCombobox
-                    value={engine}
-                    onValueChange={(value) => {
-                      setEngine(value || engine);
-                      if (!supportsDriverSelection(value || engine)) setDriver('auto');
-                    }}
-                    options={engineOptions}
-                    triggerClassName="h-10"
-                  />
-                </label>
-                <label className="space-y-2">
-                  <span className="text-xs font-medium text-muted-foreground">Driver</span>
-                  <SingleCombobox
-                    value={supportsDriverSelection(engine) ? driver : 'auto'}
-                    onValueChange={(value) => setDriver((value || 'auto') as DiagnosticDriver)}
-                    options={driverOptions}
-                    triggerClassName="h-10"
-                    disabled={!supportsDriverSelection(engine)}
-                  />
-                </label>
-                <label className="space-y-2 xl:col-span-2">
                   <span className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
-                    <span>模型</span>
-                    <span>{eligibleModels.length} 个可用</span>
+                    <span>引擎与模型</span>
                   </span>
-                  <SingleCombobox
-                    value={model}
-                    onValueChange={setModel}
-                    options={modelOptions}
-                    triggerClassName="h-10"
-                    placeholder={eligibleModels.length > 0 ? '选择模型' : '当前引擎暂无可用模型'}
-                    disabled={eligibleModels.length === 0}
+                  <EngineModelSelect
+                    engine={engine}
+                    model={model}
+                    onEngineChange={setEngine}
+                    onModelChange={setModel}
+                    className="h-10"
                   />
                 </label>
               </div>
@@ -1580,7 +1494,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="flex items-center justify-between rounded-lg border border-border/70 bg-background px-4 py-3">
                     <div>
-                      <div className="text-sm font-medium">引擎链路调试</div>
+                      <div className="text-sm font-medium">运行调试</div>
                       <div className="text-xs text-muted-foreground">可用性、耗时、流式事件、多轮</div>
                     </div>
                     <Switch checked={includeEngineDebug} onCheckedChange={setIncludeEngineDebug} />
@@ -1702,13 +1616,11 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                   <RotateCcw className="mr-2 h-4 w-4" />
                   清空结果
                 </Button>
-                {selectedProviders.length > 0 ? (
+                {model ? (
                   <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-                    {selectedProviders.map((provider) => (
-                      <Badge key={provider} variant="secondary" className="rounded-md">
-                        {provider}
-                      </Badge>
-                    ))}
+                    <Badge variant="secondary" className="rounded-md">
+                      {selectedModelLabel}
+                    </Badge>
                   </div>
                 ) : null}
                 <Badge variant="outline" className="rounded-md text-xs">
@@ -1741,8 +1653,8 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                       </div>
                       <p className="mt-2 text-sm leading-6 text-muted-foreground">
                         {result
-                          ? `${getEngineDisplayName(result.engine)} / ${result.driver.toUpperCase()} / ${result.model || '默认模型'}`
-                          : '选择引擎与模型后，运行一次诊断即可生成分数、耗时和证据链。'}
+                          ? `${selectedModelLabel || result.model || '默认模型'}`
+                          : '选择模型后，运行一次诊断即可生成分数、耗时和证据链。'}
                       </p>
                     </div>
                   </div>
@@ -1897,7 +1809,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
               {running
                 ? '上方日志会持续刷新，已完成的阶段和能力项会实时出现在这里。'
-                : '运行后这里会展示引擎阶段耗时、流式事件、模型能力评分和每个评分的证据链。'}
+                : '运行后这里会展示耗时、流式事件、模型能力评分和每个评分的证据链。'}
             </p>
           </section>
         ) : (
@@ -1905,7 +1817,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
             <section className="rounded-lg border border-border/70 bg-card p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-lg font-semibold">引擎链路调试</h3>
+                  <h3 className="text-lg font-semibold">运行调试</h3>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {result.engineDebug?.effectiveEngine || result.engine} · {result.engineDebug?.streamSupported ? '支持流式输出' : '未确认流式输出'}
                   </p>
