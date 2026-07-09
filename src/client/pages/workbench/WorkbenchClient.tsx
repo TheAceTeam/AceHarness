@@ -8942,10 +8942,18 @@ export default function WorkbenchPage({
     });
 
     const mergedItems: Item[] = [];
-    let pendingChunkItems: Array<{ type: 'chunk'; content: string; index: number }> = [];
+    let pendingChunkItems: ChunkItem[] = [];
     const flushPendingChunkItems = () => {
       if (!pendingChunkItems.length) return;
-      mergedItems.push(...mergeAceSubtaskChunkItems(mergeAceProcessChunkItems(pendingChunkItems, CHUNK_SEP), CHUNK_SEP));
+      mergedItems.push(
+        ...mergeAceSubtaskChunkItems(
+          mergeAceProcessChunkItems(
+            pendingChunkItems.map((item) => ({ ...item, index: Number(item.index) })),
+            CHUNK_SEP
+          ),
+          CHUNK_SEP
+        )
+      );
       pendingChunkItems = [];
     };
     for (const rawItem of rawFilteredItems) {

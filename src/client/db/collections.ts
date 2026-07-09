@@ -11,6 +11,8 @@ import type { ModelProbeListResponse, ModelProbeSummary } from '@/lib/models/pro
 import type { HumanQuestion } from '@/lib/run/state-persistence';
 import type { RagDocument, RagKnowledgeBase, RagVectorChunk } from '@/lib/rag/types';
 
+export * from './runtime-agent-collections';
+
 export type WorkflowConfigRow = {
   id: string;
   filename: string;

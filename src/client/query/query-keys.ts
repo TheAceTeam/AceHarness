@@ -5,6 +5,27 @@ const contentKeys = {
     ['content', 'runDocument', runId, filename, sourceRunId ?? null] as const,
 };
 
+const runtimeKeys = {
+  sessions: (params: Record<string, unknown> = {}) => ['runtime', 'sessions', params] as const,
+  session: (runtimeSessionId: string) => ['runtime', 'sessions', runtimeSessionId] as const,
+  snapshot: (runtimeSessionId: string) => ['runtime', 'sessions', runtimeSessionId, 'snapshot'] as const,
+  turns: (runtimeSessionId: string, params: Record<string, unknown> = {}) =>
+    ['runtime', 'sessions', runtimeSessionId, 'turns', params] as const,
+  turn: (runtimeSessionId: string, turnId: string) =>
+    ['runtime', 'sessions', runtimeSessionId, 'turns', turnId] as const,
+  events: (runtimeSessionId: string, params: { afterSeq?: number; limit?: number } = {}) =>
+    ['runtime', 'sessions', runtimeSessionId, 'events', params] as const,
+  projection: (runtimeSessionId: string, projectionVersion: number | string, projection: string) =>
+    ['runtime', 'sessions', runtimeSessionId, 'projections', projectionVersion, projection] as const,
+  agentStates: (params: Record<string, unknown> = {}) => ['runtime', 'agentStates', params] as const,
+  modelRoutes: (params: Record<string, unknown> = {}) => ['runtime', 'modelRoutes', params] as const,
+  modelRoute: (modelRouteId: string) => ['runtime', 'modelRoutes', modelRouteId] as const,
+  probeRuns: (params: Record<string, unknown> = {}) => ['runtime', 'probeRuns', params] as const,
+  probeRun: (probeId: string) => ['runtime', 'probeRuns', probeId] as const,
+  benchmarkRuns: (params: Record<string, unknown> = {}) => ['runtime', 'benchmarkRuns', params] as const,
+  benchmarkRun: (benchmarkRunId: string) => ['runtime', 'benchmarkRuns', benchmarkRunId] as const,
+};
+
 export const queryKeys = {
   auth: {
     currentUser: () => ['auth', 'currentUser'] as const,
@@ -77,6 +98,7 @@ export const queryKeys = {
   agents: () => ['agents'] as const,
   agentMemory: (name: string, maxChars: number) => ['agents', name, 'memory', maxChars] as const,
   models: () => ['models'] as const,
+  runtime: runtimeKeys,
   engines: () => ['engines'] as const,
   engineAvailability: () => ['engines', 'availability'] as const,
   skills: () => ['skills'] as const,
