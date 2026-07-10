@@ -3,6 +3,7 @@ import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists'
 import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
+import { isWindows } from '@/lib/core/runtime-platform';
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -198,7 +199,7 @@ function buildAcpxCommandAttemptParts(
 ): Array<{ source: string; parts: string[] }> {
   if (options.agentId === 'nga' || command.command === 'ngagent' || command.command === 'nga') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const ngagent = findCommand('ngagent', searchPaths);
+    const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || findCommand('ngagent', searchPaths);
     const nga = findCommand('nga', searchPaths);
     const primaryCommand = ngagent || nga || command.command;
     const primaryArgs = ngagent ? ['acp'] : ['--disable-update', 'acp'];
@@ -224,6 +225,16 @@ function buildAcpxCommandAttemptParts(
     return [{ source: 'codegenie', parts: [resolvedCommand, ...args] }];
   }
   return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
+}
+
+function resolveWindowsCmdShim(command: string, searchPaths: string[]): string | null {
+  if (!isWindows()) return null;
+  for (const dir of searchPaths) {
+    if (!dir) continue;
+    const candidate = join(dir, `${command}.cmd`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 function resolveNgaCodeagent(primaryCommand: string, searchPaths: string[]): string | null {
