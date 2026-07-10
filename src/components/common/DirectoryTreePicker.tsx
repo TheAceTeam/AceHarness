@@ -21,6 +21,7 @@ interface DirectoryTreePickerProps {
   quickAccessRoots?: string[];
   disabled?: boolean;
   className?: string;
+  emptyDisplayValue?: string;
   onResolvePath?: (input: string) => Promise<PathResolution> | PathResolution;
   onNavigateUp?: (currentPath: string) => Promise<PathResolution> | PathResolution;
   onNavigateHome?: () => Promise<PathResolution> | PathResolution;
@@ -72,6 +73,7 @@ export default function DirectoryTreePicker({
   quickAccessRoots = [],
   disabled = false,
   className,
+  emptyDisplayValue,
   onResolvePath,
   onNavigateUp,
   onNavigateHome,
@@ -353,13 +355,13 @@ export default function DirectoryTreePicker({
       });
   }, [disabled, draftValue, expanded, loadingPaths, toggleExpand]);
 
-  const displayValue = value || rootLabel.replace(/\s\/$/, '') || '/';
+  const displayValue = value || emptyDisplayValue || rootLabel.replace(/\s\/$/, '') || '/';
   const displayDraftValue = draftValue || rootLabel.replace(/\s\/$/, '') || '/';
 
   return (
     <>
       <div className={cn('flex min-w-0 items-center gap-2', className)}>
-        <Input value={displayValue} readOnly disabled={disabled} className="flex-1" />
+        <Input value={displayValue} readOnly disabled={disabled} className={cn('flex-1', !value && emptyDisplayValue && 'text-muted-foreground')} />
         <Button type="button" variant="outline" disabled={disabled} onClick={() => setOpen(true)} className="shrink-0">
           选择目录
         </Button>

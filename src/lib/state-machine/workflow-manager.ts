@@ -583,6 +583,15 @@ function isRecoverableStepExecutionError(message: string): boolean {
   return Boolean(normalized) && !isEngineLevelFailure(normalized);
 }
 
+function isFatalRuntimeConfigurationError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { fatal?: unknown }).fatal === true
+    && (error as { code?: unknown }).code === 'MODEL_ROUTE_NOT_FOUND'
+  );
+}
+
 function buildStepAutoRecoveryPrompt(input: {
   stateName?: string | null;
   stepName: string;
@@ -5171,7 +5180,7 @@ try {
         const errorMsg = stepError.message || String(stepError);
         stepOutputs.push(`ERROR: ${errorMsg}`);
 
-        if (isEngineLevelFailure(errorMsg)) {
+        if (isFatalRuntimeConfigurationError(stepError) || isEngineLevelFailure(errorMsg)) {
           // Engine-level failures are fatal for state-machine execution to avoid
           // uncontrolled fallback iterations and token burn.
           throw new Error(`引擎异常，已停止工作流：${errorMsg}`);

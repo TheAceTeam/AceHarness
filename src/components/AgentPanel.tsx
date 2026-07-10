@@ -328,7 +328,7 @@ export default function AgentPanel({
                         className="h-6 px-2 text-[10px]"
                         onClick={() => onViewPersistedStepOutput(log)}
                       >
-                        查看完整日志
+                        查看记录
                       </Button>
                     ) : null}
                     {onSelectPersistedStep ? (

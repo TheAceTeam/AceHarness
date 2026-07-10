@@ -190,12 +190,13 @@ function visibleRuntimeEngineOptions(agents: RuntimeAgentListItem[]): RuntimeEng
     .filter((agent): agent is RuntimeEngineOption => Boolean(agent));
 }
 
-export function useRuntimeEngineOptionsQuery() {
+export function useRuntimeEngineOptionsQuery(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: [...queryKeys.agents(), 'runtime-engine-options'] as const,
     queryFn: fetchRuntimeAgents,
     select: visibleRuntimeEngineOptions,
     staleTime: 30_000,
+    enabled: options.enabled,
   });
 }
 

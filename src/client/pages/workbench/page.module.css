@@ -302,6 +302,14 @@
   grid-template-columns: 310px minmax(520px, 1fr) 44px;
 }
 
+.runDocumentsLayout {
+  grid-template-columns: 310px minmax(520px, 1fr);
+}
+
+.designDrawerLayout {
+  grid-template-columns: 310px minmax(520px, 1fr);
+}
+
 .runWorkbenchPreviewLayout {
   grid-template-columns: 310px minmax(520px, 1fr);
 }
@@ -337,6 +345,42 @@
   overflow-x: hidden;
   border-left: 1px solid var(--workbench-line, #e3e3df);
   color: var(--workbench-text, #151515);
+}
+
+.workbenchInspectorDrawer {
+  --workbench-sidebar: #f7f7f4;
+  --workbench-paper: #ffffff;
+  --workbench-line: #e3e3df;
+  --workbench-line-strong: #d4d4ce;
+  --workbench-text: #151515;
+  --workbench-muted: #8a8a84;
+  --workbench-accent: #8b5cf6;
+  --workbench-accent-soft: #eee7ff;
+  overflow: hidden;
+  color: var(--workbench-text);
+}
+
+.workbenchInspectorDrawer * {
+  min-width: 0;
+}
+
+.workbenchInspectorDrawer :global(pre),
+.workbenchInspectorDrawer :global(code),
+.workbenchInspectorDrawer :global(.font-mono) {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+:global(.dark) .workbenchInspectorDrawer {
+  --workbench-sidebar: #191919;
+  --workbench-paper: #111111;
+  --workbench-line: #2b2b2b;
+  --workbench-line-strong: #3a3a3a;
+  --workbench-text: #f1f1ee;
+  --workbench-muted: #9b9b95;
+  --workbench-accent-soft: rgba(139, 92, 246, 0.16);
 }
 
 .workbenchInspectorCollapsedRail {

@@ -2951,6 +2951,7 @@ export interface WorkspaceTreeOptions {
   depth?: number;
   offset?: number;
   limit?: number;
+  sort?: 'name' | 'modified-desc';
 }
 
 export interface RemoteWorkspaceCredentials {
@@ -3358,6 +3359,7 @@ export const workspaceApi = {
     params.set('depth', String(normalizedOptions.depth ?? 0));
     if (normalizedOptions.offset != null) params.set('offset', String(normalizedOptions.offset));
     if (normalizedOptions.limit != null) params.set('limit', String(normalizedOptions.limit));
+    if (normalizedOptions.sort) params.set('sort', normalizedOptions.sort);
     const res = await authFetch(`${API_BASE}/workspace/tree?${params.toString()}`);
     if (!res.ok) {
       await throwWorkspaceApiError(res, '获取文件树失败');
@@ -3372,6 +3374,7 @@ export const workspaceApi = {
     params.set('depth', String(normalizedOptions.depth ?? 0));
     if (normalizedOptions.offset != null) params.set('offset', String(normalizedOptions.offset));
     if (normalizedOptions.limit != null) params.set('limit', String(normalizedOptions.limit));
+    if (normalizedOptions.sort) params.set('sort', normalizedOptions.sort);
     const res = await authFetch(`${API_BASE}/workspace/tree?${params.toString()}`);
     if (!res.ok) {
       await throwWorkspaceApiError(res, '获取子目录失败');

@@ -76,7 +76,57 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen overflow-hidden bg-[#F4F4F1] px-4 py-6 text-[#151515] dark:bg-[#0D0E14] dark:text-slate-100 sm:px-6 lg:px-8">
-      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(120deg,rgba(255,255,255,0.82),rgba(244,244,241,0.92)_45%,rgba(237,237,233,0.78))] dark:bg-[linear-gradient(120deg,rgba(18,19,25,0.98),rgba(13,14,20,0.96)_48%,rgba(23,25,33,0.92))]" />
+      <div className="pointer-events-none fixed inset-0 bg-[#F4F4F1] dark:bg-[#0D0E14]" />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 opacity-[0.55] dark:opacity-[0.32]"
+        style={{
+          backgroundImage: [
+            'linear-gradient(rgba(21,21,21,0.055) 1px, transparent 1px)',
+            'linear-gradient(90deg, rgba(21,21,21,0.055) 1px, transparent 1px)',
+            'radial-gradient(circle at 1px 1px, rgba(21,130,119,0.24) 1px, transparent 0)',
+          ].join(','),
+          backgroundSize: '72px 72px, 72px 72px, 18px 18px',
+          backgroundPosition: '-1px -1px, -1px -1px, 0 0',
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 opacity-80 dark:opacity-70"
+        style={{
+          backgroundImage: [
+            'linear-gradient(112deg, transparent 0 18%, rgba(21,130,119,0.10) 18% 18.4%, transparent 18.4% 100%)',
+            'linear-gradient(112deg, transparent 0 70%, rgba(21,21,21,0.08) 70% 70.35%, transparent 70.35% 100%)',
+            'linear-gradient(28deg, transparent 0 58%, rgba(21,130,119,0.08) 58% 58.45%, transparent 58.45% 100%)',
+          ].join(','),
+        }}
+      />
+      <div aria-hidden="true" className="pointer-events-none fixed left-[7vw] top-[14vh] hidden w-64 rounded-xl border border-[#D8D8D2]/80 bg-white/48 p-4 text-[#151515]/45 shadow-[0_12px_40px_rgba(21,21,21,0.04)] backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.035] dark:text-white/36 lg:block">
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-[10px] font-black uppercase tracking-[0.24em]">workflow</span>
+          <span className="h-2 w-2 rounded-full bg-[#158277]" />
+        </div>
+        <div className="space-y-2">
+          {['spec.ready', 'agents.synced', 'review.queued'].map((item) => (
+            <div key={item} className="flex items-center gap-2 rounded-lg border border-[#E3E3DF]/75 bg-white/55 px-3 py-2 text-[11px] font-semibold dark:border-white/10 dark:bg-white/[0.04]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#158277]" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div aria-hidden="true" className="pointer-events-none fixed bottom-[12vh] right-[8vw] hidden w-72 rounded-xl border border-[#D8D8D2]/80 bg-white/44 p-4 text-[#151515]/42 shadow-[0_12px_40px_rgba(21,21,21,0.04)] backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.035] dark:text-white/34 lg:block">
+        <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em]">
+          <span className="rounded-md border border-[#E3E3DF]/80 bg-white/60 px-2 py-2 text-center dark:border-white/10 dark:bg-white/[0.04]">plan</span>
+          <span className="h-px w-5 bg-[#158277]/55" />
+          <span className="rounded-md border border-[#E3E3DF]/80 bg-white/60 px-2 py-2 text-center dark:border-white/10 dark:bg-white/[0.04]">run</span>
+          <span className="h-px w-5 bg-[#158277]/55" />
+          <span className="rounded-md border border-[#E3E3DF]/80 bg-white/60 px-2 py-2 text-center dark:border-white/10 dark:bg-white/[0.04]">ship</span>
+        </div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#E3E3DF] dark:bg-white/10">
+          <div className="h-full w-2/3 bg-[#158277]" />
+        </div>
+      </div>
       <motion.div
         aria-hidden="true"
         className="pointer-events-none fixed inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#158277]/45 to-transparent dark:via-cyan-300/40"

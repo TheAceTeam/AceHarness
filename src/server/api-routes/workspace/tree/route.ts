@@ -25,6 +25,7 @@ interface TreeNode {
   name: string;
   path: string;
   type: 'file' | 'directory';
+  modifiedTime?: number;
   children?: TreeNode[];
 }
 
@@ -162,6 +163,7 @@ type VisibleEntry = {
   fullPath: string;
   relativePath: string;
   type: 'file' | 'directory';
+  modifiedTime?: number;
 };
 
 async function resolveEntryType(rootPath: string, fullPath: string, entry: VisibleEntry['entry']): Promise<'file' | 'directory' | null> {
@@ -180,7 +182,7 @@ async function resolveEntryType(rootPath: string, fullPath: string, entry: Visib
   return null;
 }
 
-async function listVisibleEntries(dirPath: string, rootPath: string): Promise<VisibleEntry[]> {
+async function listVisibleEntries(dirPath: string, rootPath: string, sortMode: 'name' | 'modified-desc' = 'name'): Promise<VisibleEntry[]> {
   const lexicalDir = path.resolve(dirPath);
   if (!isInsidePath(rootPath, lexicalDir)) {
     throw new Error('目录路径不合法');
@@ -194,11 +196,13 @@ async function listVisibleEntries(dirPath: string, rootPath: string): Promise<Vi
     const fullPath = path.join(lexicalDir, entry.name);
     const type = await resolveEntryType(rootPath, fullPath, entry);
     if (!type) continue;
+    const stat = await fs.stat(fullPath).catch(() => null);
     visibleEntries.push({
       entry,
       fullPath,
       relativePath: toPortablePath(path.relative(rootPath, fullPath)),
       type,
+      modifiedTime: stat?.mtimeMs,
     });
   }
 
@@ -207,25 +211,29 @@ async function listVisibleEntries(dirPath: string, rootPath: string): Promise<Vi
       const aDir = a.type === 'directory';
       const bDir = b.type === 'directory';
       if (aDir !== bDir) return aDir ? -1 : 1;
+      if (sortMode === 'modified-desc') {
+        const timeDifference = (b.modifiedTime || 0) - (a.modifiedTime || 0);
+        if (timeDifference !== 0) return timeDifference;
+      }
       return a.entry.name.localeCompare(b.entry.name);
     });
 }
 
-async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, seen = new Set<string>()): Promise<TreeNode[]> {
+async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, seen = new Set<string>(), sortMode: 'name' | 'modified-desc' = 'name'): Promise<TreeNode[]> {
   const lexicalDir = path.resolve(dirPath);
   const realDir = await assertReadableTreeDirectory(rootPath, lexicalDir);
   if (seen.has(realDir)) return [];
   seen.add(realDir);
 
-  const visibleEntries = await listVisibleEntries(lexicalDir, rootPath);
+  const visibleEntries = await listVisibleEntries(lexicalDir, rootPath, sortMode);
   const nodes: TreeNode[] = [];
 
-  for (const { entry, fullPath, relativePath, type } of visibleEntries) {
+  for (const { entry, fullPath, relativePath, type, modifiedTime } of visibleEntries) {
     if (type === 'directory') {
       let children: TreeNode[] | undefined;
       if (depth < maxDepth) {
         try {
-          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen);
+          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen, sortMode);
         } catch (error: any) {
           if (!['EPERM', 'EACCES', 'ENOENT', 'EBADF', 'ENOTDIR'].includes(error?.code)) {
             throw error;
@@ -237,6 +245,7 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
         name: entry.name,
         path: relativePath,
         type: 'directory',
+        modifiedTime,
         children,
       });
     } else if (type === 'file') {
@@ -244,6 +253,7 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
         name: entry.name,
         path: relativePath,
         type: 'file',
+        modifiedTime,
       });
     }
   }
@@ -251,17 +261,17 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
   return nodes;
 }
 
-async function buildTreePage(dirPath: string, rootPath: string, maxDepth: number, offset: number, limit: number) {
-  const visibleEntries = await listVisibleEntries(dirPath, rootPath);
+async function buildTreePage(dirPath: string, rootPath: string, maxDepth: number, offset: number, limit: number, sortMode: 'name' | 'modified-desc' = 'name') {
+  const visibleEntries = await listVisibleEntries(dirPath, rootPath, sortMode);
   const pageEntries = visibleEntries.slice(offset, offset + limit);
   const tree: TreeNode[] = [];
 
-  for (const { entry, fullPath, relativePath, type } of pageEntries) {
+  for (const { entry, fullPath, relativePath, type, modifiedTime } of pageEntries) {
     if (type === 'directory') {
       let children: TreeNode[] | undefined;
       if (maxDepth > 0) {
         try {
-          children = await buildTree(fullPath, rootPath, 1, maxDepth);
+          children = await buildTree(fullPath, rootPath, 1, maxDepth, new Set<string>(), sortMode);
         } catch (error: any) {
           if (!['EPERM', 'EACCES', 'ENOENT', 'EBADF', 'ENOTDIR'].includes(error?.code)) {
             throw error;
@@ -273,6 +283,7 @@ async function buildTreePage(dirPath: string, rootPath: string, maxDepth: number
         name: entry.name,
         path: relativePath,
         type: 'directory',
+        modifiedTime,
         children,
       });
     } else if (type === 'file') {
@@ -280,6 +291,7 @@ async function buildTreePage(dirPath: string, rootPath: string, maxDepth: number
         name: entry.name,
         path: relativePath,
         type: 'file',
+        modifiedTime,
       });
     }
   }
@@ -341,6 +353,7 @@ export async function GET(request: Request) {
     const requestedLimit = parseInt(searchParams.get('limit') || searchParams.get('pageSize') || String(DEFAULT_PAGE_SIZE), 10);
     const limit = Math.min(Math.max(requestedLimit, 1), MAX_PAGE_SIZE);
     const subPath = searchParams.get('sub') || '';
+    const sortMode = searchParams.get('sort') === 'modified-desc' ? 'modified-desc' : 'name';
 
     if (isRemoteWorkspace(workspacePath)) {
       const auth = await requireRemoteWorkspaceAuth(request);
@@ -356,7 +369,7 @@ export async function GET(request: Request) {
       return workspaceRouteJsonError('路径不是目录', 400);
     }
 
-    const page = await buildTreePage(targetPath, rootPath, maxDepth, offset, limit);
+    const page = await buildTreePage(targetPath, rootPath, maxDepth, offset, limit, sortMode);
     return jsonOk({
       ...page,
       workspaceRoot: toPortablePath(rootPath),

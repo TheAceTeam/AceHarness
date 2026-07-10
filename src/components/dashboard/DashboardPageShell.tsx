@@ -1906,6 +1906,7 @@ export default function DashboardPage() {
           onOpenChange={setAcpxTraceWorkspaceOpen}
           workspacePath={acpxTraceDirectory}
           title="ACPX 调试日志"
+          defaultTreeSortMode="modified-desc"
         />
       ) : null}
     </SidebarProvider>

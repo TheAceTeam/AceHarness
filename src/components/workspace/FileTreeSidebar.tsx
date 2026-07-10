@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { Check, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download, FolderUp, RefreshCw, LayoutGrid, List, Home } from "lucide-react"
+import { ArrowDownAZ, Check, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Clock3, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download, FolderUp, RefreshCw, LayoutGrid, List, Home } from "lucide-react"
 import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/core/api"
 import { Button } from "@/components/ui/button"
 import {
@@ -80,6 +80,7 @@ interface FileTreeSidebarProps {
   notebookPermission?: 'read' | 'write'
   notebookView?: "list" | "desktop"
   onNotebookViewChange?: (view: "list" | "desktop") => void
+  defaultSortMode?: TreeSortMode
 }
 
 interface WorkspaceTreePagination {
@@ -101,6 +102,25 @@ function formatErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message
   if (typeof error === "string" && error.trim()) return error
   return fallback
+}
+
+function sortTreeNodes(nodes: TreeNode[], sortMode: TreeSortMode): TreeNode[] {
+  return [...nodes].sort((left, right) => {
+    if (left.type !== right.type) return left.type === "directory" ? -1 : 1
+    if (sortMode === "modified-desc") {
+      const timeDifference = (right.modifiedTime || 0) - (left.modifiedTime || 0)
+      if (timeDifference !== 0) return timeDifference
+    }
+    return left.name.localeCompare(right.name, "zh-CN")
+  })
+}
+
+function formatTreeModifiedTime(modifiedTime: number | undefined): string {
+  if (!modifiedTime || !Number.isFinite(modifiedTime)) return ""
+  const date = new Date(modifiedTime)
+  if (Number.isNaN(date.getTime())) return ""
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function isSameDirectoryReorderError(error: unknown): boolean {
@@ -185,6 +205,7 @@ const TreeContext = React.createContext<{
   onDownload: (targetPath: string) => Promise<void>
   autoRefreshIntervalMs: number | null
   setAutoRefreshIntervalMs: (intervalMs: number | null) => void
+  sortMode: TreeSortMode
 } | null>(null)
 
 function useTreeCtx() {
@@ -192,6 +213,8 @@ function useTreeCtx() {
   if (!ctx) throw new Error("TreeContext missing")
   return ctx
 }
+
+export type TreeSortMode = "name" | "modified-desc"
 
 function AutoRefreshContextSubmenu({
   autoRefreshIntervalMs,
@@ -842,6 +865,7 @@ function TreeFileItem({
   }
 
   const isContextActive = contextTarget === node.path
+  const modifiedTimeLabel = mode === "default" ? formatTreeModifiedTime(node.modifiedTime) : ""
 
   return (
     <>
@@ -926,7 +950,16 @@ function TreeFileItem({
           >
             <span aria-hidden className="h-4 w-4 shrink-0" />
             <FileTypeIcon node={node} className="h-4 w-4 shrink-0" />
-            <span className="truncate">{mode === "notebook" ? stripNotebookSuffix(getNotebookDisplayName(node.name, node.path)) : getNotebookDisplayName(node.name, node.path)}</span>
+            <span className="min-w-0 flex-1 truncate text-left">{mode === "notebook" ? stripNotebookSuffix(getNotebookDisplayName(node.name, node.path)) : getNotebookDisplayName(node.name, node.path)}</span>
+            {modifiedTimeLabel ? (
+              <time
+                className="shrink-0 text-[10px] font-normal tabular-nums text-muted-foreground"
+                dateTime={new Date(node.modifiedTime!).toISOString()}
+                title={new Date(node.modifiedTime!).toLocaleString("zh-CN")}
+              >
+                {modifiedTimeLabel}
+              </time>
+            ) : null}
           </button>
           </ContextMenuTrigger>
         </TreeRow>
@@ -1572,6 +1605,7 @@ function TreeDirItem({
     onDownload,
     autoRefreshIntervalMs,
     setAutoRefreshIntervalMs,
+    sortMode,
   } = useTreeCtx()
   const queryClient = useQueryClient()
   const isCreatingHere = creatingIn?.dir === node.path
@@ -1593,7 +1627,10 @@ function TreeDirItem({
     sourceKey: treeSourceKey,
     parentPath: node.path,
   })
-  const children = dbChildren
+  const children = React.useMemo(
+    () => mode === "default" ? sortTreeNodes(dbChildren, sortMode) : dbChildren,
+    [dbChildren, mode, sortMode]
+  )
   const shouldAutoOpen = Boolean(
     normalizedSelectedFile && (normalizedSelectedFile === normalizedNodePath || normalizedSelectedFile.startsWith(`${normalizedNodePath}/`))
   )
@@ -2072,6 +2109,7 @@ export function FileTreeSidebar({
   notebookPermission = 'write',
   notebookView = "list",
   onNotebookViewChange,
+  defaultSortMode = "name",
 }: FileTreeSidebarProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -2101,6 +2139,15 @@ export function FileTreeSidebar({
   const [openDirectories, setOpenDirectories] = React.useState<Set<string>>(() => new Set())
   const [refreshToken, setRefreshToken] = React.useState(0)
   const [autoRefreshIntervalMs, setAutoRefreshIntervalMs] = React.useState<number | null>(null)
+  const [sortMode, setSortMode] = React.useState<TreeSortMode>(defaultSortMode)
+  const displayTree = React.useMemo(
+    () => mode === "default" ? sortTreeNodes(tree, sortMode) : tree,
+    [mode, sortMode, tree]
+  )
+
+  React.useEffect(() => {
+    setSortMode(defaultSortMode)
+  }, [defaultSortMode])
 
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const folderInputRef = React.useRef<HTMLInputElement>(null)
@@ -2624,7 +2671,7 @@ export function FileTreeSidebar({
 
   const isCreatingAtRoot = creatingIn?.dir === ""
   return (
-    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh: refreshLoadedTree, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, refreshToken, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload, autoRefreshIntervalMs, setAutoRefreshIntervalMs }}>
+    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh: refreshLoadedTree, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, refreshToken, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload, autoRefreshIntervalMs, setAutoRefreshIntervalMs, sortMode }}>
       <div className="flex flex-col h-full bg-card">
         <input
           ref={fileInputRef}
@@ -2678,6 +2725,36 @@ export function FileTreeSidebar({
               </button>
             </div>
           ) : null}
+          {mode === "default" && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  title={sortMode === "modified-desc" ? "按修改时间排序" : "按名称排序"}
+                >
+                  {sortMode === "modified-desc" ? <Clock3 className="h-3.5 w-3.5" /> : <ArrowDownAZ className="h-3.5 w-3.5" />}
+                  <span className="sr-only">文件排序</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem onClick={() => setSortMode("name")}>
+                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
+                    {sortMode === "name" ? <Check className="h-3.5 w-3.5" /> : null}
+                  </span>
+                  按名称
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSortMode("modified-desc")}>
+                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
+                    {sortMode === "modified-desc" ? <Check className="h-3.5 w-3.5" /> : null}
+                  </span>
+                  按修改时间
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {mode === "default" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -2804,32 +2881,32 @@ export function FileTreeSidebar({
                 <div className="px-4 py-8 text-center text-sm text-muted-foreground">空目录</div>
               ) : (
                 <>
-                  {tree.length > 0 && (
+                  {displayTree.length > 0 && (
                     <DropLine
-                      active={isDropIntentActive(dropIntent, { position: "before", targetPath: tree[0].path })}
+                      active={isDropIntentActive(dropIntent, { position: "before", targetPath: displayTree[0].path })}
                       style={{ paddingLeft: "8px" }}
                       onDragOver={(event) => {
-                        if (!draggingPath || isInvalidSiblingDrop(draggingPath, tree[0].path)) return
+                        if (!draggingPath || isInvalidSiblingDrop(draggingPath, displayTree[0].path)) return
                         event.preventDefault()
                         event.stopPropagation()
                         event.dataTransfer.dropEffect = "move"
-                        const nextIntent: DropIntent = { position: "before", targetPath: tree[0].path }
+                        const nextIntent: DropIntent = { position: "before", targetPath: displayTree[0].path }
                         if (!isDropIntentActive(dropIntent, nextIntent)) setDropIntent(nextIntent)
                       }}
                       onDragLeave={(event) => {
                         const related = event.relatedTarget as Node | null
                         if (related && event.currentTarget.contains(related)) return
-                        const nextIntent: DropIntent = { position: "before", targetPath: tree[0].path }
+                        const nextIntent: DropIntent = { position: "before", targetPath: displayTree[0].path }
                         if (isDropIntentActive(dropIntent, nextIntent)) setDropIntent(null)
                       }}
                       onDrop={(event) => {
                         const srcPath = event.dataTransfer.getData("text/plain") || draggingPath
-                        if (!srcPath || isInvalidSiblingDrop(srcPath, tree[0].path)) return
+                        if (!srcPath || isInvalidSiblingDrop(srcPath, displayTree[0].path)) return
                         event.preventDefault()
                         event.stopPropagation()
                         setDropIntent(null)
                         setDraggingPath(null)
-                        void applyDropIntent(srcPath, { position: "before", targetPath: tree[0].path })
+                        void applyDropIntent(srcPath, { position: "before", targetPath: displayTree[0].path })
                       }}
                     />
                   )}
@@ -2838,7 +2915,7 @@ export function FileTreeSidebar({
                       <InlineRenameInput defaultValue="" onConfirm={handleRootCreateConfirm} onCancel={() => setCreatingIn(null)} />
                     </div>
                   )}
-                  {tree.map((node) =>
+                  {displayTree.map((node) =>
                     node.type === "directory" ? (
                       <TreeDirItem key={node.path} node={node} selectedFile={selectedFile} depth={0} />
                     ) : (
@@ -2848,12 +2925,12 @@ export function FileTreeSidebar({
                   {mode === "default" && rootPagination?.hasMore && onLoadMoreRoot ? (
                     <TreeLoadMoreRow depth={0} loading={rootLoadingMore} onClick={() => { void onLoadMoreRoot() }} />
                   ) : null}
-                  {tree.length > 0 && (
+                  {displayTree.length > 0 && (
                     <DropLine
-                      active={isDropIntentActive(dropIntent, { position: "after", targetPath: tree[tree.length - 1].path })}
+                      active={isDropIntentActive(dropIntent, { position: "after", targetPath: displayTree[displayTree.length - 1].path })}
                       style={{ paddingLeft: "8px" }}
                       onDragOver={(event) => {
-                        const lastPath = tree[tree.length - 1]?.path
+                        const lastPath = displayTree[displayTree.length - 1]?.path
                         if (!lastPath || !draggingPath || isInvalidSiblingDrop(draggingPath, lastPath)) return
                         event.preventDefault()
                         event.stopPropagation()
@@ -2864,13 +2941,13 @@ export function FileTreeSidebar({
                       onDragLeave={(event) => {
                         const related = event.relatedTarget as Node | null
                         if (related && event.currentTarget.contains(related)) return
-                        const lastPath = tree[tree.length - 1]?.path
+                        const lastPath = displayTree[displayTree.length - 1]?.path
                         if (!lastPath) return
                         const nextIntent: DropIntent = { position: "after", targetPath: lastPath }
                         if (isDropIntentActive(dropIntent, nextIntent)) setDropIntent(null)
                       }}
                       onDrop={(event) => {
-                        const lastPath = tree[tree.length - 1]?.path
+                        const lastPath = displayTree[displayTree.length - 1]?.path
                         const srcPath = event.dataTransfer.getData("text/plain") || draggingPath
                         if (!lastPath || !srcPath || isInvalidSiblingDrop(srcPath, lastPath)) return
                         event.preventDefault()

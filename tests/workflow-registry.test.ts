@@ -85,6 +85,19 @@ describe('workflow registry', () => {
     expect(firstManager).toBe(secondManager);
   });
 
+  test('recreates idle managers after a server module hot reload', async () => {
+    const firstModule = await import('@/lib/workflow/registry');
+    const registry = firstModule.workflowRegistry;
+    const staleManager = await registry.getManager('demo.yaml');
+
+    vi.resetModules();
+    const reloadedModule = await import('@/lib/workflow/registry');
+    const currentManager = await reloadedModule.workflowRegistry.getManager('demo.yaml');
+
+    expect(reloadedModule.workflowRegistry).toBe(registry);
+    expect(currentManager).not.toBe(staleManager);
+  });
+
   test('allows independent run-scoped managers for the same config file', async () => {
     const { readFile } = await import('fs/promises');
     (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');

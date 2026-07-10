@@ -14,6 +14,9 @@ export interface CurrentUser {
 
 export type AuthSetupStatus = {
   isSetup?: boolean;
+  setupAccessRequired?: boolean;
+  setupAccessVerified?: boolean;
+  verificationFile?: string;
   platform?: string;
   runtimeRoot?: string;
   userHome?: string;
@@ -140,6 +143,16 @@ export function useInitialSetupMutation() {
     mutationFn: (payload: Record<string, unknown>) => apiRequest('/api/auth/setup', {
       method: 'POST',
       body: payload,
+      authRedirect: false,
+    }),
+  });
+}
+
+export function useVerifyInitialSetupAccessMutation() {
+  return useMutation({
+    mutationFn: (verificationCode: string) => apiRequest('/api/auth/setup', {
+      method: 'POST',
+      body: { action: 'verify-access', verificationCode },
       authRedirect: false,
     }),
   });

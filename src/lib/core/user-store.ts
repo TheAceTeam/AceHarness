@@ -4,7 +4,7 @@
  */
 
 import { mkdir, writeFile, readFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { randomBytes, createHash, randomUUID } from 'crypto';
 import { getWorkspaceDataFile, getWorkspaceDataDir } from '@/lib/core/app-paths';
 
@@ -387,32 +387,37 @@ function loadTokensSync(): void {
   tokensLoaded = true;
   try {
     if (existsSync(TOKENS_FILE)) {
-      const content = require('fs').readFileSync(TOKENS_FILE, 'utf-8');
+      const content = readFileSync(TOKENS_FILE, 'utf-8');
       const entries: [string, { userId: string; expiry: number }][] = JSON.parse(content);
       const now = Date.now();
       for (const [token, info] of entries) {
         if (info.expiry > now) tokenStore.set(token, info);
       }
     }
-  } catch {
-    // ignore corrupt token cache
+  } catch (error) {
+    console.error('[auth] Failed to load persisted login sessions:', error);
   }
 }
 
 function persistTokens(): void {
   try {
-    const { mkdirSync, writeFileSync } = require('fs');
     mkdirSync(getWorkspaceDataDir(), { recursive: true });
     writeFileSync(TOKENS_FILE, JSON.stringify([...tokenStore.entries()]), 'utf-8');
-  } catch {
-    // ignore token persistence failures
+  } catch (error) {
+    console.error('[auth] Failed to persist login sessions:', error);
+    throw new Error('登录会话保存失败，请检查 runtime 数据目录权限');
   }
 }
 
 export function storeToken(token: string, userId: string): void {
   loadTokensSync();
   tokenStore.set(token, { userId, expiry: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-  persistTokens();
+  try {
+    persistTokens();
+  } catch (error) {
+    tokenStore.delete(token);
+    throw error;
+  }
 }
 
 export function validateToken(token: string): { userId: string } | null {

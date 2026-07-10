@@ -15,10 +15,10 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { useAuthSetupStatusQuery, useInitialSetupMutation, useLoginMutation } from '@/client/query/auth';
+import { useAuthSetupStatusQuery, useInitialSetupMutation, useLoginMutation, useVerifyInitialSetupAccessMutation } from '@/client/query/auth';
 import { useRuntimeEngineOptionsQuery, useSaveEngineConfigMutation } from '@/client/query/engines';
 import { PASSWORD_POLICY_DESCRIPTION, getLoginPasswordError } from '@/lib/auth/password-policy';
-import { CheckCircle2, FolderCog, Puzzle } from 'lucide-react';
+import { CheckCircle2, FileKey2, FolderCog, KeyRound, Puzzle } from 'lucide-react';
 
 interface DiscoveredSkill {
   name: string;
@@ -95,17 +95,21 @@ export default function SetupPage() {
   const router = useRouter();
   useDocumentTitle('初始化设置');
   const setupStatusQuery = useAuthSetupStatusQuery();
+  const verifySetupAccessMutation = useVerifyInitialSetupAccessMutation();
   const initialSetupMutation = useInitialSetupMutation();
   const loginMutation = useLoginMutation();
   const saveEngineConfigMutation = useSaveEngineConfigMutation();
-  const runtimeEngineOptionsQuery = useRuntimeEngineOptionsQuery();
-  const [step, setStep] = useState<'check' | 'admin' | 'skills' | 'complete'>('check');
+  const setupAccessVerified = setupStatusQuery.data?.setupAccessVerified === true;
+  const runtimeEngineOptionsQuery = useRuntimeEngineOptionsQuery({ enabled: setupAccessVerified });
+  const [step, setStep] = useState<'check' | 'access' | 'admin' | 'skills' | 'complete'>('check');
   const [loading, setLoading] = useState(true);
   const [cloning, setCloning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [typedWelcome, setTypedWelcome] = useState('');
   const [showContinue, setShowContinue] = useState(false);
+  const [verificationCode, setVerificationCode] = useState('');
+  const [verifyingAccess, setVerifyingAccess] = useState(false);
 
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -167,15 +171,15 @@ export default function SetupPage() {
       }
       const data = setupStatusQuery.data;
       if (!data) return;
-      setPlatform(data.platform || '');
-      const setupRootKey = ['runtime', 'Root'].join('');
-      const setupRoot = (data as Record<string, unknown>)[setupRootKey];
-      setSetupDataRoot(typeof setupRoot === 'string' ? setupRoot : '');
-      setUserHome(data.userHome || '');
-      setPersonalDir(data.userHome || '');
       if (data.isSetup) {
         router.push('/login');
+      } else if (!data.setupAccessVerified) {
+        setStep('access');
       } else {
+        setPlatform(data.platform || '');
+        setSetupDataRoot(data.runtimeRoot || '');
+        setUserHome(data.userHome || '');
+        setPersonalDir(data.userHome || '');
         try {
           const settingsRes = await fetch('/api/chat/settings');
           const settingsData = await settingsRes.json();
@@ -191,6 +195,21 @@ export default function SetupPage() {
     };
     void loadInitial();
   }, [router, setupStatusQuery.data, setupStatusQuery.isError, setupStatusQuery.isLoading]);
+
+  const handleVerifyAccess = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setVerifyingAccess(true);
+    try {
+      await verifySetupAccessMutation.mutateAsync(verificationCode);
+      setVerificationCode('');
+      await setupStatusQuery.refetch();
+    } catch (err: any) {
+      setError(err.message || '验证码验证失败');
+    } finally {
+      setVerifyingAccess(false);
+    }
+  };
 
   useEffect(() => {
     if (!engine) {
@@ -356,6 +375,73 @@ export default function SetupPage() {
                   </Button>
                 </motion.div>
               </div>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'access') {
+    return (
+      <div className="min-h-screen bg-[#F4F4F1] px-4 py-8 sm:px-6 dark:bg-[#111217]">
+        <div className="mx-auto flex min-h-[calc(100vh-64px)] w-full max-w-xl items-center justify-center">
+          <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="w-full">
+            <div className="mb-5 flex items-center gap-3">
+              <RobotLogo size={48} />
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-2xl font-semibold">验证首次设置权限</h1>
+                  <StatusPill tone="warning">安全验证</StatusPill>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">仅服务器文件系统的访问者可以创建首个管理员。</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-[#E3E3DF] bg-white p-6 shadow-none dark:border-white/[0.08] dark:bg-[#191A20] sm:p-8">
+              <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <h2 className="text-lg font-semibold">输入验证码</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                打开服务器 runtime 根目录中的验证码文件，输入文件内的完整文本后继续。
+              </p>
+
+              <div className="mt-4 flex items-start gap-3 rounded-lg border border-border bg-muted/50 p-3">
+                <FileKey2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <code className="min-w-0 break-all text-xs leading-5 text-foreground">
+                  {setupStatusQuery.data?.verificationFile || 'setup-verification-code.txt'}
+                </code>
+              </div>
+
+              <form onSubmit={handleVerifyAccess} className="mt-6">
+                <FormField
+                  label="首次设置验证码"
+                  required
+                  control={(
+                    <Input
+                      type="text"
+                      autoComplete="off"
+                      autoFocus
+                      spellCheck={false}
+                      placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+                      value={verificationCode}
+                      onChange={(event) => setVerificationCode(event.target.value)}
+                      className="h-11 bg-white font-mono uppercase dark:bg-[#15161B]"
+                    />
+                  )}
+                />
+
+                {error && (
+                  <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">
+                    {error}
+                  </motion.div>
+                )}
+
+                <Button type="submit" variant="primary" className="mt-5 h-10 w-full" disabled={!verificationCode.trim() || verifyingAccess}>
+                  {verifyingAccess ? '正在验证...' : '验证并进入设置'}
+                </Button>
+              </form>
             </div>
           </motion.div>
         </div>

@@ -78,9 +78,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { DetailDrawer, DetailDrawerContent, DetailDrawerTitle } from '@/components/ui/detail-drawer';
+import { ChevronDown } from 'lucide-react';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -223,7 +225,7 @@ const MonacoEditor = dynamic(
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
 type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'conversation' | 'changes' | 'documents' | 'plan' | 'agora' | 'live' | 'spec';
-type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'agora' | 'live' | 'spec';
+type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agora' | 'live' | 'spec';
 type RunLeftPanelTab = 'summary' | 'directory';
 type RunRightPanelTab = 'detail' | 'live' | 'context' | 'questions' | 'diff';
 const WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX = 'aceharness:workflow-run:panel-tabs';
@@ -518,6 +520,7 @@ function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailab
   if (tab === 'state') return 'state';
   if (tab === 'workspace') return 'workspace';
   if (tab === 'changes') return 'changes';
+  if (tab === 'documents') return 'documents';
   if (tab === 'agora') return 'agora';
   if (tab === 'live') return 'live';
   if (tab === 'spec' && runtimeSpecAvailable) return 'spec';
@@ -657,9 +660,7 @@ type ContextWorkspaceDialogProps = {
   globalDraft: string;
   phaseDrafts: Record<string, string>;
   workingDirectoryDraft?: string;
-  initialTab?: 'overview' | 'global' | 'state';
-  focusTarget: string;
-  onFocusTargetChange: (value: string) => void;
+  workingDirectoryEditable?: boolean;
   footerText: string;
   actionLabel: string;
   actionBusyLabel: string;
@@ -1166,20 +1167,14 @@ function AceAwareMarkdown({
 }
 
 function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'global' | 'state'>(props.initialTab || 'state');
   const startupFlowEnabled = (props.preflightPreview?.commands?.length || 0) > 0;
-  const [startupStep, setStartupStep] = useState<'context' | 'preflight'>('context');
   const [localGlobalDraft, setLocalGlobalDraft] = useState(props.globalDraft);
   const [localPhaseDrafts, setLocalPhaseDrafts] = useState<Record<string, string>>(props.phaseDrafts);
   const [localWorkingDirectory, setLocalWorkingDirectory] = useState(props.workingDirectoryDraft || '');
-  const [localFocusTarget, setLocalFocusTarget] = useState(props.focusTarget || props.startContextTargets[0] || '');
-  const filledCount = props.startContextTargets.filter((name) => (localPhaseDrafts[name] || '').trim().length > 0).length;
-  const coverage = props.startContextTargets.length > 0 ? Math.round((filledCount / props.startContextTargets.length) * 100) : 0;
-  const currentTarget = localFocusTarget || props.startContextTargets[0] || '';
-  const currentTargetValue = currentTarget ? (localPhaseDrafts[currentTarget] || '') : '';
+  const [expandedTarget, setExpandedTarget] = useState(() => (
+    props.startContextTargets.find((name) => (props.phaseDrafts[name] || '').trim()) || ''
+  ));
   const previewCommands = props.preflightPreview?.commands || [];
-  const workflowCommandCount = previewCommands.filter((item) => item.origin === 'workflow').length;
-  const inferredCommandCount = previewCommands.filter((item) => item.origin === 'inferred').length;
 
   useEffect(() => {
     setLocalGlobalDraft(props.globalDraft);
@@ -1187,410 +1182,187 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
 
   useEffect(() => {
     setLocalPhaseDrafts(props.phaseDrafts);
-  }, [props.phaseDrafts]);
+    setExpandedTarget((current) => (
+      current && props.startContextTargets.includes(current)
+        ? current
+        : props.startContextTargets.find((name) => (props.phaseDrafts[name] || '').trim()) || ''
+    ));
+  }, [props.phaseDrafts, props.startContextTargets]);
 
   useEffect(() => {
     setLocalWorkingDirectory(props.workingDirectoryDraft || '');
   }, [props.workingDirectoryDraft]);
 
-  useEffect(() => {
-    setLocalFocusTarget(props.focusTarget || props.startContextTargets[0] || '');
-  }, [props.focusTarget, props.startContextTargets]);
-
-  useEffect(() => {
-    setStartupStep('context');
-  }, [startupFlowEnabled, props.preflightPreview]);
-
-  useEffect(() => {
-    setActiveTab(props.initialTab || 'state');
-  }, [props.initialTab]);
-
   return (
-    <div className="flex max-h-[92vh] w-[1120px] max-w-full flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm">
-      <div className="shrink-0 border-b border-border/70 bg-muted/20 px-4 py-4 sm:px-6 sm:py-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="flex max-h-[88vh] w-[840px] max-w-full flex-col overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+      <div className="shrink-0 border-b border-border px-5 py-4 sm:px-6">
+        <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-primary/15 bg-primary/10 text-primary">
-                <span className="material-symbols-outlined text-[22px]">tune</span>
-              </div>
-              <div>
-                <DialogTitle className="text-lg font-semibold leading-6">{props.title}</DialogTitle>
-                <DialogDescription className="mt-1 max-w-[720px] text-sm leading-6 text-muted-foreground">{props.description}</DialogDescription>
-              </div>
-            </div>
+            <DialogTitle className="text-lg font-semibold">{props.title}</DialogTitle>
+            <DialogDescription className="mt-1 max-w-[680px] text-sm leading-5 text-muted-foreground">{props.description}</DialogDescription>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="outline" className="h-6 rounded-full px-2.5 text-[10px]">全局 1 项</Badge>
-            <Badge variant="outline" className="h-6 rounded-full px-2.5 text-[10px]">
-              {props.startContextScopeLabel} {props.startContextTargets.length} 项
-            </Badge>
-            <Badge variant="secondary" className="h-6 rounded-full px-2.5 text-[10px]">{props.modeLabel}</Badge>
-          </div>
+          <Badge variant="secondary" className="shrink-0">{props.modeLabel}</Badge>
         </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 sm:px-6">
+        <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
+          <div>
+            <Label className="text-sm font-medium">{props.workingDirectoryEditable ? '本次运行工作目录' : '当前运行工作目录'}</Label>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              {props.workingDirectoryEditable ? '不选择时使用工作流配置。' : '运行开始后不支持切换。'}
+            </p>
+          </div>
+          <div className="min-w-0">
+            {props.workingDirectoryEditable ? (
+              <div className="space-y-2">
+                <WorkspaceDirectoryPicker
+                  workspaceRoot={props.projectRoot || localWorkingDirectory}
+                  value={localWorkingDirectory}
+                  onChange={setLocalWorkingDirectory}
+                  disabled={props.actionBusy}
+                  emptyDisplayValue="使用工作流默认"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span className="min-w-0 break-all">
+                    {localWorkingDirectory ? '仅覆盖本次运行，不修改工作流配置。' : `默认：${props.projectRoot || '工作流配置目录'}`}
+                  </span>
+                  {localWorkingDirectory ? (
+                    <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setLocalWorkingDirectory('')} disabled={props.actionBusy}>
+                      使用工作流默认
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="break-all rounded-md border border-border bg-muted/20 px-3 py-2 text-sm">
+                {localWorkingDirectory || props.projectRoot || '未设置'}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[170px_minmax(0,1fr)]">
+          <div>
+            <Label className="text-sm font-medium">全局上下文</Label>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">所有步骤共享。</p>
+          </div>
+          <Textarea
+            value={localGlobalDraft}
+            onChange={(event) => setLocalGlobalDraft(event.target.value)}
+            placeholder="输入本次运行共享的背景、约束或交付要求"
+            rows={4}
+            className="min-h-[104px] resize-y text-sm leading-6"
+          />
+        </section>
+
+        <section className="py-5">
+          <div className="mb-1 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-medium">{props.startContextScopeLabel}上下文</h3>
+              <p className="mt-1 text-xs text-muted-foreground">内容只注入对应{props.startContextScopeLabel}。</p>
+            </div>
+            <Badge variant="outline">{props.startContextTargets.length} 项</Badge>
+          </div>
+
+          {props.startContextTargets.length ? (
+            <div className="mt-3 overflow-hidden rounded-md border border-border">
+              {props.startContextTargets.map((name, index) => {
+                const value = localPhaseDrafts[name] || '';
+                const filled = value.trim().length > 0;
+                const open = expandedTarget === name;
+                return (
+                  <Collapsible key={`context-target-${name}`} open={open} onOpenChange={(nextOpen) => setExpandedTarget(nextOpen ? name : '')}>
+                    <CollapsibleTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex min-h-11 w-full items-center gap-3 border-b border-border px-3 text-left last:border-b-0 hover:bg-muted/35"
+                      >
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-muted text-[11px] font-medium text-muted-foreground">{index + 1}</span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+                        <span className={`text-xs ${filled ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                          {filled ? '已填写' : '未填写'}
+                        </span>
+                        <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+                      </button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="border-b border-border bg-muted/15 px-3 pb-3 pt-2 last:border-b-0">
+                      <Textarea
+                        id={`context-target-input-${index}`}
+                        value={value}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setLocalPhaseDrafts((current) => ({ ...current, [name]: nextValue }));
+                        }}
+                        placeholder={`输入仅对「${name}」生效的上下文`}
+                        rows={4}
+                        className="min-h-[96px] resize-y bg-background text-sm leading-6"
+                      />
+                    </CollapsibleContent>
+                  </Collapsible>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+              当前工作流没有可设置的{props.startContextScopeLabel}。
+            </div>
+          )}
+        </section>
 
         {startupFlowEnabled ? (
-          <div className="mt-5 flex items-center gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex items-center gap-2">
-                <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${startupStep === 'context' ? 'border-primary bg-primary text-primary-foreground' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'}`}>
-                  1
-                </div>
-                <div className="text-sm font-medium">填写上下文</div>
+          <section className="border-t border-border py-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">启动前检查</h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  命令将在 {localWorkingDirectory || props.preflightPreview?.cwd || props.projectRoot || '工作流配置目录'} 中执行。
+                </p>
               </div>
-              <div className="h-px w-8 bg-border" />
-              <div className="flex items-center gap-2">
-                <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${startupStep === 'preflight' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground'}`}>
-                  2
+              <Badge variant="outline">{previewCommands.length} 条</Badge>
+            </div>
+            <div className="mt-3 space-y-2">
+              {previewCommands.map((item, index) => (
+                <div key={`preflight-preview-${index}-${item.command}`} className="flex items-start gap-3 rounded-md border border-border bg-muted/20 px-3 py-2">
+                  <code className="min-w-0 flex-1 whitespace-pre-wrap break-all text-xs leading-5">{item.command}</code>
+                  <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'} className="shrink-0">
+                    {item.origin === 'inferred' ? '推断' : '配置'}
+                  </Badge>
                 </div>
-                <div className="text-sm font-medium">确认检查并启动</div>
-              </div>
+              ))}
             </div>
-          </div>
-        ) : null}
-
-        {startupStep === 'context' ? (
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Global</div>
-              <div className="mt-1 text-sm font-semibold">共享背景</div>
-              <div className="mt-1 text-xs text-muted-foreground">影响所有步骤的全局约束</div>
-            </div>
-            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{props.startContextScopeLabel}</div>
-              <div className="mt-1 text-sm font-semibold">局部注入</div>
-              <div className="mt-1 text-xs text-muted-foreground">只进入对应节点的 prompt</div>
-            </div>
-            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Coverage</div>
-              <div className="mt-1 text-sm font-semibold">{filledCount}/{props.startContextTargets.length || 0} 已填写</div>
-              <div className="mt-2"><Progress value={coverage} className="h-1.5" /></div>
-            </div>
-            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Workspace</div>
-              <div className="mt-1 truncate text-sm font-semibold">{localWorkingDirectory || props.projectRoot || '-'}</div>
-              <div className="mt-1 text-xs text-muted-foreground">仅用于本次运行</div>
-            </div>
-          </div>
+          </section>
         ) : null}
       </div>
 
-      {startupStep === 'context' ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[280px,minmax(0,1fr)] xl:grid-cols-[320px,minmax(0,1fr)]">
-          <div className="min-h-0 overflow-hidden border-b border-border/70 bg-muted/10 lg:border-b-0 lg:border-r">
-            <div className="flex h-full min-h-0 flex-col p-4">
-              <div className="mb-3 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">状态导航</div>
-              <Command className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
-                <CommandInput placeholder={`搜索${props.startContextScopeLabel}...`} />
-                <CommandList className="min-h-0 flex-1 overflow-y-auto">
-                  <CommandEmpty>没有匹配的{props.startContextScopeLabel}</CommandEmpty>
-                  <CommandGroup heading={`${props.startContextScopeLabel}列表`}>
-                    {props.startContextTargets.map((name, index) => {
-                      const filled = (props.phaseDrafts[name] || '').trim().length > 0;
-                      const selected = currentTarget === name;
-                      return (
-                        <CommandItem
-                          key={`context-target-${name}`}
-                          value={`${name} ${index + 1}`}
-                          onSelect={() => {
-                            setLocalFocusTarget(name);
-                            props.onFocusTargetChange(name);
-                            setActiveTab('state');
-                          }}
-                          className={`cursor-pointer rounded-lg border px-3 py-3 transition-colors hover:bg-muted/40 ${selected ? 'border-primary/30 bg-accent text-accent-foreground' : 'border-transparent'}`}
-                        >
-                          <div className="flex w-full items-center gap-3">
-                            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${selected ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
-                              {index + 1}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm font-medium">{name}</div>
-                              <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                                <span>{filled ? '已填写' : '待补充'}</span>
-                                <span className={`h-2 w-2 rounded-full ${filled ? 'bg-emerald-500' : 'bg-muted-foreground/35'}`} />
-                              </div>
-                            </div>
-                          </div>
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </div>
-          </div>
-
-          <div className="min-h-0 min-w-0 overflow-hidden bg-background">
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="flex h-full flex-col">
-              <div className="shrink-0 border-b border-border/70 px-4 py-4 sm:px-5">
-                <TabsList className="grid w-full grid-cols-3 rounded-2xl sm:max-w-[420px]">
-                  <TabsTrigger value="overview" className="rounded-xl">总览</TabsTrigger>
-                  <TabsTrigger value="global" className="rounded-xl">全局</TabsTrigger>
-                  <TabsTrigger value="state" className="rounded-xl">{props.startContextScopeLabel}</TabsTrigger>
-                </TabsList>
-              </div>
-
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
-                <TabsContent value="overview" className="mt-0">
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                      <div className="text-sm font-semibold">本次运行工作目录</div>
-                      <div className="mt-3 space-y-2">
-                        <Input
-                          value={localWorkingDirectory}
-                          onChange={(event) => setLocalWorkingDirectory(event.target.value)}
-                          placeholder={props.projectRoot || '输入绝对路径'}
-                          className="h-10 rounded-xl border-border/60 bg-background/90"
-                        />
-                        <div className="text-xs leading-5 text-muted-foreground">
-                          留空时使用工作流配置里的工作目录。填写后只影响本次启动，配置文件保持不变。
-                        </div>
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                      <div className="text-sm font-semibold">填写建议</div>
-                      <div className="mt-3 space-y-3 text-sm leading-6 text-muted-foreground">
-                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">全局上下文写不变约束、兼容策略和统一交付边界。</div>
-                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">{props.startContextScopeLabel}上下文写局部输入、特殊注意事项和额外检查点。</div>
-                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">优先补齐高风险节点，避免每个节点都复制同一段全局说明。</div>
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none xl:col-span-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm font-semibold">覆盖率</div>
-                        <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{coverage}%</Badge>
-                      </div>
-                      <div className="mt-4"><Progress value={coverage} className="h-2" /></div>
-                      <div className="mt-4 space-y-2">
-                        {props.startContextTargets.slice(0, 6).map((name) => {
-                          const filled = (localPhaseDrafts[name] || '').trim().length > 0;
-                          return (
-                            <button
-                              key={`context-summary-${name}`}
-                              type="button"
-                              onClick={() => {
-                                setLocalFocusTarget(name);
-                                props.onFocusTargetChange(name);
-                                setActiveTab('state');
-                              }}
-                              className="flex w-full items-center justify-between rounded-2xl border border-border/60 bg-background/80 px-3 py-2 text-left text-sm hover:bg-muted/40"
-                            >
-                              <span className="truncate">{name}</span>
-                              <Badge variant={filled ? 'secondary' : 'outline'} className="rounded-full px-2 text-[10px]">
-                                {filled ? '已填' : '空白'}
-                              </Badge>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                  {props.preflightPreview && props.preflightPreview.commands.length > 0 ? (
-                    <div className="mt-4 rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold">启动前检查命令</div>
-                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                            以下命令会在服务器侧于目录 {props.preflightPreview.cwd} 中执行。你可以直接执行，也可以跳过本次检查。
-                          </div>
-                        </div>
-                        <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">
-                          {props.preflightPreview.commands.length} 条
-                        </Badge>
-                      </div>
-                      <div className="mt-4 space-y-2">
-                        {props.preflightPreview.commands.map((item, index) => (
-                          <div key={`preflight-preview-${index}-${item.command}`} className="rounded-2xl border border-border/60 bg-background/80 px-3 py-2">
-                            <div className="flex items-start justify-between gap-3">
-                              <code className="min-w-0 flex-1 whitespace-pre-wrap break-all text-xs leading-5 text-foreground">{item.command}</code>
-                              <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'} className="shrink-0 rounded-full px-2 text-[10px]">
-                                {item.origin === 'inferred' ? '推断' : '配置'}
-                              </Badge>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </TabsContent>
-
-                <TabsContent value="global" className="mt-0">
-                  <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <Label className="text-sm font-medium">全局上下文</Label>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">所有步骤都能看到。适合写共享原则，不适合堆局部执行细节。</p>
-                      </div>
-                      <Badge variant="secondary" className="rounded-full px-2.5 text-[10px]">共享</Badge>
-                    </div>
-                    <Textarea
-                      value={localGlobalDraft}
-                      onChange={(e) => setLocalGlobalDraft(e.target.value)}
-                      placeholder="例如：优先保持现有架构、接口变更先兼容旧调用方、代码风格跟随仓库现状"
-                      rows={16}
-                      className="mt-4 min-h-[220px] resize-none rounded-2xl border-border/60 bg-background/90 text-sm leading-6 shadow-sm sm:min-h-[320px] lg:min-h-[420px]"
-                    />
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="state" className="mt-0">
-                  <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <Label className="text-sm font-medium">{currentTarget || `当前${props.startContextScopeLabel}`}</Label>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">这里只编辑当前选中的{props.startContextScopeLabel}，内容只会注入对应节点。</p>
-                      </div>
-                      {currentTarget ? (
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{props.startContextScopeLabel}</Badge>
-                          <Badge variant={(currentTargetValue || '').trim() ? 'secondary' : 'outline'} className="rounded-full px-2.5 text-[10px]">
-                            {(currentTargetValue || '').trim() ? '已填写' : '待补充'}
-                          </Badge>
-                        </div>
-                      ) : null}
-                    </div>
-                    <Textarea
-                      value={currentTargetValue}
-                      onChange={(e) => {
-                        if (!currentTarget) return;
-                        const nextValue = e.target.value;
-                        setLocalPhaseDrafts((prev) => ({ ...prev, [currentTarget]: nextValue }));
-                      }}
-                      placeholder={currentTarget ? `输入仅对「${currentTarget}」生效的上下文` : `先从左侧选择一个${props.startContextScopeLabel}`}
-                      rows={16}
-                      disabled={!currentTarget}
-                      className="mt-4 min-h-[220px] resize-none rounded-2xl border-border/60 bg-background/90 text-sm leading-6 shadow-sm disabled:opacity-60 sm:min-h-[320px] lg:min-h-[420px]"
-                    />
-                  </div>
-                </TabsContent>
-              </div>
-            </Tabs>
-          </div>
-        </div>
-      ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto bg-background px-4 py-4 sm:px-6 sm:py-6">
-          <div className="space-y-4">
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-5">
-              <div className="flex items-start gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-amber-500/35 bg-amber-500/15 text-amber-700">
-                  <span className="material-symbols-outlined text-[18px]">warning</span>
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                    <span>危险提醒</span>
-                    <Badge variant="outline" className="rounded-full border-amber-500/35 bg-amber-500/10 px-2 text-[10px] text-amber-700">请仔细确认</Badge>
-                  </div>
-                  <div className="mt-1 text-sm leading-6 text-muted-foreground">
-                    启动前检查命令会在服务器侧执行，工作目录为 <code className="rounded bg-background px-1.5 py-0.5 text-xs">{props.preflightPreview?.cwd || props.projectRoot || '未提供'}</code>。确认这些命令符合预期后再执行；如果你暂时不想运行检查，可以直接跳过。
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-3">
-              <div className="rounded-2xl border border-border/60 bg-card/90 p-4 shadow-sm">
-                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Commands</div>
-                <div className="mt-1 text-2xl font-semibold">{previewCommands.length}</div>
-                <div className="mt-1 text-xs text-muted-foreground">本次将展示的 preflight 命令总数</div>
-              </div>
-              <div className="rounded-2xl border border-border/60 bg-card/90 p-4 shadow-sm">
-                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Workflow</div>
-                <div className="mt-1 text-2xl font-semibold">{workflowCommandCount}</div>
-                <div className="mt-1 text-xs text-muted-foreground">直接来自当前 workflow 配置</div>
-              </div>
-              <div className="rounded-2xl border border-border/60 bg-card/90 p-4 shadow-sm">
-                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Inferred</div>
-                <div className="mt-1 text-2xl font-semibold">{inferredCommandCount}</div>
-                <div className="mt-1 text-xs text-muted-foreground">系统按项目特征自动推断</div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border/60 bg-card p-5 shadow-none">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold">启动前检查命令</div>
-                  <div className="mt-1 text-xs text-muted-foreground">下一步请选择：暂不启动、跳过检查直接启动，或先执行这些检查再启动。</div>
-                </div>
-                <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{previewCommands.length} 条</Badge>
-              </div>
-              <div className="mt-4 space-y-2">
-                {previewCommands.length > 0 ? previewCommands.map((item, index) => (
-                  <div key={`preflight-preview-${index}-${item.command}`} className="rounded-2xl border border-border/60 bg-background/80 px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-1 text-[11px] text-muted-foreground">命令 {index + 1}</div>
-                        <pre className="overflow-x-auto rounded-xl border border-amber-500/20 bg-slate-950 px-3 py-2 text-xs leading-6 text-slate-100">
-                          <code className="whitespace-pre-wrap break-all">{item.command}</code>
-                        </pre>
-                      </div>
-                      <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'} className="shrink-0 rounded-full px-2 text-[10px]">
-                        {item.origin === 'inferred' ? '推断' : '配置'}
-                      </Badge>
-                    </div>
-                  </div>
-                )) : (
-                  <div className="rounded-2xl border border-dashed border-border/60 bg-background/60 px-4 py-4 text-sm text-muted-foreground">当前没有需要执行的 preflight 命令。你可以直接启动。</div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="shrink-0 border-t border-border/70 bg-muted/15 px-4 py-4 sm:px-6">
+      <div className="shrink-0 border-t border-border bg-background px-5 py-4 sm:px-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs leading-5 text-muted-foreground sm:max-w-[55%]">{props.footerText}</div>
-          <div className="flex flex-wrap justify-end gap-2 sm:gap-3">
-            {startupFlowEnabled ? (
-              startupStep === 'context' ? (
-                <>
-                  <Button variant="destructive" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
-                  <Button onClick={() => setStartupStep('preflight')} disabled={props.actionDisabled}>下一步</Button>
-                </>
-              ) : (
-                <>
-                  <Button variant="secondary" onClick={() => setStartupStep('context')} disabled={props.actionBusy}>上一步</Button>
-                  <Button variant="destructive" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
-                  {props.onSkipPreflight ? (
-                    <Button
-                      variant="outline"
-                      onClick={() => props.onSkipPreflight?.({
-                        globalContext: localGlobalDraft,
-                        phaseContexts: localPhaseDrafts,
-                        workingDirectory: localWorkingDirectory.trim(),
-                      })}
-                      disabled={props.actionBusy}
-                    >
-                      跳过检查启动
-                    </Button>
-                  ) : null}
-                  <Button
-                    onClick={() => props.onConfirm({
-                      globalContext: localGlobalDraft,
-                      phaseContexts: localPhaseDrafts,
-                      workingDirectory: localWorkingDirectory.trim(),
-                    })}
-                    disabled={props.actionDisabled}
-                  >
-                    {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
-                  </Button>
-                </>
-              )
-            ) : (
-              <>
-                <Button variant="destructive" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
-                <Button
-                  onClick={() => props.onConfirm({
-                    globalContext: localGlobalDraft,
-                    phaseContexts: localPhaseDrafts,
-                    workingDirectory: localWorkingDirectory.trim(),
-                  })}
-                  disabled={props.actionDisabled}
-                >
-                  {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
-                </Button>
-              </>
-            )}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
+            {startupFlowEnabled && props.onSkipPreflight ? (
+              <Button
+                variant="secondary"
+                onClick={() => props.onSkipPreflight?.({
+                  globalContext: localGlobalDraft,
+                  phaseContexts: localPhaseDrafts,
+                  workingDirectory: localWorkingDirectory.trim() || undefined,
+                })}
+                disabled={props.actionBusy}
+              >
+                跳过检查启动
+              </Button>
+            ) : null}
+            <Button
+              onClick={() => props.onConfirm({
+                globalContext: localGlobalDraft,
+                phaseContexts: localPhaseDrafts,
+                workingDirectory: localWorkingDirectory.trim() || undefined,
+              })}
+              disabled={props.actionDisabled}
+            >
+              {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
+            </Button>
           </div>
         </div>
       </div>
@@ -1721,7 +1493,6 @@ export default function WorkbenchPage({
   const [pendingCheckpointPhase, setPendingCheckpointPhase] = useState<string | null>(null);
   const [fullStepOutput, setFullStepOutput] = useState<string | null>(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
-  const [markdownModal, setMarkdownModal] = useState<{ title: string; chunks: string[] } | null>(null);
   const [specCodingModalOpen, setSpecCodingModalOpen] = useState(false);
   const [specCodingModalFullscreen, setSpecCodingModalFullscreen] = useState(false);
   const [specCodingExplorerTab, setSpecCodingExplorerTab] = useState<'artifacts' | 'revisions'>('artifacts');
@@ -1787,14 +1558,18 @@ export default function WorkbenchPage({
   const [specRevisionVote, setSpecRevisionVote] = useState<WorkflowSpecRevisionVoteRecord | null>(null);
   const [specRevisionVoteHistory, setSpecRevisionVoteHistory] = useState<WorkflowSpecRevisionVoteRecord[]>([]);
   const pendingApprovalRedirectRef = useRef<string | null>(null);
-  const [openLatestAiDocRequest, setOpenLatestAiDocRequest] = useState(0);
+  const [documentFocusRequest, setDocumentFocusRequest] = useState<{
+    requestId: number;
+    stepName: string;
+    filename?: string;
+  } | null>(null);
   const [liveStream, setLiveStream] = useState<string[]>([]);
   const [showLiveStream, setShowLiveStream] = useState(false);
   const [liveStreamFullscreen, setLiveStreamFullscreen] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<RunRightPanelTab>(() => readWorkflowRunPanelTabs(configFile).right || 'detail');
   const [leftRunPanelTab, setLeftRunPanelTab] = useState<RunLeftPanelTab>(() => readWorkflowRunPanelTabs(configFile).left || 'directory');
-  const [runInspectorPanelOpen, setRunInspectorPanelOpen] = useState(true);
-  const [designAssistantPanelOpen, setDesignAssistantPanelOpen] = useState(true);
+  const [runInspectorPanelOpen, setRunInspectorPanelOpen] = useState(false);
+  const [designAssistantPanelOpen, setDesignAssistantPanelOpen] = useState(false);
   const [workbenchNavSection, setWorkbenchNavSection] = useState<'design' | 'preview' | 'runs'>(() => (
     initialWorkbenchSection?.startsWith('preview') ? 'preview' : initialMode === 'design' ? 'design' : 'runs'
   ));
@@ -2383,7 +2158,6 @@ export default function WorkbenchPage({
   const [showContextEditor, setShowContextEditor] = useState(false);
   const [contextEditorGlobalDraft, setContextEditorGlobalDraft] = useState('');
   const [contextEditorPhaseDrafts, setContextEditorPhaseDrafts] = useState<Record<string, string>>({});
-  const [contextEditorFocusTarget, setContextEditorFocusTarget] = useState('');
   const [savingContextEditor, setSavingContextEditor] = useState(false);
   const [showPromptAnalysis, setShowPromptAnalysis] = useState(false);
   const [analyzingRunId, setAnalyzingRunId] = useState<string | null>(null);
@@ -2397,7 +2171,6 @@ export default function WorkbenchPage({
   const [startGlobalContextDraft, setStartGlobalContextDraft] = useState('');
   const [startPhaseContextDrafts, setStartPhaseContextDrafts] = useState<Record<string, string>>({});
   const [startWorkingDirectoryDraft, setStartWorkingDirectoryDraft] = useState('');
-  const [startContextFocusTarget, setStartContextFocusTarget] = useState('');
   const [startupCancelRequested, setStartupCancelRequested] = useState(false);
   const startupCancelRequestedRef = useRef(false);
   const startupCreatedRunIdRef = useRef<string | null>(null);
@@ -2963,7 +2736,7 @@ export default function WorkbenchPage({
       handleRunWorkbenchTabChange('agora');
       return;
     }
-    if (runWorkbenchTab === 'documents' || runWorkbenchTab === 'plan') {
+    if (runWorkbenchTab === 'plan') {
       handleRunWorkbenchTabChange('overview');
       return;
     }
@@ -5200,6 +4973,7 @@ export default function WorkbenchPage({
     if (!matchedAgent) return;
     dispatch({ type: 'SET_SELECTED_AGENT', payload: matchedAgent as any });
     dispatch({ type: 'SET_ACTIVE_TAB', payload: 'agents' });
+    setRunInspectorPanelOpen(true);
   }, [agents, dispatch, orderedWorkflowAgents]);
   const attentionSignal = useAttentionSignal({
     active: Boolean(pendingHumanAttentionTitle),
@@ -6121,7 +5895,6 @@ export default function WorkbenchPage({
     setViewingHistoryRun(false);
     setPendingCheckpointPhase(null);
     setFullStepOutput(null);
-    setMarkdownModal(null);
     setActiveSteps([]);
     setActiveConcurrencyGroups([]);
     setPersistedStepLogs([]);
@@ -7049,13 +6822,12 @@ export default function WorkbenchPage({
     });
     setStartGlobalContextDraft(globalContext || '');
     setStartPhaseContextDrafts(nextPhaseDrafts);
-    setStartWorkingDirectoryDraft(currentRunWorkspacePath || '');
-    setStartContextFocusTarget(startContextTargets[0] || '');
+    setStartWorkingDirectoryDraft('');
     setShowStartWorkflowDialog(true);
     try {
       let preflightPreview: Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null = null;
       if (!options?.skipPreflight) {
-        preflightPreview = await workflowApi.preflightPreview(configFile, currentRunWorkspacePath || undefined);
+        preflightPreview = await workflowApi.preflightPreview(configFile);
       }
       setPendingStartRequest((current) => current && current.mode === mode ? {
         mode,
@@ -7068,7 +6840,7 @@ export default function WorkbenchPage({
     } finally {
       setStartRequesting(false);
     }
-  }, [configFile, currentRunWorkspacePath, globalContext, phaseContexts, rehearsalMode, startContextTargets, startRequesting, starting, toast]);
+  }, [configFile, globalContext, phaseContexts, rehearsalMode, startContextTargets, startRequesting, starting, toast]);
 
   useEffect(() => {
     if (autoStartHandledRef.current) return;
@@ -8031,33 +7803,19 @@ export default function WorkbenchPage({
     setLoadingOutput(false);
   };
 
-  const openMarkdownModal = async (resultKey: string) => {
-    const result = stepResults[resultKey];
-    if (!result) return;
-    // For UUID keys, find the step name for file lookup
-    const fileName = Object.entries(stepIdMap).find(([, id]) => id === resultKey)?.[0] || resultKey;
-    const rid = runId || selectedRun?.id;
-    if (rid) {
-      try {
-        // Try stream file first (has chunk separators for visual separation)
-        const streamContent = await streamApi.getStreamContent(rid, fileName);
-        if (streamContent) {
-          const chunks = mergeAceSubtaskChunks(splitStreamChunks(streamContent));
-          if (chunks.length > 1) {
-            setMarkdownModal({ title: fileName, chunks });
-            return;
-          }
-        }
-        // Fall back to output file
-        const { content } = await runsApi.getStepOutput(rid, fileName);
-        setMarkdownModal({ title: fileName, chunks: [content] });
-        return;
-      } catch { /* fall through to local */ }
-    }
-    setMarkdownModal({ title: fileName, chunks: [result.output] });
+  const openRunRecordDocument = (input: { stepName: string; filename?: string }) => {
+    setDocumentFocusRequest({
+      requestId: Date.now(),
+      stepName: input.stepName,
+      filename: input.filename,
+    });
+    setWorkbenchNavSection('runs');
+    setRunRecordDrilled(true);
+    setRunDetailSection('documents');
+    handleRunWorkbenchTabChange('documents');
   };
 
-  const openPersistedStepLogModal = async (log: {
+  const openPersistedStepRecord = (log: {
     id: string;
     stepName: string;
     status: 'completed' | 'failed';
@@ -8065,32 +7823,8 @@ export default function WorkbenchPage({
     error: string;
   }) => {
     const resultKey = log.id || log.stepName;
-    const result = stepResults[resultKey];
-    const fileName = Object.entries(stepIdMap).find(([, id]) => id === resultKey)?.[0] || log.stepName;
-    const rid = runId || selectedRun?.id;
-
-    if (rid && log.status !== 'failed') {
-      try {
-        const streamContent = await streamApi.getStreamContent(rid, fileName);
-        if (streamContent) {
-          const chunks = mergeAceSubtaskChunks(splitStreamChunks(streamContent));
-          if (chunks.length > 1) {
-            setMarkdownModal({ title: fileName, chunks });
-            return;
-          }
-        }
-        const { content } = await runsApi.getStepOutput(rid, fileName);
-        setMarkdownModal({ title: fileName, chunks: [content] });
-        return;
-      } catch { /* fall back below */ }
-    }
-
-    if (log.status === 'failed') {
-      setMarkdownModal({ title: `${fileName}（错误详情）`, chunks: [log.error || result?.error || '执行失败，但没有记录到错误详情'] });
-      return;
-    }
-
-    setMarkdownModal({ title: fileName, chunks: [result?.output || log.output || '无输出'] });
+    const fileName = Object.entries(stepIdMap).find(([, id]) => id === resultKey)?.[0];
+    openRunRecordDocument({ stepName: log.stepName, filename: fileName });
   };
 
   // Chunk separator used in persisted stream files
@@ -9092,9 +8826,15 @@ export default function WorkbenchPage({
       return (
         <div className="border-b border-border/50 px-4 pb-3 last:border-0">
           {(parsed.timestamp || item.pageCount) ? (
-            <div className="mb-1 flex flex-wrap items-center gap-2 font-mono text-[10px] text-muted-foreground">
+            <div className="mb-2 flex flex-wrap items-center gap-2 font-mono text-[10px] text-muted-foreground">
               {parsed.timestamp ? (
-                <span>{new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                <div className="flex min-w-0 flex-1 items-center gap-2" aria-label="新发言时间">
+                  <span className="h-px min-w-4 flex-1 bg-border/70" />
+                  <span className="shrink-0">
+                    {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                  <span className="h-px min-w-4 flex-1 bg-border/70" />
+                </div>
               ) : null}
               {item.pageCount ? (
                 <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 font-sans">
@@ -9409,7 +9149,7 @@ export default function WorkbenchPage({
     </div>
   );
 
-  const openContextEditor = useCallback((_scope: 'global' | 'phase' = 'global', phase?: string) => {
+  const openContextEditor = useCallback((_scope: 'global' | 'phase' = 'global', _phase?: string) => {
     const rid = runId || initialRunId || selectedRun?.id;
     if (!rid) {
       toast('warning', '当前没有可编辑上下文的运行记录');
@@ -9420,7 +9160,6 @@ export default function WorkbenchPage({
     ) as Record<string, string>;
     setContextEditorGlobalDraft(globalContext || '');
     setContextEditorPhaseDrafts(nextPhaseDrafts);
-    setContextEditorFocusTarget(phase || '');
     setShowContextEditor(true);
   }, [globalContext, initialRunId, phaseContexts, runId, selectedRun?.id, startContextTargets, toast]);
 
@@ -11354,7 +11093,7 @@ export default function WorkbenchPage({
     return () => window.removeEventListener(WORKFLOW_RUN_VISIBILITY_EVENT, handleVisibility);
   }, []);
 
-  const handleWorkflowRunWindowSelect = useCallback((windowId: 'directory' | 'center' | 'right', visible: boolean) => {
+  const handleWorkflowRunWindowSelect = useCallback((windowId: 'directory' | 'center', visible: boolean) => {
     if (windowId === 'center') {
       dispatchWorkflowRunRestore('center');
       return;
@@ -11368,7 +11107,6 @@ export default function WorkbenchPage({
       dispatchWorkflowRunRestore('left');
       return;
     }
-    dispatchWorkflowRunRestore(windowId);
   }, []);
 
   const restoreWorkflowRunDefaultLayout = useCallback(() => {
@@ -11380,10 +11118,9 @@ export default function WorkbenchPage({
   const renderWorkflowRunWindowMenu = useCallback(() => {
     if (!isRunMode) return null;
     const leftVisible = workflowRunWindowVisibility.left !== false;
-    const items: Array<{ id: 'directory' | 'center' | 'right'; label: string; visible: boolean; locked?: boolean }> = [
+    const items: Array<{ id: 'directory' | 'center'; label: string; visible: boolean; locked?: boolean }> = [
       { id: 'directory', label: '运行信息', visible: leftVisible },
       { id: 'center', label: '运行工作区', visible: true, locked: true },
-      { id: 'right', label: '检查器', visible: workflowRunWindowVisibility.right !== false },
     ];
     return (
       <DropdownMenu>
@@ -11423,7 +11160,6 @@ export default function WorkbenchPage({
     restoreWorkflowRunDefaultLayout,
     workflowRunWindowVisibility.center,
     workflowRunWindowVisibility.left,
-    workflowRunWindowVisibility.right,
   ]);
 
   const workflowStatusPill = useMemo(() => (
@@ -11691,6 +11427,7 @@ export default function WorkbenchPage({
     { key: 'state' as const, label: '状态图', icon: 'hub' },
     { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
     { key: 'changes' as const, label: '变更', icon: 'difference' },
+    { key: 'documents' as const, label: '记录', icon: 'description' },
     { key: 'agora' as const, label: '对话', icon: 'forum' },
     { key: 'live' as const, label: '实时输出', icon: 'cell_tower' },
     ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
@@ -12405,10 +12142,7 @@ export default function WorkbenchPage({
 
       <div className="flex-1 flex overflow-hidden">
         {isRunMode && (
-          <div className={cn(
-            styles.runWorkbenchLayout,
-            !runInspectorPanelOpen && styles.runInspectorCollapsed
-          )}>
+          <div className={cn(styles.runWorkbenchLayout, styles.runDocumentsLayout)}>
             <aside className={styles.runListRail}>
               {renderWorkbenchNavigation()}
             </aside>
@@ -12433,7 +12167,14 @@ export default function WorkbenchPage({
                         <span>{formatWorkflowLocation(currentPhase, currentStep, '等待运行事件')}</span>
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2" />
+                    <div className="flex flex-wrap items-center gap-2">
+                      {runDetailSection !== 'documents' ? (
+                        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setRunInspectorPanelOpen(true)}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>psychology</span>
+                          Agent Intel
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
                 {renderHumanAttentionBanner()}
@@ -12446,15 +12187,14 @@ export default function WorkbenchPage({
                     renderRunAgoraPanel()
                   ) : runDetailSection === 'live' ? (
                     renderRunLiveOutputPanel()
-                  ) : runWorkbenchTab === 'documents' ? (
-                    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
-                      <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
-                        <DocumentsPanel
-                          runId={runId || selectedRun?.id || null}
-                          openLatestTimestampedRequest={openLatestAiDocRequest}
-                          onOpenWorkspaceDirectory={(path: string) => openWorkspaceEditorAtPath(path, '文档目录')}
-                        />
-                      </div>
+                  ) : runDetailSection === 'documents' ? (
+                    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+                      <DocumentsPanel
+                        runId={runId || selectedRun?.id || null}
+                        focusRequest={documentFocusRequest}
+                        onOpenWorkspaceDirectory={(path: string) => openWorkspaceEditorAtPath(path, '文档目录')}
+                        previewPresentation="drawer"
+                      />
                     </div>
                   ) : runDetailSection === 'spec' && runtimeSpecAvailable ? (
                     <div className="h-full min-h-0 overflow-y-auto bg-muted/20 p-4">
@@ -12507,18 +12247,15 @@ export default function WorkbenchPage({
                 </div>
               </div>
             </section>
-            <aside className={cn(styles.runContextInspector, !runInspectorPanelOpen && styles.workbenchInspectorCollapsedRail)}>
-
-              {!runInspectorPanelOpen ? (
-                <button
-                  type="button"
-                  className={styles.workbenchInspectorCollapsedButton}
-                  onClick={() => setRunInspectorPanelOpen(true)}
-                  title="打开检查器"
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: 18 }}>left_panel_open</span>
-                </button>
-              ) : !workflowConfig ? (
+            {showWorkbenchPreview && runDetailSection !== 'documents' && !runInspectorPanelOpen ? (
+              <Button type="button" variant="outline" size="sm" className="absolute right-4 top-4 z-20 h-8 gap-1.5 bg-background text-xs" onClick={() => setRunInspectorPanelOpen(true)}>
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>psychology</span>
+                Agent Intel
+              </Button>
+            ) : null}
+            <DetailDrawer open={runInspectorPanelOpen && runDetailSection !== 'documents'} onOpenChange={setRunInspectorPanelOpen}>
+              <DetailDrawerContent widthClassName="w-[min(420px,calc(100vw-1rem))]" className={cn(styles.workbenchInspectorDrawer, 'p-0')}>
+              {!workflowConfig ? (
                 <WorkbenchRunDetailLoadingSkeleton />
               ) : (
               <div className="flex flex-col h-full">
@@ -12564,10 +12301,10 @@ export default function WorkbenchPage({
                   return (<>
                 <div className={styles.workbenchInspectorHeader}>
                   <div className="flex min-h-[58px] items-center justify-between gap-2 px-4">
-                    <h2 className="min-w-0 truncate text-sm font-semibold">
+                    <DetailDrawerTitle className="min-w-0 truncate text-sm font-semibold">
                       Agent Intel
-                    </h2>
-                    <Button type="button" variant="outline" size="sm" className="h-8 w-8 shrink-0 p-0" onClick={() => setRunInspectorPanelOpen(false)} title="折叠检查器">
+                    </DetailDrawerTitle>
+                    <Button type="button" variant="outline" size="sm" className="h-8 w-8 shrink-0 p-0" onClick={() => setRunInspectorPanelOpen(false)} title="关闭 Agent Intel">
                       <span className="material-symbols-outlined" style={{ fontSize: 17 }}>right_panel_close</span>
                     </Button>
                   </div>
@@ -12805,8 +12542,11 @@ export default function WorkbenchPage({
                   })()}
                   {!stepResult.error && (
                     <Button variant="secondary" size="sm" className="mt-1.5 text-[11px]"
-                      onClick={() => openMarkdownModal(stepKey)}>
-                      查看 Markdown
+                      onClick={() => {
+                        const fileName = Object.entries(stepIdMap).find(([, id]) => id === stepKey)?.[0];
+                        openRunRecordDocument({ stepName: selectedStep.name, filename: fileName });
+                      }}>
+                      查看记录
                     </Button>
                   )}
                 </div>
@@ -12886,7 +12626,7 @@ export default function WorkbenchPage({
                 runStatusReason={runStatusReason}
                 currentStepName={currentStep || null}
                 onSelectPersistedStep={selectStepByLogName}
-                onViewPersistedStepOutput={openPersistedStepLogModal}
+                onViewPersistedStepOutput={openPersistedStepRecord}
                 systemPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.systemPrompt}
                 iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt}
                 compact={!!selectedStep} />
@@ -12897,11 +12637,12 @@ export default function WorkbenchPage({
                 })()}
               </div>
               )}
-            </aside>
+              </DetailDrawerContent>
+            </DetailDrawer>
           </div>
         )}
         {isDesignMode && editingConfig && (<>
-          <div className={cn(styles.designWorkbenchLayout, !designAssistantPanelOpen && styles.designInspectorCollapsed)}>
+          <div className={cn(styles.designWorkbenchLayout, styles.designDrawerLayout)}>
             <aside className={styles.runListRail}>
               {renderWorkbenchNavigation()}
             </aside>
@@ -13367,22 +13108,12 @@ export default function WorkbenchPage({
                   </div>
                 </div>
               )}            </section>
-            <aside className={cn(styles.designInspectorRail, !designAssistantPanelOpen && styles.workbenchInspectorCollapsedRail)}>
-              {!designAssistantPanelOpen ? (
-                <button
-                  type="button"
-                  className={styles.workbenchInspectorCollapsedButton}
-                  onClick={() => setDesignAssistantPanelOpen(true)}
-                  title="打开检查器"
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: 18 }}>left_panel_open</span>
-                </button>
-              ) : (
-              <>
+            <DetailDrawer open={designAssistantPanelOpen} onOpenChange={setDesignAssistantPanelOpen}>
+              <DetailDrawerContent widthClassName="w-[min(420px,calc(100vw-1rem))]" className={cn(styles.workbenchInspectorDrawer, 'p-0')}>
               <div className={styles.workbenchInspectorHeader}>
                 <div className="flex min-h-[58px] items-center justify-between gap-2 px-4">
-                  <h2 className="min-w-0 truncate text-sm font-semibold">Agent Intel</h2>
-                  <Button type="button" variant="outline" size="sm" className="h-8 w-8 shrink-0 p-0" onClick={() => setDesignAssistantPanelOpen(false)} title="折叠检查器">
+                  <DetailDrawerTitle className="min-w-0 truncate text-sm font-semibold">Agent Intel</DetailDrawerTitle>
+                  <Button type="button" variant="outline" size="sm" className="h-8 w-8 shrink-0 p-0" onClick={() => setDesignAssistantPanelOpen(false)} title="关闭 Agent Intel">
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>right_panel_close</span>
                   </Button>
                 </div>
@@ -13449,9 +13180,8 @@ export default function WorkbenchPage({
                   </Button>
                 </div>
               </div>
-              </>
-              )}
-            </aside>
+              </DetailDrawerContent>
+            </DetailDrawer>
           </div>
         </>)}
       </div>
@@ -13771,56 +13501,6 @@ export default function WorkbenchPage({
           </div>
         </div>
       )}
-      <Dialog open={Boolean(markdownModal)} onOpenChange={(open) => { if (!open) setMarkdownModal(null); }}>
-        <DialogContent className="flex max-h-[85vh] w-[min(900px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
-          {markdownModal ? (
-            <>
-            <div className="flex items-center justify-between border-b px-5 py-4">
-              <div className="min-w-0">
-                <DialogTitle className="truncate text-lg font-semibold">{markdownModal.title}</DialogTitle>
-                <DialogDescription className="mt-1">文档或运行输出预览</DialogDescription>
-              </div>
-              <Button variant="ghost" size="icon" onClick={() => setMarkdownModal(null)}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto p-5">
-              {markdownModal.chunks.length > 1 ? (
-                <div className="space-y-3">
-                  {(() => {
-                    // Deduplicate TodoWrite: only keep the latest todo-list chunk
-                    const TODO_MK = '<!-- todo-list-marker -->';
-                    let lastIdx = -1;
-                    const filtered = markdownModal.chunks.filter((chunk, idx) => {
-                      // Filter out filler chunks (e.g. lone "." between tool calls)
-                      const stripped = chunk.replace(/\*\*🔧 .+?\*\*/g, '').replace(/<!--.*?-->/gs, '').trim();
-                      if (stripped.length <= 1) return false;
-                      if (!chunk.includes(TODO_MK)) return true;
-                      if (lastIdx === -1) {
-                        // Scan forward to find the last one
-                        for (let k = markdownModal.chunks.length - 1; k >= 0; k--) {
-                          if (markdownModal.chunks[k].includes(TODO_MK)) { lastIdx = k; break; }
-                        }
-                      }
-                      return idx === lastIdx;
-                    });
-                    return filtered.map((chunk, i) => (
-                      <div key={i} className={`${styles.markdownContent} text-sm border-b border-border/50 pb-3 last:border-0`}>
-                        <AceAwareMarkdown content={prepareChunkForDisplay(chunk)} />
-                      </div>
-                    ));
-                  })()}
-                </div>
-              ) : (
-                <div className={styles.markdownContent}>
-                  <AceAwareMarkdown content={prepareChunkForDisplay(markdownModal.chunks[0])} />
-                </div>
-              )}
-            </div>
-            </>
-          ) : null}
-        </DialogContent>
-      </Dialog>
       <Dialog open={specDesignEnabled && specCodingModalOpen} onOpenChange={(open) => {
         setSpecCodingModalOpen(open);
         if (!open) setSpecCodingModalFullscreen(false);
@@ -14788,10 +14468,8 @@ export default function WorkbenchPage({
               }
               globalDraft={startGlobalContextDraft}
               phaseDrafts={startPhaseContextDrafts}
-              workingDirectoryDraft={startWorkingDirectoryDraft || currentRunWorkspacePath || projectRoot}
-              initialTab="global"
-              focusTarget={startContextFocusTarget}
-              onFocusTargetChange={setStartContextFocusTarget}
+              workingDirectoryDraft={startWorkingDirectoryDraft}
+              workingDirectoryEditable
               footerText={pendingStartRequest.preflightPreview?.commands?.length
                 ? '先补齐本次启动上下文，再在下一步确认检查命令并启动。'
                 : '留空的项会沿用当前已保存内容；这里只覆盖你本次确认后提交的文本。'}
@@ -14804,7 +14482,7 @@ export default function WorkbenchPage({
               preflightPreview={pendingStartRequest.preflightPreview}
               startContextTargets={startContextTargets}
               startContextScopeLabel={startContextScopeLabel}
-              projectRoot={projectRoot}
+              projectRoot={resolvedProjectRoot || projectRoot}
               onCancel={() => {
                 setShowStartWorkflowDialog(false);
                 setPendingStartRequest(null);
@@ -14830,8 +14508,7 @@ export default function WorkbenchPage({
               globalDraft={contextEditorGlobalDraft}
               phaseDrafts={contextEditorPhaseDrafts}
               workingDirectoryDraft={currentRunWorkspacePath || projectRoot}
-              focusTarget={contextEditorFocusTarget}
-              onFocusTargetChange={setContextEditorFocusTarget}
+              workingDirectoryEditable={false}
               footerText="保存会逐项更新当前运行上下文，后续步骤会按新内容继续执行。"
               actionLabel="保存"
               actionBusyLabel="保存中..."

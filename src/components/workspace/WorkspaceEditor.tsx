@@ -17,7 +17,7 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable"
-import { FileTreeSidebar, type ClipboardItem } from "./FileTreeSidebar"
+import { FileTreeSidebar, type ClipboardItem, type TreeSortMode } from "./FileTreeSidebar"
 import { EditorPanel } from "./EditorPanel"
 import { FileSearchCommand } from "./FileSearchCommand"
 import AiAssistantSheet from "@/components/chat/AiAssistantSheet"
@@ -57,6 +57,7 @@ interface WorkspaceEditorProps {
   onNotebookInspectorChange?: (state: WorkspaceEditorInspectorState) => void
   onFileLocationChange?: (filePath: string | null, lineNumber?: number | null, column?: number | null) => void
   searchParamsSnapshot?: string
+  defaultTreeSortMode?: TreeSortMode
 }
 
 export interface WorkspaceEditorInspectorState {
@@ -360,6 +361,7 @@ export function WorkspaceEditor({
   onNotebookInspectorChange,
   onFileLocationChange,
   searchParamsSnapshot,
+  defaultTreeSortMode = "name",
 }: WorkspaceEditorProps) {
   const queryClient = useQueryClient()
   const [tree, setTree] = React.useState<TreeNode[]>([])
@@ -605,8 +607,8 @@ export function WorkspaceEditor({
   const layoutId = mode === "notebook" ? `workspace-editor-${notebookBrowserView}` : "workspace-editor"
   const isNotebookDesktop = mode === "notebook" && notebookBrowserView === "desktop"
   const workspaceRootTreeParams = React.useMemo(
-    () => ({ depth: 0, offset: 0, limit: WORKSPACE_TREE_PAGE_SIZE }),
-    [],
+    () => ({ depth: 0, offset: 0, limit: WORKSPACE_TREE_PAGE_SIZE, sort: defaultTreeSortMode }),
+    [defaultTreeSortMode],
   )
   const notebookRootTreeParams = React.useMemo(
     () => ({ depth: 8, scope: notebookScope, shareToken: notebookShareToken || "" }),
@@ -644,7 +646,7 @@ export function WorkspaceEditor({
 
   const workspaceTreeQuery = useWorkspaceTreeQuery(
     workspacePath,
-    { depth: workspaceRootTreeParams.depth, offset: workspaceRootTreeParams.offset, limit: workspaceRootTreeParams.limit },
+    { depth: workspaceRootTreeParams.depth, offset: workspaceRootTreeParams.offset, limit: workspaceRootTreeParams.limit, sort: workspaceRootTreeParams.sort },
     { enabled: open && mode === "default" && Boolean(workspacePath) },
   )
   const notebookTreeQuery = useNotebookTreeQuery(
@@ -1027,6 +1029,7 @@ export function WorkspaceEditor({
         depth: 0,
         offset: rootPagination.nextOffset,
         limit: WORKSPACE_TREE_PAGE_SIZE,
+        sort: defaultTreeSortMode,
       }
       const data = await queryClient.fetchQuery({
         queryKey: queryKeys.workspace.tree(workspacePath, pageParams),
@@ -1048,7 +1051,7 @@ export function WorkspaceEditor({
     } finally {
       setRootLoadingMore(false)
     }
-  }, [mode, queryClient, rootLoadingMore, rootPagination.hasMore, rootPagination.nextOffset, toast, workspacePath])
+  }, [defaultTreeSortMode, mode, queryClient, rootLoadingMore, rootPagination.hasMore, rootPagination.nextOffset, toast, workspacePath])
 
   const handleOpenChange = React.useCallback(
     (newOpen: boolean) => {
@@ -1206,6 +1209,7 @@ export function WorkspaceEditor({
             notebookPermission={selectedFileReadOnly ? 'read' : notebookPermission}
             notebookView={notebookBrowserView}
             onNotebookViewChange={handleNotebookViewChange}
+            defaultSortMode={defaultTreeSortMode}
           />
         </ResizablePanel>
         <ResizableHandle

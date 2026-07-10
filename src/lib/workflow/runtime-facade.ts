@@ -22,10 +22,13 @@ import {
   type EngineContextRecoveryOptions,
 } from '@/lib/chat/chat-engine-runtime';
 import { createRuntimeOrchestrator } from '@/lib/runtime-agent/orchestrator';
+import { createRuntimeAdapterRegistry } from '@/lib/runtime-agent/adapters/adapter-registry';
+import { createAcpxRuntimeClient } from '@/lib/runtime-agent/adapters/acpx-runtime-client';
 import { openRuntimeSqliteDatabase } from '@/lib/runtime-agent/sqlite/database';
 import { RuntimeSqliteStore } from '@/lib/runtime-agent/sqlite/runtime-store';
+import { resolveRuntimeModelRoute } from '@/lib/runtime-agent/models/model-routes-api';
+import { ACE_CHUNK_BOUNDARY } from '@/lib/chat/ai-process-blocks';
 import type {
-  ResolvedModelRoute,
   RuntimeEvent,
   RuntimeOrchestrator,
   RuntimeProfileSnapshot,
@@ -38,6 +41,11 @@ export type WorkflowRuntimeResultMetadata = ChatRuntimeResultMetadata;
 export type WorkflowRuntimeResult = ChatRuntimeResult;
 export type WorkflowRuntimeOptions = ChatRuntimeEngineOptions;
 
+export interface WorkflowRuntimeProjectionState {
+  hasMessageText: boolean;
+  toolObservedAfterMessage: boolean;
+}
+
 export interface WorkflowRuntimeJsonResult {
   result: string;
   runtimeSessionId: string;
@@ -47,6 +55,27 @@ export interface WorkflowRuntimeJsonResult {
   is_error: boolean;
   num_turns: number;
   usage: WorkflowRuntimeTokenUsage;
+}
+
+export class WorkflowRuntimeConfigurationError extends Error {
+  readonly code = 'MODEL_ROUTE_NOT_FOUND';
+  readonly fatal = true;
+  readonly cause?: unknown;
+
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'WorkflowRuntimeConfigurationError';
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+export function isFatalWorkflowRuntimeError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { fatal?: unknown }).fatal === true
+    && (error as { code?: unknown }).code === 'MODEL_ROUTE_NOT_FOUND'
+  );
 }
 
 export interface WorkflowRuntime {
@@ -153,7 +182,14 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
     this.cancelled = false;
     const startedAt = Date.now();
     const orchestrator = getWorkflowRuntimeOrchestrator();
-    const runtimeSessionId = await this.ensureRuntimeSession(orchestrator, options);
+    let modelRouteId: string;
+    let runtimeSessionId: string;
+    try {
+      modelRouteId = resolveWorkflowModelRouteId(this.agentId, options.model);
+      runtimeSessionId = await this.ensureRuntimeSession(orchestrator, options, modelRouteId);
+    } catch (error) {
+      throw normalizeWorkflowRuntimeConfigurationError(error, this.agentId, options.model);
+    }
     this.emit('stream', { type: 'session', content: runtimeSessionId });
 
     const requestId = `${options.runId || 'workflow'}:${options.agent}:${options.step}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
@@ -163,6 +199,10 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
     let stopReason: string | undefined;
     let usage: WorkflowRuntimeTokenUsage | undefined;
     let costUsd: number | undefined;
+    const projectionState: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
 
     try {
       for await (const event of orchestrator.runTurn({
@@ -170,7 +210,7 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
         requestId,
         input: buildRuntimeTurnInput(options),
         interruptPolicy: 'cancel-and-send',
-        profileSnapshot: createRuntimeProfileSnapshot(this.agentId, options),
+        profileSnapshot: createRuntimeProfileSnapshot(this.agentId, options, modelRouteId),
         metadata: {
           workflowRuntimeFacade: true,
           runtimeType: this.runtimeType,
@@ -187,7 +227,7 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
           stopReason = 'cancelled';
           break;
         }
-        const projection = projectRuntimeEvent(event);
+        const projection = projectWorkflowRuntimeEvent(event, projectionState);
         if (projection) this.emit('stream', projection);
         if (projection?.type === 'text') output += projection.content;
         if (event.type === 'turn.failed') {
@@ -260,6 +300,7 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
   private async ensureRuntimeSession(
     orchestrator: RuntimeOrchestrator,
     options: WorkflowRuntimeOptions,
+    modelRouteId: string,
   ): Promise<string> {
     if (!options.forceNewSession && options.sessionId) {
       try {
@@ -275,7 +316,7 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
     }
     const session = await orchestrator.openSession({
       agentId: this.agentId,
-      modelRouteId: buildModelRouteId(this.agentId, options.model),
+      modelRouteId,
       cwd: options.workingDirectory,
       kind: 'workflow-agent',
       ownerUserId: options.userId,
@@ -293,41 +334,69 @@ function getWorkflowRuntimeOrchestrator(): RuntimeOrchestrator {
   sharedOrchestrator = createRuntimeOrchestrator({
     db,
     store,
-    resolveModelRoute: ({ agentId, modelRouteId }) => createResolvedModelRoute(agentId, modelRouteId),
+    adapterRegistry: createRuntimeAdapterRegistry({
+      acpxClient: createAcpxRuntimeClient(),
+    }),
   });
   return sharedOrchestrator;
 }
 
-function createResolvedModelRoute(agentId: string, modelRouteId?: string): ResolvedModelRoute {
-  const providerModel = String(modelRouteId || '').split(':').pop() || 'default';
-  return {
-    modelRouteId: modelRouteId || buildModelRouteId(agentId, providerModel),
-    agentId,
-    runtime: agentId === 'cangjie-magic' ? 'magic' : 'acpx',
-    providerModel,
-    configOptions: {},
-    envRequirements: [],
-    capabilities: {
-      streaming: true,
-      cancel: true,
-      commands: true,
-      compact: false,
-      fork: false,
-      handoff: false,
-      permissions: true,
-      toolCalls: true,
-      usage: 'missing',
-      models: providerModel ? [providerModel] : undefined,
-    },
+function runtimeAgentLabel(agentId: string): string {
+  const labels: Record<string, string> = {
+    opencode: 'OpenCode',
+    codex: 'Codex',
+    claude: 'Claude Code',
+    gemini: 'Gemini',
   };
+  return labels[agentId] || agentId;
 }
 
-function buildModelRouteId(agentId: string, model?: string): string {
-  return `workflow-facade:${agentId}:${model || 'default'}`;
+export function resolveWorkflowModelRouteId(agentId: string, model: string): string {
+  const requestedModel = String(model || '').trim();
+  const displayAgent = runtimeAgentLabel(agentId);
+  if (!requestedModel) {
+    throw new WorkflowRuntimeConfigurationError(
+      `未找到可用的模型配置。\n引擎：${displayAgent}\n请在模型管理中添加模型，或修改工作流的模型设置。`,
+    );
+  }
+
+  try {
+    const explicitRoute = resolveRuntimeModelRoute({ modelRouteId: requestedModel });
+    if (explicitRoute?.agentId === agentId && explicitRoute.modelRouteId) {
+      return explicitRoute.modelRouteId;
+    }
+  } catch {
+    // Selectors may store a model ID instead of a route ID.
+  }
+
+  const modelRoute = resolveRuntimeModelRoute({ agentId, modelId: requestedModel });
+  if (modelRoute?.modelRouteId) return modelRoute.modelRouteId;
+
+  throw new WorkflowRuntimeConfigurationError(
+    `未找到可用的模型配置。\n引擎：${displayAgent}\n模型：${requestedModel}\n请在模型管理中添加该模型，或修改工作流的模型设置。`,
+  );
 }
 
-function createRuntimeProfileSnapshot(agentId: string, options: WorkflowRuntimeOptions): RuntimeProfileSnapshot {
-  const modelRouteId = buildModelRouteId(agentId, options.model);
+function normalizeWorkflowRuntimeConfigurationError(error: unknown, agentId: string, model: string): Error {
+  if (isFatalWorkflowRuntimeError(error)) return error as Error;
+  if (isSqliteForeignKeyConstraintError(error)) {
+    return new WorkflowRuntimeConfigurationError(
+      `模型配置不存在或已失效。\n引擎：${runtimeAgentLabel(agentId)}\n模型：${model}\n请重新选择模型后启动工作流。`,
+      error,
+    );
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function isSqliteForeignKeyConstraintError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'SQLITE_CONSTRAINT_FOREIGNKEY'
+  );
+}
+
+function createRuntimeProfileSnapshot(agentId: string, options: WorkflowRuntimeOptions, modelRouteId: string): RuntimeProfileSnapshot {
   return {
     agentId,
     modelRouteId,
@@ -358,10 +427,22 @@ function buildRuntimeTurnInput(options: WorkflowRuntimeOptions): string {
   ].filter(Boolean).join('\n\n');
 }
 
-function projectRuntimeEvent(event: RuntimeEvent): WorkflowRuntimeStreamEvent | null {
+export function projectWorkflowRuntimeEvent(
+  event: RuntimeEvent,
+  state: WorkflowRuntimeProjectionState,
+): WorkflowRuntimeStreamEvent | null {
+  if (event.type.startsWith('tool.') && state.hasMessageText) {
+    state.toolObservedAfterMessage = true;
+  }
   if (event.type === 'message.delta' || event.type === 'message.completed') {
     const content = extractText(event.payload);
-    return content ? { type: 'text', content, metadata: event.payload } : null;
+    if (!content) return null;
+    const prefix = state.toolObservedAfterMessage
+      ? `${ACE_CHUNK_BOUNDARY}<!-- timestamp: ${event.createdAt} -->\n`
+      : '';
+    state.hasMessageText = true;
+    state.toolObservedAfterMessage = false;
+    return { type: 'text', content: prefix + content, metadata: event.payload };
   }
   if (event.type === 'thought.delta') {
     const content = extractText(event.payload);

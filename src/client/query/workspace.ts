@@ -37,6 +37,7 @@ function workspaceTreeParams(options: WorkspaceTreeOptions = {}) {
     depth: options.depth ?? 0,
     offset: options.offset ?? 0,
     limit: options.limit ?? null,
+    sort: options.sort || 'name',
   };
 }
 
