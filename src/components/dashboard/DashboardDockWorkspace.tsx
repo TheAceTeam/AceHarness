@@ -963,8 +963,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       const distance = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
       if (distance < 6) return;
       pending.dragging = true;
-      window.requestAnimationFrame(restorePreDragActivePanel);
-    }, [restorePreDragActivePanel]);
+    }, []);
 
     const handlePointerUpCapture = useCallback(() => {
       window.setTimeout(() => {

@@ -621,7 +621,7 @@ export default function DashboardPage() {
   const handleActiveDockTabChange = useCallback((tab: DashboardDockTab | null) => {
     let nextTab = tab || { id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' };
     const currentSearch = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : searchParams.toString();
-    if (nextTab.kind === 'workbench') {
+    if (nextTab.kind === 'workbench' && !nextTab.search) {
       const currentParams = new URLSearchParams(currentSearch);
       const currentRoute = normalizeEmbeddedRoute(currentParams.get('route'));
       if (currentRoute) {
