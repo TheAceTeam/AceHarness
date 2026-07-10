@@ -2,7 +2,7 @@ import { getBuiltinAgentDefinition } from '../agent-registry';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import { existsSync } from 'fs';
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { isWindows } from '@/lib/core/runtime-platform';
 import type {
   AcpRuntime,
@@ -200,26 +200,14 @@ function buildAcpxCommandAttemptParts(
   if (options.agentId === 'nga' || command.command === 'ngagent' || command.command === 'nga') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
     const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || (!isWindows() ? findCommand('ngagent', searchPaths) : null);
-    const nga = !ngagent
-      ? (resolveWindowsCmdShim('nga', searchPaths) || (!isWindows() ? findCommand('nga', searchPaths) : null))
-      : null;
-    const primaryCommand = ngagent || nga || command.command;
-    const primaryArgs = ngagent ? ['acp'] : ['--disable-update', 'acp'];
-    if (options.cwd) primaryArgs.push('--cwd', options.cwd);
-
-    const codeagent = resolveNgaCodeagent(primaryCommand, searchPaths);
-    const codeagentArgs = ['acp'];
-    if (options.cwd) codeagentArgs.push('--cwd', options.cwd);
-    const preferCodeagent = /^(1|true|yes)$/i.test(getConfiguredEnvValueSync('ACEH_NGA_USE_CODEAGENT') || '');
-
-    const primary = { source: primaryCommand.includes('ngagent') ? 'ngagent' : 'nga', parts: [primaryCommand, ...primaryArgs] };
-    const fallback = codeagent ? { source: 'codeagent', parts: [codeagent, ...codeagentArgs] } : null;
-    return preferCodeagent && fallback ? [fallback, primary] : [primary, ...(fallback ? [fallback] : [])];
+    const args = ['--disable-update', 'acp'];
+    if (options.cwd) args.push('--cwd', options.cwd);
+    return [{ source: 'ngagent', parts: [ngagent || 'ngagent', ...args] }];
   }
   if (options.agentId === 'codegenie' || command.command === 'codegenie') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
     const explicit = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
-    const resolvedCommand = (explicit ? findCommand(explicit, searchPaths) : null)
+    const resolvedCommand = explicit
       || resolveWindowsCmdShim('codegenie', searchPaths)
       || (!isWindows() ? findCommand('codegenie', searchPaths) : null)
       || command.command;
@@ -235,31 +223,6 @@ function resolveWindowsCmdShim(command: string, searchPaths: string[]): string |
   for (const dir of searchPaths) {
     if (!dir) continue;
     const candidate = join(dir, `${command}.cmd`);
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-function resolveNgaCodeagent(primaryCommand: string, searchPaths: string[]): string | null {
-  const explicitPath = getConfiguredEnvValueSync('ACEH_NGA_CODEAGENT_PATH');
-  if (explicitPath) {
-    const resolved = findCommand(explicitPath, searchPaths);
-    if (resolved) return resolved;
-  }
-
-  const ochome = getConfiguredEnvValueSync('OCHOME');
-  const home = getConfiguredEnvValueSync('HOME') || getConfiguredEnvValueSync('USERPROFILE');
-  const candidates = [
-    primaryCommand ? join(dirname(primaryCommand), 'codeagent') : '',
-    primaryCommand ? join(dirname(primaryCommand), 'bin', 'codeagent') : '',
-    primaryCommand ? join(dirname(dirname(primaryCommand)), 'bin', 'codeagent') : '',
-    ochome ? join(ochome, 'bin', 'codeagent') : '',
-    home ? join(home, 'OCHOME', 'bin', 'codeagent') : '',
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    const resolved = findCommand(candidate, searchPaths);
-    if (resolved) return resolved;
     if (existsSync(candidate)) return candidate;
   }
   return null;

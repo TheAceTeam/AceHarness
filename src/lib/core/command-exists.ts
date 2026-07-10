@@ -99,7 +99,12 @@ function getExecutableCandidates(command: string): string[] {
     .map((ext) => ext.trim())
     .filter(Boolean);
 
-  return [...pathext.map((ext) => `${command}${ext}`), command];
+  const preferred = ['.CMD', '.BAT', '.COM', '.EXE'];
+  const ordered = [
+    ...preferred,
+    ...pathext.filter((ext) => !preferred.some((item) => item.toLowerCase() === ext.toLowerCase())),
+  ];
+  return [...ordered.map((ext) => `${command}${ext}`), command];
 }
 
 function pickPreferredWindowsCommand(candidates: string[]): string | null {
