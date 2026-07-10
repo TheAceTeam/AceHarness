@@ -81,7 +81,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { DetailDrawer, DetailDrawerContent, DetailDrawerTitle } from '@/components/ui/detail-drawer';
+import { DetailDrawer, DetailDrawerBody, DetailDrawerContent, DetailDrawerDescription, DetailDrawerHeader, DetailDrawerTitle } from '@/components/ui/detail-drawer';
 import { ChevronDown } from 'lucide-react';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useToast } from '@/components/ui/toast';
@@ -799,16 +799,18 @@ function emptyAggregatedTokenUsage(): AggregatedTokenUsage {
 }
 
 function normalizeAggregatedTokenUsage(source?: Partial<AggregatedTokenUsage> | null): AggregatedTokenUsage {
-  const inputTokens = typeof source?.inputTokens === 'number' ? source.inputTokens : 0;
-  const outputTokens = typeof source?.outputTokens === 'number' ? source.outputTokens : 0;
-  const cacheCreationInputTokens = typeof source?.cacheCreationInputTokens === 'number' ? source.cacheCreationInputTokens : 0;
-  const cacheReadInputTokens = typeof source?.cacheReadInputTokens === 'number' ? source.cacheReadInputTokens : 0;
+  const raw = source as any;
+  const inputTokens = typeof raw?.inputTokens === 'number' ? raw.inputTokens : typeof raw?.input === 'number' ? raw.input : 0;
+  const outputTokens = typeof raw?.outputTokens === 'number' ? raw.outputTokens : typeof raw?.output === 'number' ? raw.output : 0;
+  const cacheCreationInputTokens = typeof raw?.cacheCreationInputTokens === 'number' ? raw.cacheCreationInputTokens : 0;
+  const cacheReadInputTokens = typeof raw?.cacheReadInputTokens === 'number' ? raw.cacheReadInputTokens : 0;
+  const computedTotal = inputTokens + outputTokens + cacheCreationInputTokens + cacheReadInputTokens;
   return {
     inputTokens,
     outputTokens,
     cacheCreationInputTokens,
     cacheReadInputTokens,
-    totalTokens: inputTokens + outputTokens + cacheCreationInputTokens + cacheReadInputTokens,
+    totalTokens: computedTotal || (typeof raw?.totalTokens === 'number' ? raw.totalTokens : typeof raw?.total === 'number' ? raw.total : 0),
   };
 }
 
@@ -1572,6 +1574,8 @@ export default function WorkbenchPage({
   const [rightPanelTab, setRightPanelTab] = useState<RunRightPanelTab>(() => readWorkflowRunPanelTabs(configFile).right || 'detail');
   const [leftRunPanelTab, setLeftRunPanelTab] = useState<RunLeftPanelTab>(() => readWorkflowRunPanelTabs(configFile).left || 'directory');
   const [runInspectorPanelOpen, setRunInspectorPanelOpen] = useState(false);
+  const [runTimelineMode, setRunTimelineMode] = useState<'steps' | 'states'>('steps');
+  const [overviewStepRecord, setOverviewStepRecord] = useState<any | null>(null);
   const [designAssistantPanelOpen, setDesignAssistantPanelOpen] = useState(false);
   const [workbenchNavSection, setWorkbenchNavSection] = useState<'design' | 'preview' | 'runs'>(() => (
     initialWorkbenchSection?.startsWith('preview') ? 'preview' : initialMode === 'design' ? 'design' : 'runs'
@@ -4540,6 +4544,103 @@ export default function WorkbenchPage({
       };
     });
   }, [formatWorkflowLocation, runStartedAtForOverview, smStateHistory]);
+  const runStepTimeline = useMemo(() => {
+    const workflow = workflowConfig?.workflow;
+    const formationStates = !workflow
+      ? [] as StateMachineState[]
+      : workflow.mode === 'state-machine'
+        ? (workflow.states || []) as StateMachineState[]
+        : (workflow.phases || []).map((phase: any) => ({
+            name: String(phase?.name || '').trim() || '未命名阶段',
+            steps: phase?.steps || [],
+          })) as StateMachineState[];
+    const resolveStepMeta = (stepName?: string | null) => {
+      const rawName = String(stepName || '').trim();
+      if (!rawName) return { stateName: '', stepName: '', agent: '' };
+      for (const stateNode of formationStates) {
+        for (const step of stateNode.steps || []) {
+          const candidate = String(step?.name || '').trim();
+          if (!candidate) continue;
+          const stateName = String(stateNode.name || '').trim();
+          const matches = rawName === candidate
+            || rawName === `${stateName}-${candidate}`
+            || rawName === `state:${stateName}#${candidate}`
+            || workflowStepKeyMatchesName(rawName, candidate);
+          if (matches) {
+            return {
+              stateName,
+              stepName: candidate,
+              agent: String(step?.agent || '').trim(),
+            };
+          }
+        }
+      }
+      const normalized = rawName.replace(/-迭代\d+$/, '');
+      return { stateName: '', stepName: normalized || rawName, agent: '' };
+    };
+
+    const items = (persistedStepLogs || []).map((log: any, index: number) => {
+      const rawStepName = String(log?.stepName || log?.step || log?.name || '').trim();
+      const meta = resolveStepMeta(rawStepName);
+      const output = String(log?.output || log?.outputPreview || '').trim();
+      const error = String(log?.error || log?.errorPreview || '').trim();
+      const status = String(log?.status || (error ? 'failed' : output ? 'completed' : 'unknown')).trim();
+      const tokenUsage = normalizeAggregatedTokenUsage(log?.tokenUsage);
+      const agentName = String(log?.agent || meta.agent || '').trim();
+      const runtimeAgent = agentName ? agents.find((agent) => agent.name === agentName) : null;
+      const roleConfig = agentName ? agentConfigs.find((role: any) => role.name === agentName) : null;
+      return {
+        id: String(log?.id || `${rawStepName || 'step'}-${index}`),
+        index,
+        rawStepName,
+        stepName: meta.stepName || rawStepName || `步骤 ${index + 1}`,
+        stateName: meta.stateName,
+        agent: agentName,
+        status,
+        timestamp: log?.timestamp || log?.createdAt || log?.endTime || log?.startTime || null,
+        durationMs: typeof log?.durationMs === 'number' ? log.durationMs : undefined,
+        tokenUsage,
+        engineName: String(log?.engineName || '').trim(),
+        modelName: String(log?.modelName || log?.model || log?.payload?.modelName || log?.payload?.model || (runtimeAgent as any)?.model || roleConfig?.model || '').trim(),
+        sessionId: log?.sessionId || null,
+        output,
+        error,
+        payload: log,
+      };
+    });
+
+    const existingStepKeys = new Set(items.flatMap((item) => [item.rawStepName, item.stepName].filter(Boolean)));
+    const activeKeys = Array.from(new Set([currentStep, ...activeSteps].map((value) => String(value || '').trim()).filter(Boolean)));
+    activeKeys.forEach((activeKey) => {
+      const meta = resolveStepMeta(activeKey);
+      if (existingStepKeys.has(activeKey) || existingStepKeys.has(meta.stepName)) return;
+      items.push({
+        id: `active:${activeKey}`,
+        index: items.length,
+        rawStepName: activeKey,
+        stepName: meta.stepName || activeKey,
+        stateName: meta.stateName,
+        agent: meta.agent,
+        status: 'running',
+        timestamp: null,
+        durationMs: undefined,
+        tokenUsage: emptyAggregatedTokenUsage(),
+        engineName: '',
+        modelName: '',
+        sessionId: null,
+        output: '',
+        error: '',
+        payload: null,
+      });
+    });
+
+    return items.sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : NaN;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : NaN;
+      if (!Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime !== bTime) return aTime - bTime;
+      return a.index - b.index;
+    });
+  }, [activeSteps, agentConfigs, agents, currentStep, persistedStepLogs, workflowConfig?.workflow]);
   const preparingProgress = useMemo(() => {
     if (workflowStatus !== 'preparing') return null;
     const text = currentStep || '';
@@ -4564,6 +4665,9 @@ export default function WorkbenchPage({
   const selectedRoleConfig = selectedStep
     ? agentConfigs.find((role: any) => role.name === selectedStep.agent)
     : null;
+  const selectedAgentRoleConfig = selectedAgent
+    ? agentConfigs.find((role: any) => role.name === selectedAgent.name)
+    : null;
   const selectedRoleSelection = useMemo(() => {
     if (!selectedRoleConfig) return null;
     return resolveWorkflowAgentSelection(
@@ -4578,6 +4682,12 @@ export default function WorkbenchPage({
       },
     );
   }, [selectedRoleConfig, globalEngine, globalDefaultModel, engine, currentWorkflowExecutionPolicy]);
+  const overviewStepTokenUsage = normalizeAggregatedTokenUsage(overviewStepRecord?.tokenUsage);
+  const overviewStepCacheHitTokens = overviewStepTokenUsage.cacheReadInputTokens;
+  const overviewStepCacheHitRatio = formatTokenPercent(
+    overviewStepCacheHitTokens,
+    overviewStepTokenUsage.inputTokens + overviewStepCacheHitTokens,
+  );
   const pendingHumanQuestionKindLabel = useMemo(() => {
     if (!pendingHumanQuestion) return null;
     if (pendingHumanQuestion.source?.type === 'human-help') return '人工客服';
@@ -5616,7 +5726,9 @@ export default function WorkbenchPage({
       timestamp: (row.payload as any)?.timestamp || row.timestamp,
       durationMs: (row.payload as any)?.durationMs || row.durationMs,
       costUsd: (row.payload as any)?.costUsd || row.costUsd,
+      tokenUsage: (row.payload as any)?.tokenUsage,
       engineName: (row.payload as any)?.engineName || row.engineName,
+      modelName: (row.payload as any)?.modelName || (row.payload as any)?.model,
       sessionId: (row.payload as any)?.sessionId || row.sessionId,
       childRunId: (row.payload as any)?.childRunId || row.childRunId,
       childStatus: (row.payload as any)?.childStatus || row.childStatus,
@@ -7825,6 +7937,20 @@ export default function WorkbenchPage({
     if (matchedStep) {
       selectStep(matchedStep);
     }
+  };
+
+  const openStepRecordInStateDiagram = (record: any) => {
+    const stepName = String(record?.rawStepName || record?.stepName || '').trim();
+    if (!stepName) return;
+    if (record?.stateName) {
+      setFocusedState(record.stateName);
+    }
+    selectStepByLogName(stepName);
+    setWorkbenchNavSection('runs');
+    setRunRecordDrilled(true);
+    setRunDetailSection('state');
+    handleRunWorkbenchTabChange('state');
+    setOverviewStepRecord(null);
   };
 
   const loadFullOutput = async (stepName: string) => {
@@ -11466,7 +11592,7 @@ export default function WorkbenchPage({
     { key: 'agents' as const, label: 'Agents', icon: 'groups' },
     { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
     { key: 'changes' as const, label: '变更', icon: 'difference' },
-    { key: 'documents' as const, label: '记录', icon: 'description' },
+    { key: 'documents' as const, label: '工作总结', icon: 'description' },
     { key: 'agora' as const, label: '对话', icon: 'forum' },
     { key: 'live' as const, label: '实时输出', icon: 'cell_tower' },
     ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
@@ -12163,14 +12289,118 @@ export default function WorkbenchPage({
           <div className={styles.workbenchTransitionHeader}>
             <div>
               <div className={styles.workbenchTransitionTitle}>流转记录</div>
-              <div className={styles.workbenchTransitionSubtitle}>记录每个状态的开始时间和转移时间</div>
+              <div className={styles.workbenchTransitionSubtitle}>
+                {runTimelineMode === 'steps' ? '按步骤展示执行顺序，点击步骤名查看 AI 输出' : '记录每个状态的开始时间和转移时间'}
+              </div>
             </div>
-            <StatusPill tone={runTransitionTimeline.length > 0 ? 'info' : 'neutral'}>
-              {runTransitionTimeline.length} 条
-            </StatusPill>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-lg border bg-background p-0.5">
+                <Button
+                  type="button"
+                  variant={runTimelineMode === 'steps' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 rounded-md px-2.5 text-xs"
+                  onClick={() => setRunTimelineMode('steps')}
+                >
+                  步骤流转
+                </Button>
+                <Button
+                  type="button"
+                  variant={runTimelineMode === 'states' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 rounded-md px-2.5 text-xs"
+                  onClick={() => setRunTimelineMode('states')}
+                >
+                  状态转移
+                </Button>
+              </div>
+              <StatusPill tone={(runTimelineMode === 'steps' ? runStepTimeline.length : runTransitionTimeline.length) > 0 ? 'info' : 'neutral'}>
+                {runTimelineMode === 'steps' ? runStepTimeline.length : runTransitionTimeline.length} 条
+              </StatusPill>
+            </div>
           </div>
           <div className={styles.workbenchTransitionList}>
-            {runTransitionTimeline.length > 0 ? (
+            {runTimelineMode === 'steps' ? (
+              runStepTimeline.length > 0 ? (
+                runStepTimeline.map((item) => {
+                  const hasDetails = Boolean(item.output || item.error || item.payload);
+                  const statusLabel = item.status === 'completed'
+                    ? '完成'
+                    : item.status === 'failed'
+                      ? '失败'
+                      : item.status === 'running'
+                        ? '运行中'
+                        : item.status || '未知';
+                  const statusTone = item.status === 'completed'
+                    ? 'success'
+                    : item.status === 'failed'
+                      ? 'danger'
+                      : item.status === 'running'
+                        ? 'info'
+                        : 'neutral';
+                  const itemTokenUsage = normalizeAggregatedTokenUsage(item.tokenUsage);
+                  const itemCacheHitTokens = itemTokenUsage.cacheReadInputTokens;
+                  const itemCacheHitRatio = formatTokenPercent(itemCacheHitTokens, itemTokenUsage.inputTokens + itemCacheHitTokens);
+                  return (
+                    <div key={item.id} className={styles.workbenchTransitionItem}>
+                      <div className={styles.workbenchTransitionTime}>
+                        <span>{formatRunClockTime(item.timestamp)}</span>
+                        {item.durationMs ? <span>{formatRunDuration(item.durationMs)}</span> : null}
+                      </div>
+                      <div className={styles.workbenchTransitionBody}>
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            className="min-w-0 truncate text-left text-sm font-semibold text-foreground underline-offset-4 hover:text-primary hover:underline disabled:pointer-events-none disabled:no-underline"
+                            disabled={!hasDetails}
+                            onClick={() => setOverviewStepRecord(item)}
+                          >
+                            {item.stepName}
+                          </button>
+                          <StatusPill tone={statusTone as any} className="py-0.5 text-[10px]">{statusLabel}</StatusPill>
+                          {item.agent ? (
+                            <button
+                              type="button"
+                              className="inline-flex h-5 max-w-full items-center rounded-full border px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/10 hover:text-primary"
+                              title={`查看 ${item.agent} 的 Agent Intel`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openAgentFromTask(item.agent);
+                              }}
+                            >
+                              <span className="truncate">{item.agent}</span>
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          {item.stateName ? <span className="truncate">状态：{formatStateName(item.stateName)}</span> : null}
+                          {item.engineName ? <span className="truncate">引擎：{item.engineName}</span> : null}
+                          {item.modelName ? <span className="truncate">模型：{item.modelName}</span> : null}
+                        </div>
+                        {itemTokenUsage.totalTokens > 0 ? (
+                          <div className="mt-2 grid gap-1 rounded-md border bg-background/70 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground sm:grid-cols-3">
+                            <div>
+                              <span className="text-muted-foreground">Token 消耗</span>
+                              <span className="ml-1 font-semibold text-foreground">{formatTokenCount(itemTokenUsage.totalTokens)}</span>
+                            </div>
+                            <div>
+                              输入 {formatTokenCount(itemTokenUsage.inputTokens)} · 输出 {formatTokenCount(itemTokenUsage.outputTokens)}
+                            </div>
+                            <div>
+                              缓存命中 {formatTokenCount(itemCacheHitTokens)} / {itemCacheHitRatio}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className={styles.workbenchEmptyHint}>
+                  当前运行还没有步骤执行记录。
+                </div>
+              )
+            ) : runTransitionTimeline.length > 0 ? (
               runTransitionTimeline.map((item) => (
                 <div key={item.id} className={styles.workbenchTransitionItem}>
                   <div className={styles.workbenchTransitionTime}>
@@ -12340,6 +12570,130 @@ export default function WorkbenchPage({
                 Agent Intel
               </Button>
             ) : null}
+            <DetailDrawer open={Boolean(overviewStepRecord)} onOpenChange={(open) => {
+              if (!open) setOverviewStepRecord(null);
+            }}>
+              <DetailDrawerContent widthClassName="w-[min(760px,calc(100vw-1rem))]" className={cn(styles.workbenchInspectorDrawer, 'p-0')}>
+                <DetailDrawerHeader>
+                  <DetailDrawerTitle>{overviewStepRecord?.stepName || '步骤输出'}</DetailDrawerTitle>
+                  <DetailDrawerDescription>
+                    {[overviewStepRecord?.stateName ? `状态：${formatStateName(overviewStepRecord.stateName)}` : null, overviewStepRecord?.agent ? `Agent：${overviewStepRecord.agent}` : null, overviewStepRecord?.timestamp ? formatRunClockTime(overviewStepRecord.timestamp) : null].filter(Boolean).join(' · ') || '查看该步骤记录的完整输出'}
+                  </DetailDrawerDescription>
+                </DetailDrawerHeader>
+                <DetailDrawerBody className="space-y-4">
+                  {overviewStepRecord ? (
+                    <>
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 text-xs"
+                          onClick={() => openStepRecordInStateDiagram(overviewStepRecord)}
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>hub</span>
+                          在状态图查看
+                        </Button>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">状态</div>
+                          <div className="mt-1 text-sm font-semibold">
+                            {overviewStepRecord.status === 'completed' ? '完成' : overviewStepRecord.status === 'failed' ? '失败' : overviewStepRecord.status === 'running' ? '运行中' : overviewStepRecord.status || '未知'}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">Agent</div>
+                          <div className="mt-1 truncate text-sm font-semibold">{overviewStepRecord.agent || '-'}</div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">耗时</div>
+                          <div className="mt-1 text-sm font-semibold">{overviewStepRecord.durationMs ? formatRunDuration(overviewStepRecord.durationMs) : '-'}</div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">Token 消耗</div>
+                          <div className="mt-1 text-sm font-semibold">{formatTokenCount(overviewStepTokenUsage.totalTokens)}</div>
+                          <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                            输入 {formatTokenCount(overviewStepTokenUsage.inputTokens)} · 输出 {formatTokenCount(overviewStepTokenUsage.outputTokens)}
+                          </div>
+                          <div className="text-[11px] leading-5 text-muted-foreground">
+                            缓存命中 {formatTokenCount(overviewStepCacheHitTokens)} / {overviewStepCacheHitRatio}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">引擎</div>
+                          <div className="mt-1 truncate text-sm font-semibold">{overviewStepRecord.engineName || '-'}</div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">模型</div>
+                          <div className="mt-1 truncate text-sm font-semibold">{overviewStepRecord.modelName || '-'}</div>
+                        </div>
+                        <div className="rounded-lg border bg-background p-3">
+                          <div className="text-xs text-muted-foreground">Session</div>
+                          <div className="mt-1 truncate font-mono text-xs">{overviewStepRecord.sessionId || '-'}</div>
+                        </div>
+                      </div>
+                      {overviewStepRecord.error ? (
+                        <div>
+                          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">执行错误</div>
+                          <pre className="max-h-[65vh] overflow-auto rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive whitespace-pre-wrap break-words">
+                            {overviewStepRecord.error}
+                          </pre>
+                        </div>
+                      ) : overviewStepRecord.output ? (() => {
+                        const chunks = splitStreamChunks(overviewStepRecord.output);
+                        const TODO_MARKER = '<!-- todo-list-marker -->';
+                        let lastTodoIndex = -1;
+                        for (let index = chunks.length - 1; index >= 0; index--) {
+                          if (chunks[index].includes(TODO_MARKER)) {
+                            lastTodoIndex = index;
+                            break;
+                          }
+                        }
+                        const visibleChunks = chunks.filter((chunk, index) => {
+                          if (chunk.includes(TODO_MARKER) && index !== lastTodoIndex) return false;
+                          const stripped = chunk.replace(/<!--.*?-->/gs, '').trim();
+                          return stripped.length > 1;
+                        });
+                        return (
+                          <div>
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AI 输出</div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => openPersistedStepRecord({
+                                  id: overviewStepRecord.id,
+                                  stepName: overviewStepRecord.rawStepName || overviewStepRecord.stepName,
+                                  status: overviewStepRecord.status,
+                                  output: overviewStepRecord.output,
+                                  error: overviewStepRecord.error,
+                                })}
+                              >
+                                查看记录
+                              </Button>
+                            </div>
+                            <div className={`${styles.markdownContent} max-h-[65vh] overflow-auto rounded-lg border bg-background p-4 text-sm leading-relaxed`}>
+                              {visibleChunks.length > 0 ? visibleChunks.map((chunk, index) => (
+                                <div key={index} className={index < visibleChunks.length - 1 ? 'mb-4 border-b border-border/60 pb-4' : ''}>
+                                  <AceAwareMarkdown content={prepareChunkForDisplay(chunk)} />
+                                </div>
+                              )) : <AceAwareMarkdown content={prepareChunkForDisplay(overviewStepRecord.output)} />}
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div className={styles.workbenchEmptyHint}>
+                          这个步骤还没有记录到 AI 输出。
+                        </div>
+                      )}
+                    </>
+                  ) : null}
+                </DetailDrawerBody>
+              </DetailDrawerContent>
+            </DetailDrawer>
             <DetailDrawer open={runInspectorPanelOpen && runDetailSection !== 'documents'} onOpenChange={setRunInspectorPanelOpen}>
               <DetailDrawerContent widthClassName="w-[min(420px,calc(100vw-1rem))]" className={cn(styles.workbenchInspectorDrawer, 'p-0')}>
               {!workflowConfig ? (
@@ -12404,319 +12758,35 @@ export default function WorkbenchPage({
                       </div>
                       <div className="min-w-0">
                         <div className="truncate text-lg font-semibold">
-                          {selectedAgent?.name || selectedRoleConfig?.name || runtimeSupervisorAgent?.name || '运行上下文'}
+                          {selectedAgent?.name || selectedAgentRoleConfig?.name || runtimeSupervisorAgent?.name || 'Agent Intel'}
                         </div>
                         <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                          {showWorkbenchPreview
-                            ? (selectedStep ? selectedStep.name : '选择状态图里的步骤查看详情')
-                            : selectedStep ? selectedStep.name : currentStep || currentPhase || '当前运行对象'}
+                          {selectedAgent ? 'Agent 资料、提示词和完成步骤记录' : '选择一个 Agent 查看资料'}
                         </div>
                       </div>
                     </div>
-                    <div className={styles.workbenchInspectorCard}>
-                      <div className="text-xs font-medium text-muted-foreground">当前对象</div>
-                      <div className="mt-2 text-sm font-semibold">
-                        {selectedStep ? (stepKey !== selectedStep.name ? stepKey : selectedStep.name) : selectedAgent ? selectedAgent.name : showWorkbenchPreview ? '工作流结构' : currentStep || currentPhase || '运行摘要'}
-                      </div>
-                      <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                        {selectedStep ? (showWorkbenchPreview ? '步骤配置与结构信息' : '步骤详情与执行摘要') : showWorkbenchPreview ? '预览模式用于查看结构和入口位置' : '当前运行状态与上下文摘要'}
-                      </div>
-                    </div>
-                    <div className={styles.workbenchInspectorCard}>
-                      <div className="text-xs font-medium text-muted-foreground">{showWorkbenchPreview ? '预览上下文' : '运行上下文'}</div>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                        <div className="rounded-lg border bg-background px-2 py-2">
-                          <div className="text-muted-foreground">状态</div>
-                          <div className="mt-1 font-semibold">{showWorkbenchPreview ? '预览' : formatWorkflowStatusLabel(workflowStatus)}</div>
-                        </div>
-                        <div className="rounded-lg border bg-background px-2 py-2">
-                          <div className="text-muted-foreground">{showWorkbenchPreview ? '步骤' : '阶段'}</div>
-                          <div className="mt-1 truncate font-semibold">{showWorkbenchPreview ? (selectedStep?.name || '-') : (currentPhase || '-')}</div>
-                        </div>
-                      </div>
-                    </div>
-                    {selectedRoleConfig?.temperature !== undefined ? (
+                    {selectedAgentRoleConfig?.temperature !== undefined ? (
                       <div className={styles.workbenchInspectorCard}>
                         <div className="flex items-center justify-between gap-2 text-xs">
                           <span className="font-medium text-muted-foreground">Temperature</span>
-                          <span className="font-mono">{selectedRoleConfig.temperature}</span>
+                          <span className="font-mono">{selectedAgentRoleConfig.temperature}</span>
                         </div>
-                        <div className={styles.workbenchInspectorSlider}><span style={{ width: `${Math.max(0, Math.min(100, Number(selectedRoleConfig.temperature) * 100))}%` }} /></div>
+                        <div className={styles.workbenchInspectorSlider}><span style={{ width: `${Math.max(0, Math.min(100, Number(selectedAgentRoleConfig.temperature) * 100))}%` }} /></div>
                       </div>
                     ) : null}
-              {selectedStep && (
-                <div className="bg-muted border-b p-3.5">
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <span className="material-symbols-outlined text-base">
-                      {selectedRoleConfig?.team === 'blue' ? 'swords' : selectedRoleConfig?.team === 'judge' ? 'gavel' : selectedRoleConfig?.team === 'red' ? 'shield' : 'radio_button_unchecked'}
-                    </span>
-                    <span className="text-sm font-semibold flex-1">{selectedStep.name}</span>
-                    {isCurrentStepRunning ? (
-                      <Badge className="border-blue-500/30 bg-blue-500/10 text-[10px] text-blue-600">运行中</Badge>
-                    ) : isStepDone ? (
-                      <Badge className="border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-600">已完成</Badge>
-                    ) : isStepFailed ? (
-                      <Badge variant="destructive" className="text-[10px]">失败</Badge>
-                    ) : null}
-                    {selectedStep.agent && (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{selectedStep.agent}</Badge>
-                    )}
-                    {selectedRoleConfig && (
-                      <Badge className={selectedRoleConfig.team === 'blue' ? 'bg-blue-500/20 text-blue-400' : selectedRoleConfig.team === 'red' ? 'bg-red-500/20 text-red-400' : selectedRoleConfig.team === 'judge' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-muted text-muted-foreground'}>{selectedRoleConfig.team}</Badge>
-                    )}
-                  </div>
-                  <div className="mb-2.5">
-                    <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">任务描述</div>
-                    <div className="text-sm leading-relaxed max-h-[300px] overflow-y-auto"><Markdown>{selectedStep.task}</Markdown></div>
-                  </div>
-                  {selectedStep.constraints?.length > 0 && (
-                    <div className="mb-2.5">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">约束条件</div>
-                      <ul className="list-disc pl-4 text-xs leading-relaxed">
-                        {selectedStep.constraints.map((c: string, i: number) => (
-                          <li key={i}>{c}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {isCurrentStepRunning ? (
-                    <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                      <div className="flex items-start gap-2">
-                        <span className="material-symbols-outlined mt-0.5 text-amber-600" style={{ fontSize: 16 }}>warning</span>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-semibold text-amber-700 dark:text-amber-300">强制放行当前步骤</div>
-                          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                            仅当你确认实时输出已经足够作为结果时使用。系统会中断当前步骤，并用已有输出继续推进工作流。
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            className="mt-2 h-8 text-xs"
-                            onClick={forceCompleteStep}
-                            disabled={forceCompleting || !canForceCompleteStep}
-                          >
-                            {forceCompleting ? <ClipLoader color="currentColor" size={14} className="mr-1" /> : <span className="material-symbols-outlined mr-1 text-sm">published_with_changes</span>}
-                            {forceCompleting ? '放行中...' : '强制放行当前步骤'}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                  {selectedRoleConfig && (
-                    <div className="border-t pt-2.5">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Agent 配置</div>
-                      <div className="flex gap-2 items-center mb-1.5">
-                        <span className="text-xs text-muted-foreground">引擎</span>
-                        <span className="text-xs font-mono">{getEngineMeta(selectedRoleSelection?.effectiveEngine || '')?.name || selectedRoleSelection?.effectiveEngine || '-'}</span>
-                      </div>
-                      <div className="flex gap-2 items-center mb-1.5">
-                        <span className="text-xs text-muted-foreground">模型</span>
-                        <span className="text-xs font-mono">{selectedRoleSelection?.effectiveModel || selectedRoleConfig.model || '-'}</span>
-                      </div>
-                      {selectedRoleConfig.temperature !== undefined && (
-                        <div className="flex gap-2 items-center mb-1.5">
-                          <span className="text-xs text-muted-foreground">Temperature</span>
-                          <span className="text-xs font-mono">{selectedRoleConfig.temperature}</span>
-                        </div>
-                      )}
-                      {selectedRoleConfig.capabilities?.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mb-2">
-                          {selectedRoleConfig.capabilities.map((cap: string, i: number) => (
-                            <Badge key={i} variant="secondary" className="text-xs">{cap}</Badge>
-                          ))}
-                        </div>
-                      )}
-                      {selectedRoleConfig.constraints?.length > 0 && (
-                        <div className="mb-2.5">
-                          <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Agent 约束</div>
-                          <ul className="list-disc pl-4 text-xs leading-relaxed">
-                            {selectedRoleConfig.constraints.map((c: string, i: number) => (
-                              <li key={i}>{c}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {selectedRoleConfig.systemPrompt && (
-                        <div className="mt-1.5">
-                          <Button variant="link" size="sm" className="p-0 h-auto text-xs" onClick={() => setShowSystemPrompt(!showSystemPrompt)}>
-                            {showSystemPrompt ? '▼' : '▶'} System Prompt
-                          </Button>
-                          {showSystemPrompt && (
-                            <pre className="bg-background border rounded p-2 text-xs leading-relaxed max-h-[200px] overflow-y-auto mt-1.5 whitespace-pre-wrap break-words font-mono">{selectedRoleConfig.systemPrompt}</pre>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              {selectedStep && stepResult && (
-                <div className="bg-muted border-b p-3.5">
-                  <div className="text-xs text-muted-foreground font-medium mb-2 uppercase tracking-wider">
-                    {stepResult.error ? (<><span className="material-symbols-outlined text-xs text-red-400">error</span> 执行错误</>) : (<><span className="material-symbols-outlined text-xs text-green-400">check_circle</span> 执行结果</>)}
-                  </div>
-                  <div className="flex gap-3 mb-2 flex-wrap">
-                    {stepResult.durationMs !== undefined && (
-                      <div className="bg-background px-2 py-1 rounded text-[11px]">
-                        <span className="text-muted-foreground">耗时: </span>
-                        <span className="font-semibold">{(stepResult.durationMs! / 1000).toFixed(2)}s</span>
-                      </div>
-                    )}
-                    {stepResult.costUsd !== undefined && (
-                      <div className="bg-background px-2 py-1 rounded text-[11px]">
-                        <span className="text-muted-foreground">费用: </span>
-                        <span className="font-semibold">${stepResult.costUsd?.toFixed(4)}</span>
-                      </div>
-                    )}
-                    {stepResult.startTime && (
-                      <div className="bg-background px-2 py-1 rounded text-[11px]">
-                        <span className="text-muted-foreground">开始: </span>
-                        <span className="font-mono">{new Date(stepResult.startTime!).toLocaleTimeString('zh-CN')}</span>
-                      </div>
-                    )}
-                    {stepResult.endTime && (
-                      <div className="bg-background px-2 py-1 rounded text-[11px]">
-                        <span className="text-muted-foreground">结束: </span>
-                        <span className="font-mono">{new Date(stepResult.endTime!).toLocaleTimeString('zh-CN')}</span>
-                      </div>
-                    )}
-                  </div>
-                  {stepResult.error ? (
-                    <pre className="bg-background border border-red-500 rounded p-2 text-xs leading-relaxed max-h-[200px] overflow-y-auto mt-1.5 whitespace-pre-wrap break-words font-mono text-red-400">
-                      {stepResult.error}
-                    </pre>
-                  ) : (() => {
-                    const raw = fullStepOutput || stepResult.output;
-                    const displayText = !fullStepOutput && raw.length > 2000
-                      ? raw.substring(0, 2000) + '\n\n...(已截断)'
-                      : raw;
-                    const chunks = splitStreamChunks(displayText);
-                    // Deduplicate TodoWrite: only keep the latest todo-list chunk
-                    const TODO_MK2 = '<!-- todo-list-marker -->';
-                    let lastTodo2 = -1;
-                    for (let k = chunks.length - 1; k >= 0; k--) {
-                      if (chunks[k].includes(TODO_MK2)) { lastTodo2 = k; break; }
-                    }
-                    const dedupedChunks = chunks.filter((c, idx) => {
-                      if (c.includes(TODO_MK2) && idx !== lastTodo2) return false;
-                      // Filter out filler chunks (e.g. lone "." between tool calls)
-                      const stripped = c.replace(/\*\*🔧 .+?\*\*/g, '').replace(/<!--.*?-->/gs, '').trim();
-                      if (stripped.length <= 1) return false;
-                      return true;
-                    });
-                    return (
-                      <>
-                        <div className={`${styles.markdownContent} bg-background border rounded p-2 text-sm leading-relaxed max-h-[200px] overflow-y-auto mt-1.5`}>
-                          {dedupedChunks.map((chunk, i) => (
-                            <div key={i} className={i < dedupedChunks.length - 1 ? 'border-b border-border/50 pb-3 mb-3' : ''}>
-                              <AceAwareMarkdown content={prepareChunkForDisplay(chunk)} />
-                            </div>
-                          ))}
-                        </div>
-                        {!fullStepOutput && stepResult.output.length > 2000 && (runId || selectedRun?.id) && (
-                          <Button variant="secondary" size="sm" className="mt-1.5 text-[11px]"
-                            onClick={() => {
-                              // For UUID keys, find the step name for file lookup
-                              const fileName = Object.entries(stepIdMap).find(([, id]) => id === stepKey)?.[0] || stepKey;
-                              loadFullOutput(fileName);
-                            }}
-                            disabled={loadingOutput}>
-                            {loadingOutput ? '加载中...' : (<><span className="material-symbols-outlined text-xs">description</span> 查看完整输出</>)}
-                          </Button>
-                        )}
-                      </>
-                    );
-                  })()}
-                  {!stepResult.error && (
-                    <Button variant="secondary" size="sm" className="mt-1.5 text-[11px]"
-                      onClick={() => {
-                        const fileName = Object.entries(stepIdMap).find(([, id]) => id === stepKey)?.[0];
-                        openRunRecordDocument({ stepName: selectedStep.name, filename: fileName });
-                      }}>
-                      查看记录
-                    </Button>
-                  )}
-                </div>
-              )}
-              {/* Resume button on failed/crashed step */}
-              {selectedStep && !showWorkbenchPreview && isStepFailed && !isRunning && (runId || selectedRun?.id) && (
-                <div className="bg-muted border-b p-3.5">
-                  <Button className="bg-green-600 hover:bg-green-700 text-white text-xs w-full" onClick={() => resumeWorkflow()} disabled={isRunning}>
-                    <span className="material-symbols-outlined text-sm">refresh</span>
-                    从此步骤恢复运行
-                  </Button>
-                  <div className="text-[11px] text-muted-foreground mt-1.5">
-                    将跳过已完成的 {completedSteps.length} 个步骤，从「{selectedStep.name}」重新开始执行
-                  </div>
-                </div>
-              )}
-              {/* Rerun from step button — for completed or failed steps when not running */}
-              {selectedStep && !showWorkbenchPreview && !isRunning && (runId || selectedRun?.id) && (isStepDone || isStepFailed) && (
-                <div className="bg-muted border-b p-3.5">
-                  <Button variant="secondary" size="sm" className="text-xs w-full" onClick={() => handleRerunFromStep(selectedStep.name)}>
-                    <span className="material-symbols-outlined text-sm">replay</span>
-                    从此步骤重新运行
-                  </Button>
-                  <div className="text-[11px] text-muted-foreground mt-1.5">
-                    该步骤及之后的所有步骤将被重新执行
-                  </div>
-                </div>
-              )}
-              {/* Resume button when viewing crashed/stopped run without specific step selected */}
-              {!selectedStep && !showWorkbenchPreview && !isRunning && (workflowStatus === 'failed' || workflowStatus === 'stopped' || workflowStatus === 'pending') && (runId || selectedRun?.id) && (
-                <div className="bg-muted border-b p-3.5">
-                  <Button className="bg-green-600 hover:bg-green-700 text-white text-xs w-full" onClick={() => resumeWorkflow()} disabled={isRunning}>
-                    <span className="material-symbols-outlined text-sm">refresh</span>
-                    {workflowStatus === 'pending' ? '启动运行' : '恢复运行'}
-                  </Button>
-                  <div className="text-[11px] text-muted-foreground mt-1.5">
-                    {workflowStatus === 'pending'
-                      ? '从当前状态开始执行工作流'
-                      : `已完成 ${completedSteps.length} 步，将从中断处继续`}
-                  </div>
-                </div>
-              )}
-              {/* Preparing progress card */}
-              {workflowStatus === 'preparing' && (
-                <div className="bg-muted border-b p-3.5">
-                  <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">
-                    <span className="material-symbols-outlined text-xs">deployed_code_update</span> 准备阶段
-                  </div>
-                  <div className="text-xs mb-2">
-                    {currentStep || '初始化运行上下文'}
-                  </div>
-                  <div className="w-full h-2 rounded bg-background border overflow-hidden">
-                    {preparingProgress && preparingProgress.percent !== null ? (
-                      <Progress value={Math.max(0, Math.min(100, preparingProgress.percent ?? 0))} className="h-2 rounded" />
-                    ) : (
-                      <Progress value={null} className="h-2 rounded [&>[data-slot=progress-indicator]]:w-1/3 [&>[data-slot=progress-indicator]]:animate-pulse [&>[data-slot=progress-indicator]]:bg-blue-500/70" />
-                    )}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground mt-1">
-                    {preparingProgress && preparingProgress.percent !== null
-                      ? `${preparingProgress.copied ?? 0}/${preparingProgress.total ?? 0} (${preparingProgress.percent}%)`
-                      : '正在准备中...'}
-                  </div>
-                  {preparingProgress && preparingProgress.etaSec !== null && (
-                    <div className="text-[11px] text-muted-foreground">
-                      预计剩余：{preparingProgress.etaSec} 秒
-                    </div>
-                  )}
-                </div>
-              )}
               {selectedAgent ? (<AgentPanel agent={selectedAgent} logs={logs} onClearLogs={(name) => dispatch({ type: 'CLEAR_AGENT_LOGS', payload: name })}
-                stepSummary={selectedStep && stepResult?.output ? stepResult.output : undefined}
+                stepSummary={undefined}
                 persistedStepLogs={persistedStepLogs}
-                selectedStepName={selectedStep?.name || null}
-                selectedStepExecutionId={selectedStep ? stepKey : null}
+                selectedStepName={null}
+                selectedStepExecutionId={null}
                 runStatus={workflowStatus}
                 runStatusReason={runStatusReason}
                 currentStepName={currentStep || null}
                 onSelectPersistedStep={selectStepByLogName}
                 onViewPersistedStepOutput={openPersistedStepRecord}
-                systemPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.systemPrompt}
-                iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt}
-                compact={!!selectedStep} />
+                systemPrompt={selectedAgentRoleConfig?.systemPrompt}
+                iterationPrompt={selectedAgentRoleConfig?.iterationPrompt}
+                compact={false} />
               ) : (pageLoading || !workflowConfig ? <WorkbenchAgentDetailSkeleton /> : <div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="material-symbols-outlined text-5xl mb-4">smart_toy</span><p>选择一个 Agent 查看详情</p></div>)}
                   </div>
             </div>
@@ -13504,8 +13574,8 @@ export default function WorkbenchPage({
                                   {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                                 </div>
                               )}
-                              <div className="text-sm">
-                              <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} />
+              <div className="text-sm">
+                <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} className={styles.liveMarkdownContent} />
                               </div>
                             </div>
                           </div>
@@ -13518,8 +13588,8 @@ export default function WorkbenchPage({
                               {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                             </div>
                           )}
-                          <div className="text-sm">
-                            <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} />
+          <div className="text-sm">
+            <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} className={styles.liveMarkdownContent} />
                           </div>
                         </div>
                       );

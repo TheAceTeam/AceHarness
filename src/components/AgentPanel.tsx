@@ -1,11 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import Markdown from '@/components/Markdown';
 import { VirtualList } from '@/client/virtual/VirtualList';
-import styles from '@/client/pages/workbench/page.module.css';
 import { copyText } from '@/lib/core/clipboard';
 
 interface TokenUsage {
@@ -51,6 +49,13 @@ interface PersistedStepLog {
   costUsd: number;
   durationMs: number;
   timestamp: string;
+  tokenUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+    totalTokens?: number;
+  };
 }
 
 interface AgentPanelProps {
@@ -89,9 +94,13 @@ export default function AgentPanel({
   iterationPrompt,
   compact = false,
 }: AgentPanelProps) {
-  const logsContainerRef = useRef<HTMLDivElement>(null);
   const [showPrompt, setShowPrompt] = useState(false);
-  const agentLogs = logs.filter((log) => log.agent === agent.name);
+  void logs;
+  void onClearLogs;
+  void runStatus;
+  void runStatusReason;
+  void currentStepName;
+  void stepSummary;
   const relevantPersistedLogs = (selectedStepName
     ? persistedStepLogs.filter((log) => {
         if (selectedStepExecutionId && log.id === selectedStepExecutionId) return true;
@@ -102,24 +111,11 @@ export default function AgentPanel({
       })
     : persistedStepLogs.filter((log) => log.agent === agent.name)
   ).slice().sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  const showRunStatusReason = Boolean(
-    runStatusReason && ['failed', 'stopped', 'crashed'].includes(runStatus || '')
-  );
-
-  useEffect(() => {
-    if (logsContainerRef.current) {
-      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
-    }
-  }, [agentLogs.length]);
+  const completedPersistedLogs = relevantPersistedLogs.filter((log) => log.status === 'completed');
 
   const getTeamLabel = (team: string) => {
     const labels: Record<string, string> = { blue: 'Blue Team', red: 'Red Team', judge: 'Judge Team' };
     return labels[team] || team;
-  };
-
-  const getStatusText = (status: string) => {
-    const texts: Record<string, string> = { waiting: '等待中', running: '运行中', completed: '已完成', failed: '失败' };
-    return texts[status] || status;
   };
 
   const copyOutput = async () => {
@@ -130,10 +126,17 @@ export default function AgentPanel({
     if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
     return String(n);
   };
+  const totalStepTokens = (usage?: PersistedStepLog['tokenUsage']) => {
+    if (!usage) return 0;
+    return Number(usage.totalTokens || 0)
+      || Number(usage.inputTokens || 0)
+      + Number(usage.outputTokens || 0)
+      + Number(usage.cacheCreationInputTokens || 0)
+      + Number(usage.cacheReadInputTokens || 0);
+  };
 
   const teamColor = agent.team === 'red' ? 'text-red-400' : agent.team === 'judge' ? 'text-yellow-400' : 'text-blue-400';
   const teamBg = agent.team === 'red' ? 'bg-red-500/20' : agent.team === 'judge' ? 'bg-yellow-500/20' : 'bg-blue-500/20';
-  const statusColor = agent.status === 'running' ? 'bg-blue-500' : agent.status === 'completed' ? 'bg-green-500' : agent.status === 'failed' ? 'bg-red-500' : 'bg-muted-foreground';
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -151,17 +154,6 @@ export default function AgentPanel({
               <Badge variant="secondary" className="text-xs">{agent.model}</Badge>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${statusColor} ${agent.status === 'running' ? 'animate-pulse' : ''}`} />
-            <span className="text-xs text-muted-foreground">{getStatusText(agent.status)}</span>
-          </div>
-        </div>
-      )}
-
-      {agent.currentTask && (
-        <div className="rounded-md bg-muted p-3">
-          <div className="text-xs text-muted-foreground uppercase mb-1">当前任务</div>
-          <div className="text-sm">{agent.currentTask}</div>
         </div>
       )}
 
@@ -203,8 +195,8 @@ export default function AgentPanel({
 
       <div className="grid grid-cols-4 gap-2">
         <div className="text-center p-2 rounded-md bg-muted">
-          <span className="block text-xs text-muted-foreground">已完成</span>
-          <span className="block text-lg font-semibold">{agent.completedTasks}</span>
+          <span className="block text-xs text-muted-foreground">完成步骤</span>
+          <span className="block text-lg font-semibold">{completedPersistedLogs.length || agent.completedTasks}</span>
         </div>
         <div className="text-center p-2 rounded-md bg-muted">
           <span className="block text-xs text-muted-foreground">迭代轮次</span>
@@ -219,28 +211,6 @@ export default function AgentPanel({
           <span className="block text-lg font-semibold">{formatTokens(agent.tokenUsage?.outputTokens || 0)}</span>
         </div>
       </div>
-
-      {(stepSummary || agent.summary) && (
-        <div>
-          <div className="text-xs text-muted-foreground uppercase mb-1">工作总结</div>
-          <div className={`${styles.markdownContent} text-sm bg-muted p-3 rounded-md`}><Markdown>{stepSummary || agent.summary!}</Markdown></div>
-        </div>
-      )}
-
-      {showRunStatusReason && (
-        <div>
-          <div className="text-xs text-muted-foreground uppercase mb-1">运行异常</div>
-          <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs leading-relaxed text-red-200">
-            <div className="mb-1 flex items-center gap-2">
-              <Badge variant="destructive" className="text-[10px]">
-                {runStatus === 'stopped' ? '已停止' : '失败'}
-              </Badge>
-              {currentStepName ? <span className="opacity-80">当前步骤: {currentStepName}</span> : null}
-            </div>
-            <div className="whitespace-pre-wrap break-words">{runStatusReason}</div>
-          </div>
-        </div>
-      )}
 
       {agent.changes && agent.changes.length > 0 && (
         <div>
@@ -260,65 +230,40 @@ export default function AgentPanel({
 
       <div>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-muted-foreground uppercase">执行日志</span>
-          <Button variant="ghost" size="sm" className="h-6 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onClearLogs(agent.name)}>清空</Button>
-        </div>
-        <VirtualList
-          items={agentLogs}
-          estimateSize={22}
-          height={192}
-          className="rounded-md bg-muted p-2 font-mono text-xs"
-          testId="agent-log-virtual-list"
-          maxRenderedItems={80}
-          scrollRef={logsContainerRef}
-          emptyState={<div className="py-4 text-center text-muted-foreground">暂无日志</div>}
-          getKey={(log, index) => `${log.time}:${log.level}:${index}`}
-          renderItem={(log) => (
-            <div className={`flex gap-2 ${log.level === 'error' ? 'text-red-400' : log.level === 'warn' ? 'text-yellow-400' : 'text-muted-foreground'}`}>
-              <span className="shrink-0 opacity-60">{log.time}</span>
-              <span>{log.message}</span>
-            </div>
-          )}
-        />
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-muted-foreground uppercase">持久化步骤记录</span>
+          <span className="text-xs text-muted-foreground uppercase">完成过的步骤</span>
           <Badge variant="outline" className="text-[10px]">
-            {relevantPersistedLogs.length}
+            {completedPersistedLogs.length}
           </Badge>
         </div>
-        {relevantPersistedLogs.length === 0 ? (
+        {completedPersistedLogs.length === 0 ? (
           <div className="rounded-md bg-muted p-3 text-center text-xs text-muted-foreground">
-            暂无持久化记录
+            暂无完成步骤记录
           </div>
         ) : (
           <VirtualList
-            items={relevantPersistedLogs}
-            estimateSize={150}
-            height={Math.min(480, Math.max(160, relevantPersistedLogs.length * 150))}
+            items={completedPersistedLogs}
+            estimateSize={112}
+            height={Math.min(520, Math.max(180, completedPersistedLogs.length * 112))}
             className="min-h-0"
             testId="agent-persisted-step-log-virtual-list"
             maxRenderedItems={30}
             getKey={(log) => log.id || `${log.stepName}-${log.timestamp}`}
             renderItem={(log) => {
-            const preview = log.status === 'failed'
-              ? log.error
-              : log.output.length > 240
-                ? `${log.output.slice(0, 240)}...`
-                : log.output;
+            const stepTokens = totalStepTokens(log.tokenUsage);
             return (
               <div className="mb-2 rounded-md border bg-muted/40 p-2.5">
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-xs font-medium">{log.stepName}</div>
-                    <div className="text-[10px] text-muted-foreground">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                      <span>
                       {new Date(log.timestamp).toLocaleString('zh-CN')}
+                      </span>
+                      {stepTokens > 0 ? <span>Token 消耗 {formatTokens(stepTokens)}</span> : null}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={log.status === 'failed' ? 'destructive' : 'outline'} className="text-[10px]">
+                    <Badge variant={log.status === 'failed' ? 'destructive' : 'outline'} className="shrink-0 whitespace-nowrap text-[10px]">
                       {log.status === 'failed' ? '失败' : '完成'}
                     </Badge>
                     {onViewPersistedStepOutput ? (
@@ -331,22 +276,7 @@ export default function AgentPanel({
                         查看记录
                       </Button>
                     ) : null}
-                    {onSelectPersistedStep ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-2 text-[10px]"
-                        onClick={() => onSelectPersistedStep(log.stepName)}
-                      >
-                        定位步骤
-                      </Button>
-                    ) : null}
                   </div>
-                </div>
-                <div className={`whitespace-pre-wrap break-words rounded bg-background/70 p-2 text-[11px] leading-relaxed ${
-                  log.status === 'failed' ? 'text-red-300' : 'text-muted-foreground'
-                }`}>
-                  {preview || (log.status === 'failed' ? '执行失败，但没有记录到错误详情' : '无输出')}
                 </div>
               </div>
             );

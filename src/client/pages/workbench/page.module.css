@@ -138,6 +138,75 @@
   font-weight: 600;
 }
 
+.liveMarkdownContent {
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  line-height: 1.82;
+  letter-spacing: 0;
+}
+
+.liveMarkdownContent > div > *:first-child {
+  margin-top: 0;
+}
+
+.liveMarkdownContent > div > *:last-child {
+  margin-bottom: 0;
+}
+
+.liveMarkdownContent p {
+  margin: 0.55em 0;
+}
+
+.liveMarkdownContent h1,
+.liveMarkdownContent h2,
+.liveMarkdownContent h3,
+.liveMarkdownContent h4 {
+  margin: 1.05em 0 0.45em;
+  line-height: 1.35;
+}
+
+.liveMarkdownContent h1 {
+  font-size: 1.28em;
+}
+
+.liveMarkdownContent h2 {
+  font-size: 1.18em;
+}
+
+.liveMarkdownContent h3 {
+  font-size: 1.08em;
+}
+
+.liveMarkdownContent ul,
+.liveMarkdownContent ol {
+  margin: 0.55em 0;
+  padding-left: 1.45em;
+}
+
+.liveMarkdownContent li {
+  margin: 0.22em 0;
+  padding-left: 0.1em;
+}
+
+.liveMarkdownContent li > p {
+  margin: 0.25em 0;
+}
+
+.liveMarkdownContent blockquote {
+  margin: 0.8em 0;
+  padding: 0.45em 0.9em;
+}
+
+.liveMarkdownContent pre {
+  margin: 0.85em 0;
+  padding: 12px 14px;
+  line-height: 1.55;
+}
+
+.liveMarkdownContent code {
+  font-size: 0.9em;
+}
+
 /* === Todo List Styles === */
 :global(.ace-todo-list) {
   border: 1px solid hsl(var(--border));
