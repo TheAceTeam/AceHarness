@@ -1,4 +1,6 @@
 import { getBuiltinAgentDefinition } from '../agent-registry';
+import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -160,6 +162,44 @@ export function resolveAcpxCommand(agentId: string): AcpxCommandResolution {
     args: ['acp'],
     fallbackCommands: [],
   };
+}
+
+export function formatAcpxCommandForRuntime(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string } = {}): string {
+  const parts = buildAcpxCommandParts(command, options)
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+  return parts.map(quoteCommandPart).join(' ');
+}
+
+function buildAcpxCommandParts(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string }): string[] {
+  if (options.agentId === 'nga' || command.command === 'ngagent' || command.command === 'nga') {
+    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+    const resolvedCommand = findCommand('ngagent', searchPaths) || findCommand('nga', searchPaths) || command.command;
+    const args = ['--disable-update', 'acp'];
+    if (options.cwd) args.push('--cwd', options.cwd);
+    return [resolvedCommand, ...args];
+  }
+  if (options.agentId === 'codegenie' || command.command === 'codegenie') {
+    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+    const explicit = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
+    const resolvedCommand = (explicit ? findCommand(explicit, searchPaths) : null)
+      || findCommand('codegenie', searchPaths)
+      || command.command;
+    const args = ['acp'];
+    if (options.cwd) args.push('--cwd', options.cwd);
+    return [resolvedCommand, ...args];
+  }
+  if (options.agentId === 'opencode' || command.command === 'opencode') {
+    const args = ['acp'];
+    if (options.cwd) args.push('--cwd', options.cwd);
+    return [command.command, ...args];
+  }
+  return [command.command, ...(command.args || [])];
+}
+
+function quoteCommandPart(part: string): string {
+  if (!/[\s"'`]/.test(part)) return part;
+  return `"${part.replace(/(["\\])/g, '\\$1')}"`;
 }
 
 export function missingTokenUsage(): TokenUsage {

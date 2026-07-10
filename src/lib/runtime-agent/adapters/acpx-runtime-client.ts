@@ -15,7 +15,7 @@ import type {
   RuntimeBinding,
 } from '../contracts';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
-import type { AcpxCommandResolution, AcpxRuntimeClient } from './acpx-adapter';
+import { formatAcpxCommandForRuntime, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
 
 export interface CreateAcpxRuntimeClientOptions {
   cwd?: string;
@@ -55,7 +55,10 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       const session = input.session;
       const handle = await runtime.ensureSession({
         sessionKey: session.runtimeSessionId,
-        agent: input.command.command,
+        agent: formatAcpxCommandForRuntime(input.command, {
+          agentId: session.profileSnapshot.agentId,
+          cwd: session.profileSnapshot.cwd,
+        }),
         mode: 'persistent',
         cwd: session.profileSnapshot.cwd,
         resumeSessionId: resolveResumeSessionId(input.existingHandle),

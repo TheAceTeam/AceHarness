@@ -1,9 +1,8 @@
 import { cp, mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { execSync } from 'child_process';
 import { getInstallPath, getWorkspaceCacheFile, getWorkspaceSkillPath, getWorkspaceSkillsDir, getWorkspaceRoot } from '@/lib/core/app-paths';
-import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
 
 const INSTALL_SKILLS_DIR = getInstallPath('skills');
 let seedPromise: Promise<void> | null = null;
@@ -13,14 +12,11 @@ let runtimeSkillsSeeded = false;
 const SKILL_DEPS: string[] = [];
 
 interface SeedOptions {
+  refreshBundledSkills?: boolean;
   refreshAceHarnessBuiltins?: boolean;
 }
 
-function isAceHarnessBuiltinSkillName(name: string): boolean {
-  return name.toLowerCase().startsWith('aceharness-');
-}
-
-async function linkBundledEntry(src: string, dst: string, options: { replaceExisting: boolean }): Promise<void> {
+async function copyBundledEntry(src: string, dst: string, options: { replaceExisting: boolean }): Promise<void> {
   if (existsSync(dst)) {
     if (!options.replaceExisting) return;
     await rm(dst, { recursive: true, force: true, maxRetries: 3 });
@@ -29,14 +25,7 @@ async function linkBundledEntry(src: string, dst: string, options: { replaceExis
   const srcStat = await stat(src);
   if (srcStat.isDirectory()) {
     await mkdir(dirname(dst), { recursive: true });
-    try {
-      createDirectoryLinkSync(src, dst);
-    } catch (error) {
-      console.warn(`[runtime-skills] Failed to link bundled skill ${src} -> ${dst}:`, error);
-    }
-    if (!existsSync(dst)) {
-      await cp(src, dst, { recursive: true, force: true });
-    }
+    await cp(src, dst, { recursive: true, force: true });
     return;
   }
 
@@ -44,15 +33,23 @@ async function linkBundledEntry(src: string, dst: string, options: { replaceExis
   await cp(src, dst, { force: options.replaceExisting });
 }
 
-async function linkMissingBundledEntry(src: string, dst: string): Promise<void> {
-  await linkBundledEntry(src, dst, { replaceExisting: false });
+async function copyMissingBundledEntry(src: string, dst: string): Promise<void> {
+  await copyBundledEntry(src, dst, { replaceExisting: false });
 }
 
-async function linkMissingBundledSkills(srcDir: string, dstDir: string): Promise<void> {
+async function copyMissingBundledSkills(srcDir: string, dstDir: string): Promise<void> {
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    await linkMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
+    await copyMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
+  }
+}
+
+async function refreshBundledSkills(srcDir: string, dstDir: string): Promise<void> {
+  await mkdir(dstDir, { recursive: true });
+  const entries = await readdir(srcDir, { withFileTypes: true });
+  for (const entry of entries) {
+    await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
   }
 }
 
@@ -94,18 +91,9 @@ async function ensureSkillDeps(): Promise<void> {
   }
 }
 
-async function refreshAceHarnessBundledSkills(srcDir: string, dstDir: string): Promise<void> {
-  await mkdir(dstDir, { recursive: true });
-  const entries = await readdir(srcDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!isAceHarnessBuiltinSkillName(entry.name)) continue;
-    await linkBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
-  }
-}
-
 export async function ensureRuntimeSkillsSeeded(options: SeedOptions = {}): Promise<void> {
-  const refreshAceHarnessBuiltins = options.refreshAceHarnessBuiltins === true;
-  if (runtimeSkillsSeeded && !refreshAceHarnessBuiltins) return;
+  const refreshBundled = options.refreshBundledSkills === true || options.refreshAceHarnessBuiltins === true;
+  if (runtimeSkillsSeeded && !refreshBundled) return;
   if (seedPromise) return seedPromise;
 
   seedPromise = (async () => {
@@ -117,10 +105,10 @@ export async function ensureRuntimeSkillsSeeded(options: SeedOptions = {}): Prom
       return;
     }
 
-    if (refreshAceHarnessBuiltins) {
-      await refreshAceHarnessBundledSkills(INSTALL_SKILLS_DIR, runtimeSkillsDir);
+    if (refreshBundled) {
+      await refreshBundledSkills(INSTALL_SKILLS_DIR, runtimeSkillsDir);
     }
-    await linkMissingBundledSkills(INSTALL_SKILLS_DIR, runtimeSkillsDir);
+    await copyMissingBundledSkills(INSTALL_SKILLS_DIR, runtimeSkillsDir);
     await ensureSkillDeps();
     runtimeSkillsSeeded = true;
   })().finally(() => {
@@ -136,8 +124,8 @@ export function refreshBundledAceHarnessSkillsOnStartup(): void {
   if (globalState[globalKey]) return;
   globalState[globalKey] = true;
 
-  void ensureRuntimeSkillsSeeded({ refreshAceHarnessBuiltins: true }).catch((error) => {
-    console.warn('[runtime-skills] Failed to refresh bundled aceharness skills:', error);
+  void ensureRuntimeSkillsSeeded({ refreshBundledSkills: true }).catch((error) => {
+    console.warn('[runtime-skills] Failed to refresh bundled skills:', error);
   });
 }
 
@@ -179,11 +167,8 @@ export async function syncInstalledSkillsToRuntime(skillNames: string[]): Promis
     }
 
     try {
-      createDirectoryLinkSync(src, dest);
-    } catch (error) {
-      console.warn(`[runtime-skills] Failed to link installed skill ${skillName}:`, error);
-    }
-    if (!existsSync(dest) || !isLinkedDirectoryTarget(dest, src)) {
+      await cp(src, dest, { recursive: true, force: true });
+    } catch {
       missing.push(skillName);
       continue;
     }
