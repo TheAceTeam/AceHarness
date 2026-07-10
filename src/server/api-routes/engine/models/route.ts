@@ -1,6 +1,6 @@
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
-import { formatAcpxCommandForRuntime, resolveAcpxCommand } from '@/lib/runtime-agent/adapters/acpx-adapter';
+import { getAcpxCommandAttemptsForRuntime, resolveAcpxCommand } from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { discoverClaudeCodeModels } from '@/lib/engines/claude-code-model-discovery';
 import { discoverOpenCodeSdkModels } from '@/lib/engines/opencode-sdk-wrapper';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
@@ -118,13 +118,42 @@ async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
     throw new Error(`Unknown ACPX agent: ${agentId}`);
   }
   const cwd = process.cwd();
-  const command = formatAcpxCommandForRuntime(resolveAcpxCommand(agentId), { agentId, cwd });
+  const attempts = getAcpxCommandAttemptsForRuntime(resolveAcpxCommand(agentId), { agentId, cwd });
+  let lastError: unknown;
+
+  for (const [index, attempt] of attempts.entries()) {
+    try {
+      return await discoverViaAcpxCommand(agentId, attempt.command, attempt.source, index + 1, attempts.length, cwd);
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[engine/models] ACPX discovery attempt failed agent=${agentId} source=${attempt.source} ` +
+        `attempt=${index + 1}/${attempts.length} command="${attempt.command}":`,
+        error,
+      );
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(errorMessage(lastError));
+}
+
+async function discoverViaAcpxCommand(
+  agentId: string,
+  command: string,
+  source: string,
+  attempt: number,
+  attemptCount: number,
+  cwd: string,
+): Promise<DiscoveredModel[]> {
   const startedAt = Date.now();
-  console.info(`[engine/models] ACPX discovery start agent=${agentId} command="${command}"`);
+  console.info(
+    `[engine/models] ACPX discovery start agent=${agentId} source=${source} ` +
+    `attempt=${attempt}/${attemptCount} command="${command}"`,
+  );
 
   const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
   const runtime = createAcpRuntime({
-    cwd: process.cwd(),
+    cwd,
     sessionStore: createRuntimeStore({
       stateDir: getWorkspaceDataFile('acpx-runtime'),
     }),
@@ -139,12 +168,18 @@ async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
     mode: 'oneshot',
     cwd,
   });
-  console.info(`[engine/models] ACPX discovery session ready agent=${agentId} record=${handle.acpxRecordId || handle.sessionKey} elapsedMs=${Date.now() - startedAt}`);
+  console.info(
+    `[engine/models] ACPX discovery session ready agent=${agentId} source=${source} ` +
+    `record=${handle.acpxRecordId || handle.sessionKey} elapsedMs=${Date.now() - startedAt}`,
+  );
 
   try {
     const status = await runtime.getStatus?.({ handle });
     const models = uniqueModels(extractModelsFromStatus(status));
-    console.info(`[engine/models] ACPX discovery status agent=${agentId} models=${models.length} elapsedMs=${Date.now() - startedAt}`);
+    console.info(
+      `[engine/models] ACPX discovery status agent=${agentId} source=${source} ` +
+      `models=${models.length} elapsedMs=${Date.now() - startedAt}`,
+    );
     return models;
   } finally {
     await runtime.close({
@@ -152,7 +187,7 @@ async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
       reason: 'model-discovery-complete',
       discardPersistentState: true,
     }).catch(() => undefined);
-    console.info(`[engine/models] ACPX discovery closed agent=${agentId} elapsedMs=${Date.now() - startedAt}`);
+    console.info(`[engine/models] ACPX discovery closed agent=${agentId} source=${source} elapsedMs=${Date.now() - startedAt}`);
   }
 }
 

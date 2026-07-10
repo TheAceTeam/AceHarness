@@ -1,6 +1,8 @@
 import { getBuiltinAgentDefinition } from '../agent-registry';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -98,6 +100,11 @@ export interface AcpxCommandResolution {
   fallbackCommands: string[];
 }
 
+export interface AcpxRuntimeCommandAttempt {
+  command: string;
+  source: string;
+}
+
 export type AcpxRuntimeSessionBinding = Partial<Pick<RuntimeBinding, 'externalIds' | 'raw'>> & {
   handle?: AcpRuntimeHandle;
 };
@@ -165,19 +172,46 @@ export function resolveAcpxCommand(agentId: string): AcpxCommandResolution {
 }
 
 export function formatAcpxCommandForRuntime(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string } = {}): string {
-  const parts = buildAcpxCommandParts(command, options)
-    .map((part) => String(part || '').trim())
-    .filter(Boolean);
-  return parts.map(quoteCommandPart).join(' ');
+  return getAcpxCommandAttemptsForRuntime(command, options)[0]?.command || '';
 }
 
-function buildAcpxCommandParts(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string }): string[] {
+export function getAcpxCommandAttemptsForRuntime(
+  command: AcpxCommandResolution,
+  options: { cwd?: string; agentId?: string } = {},
+): AcpxRuntimeCommandAttempt[] {
+  const attempts = buildAcpxCommandAttemptParts(command, options).map((attempt) => ({
+    source: attempt.source,
+    command: formatCommandParts(attempt.parts),
+  })).filter((attempt) => attempt.command);
+
+  const seen = new Set<string>();
+  return attempts.filter((attempt) => {
+    if (seen.has(attempt.command)) return false;
+    seen.add(attempt.command);
+    return true;
+  });
+}
+
+function buildAcpxCommandAttemptParts(
+  command: AcpxCommandResolution,
+  options: { cwd?: string; agentId?: string },
+): Array<{ source: string; parts: string[] }> {
   if (options.agentId === 'nga' || command.command === 'ngagent' || command.command === 'nga') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const resolvedCommand = findCommand('ngagent', searchPaths) || findCommand('nga', searchPaths) || command.command;
-    const args = ['--disable-update', 'acp'];
-    if (options.cwd) args.push('--cwd', options.cwd);
-    return [resolvedCommand, ...args];
+    const ngagent = findCommand('ngagent', searchPaths);
+    const nga = findCommand('nga', searchPaths);
+    const primaryCommand = ngagent || nga || command.command;
+    const primaryArgs = ngagent ? ['acp'] : ['--disable-update', 'acp'];
+    if (options.cwd) primaryArgs.push('--cwd', options.cwd);
+
+    const codeagent = resolveNgaCodeagent(primaryCommand, searchPaths);
+    const codeagentArgs = ['acp'];
+    if (options.cwd) codeagentArgs.push('--cwd', options.cwd);
+    const preferCodeagent = /^(1|true|yes)$/i.test(getConfiguredEnvValueSync('ACEH_NGA_USE_CODEAGENT') || '');
+
+    const primary = { source: primaryCommand.includes('ngagent') ? 'ngagent' : 'nga', parts: [primaryCommand, ...primaryArgs] };
+    const fallback = codeagent ? { source: 'codeagent', parts: [codeagent, ...codeagentArgs] } : null;
+    return preferCodeagent && fallback ? [fallback, primary] : [primary, ...(fallback ? [fallback] : [])];
   }
   if (options.agentId === 'codegenie' || command.command === 'codegenie') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
@@ -187,14 +221,42 @@ function buildAcpxCommandParts(command: AcpxCommandResolution, options: { cwd?: 
       || command.command;
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [resolvedCommand, ...args];
+    return [{ source: 'codegenie', parts: [resolvedCommand, ...args] }];
   }
-  if (options.agentId === 'opencode' || command.command === 'opencode') {
-    const args = ['acp'];
-    if (options.cwd) args.push('--cwd', options.cwd);
-    return [command.command, ...args];
+  return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
+}
+
+function resolveNgaCodeagent(primaryCommand: string, searchPaths: string[]): string | null {
+  const explicitPath = getConfiguredEnvValueSync('ACEH_NGA_CODEAGENT_PATH');
+  if (explicitPath) {
+    const resolved = findCommand(explicitPath, searchPaths);
+    if (resolved) return resolved;
   }
-  return [command.command, ...(command.args || [])];
+
+  const ochome = getConfiguredEnvValueSync('OCHOME');
+  const home = getConfiguredEnvValueSync('HOME') || getConfiguredEnvValueSync('USERPROFILE');
+  const candidates = [
+    primaryCommand ? join(dirname(primaryCommand), 'codeagent') : '',
+    primaryCommand ? join(dirname(primaryCommand), 'bin', 'codeagent') : '',
+    primaryCommand ? join(dirname(dirname(primaryCommand)), 'bin', 'codeagent') : '',
+    ochome ? join(ochome, 'bin', 'codeagent') : '',
+    home ? join(home, 'OCHOME', 'bin', 'codeagent') : '',
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const resolved = findCommand(candidate, searchPaths);
+    if (resolved) return resolved;
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function formatCommandParts(parts: string[]): string {
+  return parts
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .map(quoteCommandPart)
+    .join(' ');
 }
 
 function quoteCommandPart(part: string): string {
