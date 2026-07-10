@@ -1679,6 +1679,7 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
             defaultOpen={shouldOpen}
             data-testid="ace-subtask-card"
             data-tool-id={entry.toolId || ''}
+            data-session-id={entry.sessionId || ''}
             data-subtask-state={entry.state}
           >
             <ToolHeader
@@ -1709,11 +1710,18 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
                   <WrapperProcessBlocks content={entry.internalText} isStreaming={isStreaming && entry.state !== 'output-available'} />
                 </div>
               ) : null}
-              {entry.agent ? (
+              {entry.agent || entry.sessionId ? (
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                  <span className="inline-flex items-center rounded-full border px-2 py-0.5">
-                    Agent: {entry.agent}
-                  </span>
+                  {entry.agent ? (
+                    <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                      Agent: {entry.agent}
+                    </span>
+                  ) : null}
+                  {entry.sessionId ? (
+                    <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                      会话: {entry.sessionId}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
               {entry.prompt ? (
