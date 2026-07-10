@@ -199,8 +199,10 @@ function buildAcpxCommandAttemptParts(
 ): Array<{ source: string; parts: string[] }> {
   if (options.agentId === 'nga' || command.command === 'ngagent' || command.command === 'nga') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || findCommand('ngagent', searchPaths);
-    const nga = findCommand('nga', searchPaths);
+    const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || (!isWindows() ? findCommand('ngagent', searchPaths) : null);
+    const nga = !ngagent
+      ? (resolveWindowsCmdShim('nga', searchPaths) || (!isWindows() ? findCommand('nga', searchPaths) : null))
+      : null;
     const primaryCommand = ngagent || nga || command.command;
     const primaryArgs = ngagent ? ['acp'] : ['--disable-update', 'acp'];
     if (options.cwd) primaryArgs.push('--cwd', options.cwd);
@@ -218,7 +220,8 @@ function buildAcpxCommandAttemptParts(
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
     const explicit = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
     const resolvedCommand = (explicit ? findCommand(explicit, searchPaths) : null)
-      || findCommand('codegenie', searchPaths)
+      || resolveWindowsCmdShim('codegenie', searchPaths)
+      || (!isWindows() ? findCommand('codegenie', searchPaths) : null)
       || command.command;
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);

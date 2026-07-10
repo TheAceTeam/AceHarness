@@ -2849,7 +2849,7 @@ export default function SkillsManager({
           <PluginsTab />
         ) : null}
       </div>
-      {activeTab === 'local' && localPagination.items.length > 0 ? (
+      {activeTab === 'local' && selectedForExport.size > 0 ? (
         <div
           className={cn(
             'pointer-events-none left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4',
@@ -2857,45 +2857,17 @@ export default function SkillsManager({
           )}
         >
           <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
-            <div
-              className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
-              role="button"
-              tabIndex={0}
-              onClick={toggleSelectAllLocalPage}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  toggleSelectAllLocalPage();
-                }
-              }}
-            >
-              <Checkbox
-                checked={allLocalPageSelected ? true : hasPartialLocalPageSelection ? 'indeterminate' : false}
-                aria-label={
-                  allLocalPageSelected
-                    ? '取消全选当前页技能'
-                    : '全选当前页技能'
-                }
-                className="mr-2 h-4 w-4 rounded-[5px] border-border bg-background"
-                onCheckedChange={toggleSelectAllLocalPage}
-              />
-              {allLocalPageSelected ? '取消全选' : '全选当前页'}
-            </div>
             <div className="px-3 text-sm font-medium text-foreground/80">
               已选 {selectedForExport.size} 项
             </div>
-            {selectedForExport.size > 0 ? (
-              <>
-                <Button size="sm" variant="outline" className="rounded-full px-4" onClick={handleExport} disabled={exporting}>
-                  <Download className={`mr-2 h-4 w-4 ${exporting ? 'animate-bounce' : ''}`} />
-                  {exporting ? '导出中...' : '导出'}
-                </Button>
-                <Button size="sm" variant="destructive" className="rounded-full px-4" onClick={handleBatchDelete}>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  批量删除
-                </Button>
-              </>
-            ) : null}
+            <Button size="sm" variant="outline" className="rounded-full px-4" onClick={handleExport} disabled={exporting}>
+              <Download className={`mr-2 h-4 w-4 ${exporting ? 'animate-bounce' : ''}`} />
+              {exporting ? '导出中...' : '导出'}
+            </Button>
+            <Button size="sm" variant="destructive" className="rounded-full px-4" onClick={handleBatchDelete}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              批量删除
+            </Button>
           </div>
         </div>
       ) : null}
