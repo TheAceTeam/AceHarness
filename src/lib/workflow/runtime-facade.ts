@@ -49,6 +49,7 @@ export interface WorkflowRuntimeProjectionState {
 export interface WorkflowRuntimeJsonResult {
   result: string;
   runtimeSessionId: string;
+  stop_reason?: string;
   cost_usd: number;
   duration_ms: number;
   duration_api_ms: number;

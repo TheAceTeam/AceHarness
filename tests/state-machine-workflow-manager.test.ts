@@ -1240,6 +1240,34 @@ describe('engine-level failure detection', () => {
       .rejects.toThrow(/自动恢复 3 次后仍失败|引擎连续失败/);
     expect(engine.calls).toHaveLength(4);
   });
+
+  test('does not auto-recover a runtime turn cancelled by manual workflow stop', async () => {
+    const engine = new MockEngine();
+    let resolveExecution: ((result: any) => void) | undefined;
+    engine.executeImpl = vi.fn().mockImplementation(() => new Promise((resolve) => {
+      resolveExecution = resolve;
+    }));
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+    const step = config.workflow.states[0].steps[0];
+    (manager as any).currentState = config.workflow.states[0].name;
+
+    const execution = (manager as any).runAgentStep(step, 'Build a feature', config, 'step-stop-test');
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(1));
+
+    await manager.stop();
+    resolveExecution?.({
+      success: false,
+      output: '',
+      error: 'cancelled',
+      stopReason: 'cancelled',
+      sessionId: 'cancelled-session',
+    });
+
+    await expect(execution).rejects.toThrow('工作流已停止');
+    expect(engine.calls).toHaveLength(1);
+    expect(engine.calls.some((call) => call.options.prompt.includes('系统自动恢复'))).toBe(false);
+  });
 });
 
 describe('state machine live feedback', () => {

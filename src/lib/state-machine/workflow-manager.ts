@@ -4038,6 +4038,7 @@ try {
         return {
           result: result.success ? fallbackOutput : (result.error || fallbackOutput || '引擎执行失败（无输出）'),
           runtimeSessionId: resolvedSessionId || '',
+          stop_reason: result.stopReason,
           is_error: !result.success,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
           duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
@@ -7311,6 +7312,9 @@ try {
           }
         );
       } catch (err) {
+        if (this.shouldStop) {
+          throw new Error('工作流已停止');
+        }
         // If force transition killed the process, return partial output and let main loop handle it
         if (this.pendingForceTransition) {
           console.log(`[SM-ForceTransition] 进程被强制跳转终止，目标: ${this.pendingForceTransition}`);
@@ -7381,6 +7385,10 @@ try {
         flushProcessStream(proc.streamContent);
       }
 
+      if (this.shouldStop) {
+        throw new Error('工作流已停止');
+      }
+
       if (result.is_error && this.interruptFlag && this.liveFeedback.length > 0 && !this.shouldStop) {
         const isFeedbackOnly = this.feedbackInterrupt;
         this.interruptFlag = false;
@@ -7415,6 +7423,10 @@ try {
         });
         this.emitLiveFeedbackStatus(feedbackEntries, 'delivered', feedbackTimestamp);
         continue;
+      }
+
+      if (result.stop_reason === 'cancelled') {
+        throw new Error('运行时执行已取消');
       }
 
       if (result.is_error) {

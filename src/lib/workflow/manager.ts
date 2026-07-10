@@ -989,6 +989,7 @@ try {
       return {
         result: result.success ? result.output : (result.error || result.output),
         runtimeSessionId: resolvedSessionId || '',
+        stop_reason: result.stopReason,
         is_error: !result.success,
         cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
         duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
@@ -2640,6 +2641,9 @@ try {
     try {
       // Execute loop: run agent, then check for pending feedback and resume if any
       while (true) {
+        if (this.shouldStop) {
+          throw new Error('工作流已停止');
+        }
         let result: WorkflowRuntimeJsonResult;
         try {
           result = await this.executeWithEngine(
@@ -2660,6 +2664,9 @@ try {
             }
           );
         } catch (err) {
+          if (this.shouldStop) {
+            throw new Error('工作流已停止');
+          }
           // If interrupted with feedback, preserve stream and resume with feedback
           if (this.interruptFlag && this.liveFeedback.length > 0) {
             const isFeedbackOnly = this.feedbackInterrupt;
@@ -2706,6 +2713,14 @@ try {
         const proc = processManager.getProcess(currentProcessId);
         if (proc?.streamContent) {
           flushProcessStream(proc.streamContent);
+        }
+
+        if (this.shouldStop) {
+          throw new Error('工作流已停止');
+        }
+
+        if (result.stop_reason === 'cancelled' && !(this.interruptFlag && this.liveFeedback.length > 0)) {
+          throw new Error('运行时执行已取消');
         }
 
         lastResult = result;
