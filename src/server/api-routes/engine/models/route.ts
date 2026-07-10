@@ -126,11 +126,6 @@ async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
       return await discoverViaAcpxCommand(agentId, attempt.command, attempt.source, index + 1, attempts.length, cwd);
     } catch (error) {
       lastError = error;
-      console.warn(
-        `[engine/models] ACPX discovery attempt failed agent=${agentId} source=${attempt.source} ` +
-        `attempt=${index + 1}/${attempts.length} command="${attempt.command}":`,
-        error,
-      );
     }
   }
 
@@ -146,10 +141,6 @@ async function discoverViaAcpxCommand(
   cwd: string,
 ): Promise<DiscoveredModel[]> {
   const startedAt = Date.now();
-  console.info(
-    `[engine/models] ACPX discovery start agent=${agentId} source=${source} ` +
-    `attempt=${attempt}/${attemptCount} command="${command}"`,
-  );
 
   const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
   const runtime = createAcpRuntime({
@@ -168,18 +159,10 @@ async function discoverViaAcpxCommand(
     mode: 'oneshot',
     cwd,
   });
-  console.info(
-    `[engine/models] ACPX discovery session ready agent=${agentId} source=${source} ` +
-    `record=${handle.acpxRecordId || handle.sessionKey} elapsedMs=${Date.now() - startedAt}`,
-  );
 
   try {
     const status = await runtime.getStatus?.({ handle });
     const models = uniqueModels(extractModelsFromStatus(status));
-    console.info(
-      `[engine/models] ACPX discovery status agent=${agentId} source=${source} ` +
-      `models=${models.length} elapsedMs=${Date.now() - startedAt}`,
-    );
     return models;
   } finally {
     await runtime.close({
@@ -187,7 +170,6 @@ async function discoverViaAcpxCommand(
       reason: 'model-discovery-complete',
       discardPersistentState: true,
     }).catch(() => undefined);
-    console.info(`[engine/models] ACPX discovery closed agent=${agentId} source=${source} elapsedMs=${Date.now() - startedAt}`);
   }
 }
 
@@ -226,7 +208,6 @@ export async function GET(request: Request) {
       return jsonOk({ engine, agentId, source: 'acpx', models });
     }
   } catch (error) {
-    console.error(`[engine/models] ACPX discovery failed for ${agentId}:`, error);
     if (agentId !== 'opencode') {
       return jsonError(`Failed to discover models: ${errorMessage(error)}`, 500);
     }
