@@ -1,26 +1,13 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef } from 'react';
+import { memo, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import ReactFlow, {
-  Background,
-  Controls,
-  Handle,
-  MarkerType,
-  Position,
-  ReactFlowProvider,
-  type Edge,
-  type Node,
-  type NodeProps,
-  type NodeTypes,
-  useEdgesState,
-  useNodesState,
-  useReactFlow,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
+import { Star } from 'lucide-react';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from './ui/badge';
+import { cn } from '@/lib/core/utils';
 import { resolveAgentAvatarSrc, type AgentAvatarConfig, type AgentRoleType, type AgentTeam } from '@/lib/agent/personas';
+import { pickSpriteAvatarValue } from '@/lib/avatar/sprite';
 import type { StateMachineState } from '@/lib/core/schemas';
 
 type FormationAgent = {
@@ -40,74 +27,12 @@ interface AgentFormationDiagramProps {
   className?: string;
 }
 
-type FormationNodeData = {
-  name: string;
-  team: AgentTeam;
-  roleType: AgentRoleType;
-  avatar?: AgentAvatarConfig | string | null;
+type FormationCardData = FormationAgent & {
+  isSupervisor?: boolean;
   isActive: boolean;
   activeStep?: string | null;
-  isSupervisor?: boolean;
   status?: AgentFormationDiagramProps['status'];
-  width?: number;
 };
-
-const SUPERVISOR_ID = 'formation-supervisor';
-const MIN_NODE_WIDTH = 208;
-const MAX_NODE_WIDTH = 296;
-
-function estimateNodeWidth(name: string, isSupervisor = false): number {
-  const trimmed = name.trim();
-  const estimated = trimmed.length <= 8
-    ? MIN_NODE_WIDTH
-    : Math.min(MAX_NODE_WIDTH, MIN_NODE_WIDTH + (trimmed.length - 8) * 7);
-  return isSupervisor ? Math.min(MAX_NODE_WIDTH, estimated + 18) : estimated;
-}
-
-function getTeamTone(team: AgentTeam, isSupervisor?: boolean) {
-  if (isSupervisor || team === 'black-gold') {
-    return {
-      ring: 'ring-amber-400/45',
-      border: 'border-amber-500/45',
-      accent: 'bg-amber-400',
-      accentSoft: 'bg-amber-500/12',
-      glow: 'rgba(245,158,11,0.18)',
-      avatarRing: 'ring-amber-400/45',
-      badge: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200',
-    };
-  }
-  if (team === 'red') {
-    return {
-      ring: 'ring-rose-400/40',
-      border: 'border-rose-500/35',
-      accent: 'bg-rose-400',
-      accentSoft: 'bg-rose-500/10',
-      glow: 'rgba(244,63,94,0.16)',
-      avatarRing: 'ring-rose-400/35',
-      badge: 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-200',
-    };
-  }
-  if (team === 'judge') {
-    return {
-      ring: 'ring-violet-400/40',
-      border: 'border-violet-500/35',
-      accent: 'bg-violet-400',
-      accentSoft: 'bg-violet-500/10',
-      glow: 'rgba(168,85,247,0.16)',
-      avatarRing: 'ring-violet-400/35',
-      badge: 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-200',
-    };
-  }
-  return {
-    ring: 'ring-cyan-400/40',
-    border: 'border-cyan-500/35',
-    accent: 'bg-cyan-400',
-    accentSoft: 'bg-cyan-500/10',
-    glow: 'rgba(34,211,238,0.16)',
-    avatarRing: 'ring-cyan-400/35',
-    badge: 'border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200',
-  };
-}
 
 function normalizeStepKeyVariants(stateName: string, stepName: string): string[] {
   return [
@@ -127,379 +52,276 @@ function buildActiveStepMap(
 
   for (const state of states) {
     for (const step of state.steps || []) {
-      const variants = normalizeStepKeyVariants(state.name, step.name);
-      if (variants.some((key) => activeKeys.has(key))) {
-        map.set(step.agent, step.name);
-      }
+      const stepName = String(step.name || '').trim();
+      const baseStepName = stepName.replace(/-迭代\d+$/, '');
+      const variants = normalizeStepKeyVariants(state.name, stepName);
+      const isActive = variants.some((key) => activeKeys.has(key))
+        || Array.from(activeKeys).some((key) => (
+          key === baseStepName
+          || key.startsWith(`${stepName}-迭代`)
+          || key.startsWith(`${baseStepName}-迭代`)
+          || key.endsWith(`-${stepName}`)
+          || key.endsWith(`-${baseStepName}`)
+        ));
+      if (isActive && step.agent) map.set(step.agent, stepName);
     }
   }
 
   return map;
 }
 
-function getSourceHandleId(angle: number): string {
-  const degrees = ((angle * 180 / Math.PI) % 360 + 360) % 360;
-  if (degrees >= 45 && degrees < 135) return 'source-bottom';
-  if (degrees >= 135 && degrees < 225) return 'source-left';
-  if (degrees >= 225 && degrees < 315) return 'source-top';
-  return 'source-right';
+function getTeamTone(team: AgentTeam, isSupervisor?: boolean) {
+  if (isSupervisor || team === 'black-gold') {
+    return {
+      status: 'bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.38)]',
+      ring: 'ring-amber-400/45',
+      tag: 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-200',
+      hoverText: 'group-hover:text-amber-600 dark:group-hover:text-amber-300',
+      aura: 'bg-amber-400/12',
+      accent: 'border-amber-300/50',
+    };
+  }
+  if (team === 'red') {
+    return {
+      status: 'bg-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.32)]',
+      ring: 'ring-rose-400/35',
+      tag: 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-200',
+      hoverText: 'group-hover:text-rose-600 dark:group-hover:text-rose-300',
+      aura: 'bg-rose-400/10',
+      accent: 'border-rose-300/45',
+    };
+  }
+  if (team === 'judge') {
+    return {
+      status: 'bg-violet-500 shadow-[0_0_12px_rgba(139,92,246,0.32)]',
+      ring: 'ring-violet-400/35',
+      tag: 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-200',
+      hoverText: 'group-hover:text-violet-600 dark:group-hover:text-violet-300',
+      aura: 'bg-violet-400/10',
+      accent: 'border-violet-300/45',
+    };
+  }
+  return {
+    status: 'bg-cyan-500 shadow-[0_0_12px_rgba(8,145,178,0.32)]',
+    ring: 'ring-cyan-400/35',
+    tag: 'border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200',
+    hoverText: 'group-hover:text-cyan-700 dark:group-hover:text-cyan-300',
+    aura: 'bg-cyan-400/10',
+    accent: 'border-cyan-300/45',
+  };
 }
 
-function getTargetHandleId(angle: number): string {
-  const opposite = angle + Math.PI;
-  const degrees = ((opposite * 180 / Math.PI) % 360 + 360) % 360;
-  if (degrees >= 45 && degrees < 135) return 'target-bottom';
-  if (degrees >= 135 && degrees < 225) return 'target-left';
-  if (degrees >= 225 && degrees < 315) return 'target-top';
-  return 'target-right';
+function resolveStatusText(card: FormationCardData) {
+  if (card.isSupervisor) {
+    if (card.status === 'waiting') return '等待人工';
+    if (card.status === 'failed') return '调度异常';
+    if (card.isActive) return '指挥中';
+    return '待命';
+  }
+  if (card.isActive) return '执行中';
+  if (card.status === 'completed') return '已收束';
+  return '待命';
 }
 
-const AgentFormationNode = memo(function AgentFormationNode({ data }: NodeProps<FormationNodeData>) {
-  const avatarSrc = resolveAgentAvatarSrc(data.avatar, data.name, {
-    team: data.team,
-    roleType: data.roleType,
-  });
-  const teamTone = getTeamTone(data.team, data.isSupervisor);
-  const isWaiting = data.status === 'waiting';
-  const isFailed = data.status === 'failed';
-  const isCompleted = data.status === 'completed';
-  const supervisorTone = isFailed
-    ? 'from-red-500/18 via-red-500/8 to-transparent'
-    : isWaiting
-      ? 'from-amber-500/18 via-amber-500/8 to-transparent'
-      : 'from-amber-400/20 via-yellow-400/10 to-transparent';
-  const activeTone = isFailed
-    ? 'from-red-500/20 via-red-500/10 to-transparent'
-    : isCompleted
-      ? 'from-emerald-500/18 via-emerald-500/8 to-transparent'
-      : isWaiting
-        ? 'from-amber-500/18 via-amber-500/8 to-transparent'
-        : 'from-cyan-500/20 via-blue-500/10 to-transparent';
-  const statusText = data.isSupervisor
-    ? isWaiting
-      ? '等待人工'
-      : isFailed
-        ? '调度异常'
-        : data.isActive
-          ? '指挥中'
-          : '待命'
-    : data.isActive
-      ? '执行中'
-      : isCompleted
-        ? '已收束'
-        : '待命';
+function resolveStableFormationAvatar(
+  avatar: AgentAvatarConfig | string | null | undefined,
+  stableSeed: string,
+  options: { team: AgentTeam; roleType: AgentRoleType }
+) {
+  if (typeof avatar === 'string' && avatar.trim()) {
+    return resolveAgentAvatarSrc(avatar, stableSeed, options);
+  }
+  if (avatar && typeof avatar === 'object') {
+    if (
+      avatar.mode === 'uploaded'
+      || avatar.mode === 'generated'
+      || avatar.mode === 'sprite'
+      || avatar.mode === 'preset'
+    ) {
+      return resolveAgentAvatarSrc(avatar, stableSeed, options);
+    }
+  }
+  return pickSpriteAvatarValue(stableSeed, { category: 'agent-default' });
+}
 
-  return (
-    <motion.div
-      initial={false}
-      animate={{
-        y: data.isActive ? -3 : 0,
-        scale: data.isActive ? 1.02 : 1,
-        boxShadow: data.isActive
-          ? '0 18px 40px rgba(59,130,246,0.20)'
-          : data.isSupervisor
-            ? `0 12px 28px ${teamTone.glow}`
-            : '0 8px 18px rgba(15,23,42,0.08)',
-      }}
-      transition={{ duration: 0.35, ease: 'easeOut' }}
-      className={[
-        'relative overflow-hidden rounded-2xl border bg-background/95 px-4 py-3 transition-all',
-        data.isActive
-          ? 'border-blue-500/80 bg-slate-950/[0.03] dark:bg-blue-950/40'
-          : `border-border/70 ${teamTone.accentSoft}`,
-        data.isSupervisor ? `ring-1 ${teamTone.ring}` : '',
-        isFailed ? 'border-red-500/70' : '',
-      ].join(' ')}
-      style={{ width: data.width || MIN_NODE_WIDTH }}
-    >
-      <div className={`absolute inset-x-0 top-0 h-1.5 ${teamTone.accent}`} />
-      <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${data.isSupervisor ? supervisorTone : activeTone}`} />
-      {data.isSupervisor ? (
-        <motion.div
-          className="pointer-events-none absolute inset-[-18%] rounded-[28px] border border-amber-400/20"
-          animate={{
-            scale: [1, 1.06, 1],
-            opacity: isWaiting ? [0.2, 0.45, 0.2] : [0.18, 0.32, 0.18],
-          }}
-          transition={{ duration: isWaiting ? 2.4 : 3.2, repeat: Infinity, ease: 'easeInOut' }}
-        />
-      ) : null}
-      {data.isActive ? (
-        <motion.div
-          className="pointer-events-none absolute inset-y-0 left-[-35%] w-[42%] bg-gradient-to-r from-transparent via-white/45 to-transparent dark:via-cyan-200/20"
-          animate={{ x: ['0%', '270%'] }}
-          transition={{ duration: 1.6, repeat: Infinity, ease: 'linear' }}
-        />
-      ) : null}
-      {!data.isSupervisor ? (
-        <>
-          <Handle type="target" id="target-top" position={Position.Top} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-          <Handle type="target" id="target-bottom" position={Position.Bottom} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-          <Handle type="target" id="target-left" position={Position.Left} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-          <Handle type="target" id="target-right" position={Position.Right} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-        </>
-      ) : null}
-      {data.isSupervisor ? (
-        <>
-          <Handle type="source" id="source-top" position={Position.Top} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-          <Handle type="source" id="source-bottom" position={Position.Bottom} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-          <Handle type="source" id="source-left" position={Position.Left} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-          <Handle type="source" id="source-right" position={Position.Right} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
-        </>
-      ) : null}
-
-      <div className="flex items-center gap-3">
-        <SpriteAvatar
-          avatar={avatarSrc}
-          seed={data.name}
-          category="agent-default"
-          alt={data.name}
-          fallback={data.name.charAt(0).toUpperCase()}
-          className={`h-11 w-11 ring-2 ${teamTone.avatarRing}`}
-          fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start gap-2">
-            <div className="min-w-0 flex-1 break-words text-sm font-semibold leading-5">{data.name}</div>
-            {data.isSupervisor ? (
-              <Badge variant="outline" className={`h-5 shrink-0 text-[10px] ${teamTone.badge}`}>Supervisor</Badge>
-            ) : null}
-          </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            {statusText}
-          </div>
-        </div>
-      </div>
-
-      <AnimatePresence initial={false}>
-        {data.isSupervisor && (isWaiting || isFailed) ? (
-          <motion.div
-            key={`${data.name}-${data.status}`}
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            className={[
-              'mt-3 inline-flex rounded-full border px-2 py-1 text-[10px] font-medium',
-              isFailed
-                ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200'
-                : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200',
-            ].join(' ')}
-          >
-            {isFailed ? '需要介入' : '人工确认中'}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-
-      {data.activeStep ? (
-        <motion.div
-          key={data.activeStep}
-          initial={{ opacity: 0, y: 6, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.24, ease: 'easeOut' }}
-          className="mt-3 rounded-xl border border-blue-500/20 bg-blue-500/8 px-2.5 py-2"
-        >
-          <div className="text-[10px] text-blue-700 dark:text-blue-300">当前步骤</div>
-          <div className="mt-0.5 truncate text-xs font-medium text-blue-900 dark:text-blue-100">{data.activeStep}</div>
-        </motion.div>
-      ) : null}
-    </motion.div>
-  );
-});
-
-const nodeTypes: NodeTypes = {
-  formationNode: AgentFormationNode,
-};
-
-function buildGraph(
+function buildCards(
   agents: FormationAgent[],
   states: StateMachineState[],
   supervisorAgent?: string | null,
   currentStep?: string | null,
   activeSteps: string[] = [],
   status?: AgentFormationDiagramProps['status']
-): { nodes: Node<FormationNodeData>[]; edges: Edge[] } {
+) {
   const activeStepMap = buildActiveStepMap(states, currentStep, activeSteps);
   const supervisorName = supervisorAgent || agents.find((agent) => agent.roleType === 'supervisor')?.name || 'Supervisor';
   const supervisorConfig = agents.find((agent) => agent.name === supervisorName);
-  const workerAgents = agents.filter((agent) => agent.name !== supervisorName);
-  const supervisorWidth = estimateNodeWidth(supervisorName, true);
-  const widestWorker = workerAgents.reduce((max, agent) => Math.max(max, estimateNodeWidth(agent.name)), MIN_NODE_WIDTH);
-  const ringRadiusBase = Math.max(230, widestWorker * 0.9 + 92);
-  const ringCapacity = 6;
+  const supervisor: FormationCardData = {
+    name: supervisorName,
+    team: supervisorConfig?.team || 'black-gold',
+    roleType: 'supervisor',
+    avatar: supervisorConfig?.avatar,
+    isSupervisor: true,
+    isActive: status === 'running' || status === 'waiting',
+    activeStep: status === 'waiting' ? '等待人工回复' : null,
+    status,
+  };
+  const workers = agents
+    .filter((agent) => agent.name !== supervisorName)
+    .map((agent): FormationCardData => ({
+      ...agent,
+      team: agent.team || 'blue',
+      roleType: agent.roleType || 'normal',
+      isActive: activeStepMap.has(agent.name),
+      activeStep: activeStepMap.get(agent.name) || null,
+      status,
+    }));
 
-  const nodes: Node<FormationNodeData>[] = [
-    {
-      id: SUPERVISOR_ID,
-      type: 'formationNode',
-      position: { x: 0, y: 0 },
-      zIndex: 2,
-      data: {
-        name: supervisorName,
-        team: supervisorConfig?.team || 'black-gold',
-        roleType: 'supervisor',
-        avatar: supervisorConfig?.avatar,
-        isActive: status === 'running' || status === 'waiting',
-        activeStep: status === 'waiting' ? '等待人工回复' : null,
-        isSupervisor: true,
-        status,
-        width: supervisorWidth,
-      },
-      draggable: false,
-    },
-  ];
-
-  const edges: Edge[] = [];
-
-  workerAgents.forEach((agent, index) => {
-    const ringIndex = Math.floor(index / ringCapacity);
-    const indexInRing = index % ringCapacity;
-    const countInRing = Math.min(ringCapacity, workerAgents.length - ringIndex * ringCapacity);
-    const radius = ringRadiusBase + ringIndex * 170;
-    const angle = (-Math.PI / 2) + (indexInRing / Math.max(countInRing, 1)) * Math.PI * 2;
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius + 70;
-
-    nodes.push({
-      id: `formation-agent:${agent.name}`,
-      type: 'formationNode',
-      position: { x, y },
-      zIndex: 2,
-      data: {
-        name: agent.name,
-        team: agent.team || 'blue',
-        roleType: agent.roleType || 'normal',
-        avatar: agent.avatar,
-        isActive: activeStepMap.has(agent.name),
-        activeStep: activeStepMap.get(agent.name) || null,
-        status,
-        width: estimateNodeWidth(agent.name),
-      },
-      draggable: false,
-    });
-
-    edges.push({
-      id: `formation-edge:${supervisorName}->${agent.name}`,
-      source: SUPERVISOR_ID,
-      target: `formation-agent:${agent.name}`,
-      sourceHandle: getSourceHandleId(angle),
-      targetHandle: getTargetHandleId(angle),
-      type: 'default',
-      zIndex: 0,
-      animated: activeStepMap.has(agent.name) || status === 'running' || status === 'waiting',
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: activeStepMap.has(agent.name)
-          ? status === 'waiting'
-            ? '#f59e0b'
-            : status === 'failed'
-              ? '#ef4444'
-              : '#22d3ee'
-          : '#94a3b8',
-      },
-      style: {
-        stroke: activeStepMap.has(agent.name)
-          ? status === 'waiting'
-            ? '#f59e0b'
-            : status === 'failed'
-              ? '#ef4444'
-              : '#22d3ee'
-          : '#94a3b8',
-        strokeWidth: activeStepMap.has(agent.name) ? 3 : 1.6,
-        strokeDasharray: activeStepMap.has(agent.name) ? '10 6' : '6 8',
-        opacity: activeStepMap.has(agent.name) ? 0.95 : 0.55,
-      },
-    });
-  });
-
-  return { nodes, edges };
+  return { supervisor, workers };
 }
 
-function AgentFormationDiagramInner(props: AgentFormationDiagramProps) {
-  const { fitView } = useReactFlow();
-  const graph = useMemo(
-    () => buildGraph(props.agents, props.states, props.supervisorAgent, props.currentStep, props.activeSteps, props.status),
+const AgentProfileCard = memo(function AgentProfileCard({
+  card,
+  variant = 'worker',
+}: {
+  card: FormationCardData;
+  variant?: 'supervisor' | 'worker';
+}) {
+  const tone = getTeamTone(card.team || 'blue', card.isSupervisor);
+  const statusText = resolveStatusText(card);
+  const tagLabel = card.isSupervisor ? 'Supervisor' : card.team || 'Agent';
+  const isSupervisor = variant === 'supervisor';
+  const stableAvatarSeed = `${card.name}:${card.team || 'blue'}:${card.roleType || 'normal'}`;
+  const avatarSrc = resolveStableFormationAvatar(card.avatar, stableAvatarSeed, {
+    team: card.team || 'blue',
+    roleType: card.roleType || 'normal',
+  });
+
+  return (
+    <motion.div
+      initial={false}
+      animate={{
+        y: card.isActive ? -2 : 0,
+      }}
+      transition={{ duration: 0.22, ease: 'easeOut' }}
+      className={cn(
+        'group relative overflow-hidden rounded-2xl border border-white/70 bg-white p-3.5 text-center transition-all duration-200 dark:border-white/8 dark:bg-gray-800',
+        'shadow-[0_8px_22px_rgba(15,23,42,0.08)]',
+        'dark:shadow-[0_10px_24px_rgba(0,0,0,0.26)]',
+        'hover:-translate-y-0.5 hover:border-cyan-300/45 hover:shadow-[0_12px_28px_rgba(15,23,42,0.12)]',
+        'dark:hover:border-cyan-700/45 dark:hover:shadow-[0_12px_28px_rgba(0,0,0,0.32)]',
+        card.isActive && 'ring-1 ring-cyan-400/45',
+        isSupervisor ? 'w-[min(420px,100%)] text-left' : 'min-h-[176px] w-[176px]',
+      )}
+    >
+      <div className={cn('pointer-events-none absolute -left-10 -top-10 h-24 w-24 rounded-full blur-2xl transition-opacity duration-300', tone.aura, card.isActive ? 'opacity-100' : 'opacity-55')} />
+
+      <div className="absolute right-3.5 top-3.5 z-10">
+        <div className="relative">
+          <span className={cn('block h-2.5 w-2.5 rounded-full border-2 border-white transition-transform duration-200 group-hover:scale-110 dark:border-gray-800', card.isActive ? tone.status : 'bg-gray-400')} />
+          {card.isActive ? <span className={cn('absolute inset-0 h-2.5 w-2.5 animate-ping rounded-full opacity-20', tone.status)} /> : null}
+        </div>
+      </div>
+
+      {card.isSupervisor ? (
+        <div className="absolute right-3.5 top-9 z-10 rounded-full bg-amber-500 p-1 shadow-[0_0_12px_rgba(245,158,11,0.24)] transition-transform duration-200 group-hover:rotate-12 group-hover:scale-105">
+          <Star className="h-3 w-3 fill-white text-white" />
+        </div>
+      ) : null}
+
+      <div className={cn('relative z-10', isSupervisor ? 'flex items-center gap-3 pr-10 text-left' : 'mb-3 flex justify-center')}>
+        <div className="relative">
+          <div className={cn(
+            'shrink-0',
+            'overflow-hidden rounded-full bg-white p-1 transition-transform duration-200 dark:bg-gray-700',
+            isSupervisor ? 'h-16 w-16' : 'h-14 w-14',
+            'shadow-[inset_4px_4px_8px_rgba(15,23,42,0.08),inset_-4px_-4px_8px_rgba(255,255,255,0.88)]',
+            'dark:shadow-[inset_4px_4px_8px_rgba(0,0,0,0.26),inset_-4px_-4px_8px_rgba(255,255,255,0.055)]',
+          )}>
+            <SpriteAvatar
+              avatar={avatarSrc}
+              seed={stableAvatarSeed}
+              category="agent-default"
+              alt={card.name}
+              fallback={card.name.charAt(0).toUpperCase()}
+              className={cn('h-full w-full rounded-full ring-2', card.isActive ? 'ring-cyan-500/70' : tone.ring)}
+              fallbackClassName="bg-primary/10 text-sm font-semibold text-primary"
+            />
+          </div>
+          <div className={cn('absolute inset-0 rounded-full border-2 opacity-0 transition-opacity duration-300 group-hover:opacity-100', tone.accent)} />
+        </div>
+
+        <div className={cn('relative z-10 min-w-0', isSupervisor ? 'flex-1' : '')}>
+          <h3 className={cn('break-words text-sm font-semibold leading-5 text-gray-950 transition-colors duration-200 dark:text-gray-100', tone.hoverText)}>
+            {card.name}
+          </h3>
+          <p className="mt-1 text-xs text-gray-500 transition-colors duration-300 dark:text-gray-400">
+            {statusText}
+          </p>
+        </div>
+      </div>
+
+      <div className={cn('relative z-10 mt-3 flex gap-2', isSupervisor ? 'pl-[76px] justify-start' : 'justify-center')}>
+        <Badge variant="outline" className={cn('text-[10px]', tone.tag)}>
+          {tagLabel}
+        </Badge>
+        {card.isActive ? (
+          <Badge variant="outline" className="border-cyan-500/25 bg-cyan-500/10 text-[10px] text-cyan-700 dark:text-cyan-200">
+            Active
+          </Badge>
+        ) : null}
+      </div>
+
+      <AnimatePresence initial={false}>
+        {card.activeStep ? (
+          <motion.div
+            key={card.activeStep}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="relative z-10 mt-3 rounded-xl border border-cyan-500/14 bg-cyan-500/[0.06] px-3 py-2 text-left"
+          >
+            <div className="text-[10px] font-medium text-cyan-700 dark:text-cyan-300">当前步骤</div>
+            <div className="mt-0.5 truncate text-xs font-semibold text-gray-950 dark:text-gray-100">{card.activeStep}</div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <div className="pointer-events-none absolute inset-0 rounded-2xl border border-cyan-200/0 transition-colors duration-200 group-hover:border-cyan-300/36 dark:group-hover:border-cyan-700/36" />
+    </motion.div>
+  );
+});
+
+export default function AgentFormationDiagram(props: AgentFormationDiagramProps) {
+  const cards = useMemo(
+    () => buildCards(props.agents, props.states, props.supervisorAgent, props.currentStep, props.activeSteps, props.status),
     [props.agents, props.states, props.supervisorAgent, props.currentStep, props.activeSteps, props.status]
   );
-  const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
-  const layoutSignatureRef = useRef('');
-
-  useEffect(() => {
-    setNodes(graph.nodes);
-    setEdges(graph.edges);
-  }, [graph, setEdges, setNodes]);
-
-  useEffect(() => {
-    const signature = JSON.stringify({
-      agents: props.agents.map((agent) => agent.name),
-      states: props.states.map((state) => `${state.name}:${state.steps?.length || 0}`),
-    });
-    const layoutChanged = layoutSignatureRef.current !== signature;
-    layoutSignatureRef.current = signature;
-
-    const timer = window.setTimeout(() => {
-      fitView({
-        padding: layoutChanged ? 0.08 : 0.12,
-        duration: 240,
-        includeHiddenNodes: false,
-        maxZoom: 1.18,
-      });
-    }, 80);
-
-    return () => window.clearTimeout(timer);
-  }, [fitView, props.agents, props.states, nodes.length, edges.length]);
 
   if (props.agents.length === 0) {
     return (
-      <div className="flex h-full min-h-[clamp(420px,46vh,620px)] items-center justify-center rounded-2xl border border-dashed text-sm text-muted-foreground">
+      <div className="flex h-full min-h-[clamp(420px,46vh,620px)] items-center justify-center rounded-2xl border border-dashed border-border bg-background text-sm text-muted-foreground">
         当前没有可展示的 Agent 编队
       </div>
     );
   }
 
   return (
-    <div className={`relative w-full overflow-hidden rounded-2xl border border-border/60 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.03),rgba(15,23,42,0.01))] dark:bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.16),transparent_32%),linear-gradient(180deg,rgba(2,6,23,0.88),rgba(15,23,42,0.74))] ${props.className || 'h-[clamp(420px,46vh,620px)]'}`}>
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:32px_32px]" />
-      <motion.div
-        className="pointer-events-none absolute left-1/2 top-[88px] h-40 w-40 -translate-x-1/2 rounded-full bg-amber-400/10 blur-3xl"
-        animate={{
-          scale: props.status === 'running' || props.status === 'waiting' ? [1, 1.12, 1] : 1,
-          opacity: props.status === 'failed' ? 0.18 : [0.12, 0.22, 0.12],
-        }}
-        transition={{ duration: props.status === 'waiting' ? 2.2 : 3.4, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.08, maxZoom: 1.18 }}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        panOnDrag
-        edgesFocusable={false}
-        edgesUpdatable={false}
-        zoomOnScroll
-        zoomOnPinch
-        zoomOnDoubleClick
-        minZoom={0.35}
-        defaultViewport={{ x: 0, y: 0, zoom: 0.92 }}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Controls showInteractive={false} />
-        <Background color="rgba(148,163,184,0.28)" gap={20} />
-      </ReactFlow>
-    </div>
-  );
-}
+    <div className={cn('h-full w-full overflow-auto rounded-2xl bg-gray-100 p-5 dark:bg-gray-900', props.className || 'min-h-[clamp(420px,46vh,620px)]')}>
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-5">
+        <div className="flex justify-center">
+          <AgentProfileCard card={cards.supervisor} variant="supervisor" />
+        </div>
 
-export default function AgentFormationDiagram(props: AgentFormationDiagramProps) {
-  return (
-    <ReactFlowProvider>
-      <AgentFormationDiagramInner {...props} />
-    </ReactFlowProvider>
+        <div
+          className="grid justify-center gap-4"
+          style={{ gridTemplateColumns: 'repeat(auto-fill, 176px)' }}
+        >
+          {cards.workers.map((card) => (
+            <AgentProfileCard key={card.name} card={card} />
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

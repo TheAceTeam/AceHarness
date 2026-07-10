@@ -1,6 +1,6 @@
 'use client';
 
-import { type ComponentProps, useMemo, useState } from 'react';
+import { type ComponentProps, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from '@/lib/navigation/client';
 import { usePathname, useRouter, useSearchParams } from '@/lib/navigation/client';
@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { ActionMenuGroup } from '@/components/ui/action-menu';
+import { BulkActionBar } from '@/components/ui/bulk-action-bar';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import {
   DetailDrawer,
@@ -53,6 +55,7 @@ import {
   useRunHistoryRows,
   useSyncDocumentsMetadataToDb,
   useSyncRunHistoryToDb,
+  runHistoryCollection,
   type RunHistoryRow,
 } from '@/client/db/collections';
 import { runsApi } from '@/lib/core/api';
@@ -278,6 +281,9 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
   );
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
   const [selectedRun, setSelectedRun] = useState<RunRow | null>(null);
+  const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
   const [pendingRunAction, setPendingRunAction] = useState<string | null>(null);
 
   useDocumentTitle('运行记录');
@@ -435,6 +441,17 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
       return [{ ...item, depth }, ...visibleChildren];
     });
   const displayedRunItems = useMemo(() => flattenRunItems(runItems), [runItems, expandedRunIds]);
+  const displayedRunIds = useMemo(() => displayedRunItems.map((run) => run.id), [displayedRunItems]);
+  const allDisplayedRunsSelected = displayedRunIds.length > 0 && displayedRunIds.every((id) => selectedRunIds.includes(id));
+  const selectedRunRows = useMemo(() => {
+    const byId = new Map(statusFilteredRunRows.map((row) => [row.id, row]));
+    return selectedRunIds.map((id) => byId.get(id)).filter((row): row is RunHistoryRow => Boolean(row));
+  }, [selectedRunIds, statusFilteredRunRows]);
+
+  useEffect(() => {
+    setSelectedRunIds((current) => current.filter((id) => statusFilteredRunRows.some((row) => row.id === id)));
+  }, [statusFilteredRunRows]);
+
   const toggleExpandedRun = (runId: string) => {
     setExpandedRunIds((prev) => {
       const next = new Set(prev);
@@ -495,12 +512,60 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
     if (!ok) return;
     void runAction('delete', run, async () => {
       await runsApi.deleteRun(run.id);
+      runHistoryCollection.delete(run.id);
+      setSelectedRunIds((current) => current.filter((id) => id !== run.id));
       if (selectedRun?.id === run.id) setSelectedRun(null);
       window.dispatchEvent(new CustomEvent(WORKFLOW_RUN_DELETED_EVENT, {
         detail: { runId: run.id, configFile: run.configFile },
       }));
       toast('success', '运行记录已删除');
     });
+  };
+  const toggleSelectAllDisplayedRuns = () => {
+    setSelectedRunIds((current) => {
+      const next = new Set(current);
+      if (allDisplayedRunsSelected) {
+        displayedRunIds.forEach((id) => next.delete(id));
+      } else {
+        displayedRunIds.forEach((id) => next.add(id));
+      }
+      return Array.from(next);
+    });
+  };
+  const confirmBatchDeleteRuns = async () => {
+    if (selectedRunIds.length === 0) return;
+    const targetIds = [...selectedRunIds];
+    setBatchDeleting(true);
+    try {
+      const result = await apiRequest<{ message?: string; deletedCount?: number; errors?: string[] }>('/api/runs/batch', {
+        method: 'POST',
+        body: { action: 'delete', runIds: targetIds },
+      });
+      const failedIds = new Set((result.errors || [])
+        .map((item) => String(item).split(':')[0]?.trim())
+        .filter(Boolean));
+      const deletedIds = targetIds.filter((runId) => !failedIds.has(runId));
+      deletedIds.forEach((runId) => {
+        const run = statusFilteredRunRows.find((item) => item.id === runId);
+        runHistoryCollection.delete(runId);
+        window.dispatchEvent(new CustomEvent(WORKFLOW_RUN_DELETED_EVENT, {
+          detail: { runId, configFile: run?.configFile },
+        }));
+      });
+      if (selectedRun && deletedIds.includes(selectedRun.id)) setSelectedRun(null);
+      setSelectedRunIds((current) => current.filter((id) => failedIds.has(id)));
+      setBatchDeleteConfirmOpen(false);
+      await refreshRuns();
+      if (result.errors?.length) {
+        toast('warning', result.message || `已删除 ${result.deletedCount || 0} 条运行记录，部分失败`);
+      } else {
+        toast('success', result.message || `已删除 ${result.deletedCount || targetIds.length} 条运行记录`);
+      }
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '批量删除失败');
+    } finally {
+      setBatchDeleting(false);
+    }
   };
   const analyzeRun = (run: RunRow) => runAction('analyze', run, async () => {
     const result = await apiRequest<{ steps?: unknown[]; summary?: { totalSteps?: number; avgScore?: number } }>(`/api/prompt-analysis?runId=${encodeURIComponent(run.id)}`);
@@ -888,6 +953,11 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
               direction: sortDirection,
               onSortChange: ({ columnId }) => toggleSort(columnId as RunSortKey),
             }}
+            selection={{
+              selectedKeys: selectedRunIds,
+              onSelectedKeysChange: (keys) => setSelectedRunIds(keys.map(String)),
+              ariaLabel: '选择运行记录',
+            }}
             onRowClick={(run) => setSelectedRun(run)}
             rowActions={getRunActions}
             density="comfortable"
@@ -1011,6 +1081,42 @@ export default function RunHistoryPage({ embeddedSearch, onEmbeddedSearchChange 
           ) : null}
         </DetailDrawerContent>
       </DetailDrawer>
+
+      {view === 'runs' && displayedRunItems.length > 0 ? (
+        <BulkActionBar
+          selectedCount={selectedRunIds.length}
+          onClear={() => setSelectedRunIds([])}
+          actions={(
+            <>
+              <Button size="sm" variant="outline" onClick={toggleSelectAllDisplayedRuns}>
+                {allDisplayedRunsSelected ? '取消全选当前页' : '全选当前页'}
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => setBatchDeleteConfirmOpen(true)}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                批量删除
+              </Button>
+            </>
+          )}
+        />
+      ) : null}
+
+      <ConfirmModal
+        open={batchDeleteConfirmOpen}
+        variant="delete"
+        title="批量删除运行记录"
+        objectName={`${selectedRunIds.length} 条运行记录`}
+        consequence="删除后会移除运行目录、运行记录和关联协作会话，此操作无法撤销。"
+        confirmLabel={`删除 ${selectedRunIds.length} 条`}
+        loading={batchDeleting}
+        affectedItems={selectedRunRows.map((run) => ({
+          id: run.id,
+          label: run.configName || run.configFile || run.id,
+          description: run.id,
+        }))}
+        onConfirm={confirmBatchDeleteRuns}
+        onCancel={() => setBatchDeleteConfirmOpen(false)}
+        onOpenChange={setBatchDeleteConfirmOpen}
+      />
     </div>
   );
 }

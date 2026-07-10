@@ -134,7 +134,7 @@ import type {
   HumanQuestionAnswer,
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
-import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
+import type { StateMachineState, WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPanel';
 import { cn } from '@/lib/core/utils';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
@@ -224,8 +224,8 @@ const MonacoEditor = dynamic(
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
-type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'conversation' | 'changes' | 'documents' | 'plan' | 'agora' | 'live' | 'spec';
-type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agora' | 'live' | 'spec';
+type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'conversation' | 'changes' | 'documents' | 'plan' | 'agents' | 'agora' | 'live' | 'spec';
+type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
 type RunLeftPanelTab = 'summary' | 'directory';
 type RunRightPanelTab = 'detail' | 'live' | 'context' | 'questions' | 'diff';
 const WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX = 'aceharness:workflow-run:panel-tabs';
@@ -521,6 +521,7 @@ function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailab
   if (tab === 'workspace') return 'workspace';
   if (tab === 'changes') return 'changes';
   if (tab === 'documents') return 'documents';
+  if (tab === 'agents') return 'agents';
   if (tab === 'agora') return 'agora';
   if (tab === 'live') return 'live';
   if (tab === 'spec' && runtimeSpecAvailable) return 'spec';
@@ -565,6 +566,7 @@ function isRunWorkbenchTab(value: unknown): value is RunWorkbenchTab {
     || value === 'changes'
     || value === 'documents'
     || value === 'plan'
+    || value === 'agents'
     || value === 'agora'
     || value === 'live'
     || value === 'spec';
@@ -594,6 +596,7 @@ function readWorkflowRunPanelTabs(configFile: string): {
           || parsed.center === 'changes'
           || parsed.center === 'documents'
           || parsed.center === 'plan'
+          || parsed.center === 'agents'
           || parsed.center === 'agora'
           || parsed.center === 'live'
           || parsed.center === 'spec'
@@ -1577,6 +1580,8 @@ export default function WorkbenchPage({
   const [runDetailSection, setRunDetailSection] = useState<RunDetailSection>(() => (
     initialWorkbenchSection === 'preview-state'
       ? 'state'
+      : initialWorkbenchSection === 'preview-agents'
+        ? 'agents'
       : initialWorkbenchSection === 'preview-workspace'
         ? 'workspace'
         : initialWorkbenchSection === 'preview-spec'
@@ -4755,6 +4760,36 @@ export default function WorkbenchPage({
     }
     return result;
   }, [agentConfigs, orderedWorkflowAgents, runtimeSupervisorAgent, workflowConfig?.workflow]);
+  const workflowFormationStates = useMemo(() => {
+    const workflow = workflowConfig?.workflow;
+    if (!workflow) return [] as StateMachineState[];
+    if (workflow.mode === 'state-machine') return (workflow.states || []) as StateMachineState[];
+    return (workflow.phases || []).map((phase: any) => ({
+      name: String(phase?.name || '').trim() || '未命名阶段',
+      description: phase?.description,
+      steps: Array.isArray(phase?.steps) ? phase.steps : [],
+      transitions: [],
+      isInitial: false,
+      isFinal: false,
+    })) as StateMachineState[];
+  }, [workflowConfig?.workflow]);
+  const activeFormationAgentNames = useMemo(() => {
+    const activeKeys = new Set([currentStep, ...activeSteps].map((value) => String(value || '').trim()).filter(Boolean));
+    if (activeKeys.size === 0) return [] as string[];
+    const result = new Set<string>();
+    for (const stateNode of workflowFormationStates) {
+      for (const step of stateNode.steps || []) {
+        const stateName = String(stateNode.name || '').trim();
+        const stepName = String(step?.name || '').trim();
+        const matches = activeKeys.has(stepName)
+          || activeKeys.has(`${stateName}-${stepName}`)
+          || activeKeys.has(`state:${stateName}#${stepName}`)
+          || Array.from(activeKeys).some((key) => workflowStepKeyMatchesName(key, stepName));
+        if (matches && step?.agent) result.add(step.agent);
+      }
+    }
+    return Array.from(result);
+  }, [activeSteps, currentStep, workflowFormationStates]);
   const workflowAgoraInitialGuests = useMemo(() => (
     supervisorFormationAgents.map((agent) => ({
       name: agent.name,
@@ -5429,6 +5464,8 @@ export default function WorkbenchPage({
       setRunRecordDrilled((current) => current ? false : current);
       const nextPreviewSection = routeSection === 'preview-state'
         ? 'state'
+        : routeSection === 'preview-agents'
+          ? 'agents'
         : routeSection === 'preview-workspace'
           ? 'workspace'
           : routeSection === 'preview-spec'
@@ -11419,12 +11456,14 @@ export default function WorkbenchPage({
   const previewDetailNavItems = [
     { key: 'overview' as const, label: '总览', icon: 'dashboard' },
     { key: 'state' as const, label: '状态图', icon: 'hub' },
+    { key: 'agents' as const, label: 'Agents', icon: 'groups' },
     { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
     ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
   ];
   const runDetailNavItems = [
     { key: 'overview' as const, label: '总览', icon: 'dashboard' },
     { key: 'state' as const, label: '状态图', icon: 'hub' },
+    { key: 'agents' as const, label: 'Agents', icon: 'groups' },
     { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
     { key: 'changes' as const, label: '变更', icon: 'difference' },
     { key: 'documents' as const, label: '记录', icon: 'description' },
@@ -11461,6 +11500,8 @@ export default function WorkbenchPage({
     dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
     const previewSection = section === 'state'
       ? 'preview-state'
+      : section === 'agents'
+        ? 'preview-agents'
       : section === 'workspace'
         ? 'preview-workspace'
         : section === 'spec'
@@ -11652,6 +11693,47 @@ export default function WorkbenchPage({
     </div>
   );
 
+  const renderAgentFormationPanel = (mode: 'preview' | 'run') => {
+    const isPreview = mode === 'preview';
+    const activeCount = isPreview ? 0 : activeFormationAgentNames.length;
+    const statusLabel = isPreview
+      ? '待运行'
+      : formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus);
+    return (
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+        <div className="shrink-0 border-b bg-background px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className={styles.workbenchPreviewKicker}>{isPreview ? '编队预览' : '活跃编队'}</div>
+              <h2 className="mt-3 text-xl font-semibold tracking-tight">Agents</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+                {isPreview
+                  ? '展示当前工作流会用到的 Agent 编队、主管节点和执行关系。'
+                  : '展示当前运行中参与调度的 Agent，活跃节点会随当前步骤和并发步骤高亮。'}
+              </p>
+            </div>
+            <div className="grid min-w-[280px] grid-cols-3 gap-2">
+              <div className={styles.workbenchMetric}><span>状态</span><strong>{statusLabel}</strong></div>
+              <div className={styles.workbenchMetric}><span>Agent</span><strong>{supervisorFormationAgents.length}</strong></div>
+              <div className={styles.workbenchMetric}><span>活跃</span><strong>{activeCount}</strong></div>
+            </div>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto bg-muted/20 p-4">
+          <AgentFormationDiagram
+            states={workflowFormationStates}
+            agents={supervisorFormationAgents}
+            supervisorAgent={runtimeSupervisorAgent}
+            currentStep={isPreview ? null : currentStep}
+            activeSteps={isPreview ? [] : activeSteps}
+            status={isPreview ? 'idle' : workflowStatus as any}
+            className="min-h-0 rounded-xl"
+          />
+        </div>
+      </div>
+    );
+  };
+
   const renderRunAgoraPanel = () => (
     <div className="h-full min-h-0 overflow-hidden bg-background">
       <WorkflowSupervisorAgoraPanel
@@ -11674,7 +11756,7 @@ export default function WorkbenchPage({
           <div className="h-full min-h-0 bg-muted/20 p-4">
             <div className="h-full min-h-[420px] overflow-hidden rounded-2xl border bg-background">
               <AgentFormationDiagram
-                states={workflowConfig?.workflow?.states || []}
+                states={workflowFormationStates}
                 agents={supervisorFormationAgents}
                 supervisorAgent={runtimeSupervisorAgent}
                 currentStep={currentStep}
@@ -12002,6 +12084,9 @@ export default function WorkbenchPage({
         </div>
       );
     }
+    if (runDetailSection === 'agents') {
+      return renderAgentFormationPanel('preview');
+    }
     if (runDetailSection === 'spec') {
       return (
         <div className={styles.workbenchPreviewPanel}>
@@ -12034,7 +12119,7 @@ export default function WorkbenchPage({
           <div className="mt-5 grid gap-3 sm:grid-cols-4">
             <div className={styles.workbenchMetric}><span>工作流</span><strong>{workflowBaseTitle}</strong></div>
             <div className={styles.workbenchMetric}><span>当前步骤</span><strong>待运行</strong></div>
-            <div className={styles.workbenchMetric}><span>Agent</span><strong>{agentConfigs.length}</strong></div>
+            <div className={styles.workbenchMetric}><span>Agent</span><strong>{workflowAgentNames.length}</strong></div>
             <div className={styles.workbenchMetric}><span>转移次数</span><strong>0</strong></div>
           </div>
         </div>
@@ -12183,6 +12268,8 @@ export default function WorkbenchPage({
                     renderRunOverviewPanel()
                   ) : runDetailSection === 'state' ? (
                     renderRunStateMapPanel()
+                  ) : runDetailSection === 'agents' ? (
+                    renderAgentFormationPanel('run')
                   ) : runDetailSection === 'agora' ? (
                     renderRunAgoraPanel()
                   ) : runDetailSection === 'live' ? (
