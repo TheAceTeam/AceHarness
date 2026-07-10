@@ -1540,7 +1540,7 @@ function renderToolEntryCard(
 
   return (
     <Tool
-      key={key}
+      key={`${key}-${entry.state}`}
       className="overflow-hidden rounded-xl border-border/70 bg-background/70 shadow-sm"
       defaultOpen={shouldOpen}
       data-testid="ace-tool-card"

@@ -2290,6 +2290,50 @@ describe('Wrapper stream markdown rendering', () => {
     expect(screen.getByText(/读取文件/)).toBeInTheDocument();
   });
 
+  test('tool card closes when a streaming tool call receives its result', () => {
+    const toolCall = wrapAceProcessBlock(
+      'tool-call',
+      { toolName: 'read', toolId: 'read-stream-1', title: '📖 读取文件', filePath: 'README.md' },
+      '',
+    );
+    const toolResult = wrapAceProcessBlock(
+      'tool-result',
+      { toolName: 'read', toolId: 'read-stream-1', title: '📖 读取文件', filePath: 'README.md', content: '# README' },
+      '',
+    );
+    const renderStreamingMessage = (rawContent: string) => (
+      <ChatMessage
+        message={{
+          id: 'stream-close-tool',
+          role: 'assistant',
+          content: extractAceProcessBlocks(rawContent).cleanText,
+          rawContent,
+        }}
+        isStreaming
+        onConfirmAction={() => {}}
+        onRejectAction={() => {}}
+        onUndoAction={() => {}}
+        onRetryAction={() => {}}
+      />
+    );
+
+    const view = render(renderStreamingMessage(toolCall));
+    let cards = getToolCards(view.container);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].state).toBe('input-available');
+    expect(cards[0].expanded).toBe(true);
+
+    view.rerender(renderStreamingMessage(`${toolCall}${toolResult}`));
+    cards = getToolCards(view.container);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].state).toBe('output-available');
+    expect(cards[0].expanded).toBe(false);
+
+    const trigger = cards[0].node.querySelector('button[aria-expanded]') as HTMLButtonElement;
+    fireEvent.click(trigger);
+    expect(getToolCards(view.container)[0].expanded).toBe(true);
+  });
+
   test('ace-process pairs tool results by toolId in the rendered DOM without cross-wiring cards', async () => {
     const view = renderWrapperStream([
       {
