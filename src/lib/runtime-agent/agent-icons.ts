@@ -17,6 +17,7 @@ export const AGENT_ICON_PATHS = {
   kilocode: `${ENGINE_ICON_BASE_PATH}/kilocode.svg`,
   kimi: `${ENGINE_ICON_BASE_PATH}/kimi.svg`,
   mux: `${ENGINE_ICON_BASE_PATH}/mux.svg`,
+  qoder: `${ENGINE_ICON_BASE_PATH}/qoder.svg`,
   qwen: `${ENGINE_ICON_BASE_PATH}/qwen.svg`,
   genericProvider: `${ENGINE_ICON_BASE_PATH}/code-agent.svg`,
 } as const;

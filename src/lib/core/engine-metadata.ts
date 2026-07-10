@@ -158,7 +158,7 @@ export const ENGINE_META: Record<EngineMetadataId, EngineMeta> = {
   qoder: {
     id: 'qoder',
     name: 'Qoder',
-    iconPath: AGENT_ICON_PATHS.genericProvider,
+    iconPath: AGENT_ICON_PATHS.qoder,
   },
   qwen: {
     id: 'qwen',

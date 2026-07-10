@@ -127,7 +127,7 @@ const RUNTIME_AGENT_ICON_PATHS: Record<string, string> = {
   kimi: '/engines/kimi.svg',
   mux: '/engines/mux.svg',
   pi: '/engines/pi.svg',
-  qoder: '/engines/generic-provider.svg',
+  qoder: '/engines/qoder.svg',
   qwen: '/engines/qwen.svg',
 };
 

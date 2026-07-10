@@ -1,8 +1,8 @@
 import { getBuiltinAgentDefinition } from '../agent-registry';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
-import { existsSync, readFileSync } from 'fs';
-import { dirname, resolve, join } from 'path';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { isWindows } from '@/lib/core/runtime-platform';
 import type {
   AcpRuntime,
@@ -202,7 +202,7 @@ function buildAcpxCommandAttemptParts(
     const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || (!isWindows() ? findCommand('ngagent', searchPaths) : null);
     const args = ['--disable-update', 'acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'ngagent', parts: buildWindowsShimAwareParts(ngagent || 'ngagent', args) }];
+    return [{ source: 'ngagent', parts: wrapWindowsCmdShellParts(ngagent || 'ngagent', args) }];
   }
   if (options.agentId === 'codegenie' || command.command === 'codegenie') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
@@ -213,7 +213,7 @@ function buildAcpxCommandAttemptParts(
       || command.command;
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'codegenie', parts: buildWindowsShimAwareParts(resolvedCommand, args) }];
+    return [{ source: 'codegenie', parts: wrapWindowsCmdShellParts(resolvedCommand, args) }];
   }
   return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
 }
@@ -224,30 +224,6 @@ function resolveWindowsCmdShim(command: string, searchPaths: string[]): string |
     if (!dir) continue;
     const candidate = join(dir, `${command}.cmd`);
     if (existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-function buildWindowsShimAwareParts(command: string, args: string[]): string[] {
-  const nodeShim = resolveWindowsNodeCmdShim(command);
-  if (nodeShim) return [process.execPath, nodeShim, ...args];
-  return wrapWindowsCmdShellParts(command, args);
-}
-
-function resolveWindowsNodeCmdShim(command: string): string | null {
-  if (!isWindows() || !command.toLowerCase().endsWith('.cmd') || !existsSync(command)) return null;
-  try {
-    const content = readFileSync(command, 'utf8');
-    for (const match of content.matchAll(/"([^"\r\n]*%~?dp0%?[^"\r\n]*)"/gi)) {
-      const token = match[1] || '';
-      if (/\.exe$/i.test(token)) continue;
-      const relative = token.replace(/^.*%~?dp0%?[\\/]*/i, '').replace(/[\\/]+/g, '/');
-      if (!relative) continue;
-      const candidate = resolve(dirname(command), relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  } catch {
-    return null;
   }
   return null;
 }

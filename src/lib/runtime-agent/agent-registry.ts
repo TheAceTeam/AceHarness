@@ -317,7 +317,7 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
   acpxAgent({ id: 'kilocode', displayName: 'Kilo Code', tier: 'verified', command: 'kilocode', iconPath: AGENT_ICON_PATHS.kilocode }),
   acpxAgent({ id: 'kimi', displayName: 'Kimi', tier: 'verified', command: 'kimi', iconPath: AGENT_ICON_PATHS.kimi }),
   acpxAgent({ id: 'mux', displayName: 'Mux', tier: 'verified', command: 'mux', iconPath: AGENT_ICON_PATHS.mux }),
-  acpxAgent({ id: 'qoder', displayName: 'Qoder', tier: 'verified', command: 'qoder', iconPath: AGENT_ICON_PATHS.genericProvider }),
+  acpxAgent({ id: 'qoder', displayName: 'Qoder', tier: 'verified', command: 'qoder', iconPath: AGENT_ICON_PATHS.qoder }),
   acpxAgent({ id: 'qwen', displayName: 'Qwen', tier: 'verified', command: 'qwen', iconPath: AGENT_ICON_PATHS.qwen }),
 ] as const;
 
