@@ -614,7 +614,7 @@ export function AccountContent({
       >
         <FormSection title="账户安全" description={PASSWORD_POLICY_DESCRIPTION}>
           <Input type="password" placeholder="当前密码" value={currentPwd} onChange={e => setCurrentPwd(e.target.value)} />
-          <Input type="password" placeholder="新密码（至少 8 位，包含字母和数字）" value={newPwd} onChange={e => setNewPwd(e.target.value)} minLength={8} />
+          <Input type="password" placeholder="新密码（至少 8 位，包含字母、数字和符号）" value={newPwd} onChange={e => setNewPwd(e.target.value)} minLength={8} />
           <Input type="password" placeholder="确认新密码" value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)} />
           {pwdError && <p className="text-sm text-destructive">{pwdError}</p>}
           {pwdSuccess && <p className="text-sm text-green-600">{pwdSuccess}</p>}

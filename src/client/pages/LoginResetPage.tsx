@@ -193,7 +193,7 @@ export default function ResetPasswordPage() {
                 </DataCard>
                 <FormSection title="设置新密码" description="密保答案正确后，新密码立即生效。">
                   <FormField label="密保答案" required control={<Input value={answer} onChange={(event) => setAnswer(event.target.value)} required className="h-11 bg-white" placeholder="请输入密保答案" />} />
-                  <FormField label="新密码" required description={PASSWORD_POLICY_DESCRIPTION} control={<Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required minLength={8} className="h-11 bg-white" placeholder="至少 8 位，包含字母和数字" />} />
+                  <FormField label="新密码" required description={PASSWORD_POLICY_DESCRIPTION} control={<Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required minLength={8} className="h-11 bg-white" placeholder="至少 8 位，包含字母、数字和符号" />} />
                   <FormField label="确认新密码" required control={<Input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={8} className="h-11 bg-white" placeholder="再次输入新密码" />} />
                 </FormSection>
                 {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}

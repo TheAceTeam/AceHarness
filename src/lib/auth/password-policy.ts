@@ -1,4 +1,4 @@
-export const PASSWORD_POLICY_DESCRIPTION = '至少 8 个字符，且包含字母和数字，不能包含空格，也不能与用户名或邮箱过于相似。';
+export const PASSWORD_POLICY_DESCRIPTION = '至少 8 个字符，且包含字母、数字和符号，不能包含空格，也不能与用户名或邮箱过于相似。';
 
 export type PasswordPolicyContext = {
   username?: string;
@@ -46,8 +46,8 @@ export function validateLoginPassword(
   if (/\s/.test(value)) {
     return { valid: false, error: '密码不能包含空格或换行' };
   }
-  if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) {
-    return { valid: false, error: '密码需要同时包含字母和数字' };
+  if (!/[A-Za-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9\s]/.test(value)) {
+    return { valid: false, error: '密码需要同时包含字母、数字和符号' };
   }
   const lowered = value.toLowerCase();
   if (COMMON_WEAK_PASSWORDS.has(lowered)) {

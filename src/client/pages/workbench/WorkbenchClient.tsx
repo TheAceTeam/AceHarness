@@ -4504,6 +4504,20 @@ export default function WorkbenchPage({
       ? '当前状态无需恢复'
       : '请选择一条运行记录';
   useEffect(() => {
+    if (!actionIsRunning && stopping) {
+      setStopping(false);
+    }
+  }, [actionIsRunning, stopping]);
+
+  useEffect(() => {
+    if (!stopping) return;
+    const timer = window.setTimeout(() => {
+      setStopping(false);
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, [stopping]);
+
+  useEffect(() => {
     if (!isRunMode || !actionIsRunning) return;
     setRunClockNow(Date.now());
     const timer = window.setInterval(() => setRunClockNow(Date.now()), 1000);
@@ -7245,11 +7259,12 @@ export default function WorkbenchPage({
   const stopWorkflow = useCallback(async () => {
     setStopping(true);
     try {
-      const stopResult = await workflowApi.stop(configFile) as { runIds?: string[] };
+      const targetRunId = actionRunId || runId || selectedRun?.id || initialRunId || undefined;
+      const stopResult = await workflowApi.stop(configFile, targetRunId) as { runIds?: string[] };
       const stoppedAt = new Date().toISOString();
       const stoppedRunIds = new Set(
         (Array.isArray(stopResult.runIds) ? stopResult.runIds : [])
-          .concat(runId || selectedRun?.id || initialRunId || [])
+          .concat(targetRunId || [])
           .filter(Boolean) as string[]
       );
       // Directly update local state — don't rely solely on SSE
@@ -7304,7 +7319,7 @@ export default function WorkbenchPage({
     } finally {
       setStopping(false);
     }
-  }, [addLog, clearHumanApprovalData, clearPendingHumanQuestion, configFile, dispatch, fetchCurrentStatus, initialRunId, loadHistory, queryClient, runId, selectedRun?.id]);
+  }, [actionRunId, addLog, clearHumanApprovalData, clearPendingHumanQuestion, configFile, dispatch, fetchCurrentStatus, initialRunId, loadHistory, queryClient, runId, selectedRun?.id]);
 
   const requestStopWorkflow = useCallback(async () => {
     const ok = await confirm({

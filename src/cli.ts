@@ -17,9 +17,6 @@ import {
 } from '@/lib/core/self-update';
 import { isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { parse, stringify } from 'yaml';
-import { getModelOptions, modelSupportsEngine } from '@/lib/core/models';
-import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
-import { listRuntimeModelsFromSqlite } from '@/lib/runtime-agent/models/model-routes-api';
 import {
   getWorkspaceDirectory,
   getEngineConfigPath,
@@ -29,18 +26,12 @@ import {
   getWorkspaceDataFile,
 } from '@/lib/core/app-paths';
 import { refreshBundledAceHarnessSkillsOnStartup } from '@/lib/run/runtime-skills';
+import { getLoginPasswordError, PASSWORD_POLICY_DESCRIPTION } from '@/lib/auth/password-policy';
 
 process.chdir(getRepoRoot());
 refreshBundledAceHarnessSkillsOnStartup();
 
 type Locale = 'zh' | 'en';
-type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli';
-type RuntimeAgentId = 'claude' | 'kiro' | 'codex' | 'cursor' | 'opencode' | 'nga' | 'codegenie' | 'trae' | 'cangjie-magic';
-
-interface ConfiguredEngine {
-  engine?: EngineType;
-  defaultModel?: string;
-}
 
 interface SystemSettings {
   gitcodeToken?: string;
@@ -90,7 +81,6 @@ interface CliMessages {
   statusLabel: string;
   runtimeHome: string;
   localeStatus: (value: string) => string;
-  engineStatus: (value: string) => string;
   adminStatus: (configured: boolean) => string;
   resetRequiresForce: string;
   resetDone: string;
@@ -100,10 +90,6 @@ interface CliMessages {
   unknownOption: (option: string) => string;
   languagePrompt: string;
   languageChoices: Array<{ title: string; value: Locale }>;
-  detectEngines: string;
-  chooseEngine: string;
-  chooseModel: string;
-  noEnginesDetected: string;
   createAdmin: string;
   adminUsername: string;
   adminEmail: string;
@@ -181,30 +167,6 @@ async function ensureRuntimeHome(): Promise<void> {
   ]);
 }
 
-const ENGINE_META: Array<{ id: EngineType; name: string }> = [
-  { id: 'claude-code', name: 'Claude Code' },
-  { id: 'codex', name: 'Codex' },
-  { id: 'kiro-cli', name: 'Kiro CLI' },
-  { id: 'opencode', name: 'OpenCode' },
-  { id: 'nga', name: 'NGA' },
-  { id: 'codegenie', name: 'CodeGenie' },
-  { id: 'cursor', name: 'Cursor CLI' },
-  { id: 'trae-cli', name: 'Trae CLI' },
-  { id: 'magic-cli', name: 'Magic CLI' },
-];
-
-const ENGINE_TO_AGENT_ID: Record<EngineType, RuntimeAgentId> = {
-  'claude-code': 'claude',
-  'kiro-cli': 'kiro',
-  codex: 'codex',
-  cursor: 'cursor',
-  opencode: 'opencode',
-  nga: 'nga',
-  codegenie: 'codegenie',
-  'trae-cli': 'trae',
-  'magic-cli': 'cangjie-magic',
-};
-
 const CLI_MESSAGES: Record<Locale, CliMessages> = {
   zh: {
     setupCancelled: '初始化已取消',
@@ -212,7 +174,6 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     statusLabel: '[ACE] 当前状态',
     runtimeHome: '系统数据保存目录',
     localeStatus: (value: string) => `语言: ${value}`,
-    engineStatus: (value: string) => `默认引擎: ${value}`,
     adminStatus: (configured: boolean) => `管理员: ${configured ? '已配置' : '未配置'}`,
     resetRequiresForce: '[ACE] 请使用 `ace reset --force` 确认重置本地 ACE 配置。',
     resetDone: '[ACE] 重置完成。下次运行 `ace` 时会重新初始化。',
@@ -233,10 +194,6 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       { title: '中文', value: 'zh' },
       { title: 'English', value: 'en' },
     ],
-    detectEngines: '现在检测可用引擎吗？',
-    chooseEngine: '选择默认引擎',
-    chooseModel: '选择默认模型',
-    noEnginesDetected: '[ACE] 未检测到受支持的引擎，将使用当前/默认引擎。',
     createAdmin: '现在创建管理员账号吗？',
     adminUsername: '管理员用户名',
     adminEmail: '管理员邮箱',
@@ -245,7 +202,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     securityAnswer: '安全答案',
     usernameRequired: '用户名不能为空',
     validEmailRequired: '请输入有效邮箱',
-    passwordTooShort: '至少 6 个字符',
+    passwordTooShort: PASSWORD_POLICY_DESCRIPTION,
     securityQuestionRequired: '安全问题不能为空',
     securityAnswerRequired: '安全答案不能为空',
     defaultSecurityQuestion: '你的团队名称是什么？',
@@ -302,7 +259,6 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     statusLabel: '[ACE] Current status',
     runtimeHome: 'System data directory',
     localeStatus: (value: string) => `Language: ${value}`,
-    engineStatus: (value: string) => `Default engine: ${value}`,
     adminStatus: (configured: boolean) => `Admin: ${configured ? 'configured' : 'missing'}`,
     resetRequiresForce: '[ACE] Re-run with `ace reset --force` to confirm resetting local ACE state.',
     resetDone: '[ACE] Reset complete. The next `ace` run will initialize again.',
@@ -323,10 +279,6 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       { title: 'English', value: 'en' },
       { title: '中文', value: 'zh' },
     ],
-    detectEngines: 'Detect available engines now?',
-    chooseEngine: 'Choose a default engine',
-    chooseModel: 'Choose a default model',
-    noEnginesDetected: '[ACE] No supported engines were detected. Using the current/default engine.',
     createAdmin: 'Create an admin account now?',
     adminUsername: 'Admin username',
     adminEmail: 'Admin email',
@@ -335,7 +287,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     securityAnswer: 'Security answer',
     usernameRequired: 'Username is required',
     validEmailRequired: 'Enter a valid email',
-    passwordTooShort: 'At least 6 characters',
+    passwordTooShort: 'At least 8 characters and include letters, numbers, and symbols.',
     securityQuestionRequired: 'Security question is required',
     securityAnswerRequired: 'Security answer is required',
     defaultSecurityQuestion: 'What is your team name?',
@@ -398,11 +350,6 @@ function normalizeLocale(value: unknown): Locale {
 
 function formatLocaleLabel(locale?: Locale): string {
   return locale === 'en' ? 'English' : '中文';
-}
-
-function formatEngineLabel(engine?: EngineType): string {
-  const hit = ENGINE_META.find((item) => item.id === engine);
-  return hit?.name || '未设置';
 }
 
 function resolveCliLocale(): Locale {
@@ -494,28 +441,6 @@ async function resetAceState(force: boolean) {
   }
 
   console.log(messages.resetDone);
-}
-
-async function loadConfiguredEngine(): Promise<ConfiguredEngine> {
-  if (!existsSync(getEngineConfigPath())) return {};
-  try {
-    const content = JSON.parse(await readFile(getEngineConfigPath(), 'utf-8'));
-    return {
-      engine: content.engine as EngineType | undefined,
-      defaultModel: typeof content.defaultModel === 'string' ? content.defaultModel : '',
-    };
-  } catch {
-    return {};
-  }
-}
-
-async function saveConfiguredEngine(engine: EngineType, defaultModel: string) {
-  await mkdir(dirname(getEngineConfigPath()), { recursive: true });
-  await writeFile(
-    getEngineConfigPath(),
-    JSON.stringify({ engine, defaultModel, updatedAt: new Date().toISOString() }, null, 2),
-    'utf-8'
-  );
 }
 
 async function loadSystemSettings(): Promise<SystemSettings> {
@@ -685,68 +610,6 @@ async function setupFirstAdmin(data: {
   await writeFile(USERS_FILE, JSON.stringify([user], null, 2), 'utf-8');
 }
 
-async function moduleExists(moduleName: string): Promise<boolean> {
-  try {
-    await import(moduleName);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function detectEngines() {
-  const availability = await Promise.all(ENGINE_META.map(async (engine) => {
-    const definition = getBuiltinAgentDefinition(ENGINE_TO_AGENT_ID[engine.id]);
-    const commands = [
-      definition?.availabilityProbe?.resolver.primaryCommand,
-      ...(definition?.availabilityProbe?.resolver.fallbackCommands ?? []),
-      definition?.command,
-      ...(definition?.fallbackCommands ?? []),
-    ].filter((command): command is string => Boolean(command));
-
-    return {
-      ...engine,
-      available:
-        engine.id === 'claude-code' ? (await moduleExists('@anthropic-ai/claude-agent-sdk')) || commands.some((command) => commandExists(command))
-          : commands.some((command) => commandExists(command)),
-    };
-  }));
-
-  return availability;
-}
-
-async function getRuntimeModelRouteChoices(engineType: EngineType): Promise<Array<{ value: string; title: string }>> {
-  try {
-    const agentId = ENGINE_TO_AGENT_ID[engineType];
-    const models = listRuntimeModelsFromSqlite().routes
-      .filter((model) => model.agentId === agentId && model.status !== 'inactive');
-    return models.map((model) => ({
-      value: model.modelRouteId || model.value,
-      title: model.modelRouteId
-        ? `${model.label} (${model.modelRouteId})`
-        : model.label,
-    }));
-  } catch {
-    return [];
-  }
-}
-
-async function getEngineModelChoices(engineType: EngineType): Promise<Array<{ value: string; title: string }>> {
-  const routeChoices = await getRuntimeModelRouteChoices(engineType);
-  if (routeChoices.length > 0) {
-    return routeChoices;
-  }
-
-  const models = await getModelOptions();
-  return models
-    .filter((model) => model.status !== 'inactive')
-    .filter((model) => modelSupportsEngine(model, engineType) || modelSupportsEngine(model, ENGINE_TO_AGENT_ID[engineType]))
-    .map((model) => ({
-      value: model.value,
-      title: `${model.label} (${model.costMultiplier}x)`,
-    }));
-}
-
 type PromptFn = (questions: PromptQuestion | PromptQuestion[], options?: { onCancel?: () => void }) => Promise<Record<string, any>>;
 
 async function loadPrompts(): Promise<PromptFn | null> {
@@ -867,7 +730,7 @@ function buildAdminPrompts(messages: CliMessages): PromptQuestion[] {
       type: 'password',
       name: 'password',
       message: messages.adminPassword,
-      validate: (value: string) => value.length >= 6 ? true : messages.passwordTooShort,
+      validate: (value: string) => getLoginPasswordError(value) || true,
     },
     {
       type: 'text',
@@ -938,7 +801,6 @@ async function promptForNetworkSettings(settings: SystemSettings, locale: Locale
 
 async function runFirstLaunchWizard() {
   const settings = await loadSystemSettings();
-  const configuredEngine = await loadConfiguredEngine();
   const adminExists = await isSetup();
 
   const initialLocale = normalizeLocale(settings.locale);
@@ -949,79 +811,7 @@ async function runFirstLaunchWizard() {
   console.log(messages.statusLabel);
   console.log(`  ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
   console.log(`  ${messages.localeStatus(formatLocaleLabel(settings.locale ? initialLocale : undefined))}`);
-  console.log(`  ${messages.engineStatus(configuredEngine.engine ? formatEngineLabel(configuredEngine.engine) : '未设置')}`);
   console.log(`  ${messages.adminStatus(adminExists)}`);
-
-  let selectedEngine = configuredEngine.engine;
-  if (!selectedEngine) {
-    const shouldDetectEnginesAnswer = await prompt({
-      type: 'toggle',
-      name: 'value',
-      message: messages.detectEngines,
-      initial: true,
-      active: messages.yes,
-      inactive: messages.skip,
-    }, getPromptOptions(locale));
-
-    const shouldDetectEngines = Boolean(shouldDetectEnginesAnswer.value);
-    const detected = shouldDetectEngines ? await detectEngines() : [];
-    const availableChoices = detected.filter((item) => item.available);
-
-    if (shouldDetectEngines) {
-      if (availableChoices.length > 0) {
-        const engineAnswer = await prompt({
-          type: 'select',
-          name: 'value',
-          message: messages.chooseEngine,
-          choices: availableChoices.map((item) => ({ title: item.name, value: item.id })),
-          initial: Math.max(availableChoices.findIndex((item) => item.id === selectedEngine), 0),
-        }, getPromptOptions(locale));
-
-        if (engineAnswer.value) {
-          selectedEngine = engineAnswer.value as EngineType;
-        }
-      } else {
-        console.log(messages.noEnginesDetected);
-        const engineAnswer = await prompt({
-          type: 'select',
-          name: 'value',
-          message: messages.chooseEngine,
-          choices: ENGINE_META.map((item) => ({ title: item.name, value: item.id })),
-          initial: 0,
-        }, getPromptOptions(locale));
-        selectedEngine = engineAnswer.value as EngineType;
-      }
-    } else {
-      const engineAnswer = await prompt({
-        type: 'select',
-        name: 'value',
-        message: messages.chooseEngine,
-        choices: ENGINE_META.map((item) => ({ title: item.name, value: item.id })),
-        initial: 0,
-      }, getPromptOptions(locale));
-      selectedEngine = engineAnswer.value as EngineType;
-    }
-  }
-
-  if (!selectedEngine) {
-    throw new Error('默认引擎未配置');
-  }
-
-  let selectedModel = configuredEngine.defaultModel || '';
-  if (!selectedModel) {
-    const modelChoices = await getEngineModelChoices(selectedEngine);
-    if (modelChoices.length === 0) {
-      throw new Error(`未发现可用于 ${formatEngineLabel(selectedEngine)} 的模型`);
-    }
-    const modelAnswer = await prompt({
-      type: 'select',
-      name: 'value',
-      message: messages.chooseModel,
-      choices: modelChoices,
-      initial: Math.max(modelChoices.findIndex((item) => item.value === selectedModel), 0),
-    }, getPromptOptions(locale));
-    selectedModel = modelAnswer.value as string;
-  }
 
   if (!adminExists) {
     const adminAnswer = await prompt({
@@ -1046,8 +836,6 @@ async function runFirstLaunchWizard() {
       });
     }
   }
-
-  await saveConfiguredEngine(selectedEngine, selectedModel);
 
   await saveSystemSettings({
     ...settings,
@@ -1552,9 +1340,8 @@ async function start(interactive: boolean) {
   await ensureRuntimeHome();
 
   const settings = await loadSystemSettings();
-  const configuredEngine = await loadConfiguredEngine();
   const adminExists = await isSetup();
-  if (!settings.locale || !configuredEngine.engine || !configuredEngine.defaultModel || !adminExists) {
+  if (!settings.locale || !adminExists) {
     await runFirstLaunchWizard();
   }
 

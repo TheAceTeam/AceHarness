@@ -473,7 +473,7 @@ export default function SetupPage() {
               <FormSection title="管理员账户" description="首个用户会成为系统管理员。">
                 <FormField label="用户名" required control={<Input type="text" placeholder="请输入用户名" value={username} onChange={(e) => setUsername(e.target.value)} required minLength={2} className="h-10 bg-white" />} />
                 <FormField label="邮箱" required control={<Input type="email" placeholder="请输入邮箱" value={email} onChange={(e) => setEmail(e.target.value)} required className="h-10 bg-white" />} />
-                <FormField label="密码" required description={PASSWORD_POLICY_DESCRIPTION} control={<Input type="password" placeholder="至少 8 位，包含字母和数字" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} className="h-10 bg-white" />} />
+                <FormField label="密码" required description={PASSWORD_POLICY_DESCRIPTION} control={<Input type="password" placeholder="至少 8 位，包含字母、数字和符号" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} className="h-10 bg-white" />} />
                 <FormField label="确认密码" required control={<Input type="password" placeholder="再次输入密码" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required minLength={8} className="h-10 bg-white" />} />
               </FormSection>
 

@@ -84,7 +84,7 @@ describe('/api/auth/setup access gate', () => {
     const response = await POST(request({
       username: 'admin',
       email: 'admin@example.com',
-      password: 'StrongPass123',
+      password: 'StrongPass123!',
       question: 'question',
       answer: 'answer',
     }));
@@ -112,7 +112,7 @@ describe('/api/auth/setup access gate', () => {
     const response = await POST(request({
       username: 'admin',
       email: 'admin@example.com',
-      password: 'StrongPass123',
+      password: 'StrongPass123!',
       question: 'question',
       answer: 'answer',
     }, 'ace_setup_access=valid-grant'));

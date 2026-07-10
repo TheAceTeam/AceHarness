@@ -504,7 +504,7 @@ export function UsersContent({ embedded = false }: { embedded?: boolean } = {}) 
                   label="密码"
                   required
                   description={PASSWORD_POLICY_DESCRIPTION}
-                  control={<Input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} minLength={8} placeholder="至少 8 位，包含字母和数字" />}
+                  control={<Input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} minLength={8} placeholder="至少 8 位，包含字母、数字和符号" />}
                 />
                 <FormField
                   label="密保问题"
@@ -558,7 +558,7 @@ export function UsersContent({ embedded = false }: { embedded?: boolean } = {}) 
         <DialogContent>
           <DialogHeader><DialogTitle>重置密码</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <Input type="password" placeholder="新密码（至少 8 位，包含字母和数字）" value={resetPwd} onChange={e => setResetPwd(e.target.value)} minLength={8} />
+            <Input type="password" placeholder="新密码（至少 8 位，包含字母、数字和符号）" value={resetPwd} onChange={e => setResetPwd(e.target.value)} minLength={8} />
             {resetError && <p className="text-sm text-destructive">{resetError}</p>}
           </div>
           <DialogFooter>

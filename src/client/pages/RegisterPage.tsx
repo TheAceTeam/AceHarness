@@ -179,7 +179,7 @@ export default function RegisterPage() {
                 <FormSection title="基本信息" description="用于管理员审核和后续登录。">
                   <FormField label="用户名" required control={<Input value={form.username} onChange={(e) => updateForm('username', e.target.value)} required minLength={2} className="h-10 bg-white" placeholder="请输入用户名" />} />
                   <FormField label="邮箱" required control={<Input type="email" value={form.email} onChange={(e) => updateForm('email', e.target.value)} required className="h-10 bg-white" placeholder="请输入邮箱" />} />
-                  <FormField label="密码" required description={PASSWORD_POLICY_DESCRIPTION} control={<Input type="password" value={form.password} onChange={(e) => updateForm('password', e.target.value)} required minLength={8} className="h-10 bg-white" placeholder="至少 8 位，包含字母和数字" />} />
+                  <FormField label="密码" required description={PASSWORD_POLICY_DESCRIPTION} control={<Input type="password" value={form.password} onChange={(e) => updateForm('password', e.target.value)} required minLength={8} className="h-10 bg-white" placeholder="至少 8 位，包含字母、数字和符号" />} />
                   <FormField label="确认密码" required control={<Input type="password" value={form.confirmPassword} onChange={(e) => updateForm('confirmPassword', e.target.value)} required minLength={8} className="h-10 bg-white" placeholder="再次输入密码" />} />
                 </FormSection>
 

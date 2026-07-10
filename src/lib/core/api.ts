@@ -2058,11 +2058,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async stop(configFile?: string): Promise<ApiResponse> {
+  async stop(configFile?: string, runId?: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ configFile }),
+      body: JSON.stringify({ configFile, runId }),
     });
     if (!response.ok) throw new Error('停止工作流失败');
     return response.json();

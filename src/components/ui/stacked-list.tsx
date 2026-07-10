@@ -2,13 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  Add01Icon,
-  Cancel01Icon,
-  ProfileIcon,
-  Search01Icon,
-} from "@hugeicons/core-free-icons";
+import { Plus, Search, UserRound, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -96,7 +90,7 @@ function statusClass(member: StackedListMember) {
 }
 
 function MemberItem({ member }: { member: StackedListMember }) {
-  const ActionIcon = member.action?.type === "remove" ? Cancel01Icon : Add01Icon;
+  const ActionIcon = member.action?.type === "remove" ? X : Plus;
 
   return (
     <motion.div
@@ -148,7 +142,7 @@ function MemberItem({ member }: { member: StackedListMember }) {
               member.action?.onClick();
             }}
           >
-            <HugeiconsIcon icon={ActionIcon} size={15} strokeWidth={2.4} />
+            <ActionIcon className="h-[15px] w-[15px]" strokeWidth={2.4} />
           </Button>
         ) : null}
       </div>
@@ -206,17 +200,13 @@ export function StackedList({
                 title="添加成员"
                 aria-label="添加成员"
               >
-                <HugeiconsIcon icon={Add01Icon} size={16} strokeWidth={2.5} />
+                <Plus className="h-4 w-4" strokeWidth={2.5} />
               </Button>
             ) : null}
           </div>
 
           <div className="relative mb-3">
-            <HugeiconsIcon
-              icon={Search01Icon}
-              className="absolute left-3 top-1/2 z-10 -translate-y-1/2 text-muted-foreground/60"
-              size={14}
-            />
+            <Search className="absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
             <Input
               placeholder={searchPlaceholder}
               value={searchQuery}
@@ -274,7 +264,7 @@ export function StackedList({
         >
           <div className="flex min-w-0 items-center gap-2.5">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)] transition-transform group-hover/bar:scale-105">
-              <HugeiconsIcon icon={ProfileIcon} size={17} strokeWidth={2} />
+              <UserRound className="h-[17px] w-[17px]" strokeWidth={2} />
             </div>
             <motion.div layout="position" className="min-w-0">
               <h4 className="truncate text-sm font-medium leading-none tracking-normal text-foreground">
@@ -320,7 +310,7 @@ export function StackedList({
                 }}
                 aria-label="收起成员目录"
               >
-                <HugeiconsIcon icon={Cancel01Icon} size={16} strokeWidth={2.5} />
+                <X className="h-4 w-4" strokeWidth={2.5} />
               </button>
             )}
           </div>
@@ -336,11 +326,7 @@ export function StackedList({
                 className="px-4 py-3"
               >
                 <div className="relative">
-                  <HugeiconsIcon
-                    icon={Search01Icon}
-                    className="absolute left-3 top-1/2 z-10 -translate-y-1/2 text-muted-foreground/50"
-                    size={14}
-                  />
+                  <Search className="absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
                   <Input
                     placeholder={directorySearchPlaceholder}
                     value={searchQuery}

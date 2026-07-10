@@ -1,15 +1,39 @@
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { createLogger, defineConfig } from 'vite';
 
 const rawBase = process.env.BASEURL || process.env.BASE_URL || '/';
 const base = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
 const rawPort = process.env.ACE_PORT || process.env.PORT;
 const devPort = rawPort ? Number.parseInt(rawPort, 10) : undefined;
 const devTimeoutMs = Number.parseInt(process.env.VITE_DEV_TIMEOUT_MS || '180000', 10);
+const logger = createLogger();
+
+function shouldMuteBuildWarning(message: string): boolean {
+  return [
+    'has been externalized for browser compatibility',
+    'INEFFECTIVE_DYNAMIC_IMPORT',
+    'Use of direct `eval` function is strongly discouraged',
+    'Some chunks are larger than',
+    'PLUGIN_TIMINGS',
+  ].some((pattern) => message.includes(pattern));
+}
+
+const customLogger = {
+  ...logger,
+  warn(message: string, options?: Parameters<typeof logger.warn>[1]) {
+    if (shouldMuteBuildWarning(message)) return;
+    logger.warn(message, options);
+  },
+  warnOnce(message: string, options?: Parameters<typeof logger.warnOnce>[1]) {
+    if (shouldMuteBuildWarning(message)) return;
+    logger.warnOnce(message, options);
+  },
+};
 
 export default defineConfig({
   base,
+  customLogger,
   server: {
     port: Number.isFinite(devPort) ? devPort : undefined,
     strictPort: Number.isFinite(devPort),
@@ -58,6 +82,22 @@ export default defineConfig({
       'webdav',
       'lancedb',
     ],
+  },
+  build: {
+    chunkSizeWarningLimit: 10_000,
+    rolldownOptions: {
+      checks: {
+        eval: false,
+        invalidAnnotation: false,
+        pluginTimings: false,
+      },
+      onwarn(warning, defaultHandler) {
+        const code = typeof warning.code === 'string' ? warning.code : '';
+        const message = typeof warning.message === 'string' ? warning.message : String(warning);
+        if (code === 'INEFFECTIVE_DYNAMIC_IMPORT' || shouldMuteBuildWarning(message)) return;
+        defaultHandler(warning);
+      },
+    } as any,
   },
   plugins: [
     tanstackStart(),
