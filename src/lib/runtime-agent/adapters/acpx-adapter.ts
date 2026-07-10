@@ -202,7 +202,7 @@ function buildAcpxCommandAttemptParts(
     const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || (!isWindows() ? findCommand('ngagent', searchPaths) : null);
     const args = ['--disable-update', 'acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'ngagent', parts: [ngagent || 'ngagent', ...args] }];
+    return [{ source: 'ngagent', parts: wrapWindowsCmdShellParts(ngagent || 'ngagent', args) }];
   }
   if (options.agentId === 'codegenie' || command.command === 'codegenie') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
@@ -213,7 +213,7 @@ function buildAcpxCommandAttemptParts(
       || command.command;
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'codegenie', parts: [resolvedCommand, ...args] }];
+    return [{ source: 'codegenie', parts: wrapWindowsCmdShellParts(resolvedCommand, args) }];
   }
   return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
 }
@@ -226,6 +226,18 @@ function resolveWindowsCmdShim(command: string, searchPaths: string[]): string |
     if (existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+function wrapWindowsCmdShellParts(command: string, args: string[]): string[] {
+  if (!isWindows()) return [command, ...args];
+  const line = [command, ...args].map(quoteWindowsCmdToken).join(' ');
+  return ['cmd.exe', '/d', '/s', '/c', line];
+}
+
+function quoteWindowsCmdToken(token: string): string {
+  if (token === '') return '""';
+  if (!/[\s"]/u.test(token)) return token;
+  return `"${token.replace(/"/g, '""')}"`;
 }
 
 function formatCommandParts(parts: string[]): string {
