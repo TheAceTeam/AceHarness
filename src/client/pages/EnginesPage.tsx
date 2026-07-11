@@ -41,6 +41,7 @@ import {
   useModelsQuery,
   useSaveEngineConfigMutation,
   useSaveModelsMutation,
+  selectEngineDefaultModel,
 } from '@/client/query/engines';
 
 interface ModelOption {
@@ -406,14 +407,20 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
     }
 
     try {
-      await saveEngineConfigMutation.mutateAsync({ engine: normalizedEngineId });
+      const compatible = getModelsForEngine(normalizedEngineId);
+      if (compatible.length === 0) {
+        toast('error', `引擎 ${engine?.name || normalizedEngineId} 尚无已导入模型，请先检测并导入模型`);
+        return;
+      }
+      const nextDefaultModel = selectEngineDefaultModel(compatible, defaultModel);
+      const saved = await saveEngineConfigMutation.mutateAsync({
+        engine: normalizedEngineId,
+        defaultModel: nextDefaultModel,
+      });
       setCurrentEngine(normalizedEngineId);
       setSelectedEngine(normalizedEngineId);
+      setDefaultModel(typeof saved.defaultModel === 'string' ? saved.defaultModel : nextDefaultModel);
       onRouteSearchChange?.({ engine: normalizedEngineId });
-      const compatible = getModelsForEngine(normalizedEngineId);
-      if (defaultModel && !compatible.find(m => m.value === defaultModel)) {
-        setDefaultModel('');
-      }
       broadcastEngineUpdated();
       toast('success', `已切换到 ${engine?.name || normalizedEngineId}`);
     } catch (error) {
