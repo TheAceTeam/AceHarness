@@ -55,6 +55,7 @@ import {
   getConfiguredWorkflowRuntime,
   getWorkflowRuntimeSkillsSubdir,
   getLogicalEngineId,
+  prewarmWorkflowRuntimeSession,
   resolveRecoveredWorkflowRuntimeSessionId,
   resolveRequestedWorkflowRuntimeType,
   type WorkflowRuntime,
@@ -149,6 +150,10 @@ const ZERO_ENGINE_USAGE: WorkflowRuntimeTokenUsage = {
 
 const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
+const DEFAULT_AGENT_PREWARM_CONCURRENCY = Math.max(
+  1,
+  Math.min(4, Number.parseInt(process.env.ACE_WORKFLOW_AGENT_PREWARM_CONCURRENCY || '2', 10) || 2)
+);
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
 const TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS = 2;
@@ -1887,6 +1892,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       });
       await this.persistState();
 
+      this.startWorkflowAgentPrewarm(workflowConfig);
       await this.executeStateMachine(workflowConfig, this.currentRequirements);
       await this.specRevisionVoteTail.catch(() => {});
 
@@ -4096,6 +4102,140 @@ try {
     this.emit('agents', { agents: this.agents });
   }
 
+  private shouldPrewarmWorkflowAgents(workflowConfig: StateMachineWorkflowConfig): boolean {
+    const raw = (workflowConfig.context as any)?.prewarmAgents;
+    if (raw === false) return false;
+    if (typeof raw === 'string' && ['0', 'false', 'off', 'disabled', 'none'].includes(raw.trim().toLowerCase())) return false;
+    return true;
+  }
+
+  private getWorkflowAgentPrewarmConcurrency(workflowConfig: StateMachineWorkflowConfig): number {
+    const raw = (workflowConfig.context as any)?.prewarmAgentConcurrency;
+    const parsed = Number.parseInt(String(raw || ''), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AGENT_PREWARM_CONCURRENCY;
+    return Math.max(1, Math.min(4, parsed));
+  }
+
+  private collectWorkflowAgentPrewarmTargets(workflowConfig: StateMachineWorkflowConfig): Array<{
+    runtimeAgentName: string;
+    baseAgentName: string;
+    stepName: string;
+    roleConfig?: RoleConfig;
+    engine: string;
+    model: string;
+  }> {
+    const targets = new Map<string, {
+      runtimeAgentName: string;
+      baseAgentName: string;
+      stepName: string;
+      roleConfig?: RoleConfig;
+      engine: string;
+      model: string;
+    }>();
+    const addTarget = (runtimeAgentName: string | undefined, baseAgentName: string | undefined, stepName: string) => {
+      const normalizedRuntimeName = String(runtimeAgentName || '').trim();
+      const normalizedBaseName = String(baseAgentName || normalizedRuntimeName).trim();
+      if (!normalizedRuntimeName || targets.has(normalizedRuntimeName)) return;
+      const roleConfig = this.agentConfigs.find((role) => role.name === normalizedBaseName)
+        || workflowConfig.roles?.find((role) => role.name === normalizedBaseName);
+      const selection = resolveAgentEngineSelection(roleConfig, workflowConfig.context);
+      targets.set(normalizedRuntimeName, {
+        runtimeAgentName: normalizedRuntimeName,
+        baseAgentName: normalizedBaseName,
+        stepName,
+        roleConfig,
+        engine: selection.engine,
+        model: selection.model,
+      });
+    };
+
+    for (const state of workflowConfig.workflow.states || []) {
+      for (const step of state.steps || []) {
+        addTarget(getStepRuntimeAgentName(step), step.agent, `${state.name} / ${step.name}`);
+      }
+    }
+    if (workflowConfig.workflow.supervisor?.enabled !== false) {
+      const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+      addTarget(supervisorName, supervisorName, 'supervisor');
+    }
+    return Array.from(targets.values()).filter((target) => Boolean(target.model));
+  }
+
+  private getInitialSegmentAgentNames(workflowConfig: StateMachineWorkflowConfig): Set<string> {
+    const stateName = this.currentState || workflowConfig.workflow.states.find((state) => state.isInitial)?.name || workflowConfig.workflow.states[0]?.name;
+    const state = workflowConfig.workflow.states.find((item) => item.name === stateName);
+    const segments = state?.steps?.length ? groupStateStepsIntoSegments(state.steps) : [];
+    const resumeStepKey = this.resumeStateName === stateName ? this.resumeStepKey : null;
+    const initialSegment = resumeStepKey
+      ? segments.find((segment) => this.getSegmentStepKeys(stateName, segment).includes(resumeStepKey))
+      : segments[0];
+    if (!initialSegment) return new Set();
+    const steps = initialSegment.type === 'parallel' ? initialSegment.steps : [initialSegment.step];
+    return new Set(steps.map((step) => getStepRuntimeAgentName(step)).filter(Boolean));
+  }
+
+  private async prewarmWorkflowAgents(workflowConfig: StateMachineWorkflowConfig): Promise<void> {
+    if (!this.shouldPrewarmWorkflowAgents(workflowConfig)) return;
+    const workingDirectory = workflowConfig.context?.projectRoot
+      ? this.resolveProjectRootPath(workflowConfig.context.projectRoot)
+      : this.resolveProjectRootPath();
+    const initialSegmentAgents = this.getInitialSegmentAgentNames(workflowConfig);
+    const targets = this.collectWorkflowAgentPrewarmTargets(workflowConfig)
+      .filter((target) => !initialSegmentAgents.has(target.runtimeAgentName))
+      .filter((target) => !this.agents.find((agent) => agent.name === target.runtimeAgentName)?.sessionId);
+    if (!targets.length) return;
+
+    const concurrency = this.getWorkflowAgentPrewarmConcurrency(workflowConfig);
+    this.emit('log', {
+      level: 'info',
+      message: `开始异步预热后续 Agent runtime session：${targets.length} 个，并发 ${concurrency}`,
+    });
+    let cursor = 0;
+    const worker = async () => {
+      while (!this.shouldStop) {
+        const target = targets[cursor++];
+        if (!target) return;
+        const agent = this.agents.find((item) => item.name === target.runtimeAgentName);
+        if (!agent || agent.sessionId) continue;
+        try {
+          agent.engine = target.engine;
+          agent.model = target.model;
+          const sessionId = await prewarmWorkflowRuntimeSession({
+            runtimeType: target.engine,
+            agent: target.runtimeAgentName,
+            step: target.stepName,
+            model: target.model,
+            workingDirectory,
+            userId: this._createdBy,
+          });
+          if (this.shouldStop) return;
+          replaceAgentStateSessionId(agent, sessionId);
+          this.emit('agents', { agents: this.agents });
+          this.emit('log', {
+            level: 'info',
+            message: `Agent 已预热：${target.runtimeAgentName}`,
+          });
+          await this.persistState();
+        } catch (error) {
+          this.emit('log', {
+            level: 'warning',
+            message: `Agent 预热失败：${target.runtimeAgentName} - ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+    };
+    await Promise.allSettled(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()));
+  }
+
+  private startWorkflowAgentPrewarm(workflowConfig: StateMachineWorkflowConfig): void {
+    void this.prewarmWorkflowAgents(workflowConfig).catch((error) => {
+      this.emit('log', {
+        level: 'warning',
+        message: `Agent 预热任务异常：${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
+  }
+
   private ensureSupervisorAgentExists(workflowConfig: StateMachineWorkflowConfig): void {
     const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
     const existsInConfigs = this.agentConfigs.some((config) => config.name === supervisorName);
@@ -4410,7 +4550,7 @@ try {
       // Check self-transition circuit breaker
       if (nextState === this.currentState) {
         const currentSelfCount = this.selfTransitionCounts.get(this.currentState!) || 0;
-        const maxSelfTransitions = stateConfig.maxSelfTransitions || 3;
+        const maxSelfTransitions = stateConfig.maxSelfTransitions ?? 3;
         if (currentSelfCount >= maxSelfTransitions) {
           // Circuit breaker triggered - force transition to a different state or fail
           this.emit('circuit-breaker', {
@@ -4420,7 +4560,10 @@ try {
             message: `状态 "${this.currentState}" 自我转换次数超过限制 (${maxSelfTransitions})，自动熔断`,
           });
           // Find an alternative transition target
-          const alternativeTransition = stateConfig.transitions.find(t => t.to !== this.currentState);
+          const alternativeTransition = stateConfig.transitions.find(t =>
+            t.to !== this.currentState
+            && (!t.condition?.verdict || t.condition.verdict === result.verdict)
+          ) || stateConfig.transitions.find(t => t.to !== this.currentState);
           if (alternativeTransition) {
             this.stateHistory.push({
               from: this.currentState!,
@@ -7836,12 +7979,16 @@ try {
   private getTransitionReason(result: StateExecutionResult): string {
     if (result.verdict === 'pass') {
       return '所有检查通过';
-    } else if (result.issues.length > 0) {
+    }
+    if (result.issues.length > 0) {
       const criticalCount = result.issues.filter(i => i.severity === 'critical').length;
       const majorCount = result.issues.filter(i => i.severity === 'major').length;
       return `发现 ${criticalCount} 个严重问题, ${majorCount} 个主要问题`;
     }
-    return '条件性通过';
+    if (result.verdict === 'conditional_pass') {
+      return '条件性通过';
+    }
+    return '裁决失败';
   }
 
   private generateStateSummary(state: StateMachineState, issues: Issue[]): string {
@@ -7949,6 +8096,7 @@ try {
     } else {
       await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
     }
+    this.startWorkflowAgentPrewarm(workflowConfig);
 
     // If resuming from __human_approval__, restore the approval wait flow
     if (this.currentState === '__human_approval__') {
@@ -8517,6 +8665,7 @@ try {
         agent.sessionId = persistedAgent.sessionId;
       }
     }
+    this.startWorkflowAgentPrewarm(workflowConfig);
 
     // Continue execution from this state
     try {
@@ -8644,6 +8793,7 @@ try {
     } else {
       await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
     }
+    this.startWorkflowAgentPrewarm(workflowConfig);
 
     try {
       await this.executeStateMachine(workflowConfig, runState.requirements);

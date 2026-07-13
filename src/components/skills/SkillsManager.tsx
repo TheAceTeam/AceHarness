@@ -26,6 +26,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import {
   DataCard,
   DataCardActions,
@@ -80,12 +81,16 @@ import { DEFAULT_PAGE_SIZE } from '@/constants/marketplace';
 import { apiFetch } from '@/client/query/api-client';
 import { queryKeys } from '@/client/query/query-keys';
 import {
+  getSkillImportJob,
   useDeleteSkillsMutation,
   useExportSkillsMutation,
   useSyncSkillsMutation,
   useSkillsQuery,
   useUploadSkillZipMutation,
+  type SkillImportJob,
   type LocalSkill,
+  type SkillImportResult,
+  type SkillMutationResponse,
 } from '@/client/query/skills';
 import {
   useMarketplaceCategoriesQuery,
@@ -108,6 +113,20 @@ interface SkillsManagerProps {
   returnTarget?: ReturnTarget;
   initialTab?: TabType;
 }
+
+type SkillImportDialogState = SkillMutationResponse & {
+  fileName: string;
+};
+
+type SkillUploadDialogState = {
+  fileName: string;
+  fileSize: number;
+  phase: 'uploading' | 'queued' | 'reading' | 'scanning' | 'validating' | 'writing' | 'processing' | 'complete' | 'error';
+  progress: number;
+  startedAt: number;
+  processingStartedAt?: number;
+  message?: string;
+};
 
 const LOCAL_VIEW_MODE_KEY = 'aceharness:skills:local-view-mode';
 const ONLINE_VIEW_MODE_KEY = 'aceharness:skills:online-view-mode';
@@ -1525,6 +1544,8 @@ export default function SkillsManager({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set());
   const [uploading, setUploading] = useState(false);
+  const [importDialog, setImportDialog] = useState<SkillImportDialogState | null>(null);
+  const [skillUploadDialog, setSkillUploadDialog] = useState<SkillUploadDialogState | null>(null);
   const [exporting, setExporting] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [syncingAllBuiltin, setSyncingAllBuiltin] = useState(false);
@@ -1665,18 +1686,98 @@ export default function SkillsManager({
     }
   }, [marketplaceCategoriesQuery.data]);
 
+  const getImportSummary = useCallback((data: SkillMutationResponse) => {
+    const results = Array.isArray(data.results) ? data.results : [];
+    const imported = data.summary?.imported ?? results.filter((item) => item.status === 'imported').length ?? data.imported?.length ?? 0;
+    const failed = data.summary?.failed ?? results.filter((item) => item.status === 'failed').length ?? data.failed?.length ?? 0;
+    const skipped = data.summary?.skipped ?? results.filter((item) => item.status === 'skipped').length ?? data.skipped?.length ?? 0;
+    const total = data.summary?.total ?? Math.max(results.length, imported + failed + skipped);
+    return { total, imported, failed, skipped };
+  }, []);
+  const formatUploadSize = useCallback((bytes: number) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '-';
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  }, []);
+
+  const applySkillImportJob = useCallback((job: SkillImportJob) => {
+    setImportDialog({ ...job, fileName: job.fileName });
+    setSkillUploadDialog((prev) => ({
+      fileName: job.fileName,
+      fileSize: job.fileSize,
+      phase: job.phase === 'completed' ? 'complete' : job.phase === 'failed' ? 'error' : job.phase,
+      progress: job.progress,
+      startedAt: prev?.startedAt || new Date(job.startedAt).getTime() || Date.now(),
+      processingStartedAt: prev?.processingStartedAt || Date.now(),
+      message: job.message,
+    }));
+  }, []);
+
+  const waitForSkillImportJob = useCallback(async (jobId: string): Promise<SkillImportJob> => {
+    while (true) {
+      const job = await getSkillImportJob(jobId);
+      applySkillImportJob(job);
+      if (job.status === 'completed' || job.status === 'failed') return job;
+      await new Promise((resolve) => window.setTimeout(resolve, 800));
+    }
+  }, [applySkillImportJob]);
+
   const handleUploadZip = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setImportDialog(null);
+    setSkillUploadDialog({
+      fileName: file.name,
+      fileSize: file.size,
+      phase: 'uploading',
+      progress: 0,
+      startedAt: Date.now(),
+      message: '正在上传 ZIP 文件。',
+    });
     try {
-      const data = await uploadSkillZipMutation.mutateAsync(file);
-      if (data.success) {
-        toast('success', data.message || '导入成功');
+      const data = await uploadSkillZipMutation.mutateAsync({
+        file,
+        onProgress: ({ percent }) => {
+          setSkillUploadDialog((prev) => prev ? {
+            ...prev,
+            phase: percent >= 100 ? 'queued' : 'uploading',
+            progress: percent >= 100 ? 100 : percent,
+            processingStartedAt: percent >= 100 ? (prev.processingStartedAt || Date.now()) : prev.processingStartedAt,
+            message: percent >= 100 ? '上传完成，正在创建导入任务。' : '正在上传 ZIP 文件。',
+          } : prev);
+        },
+      });
+      const finalData = data.jobId ? await waitForSkillImportJob(data.jobId) : data;
+      setImportDialog({ ...finalData, fileName: file.name });
+      setSkillUploadDialog((prev) => prev ? {
+        ...prev,
+        phase: finalData.status === 'failed' || finalData.phase === 'failed' ? 'error' : 'complete',
+        startedAt: prev.startedAt || Date.now(),
+        progress: typeof finalData.progress === 'number' ? finalData.progress : 100,
+        message: finalData.message || '导入处理完成。',
+      } : prev);
+      const summary = getImportSummary(finalData);
+      if (summary.imported > 0) {
+        toast('success', finalData.message || `导入完成：成功 ${summary.imported} 个`);
       } else {
-        toast('error', data.error || '导入失败');
+        toast('error', finalData.error || finalData.message || '没有 Skill 导入成功');
       }
     } catch (error: any) {
+      setSkillUploadDialog((prev) => prev ? {
+        ...prev,
+        phase: 'error',
+        startedAt: prev.startedAt || Date.now(),
+        message: error?.message || '导入失败',
+      } : {
+        fileName: file.name,
+        fileSize: file.size,
+        phase: 'error',
+        startedAt: Date.now(),
+        progress: 0,
+        message: error?.message || '导入失败',
+      });
       toast('error', error?.message || '导入失败');
     } finally {
       setUploading(false);
@@ -2383,6 +2484,36 @@ export default function SkillsManager({
     subtitle: '统一管理本地 Skills、MCP 与应用市场安装',
     actions: activeTab === 'local' ? renderLocalHeaderActions() : null,
   }, [activeTab, runtimeSkillsDir, uploading, exporting, selectedForExport.size, syncingAllBuiltin, builtinAceharnessInstallCount]);
+  const importResults = importDialog?.results || [];
+  const importSummary = importDialog ? getImportSummary(importDialog) : { total: 0, imported: 0, failed: 0, skipped: 0 };
+  const importModalOpen = Boolean(skillUploadDialog || importDialog);
+  const uploadPhase = skillUploadDialog?.phase;
+  const importProgress = skillUploadDialog?.progress ?? (importSummary.total > 0
+    ? Math.round(((importSummary.imported + importSummary.failed + importSummary.skipped) / importSummary.total) * 100)
+    : 0);
+  const importedRatio = importSummary.total > 0 ? Math.round((importSummary.imported / importSummary.total) * 100) : 0;
+  const getImportPhaseLabel = (phase?: SkillUploadDialogState['phase']) => {
+    if (phase === 'uploading') return '上传中';
+    if (phase === 'queued') return '等待导入';
+    if (phase === 'reading') return '读取 ZIP';
+    if (phase === 'scanning') return '扫描目录';
+    if (phase === 'validating') return '校验 Skill';
+    if (phase === 'writing') return '写入运行目录';
+    if (phase === 'processing') return '服务端处理中';
+    if (phase === 'error') return '处理失败';
+    if (phase === 'complete') return '处理完成';
+    return 'Skill 导入结果';
+  };
+  const getImportResultTone = (status: SkillImportResult['status']) => {
+    if (status === 'imported') return 'success' as const;
+    if (status === 'failed') return 'danger' as const;
+    return 'warning' as const;
+  };
+  const getImportResultLabel = (status: SkillImportResult['status']) => {
+    if (status === 'imported') return '成功';
+    if (status === 'failed') return '失败';
+    return '跳过';
+  };
 
   return (
     <div
@@ -2871,6 +3002,123 @@ export default function SkillsManager({
           </div>
         </div>
       ) : null}
+      <Dialog
+        open={importModalOpen}
+        onOpenChange={(open) => {
+          if (open || uploading) return;
+          setImportDialog(null);
+          setSkillUploadDialog(null);
+        }}
+      >
+        <DialogContent
+          className="w-[min(860px,calc(100vw-1.5rem))] max-w-none"
+          onInteractOutside={(event) => {
+            if (uploading) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (uploading) event.preventDefault();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>
+              {uploadPhase === 'error' ? 'Skill 导入失败' : uploadPhase === 'complete' ? 'Skill 导入结果' : getImportPhaseLabel(uploadPhase)}
+            </DialogTitle>
+            <DialogDescription>
+              {skillUploadDialog?.fileName || importDialog?.fileName || '上传文件'}
+              {skillUploadDialog ? ` · ${formatUploadSize(skillUploadDialog.fileSize)}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-card p-4">
+              <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+                <div>
+                  <p className="font-medium text-foreground">
+                    {getImportPhaseLabel(uploadPhase)}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {skillUploadDialog?.message || importDialog?.message || '导入处理完成。'}
+                  </p>
+                </div>
+                <span className="shrink-0 text-sm text-muted-foreground">{importProgress}%</span>
+              </div>
+              <Progress value={importProgress} className="h-2" />
+            </div>
+            {importDialog ? (
+            <>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <p className="text-xs text-muted-foreground">总计</p>
+                <p className="mt-1 text-xl font-semibold text-foreground">{importSummary.total}</p>
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+                <p className="text-xs text-emerald-700 dark:text-emerald-300">成功</p>
+                <p className="mt-1 text-xl font-semibold text-emerald-700 dark:text-emerald-300">{importSummary.imported}</p>
+              </div>
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/30">
+                <p className="text-xs text-red-700 dark:text-red-300">失败</p>
+                <p className="mt-1 text-xl font-semibold text-red-700 dark:text-red-300">{importSummary.failed}</p>
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+                <p className="text-xs text-amber-700 dark:text-amber-300">跳过</p>
+                <p className="mt-1 text-xl font-semibold text-amber-700 dark:text-amber-300">{importSummary.skipped}</p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-border bg-card p-3">
+              <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+                <span className="font-medium text-foreground">处理进度</span>
+                <span className="text-muted-foreground">完成 {importProgress}% · 成功率 {importedRatio}%</span>
+              </div>
+              <Progress value={importProgress} className="h-2" />
+            </div>
+            <div className="max-h-[360px] overflow-auto rounded-lg border border-border">
+              <table className="w-full min-w-[680px] text-left text-sm">
+                <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
+                  <tr>
+                    <th className="w-[120px] px-3 py-2 font-medium">状态</th>
+                    <th className="w-[190px] px-3 py-2 font-medium">Skill</th>
+                    <th className="w-[240px] px-3 py-2 font-medium">路径</th>
+                    <th className="px-3 py-2 font-medium">原因</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {importResults.length > 0 ? importResults.map((result, index) => (
+                    <tr key={`${result.status}-${result.path}-${result.name}-${index}`} className="bg-card">
+                      <td className="px-3 py-2 align-top">
+                        <StatusPill tone={getImportResultTone(result.status)}>{getImportResultLabel(result.status)}</StatusPill>
+                      </td>
+                      <td className="px-3 py-2 align-top font-medium text-foreground">{result.name}</td>
+                      <td className="px-3 py-2 align-top font-mono text-xs text-muted-foreground">{result.path || '-'}</td>
+                      <td className="px-3 py-2 align-top text-muted-foreground">{result.reason || (result.status === 'imported' ? '已导入' : '-')}</td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">没有返回导入明细。</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            </>
+            ) : (
+              <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                服务端返回后会自动显示成功、失败和跳过明细。
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setImportDialog(null);
+                setSkillUploadDialog(null);
+              }}
+              disabled={uploading}
+            >
+              {uploading ? '处理中...' : '关闭'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <ConfirmModal
         open={deleteSkillNames.length > 0}
         variant="delete"

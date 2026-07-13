@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { createReadStream, createWriteStream, existsSync } from 'fs';
+import { createWriteStream, existsSync } from 'fs';
+import { pipeline } from 'stream/promises';
+import { randomUUID } from 'crypto';
 import unzipper from 'unzipper';
 import { ZipFile } from 'yazl';
 import { getInstallSkillsDirPath, getRuntimeSkillsDirPath, getSkillsTempPath, syncInstalledSkillsToRuntime } from '@/lib/run/runtime-skills';
@@ -73,9 +75,341 @@ async function discoverSkills(skillsDir: string) {
   return skills;
 }
 
-// GET: List all skills
-export async function GET() {
+type SkillImportStatus = 'queued' | 'running' | 'completed' | 'failed';
+type SkillImportPhase = 'queued' | 'reading' | 'scanning' | 'validating' | 'writing' | 'completed' | 'failed';
+type SkillImportResult = {
+  name: string;
+  path: string;
+  status: 'imported' | 'failed' | 'skipped';
+  reason?: string;
+};
+type SkillImportJob = {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  status: SkillImportStatus;
+  phase: SkillImportPhase;
+  progress: number;
+  message: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  imported: string[];
+  failed: SkillImportResult[];
+  skipped: SkillImportResult[];
+  results: SkillImportResult[];
+  summary: { total: number; imported: number; failed: number; skipped: number };
+  error?: string;
+};
+type SkillImportCandidate = {
+  destName: string;
+  label: string;
+  relativePath: string;
+  prefix: string;
+  skillMdEntry: any;
+};
+
+const skillImportJobs: Map<string, SkillImportJob> = ((globalThis as any).__ACE_SKILL_IMPORT_JOBS ||= new Map());
+
+function updateSkillImportJob(id: string, patch: Partial<SkillImportJob>): SkillImportJob | null {
+  const current = skillImportJobs.get(id);
+  if (!current) return null;
+  const next = {
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  skillImportJobs.set(id, next);
+  return next;
+}
+
+function summarizeSkillImportResults(results: SkillImportResult[]) {
+  const imported = results.filter((item) => item.status === 'imported').map((item) => item.name);
+  const failed = results.filter((item) => item.status === 'failed');
+  const skipped = results.filter((item) => item.status === 'skipped');
+  return {
+    imported,
+    failed,
+    skipped,
+    summary: {
+      total: results.length,
+      imported: imported.length,
+      failed: failed.length,
+      skipped: skipped.length,
+    },
+  };
+}
+
+function getZipParentPath(rawPath: string): string {
+  const normalized = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const index = normalized.lastIndexOf('/');
+  return index >= 0 ? normalized.slice(0, index) : '';
+}
+
+function getZipBaseName(rawPath: string): string {
+  const normalized = rawPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  const index = normalized.lastIndexOf('/');
+  return index >= 0 ? normalized.slice(index + 1) : normalized;
+}
+
+function shouldSkipSkillArchiveFile(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/');
+  return normalized.split('/').includes('__pycache__') || normalized.endsWith('.pyc');
+}
+
+function getZipEntrySize(entry: any): number | null {
+  const raw = entry?.uncompressedSize ?? entry?.vars?.uncompressedSize;
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+}
+
+async function writeZipEntryIfChanged(entry: any, target: string): Promise<'written' | 'skipped'> {
+  const entrySize = getZipEntrySize(entry);
+  if (entrySize != null) {
+    const existing = await fs.stat(target).catch(() => null);
+    if (existing?.isFile() && existing.size === entrySize) return 'skipped';
+  }
+
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  if (typeof entry.stream === 'function') {
+    await pipeline(entry.stream(), createWriteStream(target));
+  } else {
+    await fs.writeFile(target, await entry.buffer());
+  }
+  return 'written';
+}
+
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function processSkillImportJob(jobId: string, buffer: Buffer, fileName: string): Promise<void> {
   try {
+    const skillsDir = await getRuntimeSkillsDirPath();
+    updateSkillImportJob(jobId, {
+      status: 'running',
+      phase: 'reading',
+      progress: 8,
+      message: '正在读取 ZIP 目录。',
+    });
+
+    const directory = await (unzipper as any).Open.buffer(buffer);
+    const files: any[] = (directory.files || []).filter((entry: any) => entry.type === 'File');
+
+    updateSkillImportJob(jobId, {
+      phase: 'scanning',
+      progress: 20,
+      message: `正在扫描 ${files.length} 个文件。`,
+    });
+
+    const candidates = new Map<string, SkillImportCandidate>();
+    const skippedByPath = new Map<string, SkillImportResult>();
+    const rootSkillMd = files.find((entry) => String(entry.path || '').replace(/\\/g, '/') === 'SKILL.md');
+    if (rootSkillMd) {
+      const skillName = fileName.replace(/\.zip$/i, '');
+      candidates.set('.', {
+        destName: skillName,
+        label: skillName,
+        relativePath: '.',
+        prefix: '',
+        skillMdEntry: rootSkillMd,
+      });
+    } else {
+      const directSkillEntries = files.filter((entry) => {
+        const rawPath = String(entry.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+        const parts = rawPath.split('/');
+        return parts.at(-1) === 'SKILL.md' && (
+          parts.length === 2
+          || (parts.length === 3 && ['skills', 'skill'].includes(parts[0].toLowerCase()))
+        );
+      });
+
+      for (const entry of directSkillEntries) {
+        const rawPath = String(entry.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+        const parentPath = getZipParentPath(rawPath);
+        const destName = getZipBaseName(parentPath);
+        candidates.set(parentPath, {
+          destName,
+          label: parentPath,
+          relativePath: parentPath,
+          prefix: `${parentPath}/`,
+          skillMdEntry: entry,
+        });
+      }
+
+      const topLevelDirs = new Set<string>();
+      const wrappedSkillDirs = new Set<string>();
+      for (const entry of files) {
+        const rawPath = String(entry.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+        const parts = rawPath.split('/');
+        if (parts[0]) topLevelDirs.add(parts[0]);
+        if (parts.length >= 2 && ['skills', 'skill'].includes(parts[0].toLowerCase())) {
+          wrappedSkillDirs.add(`${parts[0]}/${parts[1]}`);
+        }
+      }
+      for (const dir of topLevelDirs) {
+        if (['skills', 'skill'].includes(dir.toLowerCase())) continue;
+        if (!candidates.has(dir)) {
+          skippedByPath.set(dir, { name: dir, path: dir, status: 'skipped', reason: '目录下没有直接的 SKILL.md' });
+        }
+      }
+      for (const dir of wrappedSkillDirs) {
+        if (!candidates.has(dir)) {
+          skippedByPath.set(dir, { name: getZipBaseName(dir), path: dir, status: 'skipped', reason: '目录下没有直接的 SKILL.md' });
+        }
+      }
+    }
+
+    const candidateList = Array.from(candidates.values());
+    const skippedResults = Array.from(skippedByPath.values());
+    if (candidateList.length === 0) {
+      const results = skippedResults;
+      const summary = summarizeSkillImportResults(results);
+      updateSkillImportJob(jobId, {
+        status: 'failed',
+        phase: 'failed',
+        progress: 100,
+        message: '未找到有效的 Skill（需包含 SKILL.md）。',
+        error: '未找到有效的 Skill（需包含 SKILL.md）',
+        results,
+        ...summary,
+        completedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    updateSkillImportJob(jobId, {
+      phase: 'validating',
+      progress: 35,
+      message: `发现 ${candidateList.length} 个候选 Skill，正在校验 SKILL.md。`,
+    });
+
+    const results: SkillImportResult[] = [];
+    const validCandidates: SkillImportCandidate[] = [];
+    for (let index = 0; index < candidateList.length; index++) {
+      const candidate = candidateList[index];
+      const validationProgress = 35 + Math.floor(((index + 1) / candidateList.length) * 25);
+      try {
+        const content = (await candidate.skillMdEntry.buffer()).toString('utf-8');
+        const validation = validateSkillFrontmatter(content);
+        if (!validation.ok) {
+          results.push({ name: candidate.destName, path: candidate.relativePath, status: 'failed', reason: validation.error });
+        } else {
+          validCandidates.push(candidate);
+        }
+      } catch (error) {
+        results.push({
+          name: candidate.destName,
+          path: candidate.relativePath,
+          status: 'failed',
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      updateSkillImportJob(jobId, {
+        phase: 'validating',
+        progress: validationProgress,
+        message: `正在校验 SKILL.md：${index + 1}/${candidateList.length}`,
+        results: [...results],
+      });
+    }
+
+    updateSkillImportJob(jobId, {
+      phase: 'writing',
+      progress: 62,
+      message: `正在写入 ${validCandidates.length} 个 Skill。`,
+    });
+
+    for (let index = 0; index < validCandidates.length; index++) {
+      const candidate = validCandidates[index];
+      const dest = path.join(skillsDir, candidate.destName);
+      try {
+        await fs.mkdir(dest, { recursive: true });
+        const candidateFiles = files.filter((entry) => {
+          const rawPath = String(entry.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+          if (!rawPath.startsWith(candidate.prefix)) return false;
+          const relative = candidate.prefix ? rawPath.slice(candidate.prefix.length) : rawPath;
+          return Boolean(relative) && !relative.includes('..') && !shouldSkipSkillArchiveFile(relative);
+        });
+        let written = 0;
+        let skipped = 0;
+        await runWithConcurrency(candidateFiles, 12, async (entry) => {
+          const rawPath = String(entry.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+          const relative = candidate.prefix ? rawPath.slice(candidate.prefix.length) : rawPath;
+          const target = path.join(dest, ...relative.split('/'));
+          const result = await writeZipEntryIfChanged(entry, target);
+          if (result === 'written') written++;
+          else skipped++;
+        });
+        const ignored = files.filter((entry) => {
+          const rawPath = String(entry.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+          if (!rawPath.startsWith(candidate.prefix)) return false;
+          const relative = candidate.prefix ? rawPath.slice(candidate.prefix.length) : rawPath;
+          return shouldSkipSkillArchiveFile(relative);
+        }).length;
+        results.push({
+          name: candidate.destName,
+          path: candidate.relativePath,
+          status: 'imported',
+          reason: `已写入 ${written} 个文件，跳过未变化 ${skipped} 个${ignored ? `，忽略缓存 ${ignored} 个` : ''}`,
+        });
+      } catch (error) {
+        results.push({
+          name: candidate.destName,
+          path: candidate.relativePath,
+          status: 'failed',
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const writeProgress = 62 + Math.floor(((index + 1) / Math.max(1, validCandidates.length)) * 33);
+      updateSkillImportJob(jobId, {
+        phase: 'writing',
+        progress: writeProgress,
+        message: `正在写入 Skill：${index + 1}/${validCandidates.length}`,
+        results: [...results],
+      });
+    }
+
+    results.push(...skippedResults);
+    const summary = summarizeSkillImportResults(results);
+    updateSkillImportJob(jobId, {
+      status: summary.imported.length > 0 ? 'completed' : 'failed',
+      phase: summary.imported.length > 0 ? 'completed' : 'failed',
+      progress: 100,
+      message: `导入完成：成功 ${summary.summary.imported} 个，失败 ${summary.summary.failed} 个，跳过 ${summary.summary.skipped} 个`,
+      error: summary.imported.length > 0 ? undefined : '没有 Skill 导入成功',
+      results,
+      ...summary,
+      completedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    updateSkillImportJob(jobId, {
+      status: 'failed',
+      phase: 'failed',
+      progress: 100,
+      message: error instanceof Error ? error.message : String(error),
+      error: error instanceof Error ? error.message : String(error),
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
+// GET: List all skills
+export async function GET(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const importJobId = url.searchParams.get('importJobId');
+    if (importJobId) {
+      const job = skillImportJobs.get(importJobId);
+      if (!job) return jsonOk({ error: '找不到导入任务' }, { status: 404 });
+      return jsonOk(job, { headers: { 'Cache-Control': 'no-store' } });
+    }
+
     const skillsDir = await getRuntimeSkillsDirPath();
     const installSkillsDir = getInstallSkillsDirPath();
     const dirExists = existsSync(skillsDir);
@@ -114,79 +448,37 @@ export async function POST(request: Request) {
       return jsonOk({ error: '未找到上传文件' }, { status: 400 });
     }
 
-    // Save zip to temp
-    const skillsDir = await getRuntimeSkillsDirPath();
-    const tmpDir = getSkillsTempPath('upload');
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    await fs.mkdir(tmpDir, { recursive: true });
-
-    const zipPath = path.join(tmpDir, 'upload.zip');
     const buffer = Buffer.from(await file.arrayBuffer());
-    await fs.writeFile(zipPath, buffer);
-
-    // Unzip
-    const extractDir = path.join(tmpDir, 'extracted');
-    await fs.mkdir(extractDir, { recursive: true });
-    await new Promise<void>((resolve, reject) => {
-      createReadStream(zipPath)
-        .pipe(unzipper.Extract({ path: extractDir }))
-        .on('close', resolve)
-        .on('error', reject);
-    });
-
-    type SkillImportCandidate = {
-      sourceDir: string;
-      destName: string;
-      label: string;
+    const jobId = `skill-import-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const job: SkillImportJob = {
+      id: jobId,
+      fileName: file.name,
+      fileSize: file.size,
+      status: 'queued',
+      phase: 'queued',
+      progress: 0,
+      message: '导入任务已创建。',
+      startedAt: now,
+      updatedAt: now,
+      imported: [],
+      failed: [],
+      skipped: [],
+      results: [],
+      summary: { total: 0, imported: 0, failed: 0, skipped: 0 },
     };
+    skillImportJobs.set(jobId, job);
+    void processSkillImportJob(jobId, buffer, file.name);
 
-    const candidates: SkillImportCandidate[] = [];
-    const rootSkillMd = path.join(extractDir, 'SKILL.md');
-
-    // Root SKILL.md means the zip itself is a single skill; subdirectories are resources.
-    if (existsSync(rootSkillMd)) {
-      const skillName = file.name.replace(/\.zip$/i, '');
-      candidates.push({ sourceDir: extractDir, destName: skillName, label: skillName });
-    } else {
-      // Otherwise import every top-level directory that contains SKILL.md.
-      const entries = await fs.readdir(extractDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const skillMd = path.join(extractDir, entry.name, 'SKILL.md');
-        if (!existsSync(skillMd)) continue;
-        candidates.push({ sourceDir: path.join(extractDir, entry.name), destName: entry.name, label: entry.name });
-      }
-    }
-
-    if (candidates.length === 0) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-      return jsonOk({ error: '未找到有效的 Skill（需包含 SKILL.md）' }, { status: 400 });
-    }
-
-    for (const candidate of candidates) {
-      const skillMdPath = path.join(candidate.sourceDir, 'SKILL.md');
-      const content = await fs.readFile(skillMdPath, 'utf-8');
-      const validation = validateSkillFrontmatter(content);
-      if (!validation.ok) {
-        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-        return jsonOk(
-          { error: `Skill 校验失败（${candidate.label}/SKILL.md）：${validation.error}` },
-          { status: 400 }
-        );
-      }
-    }
-
-    const imported: string[] = [];
-    for (const candidate of candidates) {
-      const dest = path.join(skillsDir, candidate.destName);
-      await fs.cp(candidate.sourceDir, dest, { recursive: true });
-      imported.push(candidate.destName);
-    }
-
-    // Cleanup
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-
-    return jsonOk({ success: true, imported, message: `导入了 ${imported.length} 个 Skill` });
+    return jsonOk({
+      success: true,
+      async: true,
+      jobId,
+      status: job.status,
+      phase: job.phase,
+      progress: job.progress,
+      message: job.message,
+    });
   } catch (error) {
     console.error('Failed to import skills:', error);
     return jsonOk({ error: '导入失败: ' + (error as Error).message }, { status: 500 });

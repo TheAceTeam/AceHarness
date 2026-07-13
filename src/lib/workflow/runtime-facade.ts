@@ -146,6 +146,28 @@ export async function executeWorkflowRuntimeWithContextRecovery(
   return executeChatRuntimeWithContextRecovery(runtime, options, recovery);
 }
 
+export async function prewarmWorkflowRuntimeSession(input: {
+  runtimeType?: WorkflowRuntimeType | null;
+  agent: string;
+  step?: string;
+  model: string;
+  workingDirectory: string;
+  userId?: string;
+}): Promise<string> {
+  const runtimeType = await resolveRequestedWorkflowRuntimeType(input.runtimeType);
+  const agentId = getLogicalEngineId(runtimeType);
+  const modelRouteId = resolveWorkflowModelRouteId(agentId, input.model);
+  const session = await getWorkflowRuntimeOrchestrator().openSession({
+    agentId,
+    modelRouteId,
+    cwd: input.workingDirectory,
+    kind: 'workflow-agent',
+    ownerUserId: input.userId,
+    title: [input.agent, input.step || 'prewarm'].filter(Boolean).join(' / '),
+  });
+  return session.runtimeSessionId;
+}
+
 export async function compactWorkflowRuntimeContextManually(
   runtime: WorkflowRuntime,
   options: WorkflowRuntimeOptions,

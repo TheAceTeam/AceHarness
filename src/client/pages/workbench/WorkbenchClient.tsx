@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from '@/lib/navigation/dynamic';
-import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
+import { memo, useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import type { ComponentProps } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams, useRouter } from '@/lib/navigation/client';
@@ -699,12 +699,19 @@ type MonacoNamespace = {
   ) => any;
 };
 
-function computeSimpleDiff(base: string, next: string): Array<{ type: 'same' | 'add' | 'remove'; text: string }> {
+const DESIGN_OPTIMIZATION_DIFF_ROW_LIMIT = 1200;
+const DESIGN_OPTIMIZATION_STREAM_UPDATE_MS = 120;
+
+function computeSimpleDiff(base: string, next: string, maxRows = Number.POSITIVE_INFINITY): Array<{ type: 'same' | 'add' | 'remove'; text: string }> {
   const baseLines = base.split('\n');
   const nextLines = next.split('\n');
   const rows: Array<{ type: 'same' | 'add' | 'remove'; text: string }> = [];
   const max = Math.max(baseLines.length, nextLines.length);
   for (let index = 0; index < max; index += 1) {
+    if (rows.length >= maxRows) {
+      rows.push({ type: 'same', text: `... diff 过大，已截断 ${max - index} 行；完整内容会在应用建议时写入草稿 ...` });
+      break;
+    }
     const before = baseLines[index];
     const after = nextLines[index];
     if (before === after) {
@@ -1144,7 +1151,7 @@ function splitMarkdownIntoVirtualPages(content: string, limit = 30000): string[]
   return pages.filter((page) => page.trim().length > 0);
 }
 
-function AceAwareMarkdown({
+const AceAwareMarkdown = memo(function AceAwareMarkdown({
   content,
   isStreaming = false,
   className = '',
@@ -1169,7 +1176,7 @@ function AceAwareMarkdown({
       <Markdown>{prepared}</Markdown>
     </div>
   );
-}
+});
 
 function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const startupFlowEnabled = (props.preflightPreview?.commands?.length || 0) > 0;
@@ -1580,6 +1587,7 @@ export default function WorkbenchPage({
   const [workbenchNavSection, setWorkbenchNavSection] = useState<'design' | 'preview' | 'runs'>(() => (
     initialWorkbenchSection?.startsWith('preview') ? 'preview' : initialMode === 'design' ? 'design' : 'runs'
   ));
+  const [savedWorkflowRevision, setSavedWorkflowRevision] = useState(0);
   const [runRecordDrilled, setRunRecordDrilled] = useState(false);
   const [runDetailSection, setRunDetailSection] = useState<RunDetailSection>(() => (
     initialWorkbenchSection === 'preview-state'
@@ -2293,6 +2301,8 @@ export default function WorkbenchPage({
     showEditNodeModal, editingNode, iterationStates, stepResults, stepIdMap,
     globalContext, phaseContexts,
   } = state;
+  const latestEditingConfigRef = useRef<any>(editingConfig);
+  const hasUnsavedDesignConfigChangesRef = useRef(false);
   const specCodingDisabled = workflowConfig?.context?.specCodingEnabled === false
     || workflowConfig?.context?.skipSpecCoding === true;
   const runtimeSpecAvailable = !specCodingDisabled && Boolean(
@@ -2584,6 +2594,12 @@ export default function WorkbenchPage({
     () => hasWorkflowDesignDraftChanges(persistedDesignConfigComparable, editingDesignConfigComparable),
     [editingDesignConfigComparable, persistedDesignConfigComparable],
   );
+  useEffect(() => {
+    latestEditingConfigRef.current = editingConfig;
+  }, [editingConfig]);
+  useEffect(() => {
+    hasUnsavedDesignConfigChangesRef.current = hasUnsavedDesignConfigChanges;
+  }, [hasUnsavedDesignConfigChanges]);
   const configuredWorkflowOverrideCount = useMemo(
     () => Object.values(workflowAgentOverrides).filter((value) => value?.enabled).length,
     [workflowAgentOverrides],
@@ -3084,6 +3100,7 @@ export default function WorkbenchPage({
     return computeSimpleDiff(
       JSON.stringify(designOptimizationCandidate.baseSnapshot ?? {}, null, 2),
       JSON.stringify(designOptimizationCandidate.candidateSnapshot ?? {}, null, 2),
+      DESIGN_OPTIMIZATION_DIFF_ROW_LIMIT,
     );
   }, [designOptimizationCandidate]);
   const designOptimizationValidationIssues = useMemo(
@@ -3211,6 +3228,7 @@ export default function WorkbenchPage({
   }, []);
   const applySuggestedSpecTaskBindings = useCallback(() => {
     if (!specBindingReview?.suggestedConfig) return;
+    latestEditingConfigRef.current = specBindingReview.suggestedConfig;
     dispatch({ type: 'SET_EDITING_CONFIG', payload: specBindingReview.suggestedConfig });
     setDesignTab('orchestration');
     setSpecBindingReview(null);
@@ -4053,53 +4071,57 @@ export default function WorkbenchPage({
         let thinkingAccumulated = '';
         let settled = false;
         let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
-        const updateAssistantMessage = (content: string, status: DesignOptimizationMessage['status']) => {
+        let streamUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+        let lastStreamUpdateAt = 0;
+        let pendingStreamContent = '';
+        let pendingStreamStatus: DesignOptimizationMessage['status'] = 'streaming';
+        const commitAssistantMessage = (content: string, status: DesignOptimizationMessage['status']) => {
           setDesignOptimizationMessages((messages) => messages.map((message) => (
             message.id === assistantMessageId
               ? { ...message, content, status }
               : message
           )));
         };
+        const flushAssistantMessage = () => {
+          if (streamUpdateTimer) {
+            clearTimeout(streamUpdateTimer);
+            streamUpdateTimer = null;
+          }
+          lastStreamUpdateAt = Date.now();
+          commitAssistantMessage(pendingStreamContent, pendingStreamStatus);
+        };
+        const updateAssistantMessage = (content: string, status: DesignOptimizationMessage['status'], immediate = false) => {
+          pendingStreamContent = content;
+          pendingStreamStatus = status;
+          if (immediate) {
+            flushAssistantMessage();
+            return;
+          }
+          const elapsed = Date.now() - lastStreamUpdateAt;
+          if (elapsed >= DESIGN_OPTIMIZATION_STREAM_UPDATE_MS) {
+            flushAssistantMessage();
+            return;
+          }
+          if (!streamUpdateTimer) {
+            streamUpdateTimer = setTimeout(flushAssistantMessage, DESIGN_OPTIMIZATION_STREAM_UPDATE_MS - elapsed);
+          }
+        };
         const fail = (message: string) => {
           if (settled) return;
           settled = true;
           es.close();
-          updateAssistantMessage(accumulated || thinkingAccumulated || message, 'failed');
+          updateAssistantMessage(accumulated || thinkingAccumulated || message, 'failed', true);
           reject(new Error(message));
         };
         es.addEventListener('delta', (event) => {
           const data = parseAceSseEventData((event as MessageEvent).data);
           accumulated += String(data.content || '');
-          const row = storeChatStreamSseEventAsAgentMessage('delta', data, {
-            chatId: startData.chatId,
-            runId: runId || selectedRun?.id || undefined,
-            stepKey: 'workbench-design-optimization',
-            provider: data.engine || selectedEngine,
-            model: data.model || model,
-            sessionId: data.sessionId || designOptimizationSessionId || undefined,
-            frontendSessionId: `design-opt-${configFile}-${target.scope}`,
-            streamScope: 'workbench-design-optimization',
-          }, aiPrevious);
-          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-          setDesignOptimizationStream(accumulated);
           updateAssistantMessage(accumulated, 'streaming');
         });
         es.addEventListener('thinking', (event) => {
           const data = parseAceSseEventData((event as MessageEvent).data);
           thinkingAccumulated += String(data.content || '');
-          const row = storeChatStreamSseEventAsAgentMessage('thinking', data, {
-            chatId: startData.chatId,
-            runId: runId || selectedRun?.id || undefined,
-            stepKey: 'workbench-design-optimization',
-            provider: data.engine || selectedEngine,
-            model: data.model || model,
-            sessionId: data.sessionId || designOptimizationSessionId || undefined,
-            frontendSessionId: `design-opt-${configFile}-${target.scope}`,
-            streamScope: 'workbench-design-optimization',
-          }, aiPrevious);
-          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
           if (!accumulated) {
-            setDesignOptimizationStream(thinkingAccumulated);
             updateAssistantMessage(thinkingAccumulated, 'streaming');
           }
         });
@@ -4132,7 +4154,7 @@ export default function WorkbenchPage({
               frontendSessionId: `design-opt-${configFile}-${target.scope}`,
               streamScope: 'workbench-design-optimization',
             }, aiPrevious);
-            updateAssistantMessage(data.error || data.result || accumulated || 'AI 工作流优化失败', 'failed');
+            updateAssistantMessage(data.error || data.result || accumulated || 'AI 工作流优化失败', 'failed', true);
             reject(new Error(data.error || data.result || accumulated || 'AI 工作流优化失败'));
             return;
           }
@@ -4151,7 +4173,7 @@ export default function WorkbenchPage({
             streamScope: 'workbench-design-optimization',
           }, aiPrevious);
           aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-          updateAssistantMessage(finalText, 'completed');
+          updateAssistantMessage(finalText, 'completed', true);
           resolve(finalText);
         });
         es.addEventListener('engine_error', (event) => {
@@ -4236,15 +4258,23 @@ export default function WorkbenchPage({
     workflowConfig,
     workflowDefaultModel,
   ]);
+  const handleCloseDesignOptimizationDialog = useCallback(() => {
+    setDesignOptimizationDialogOpen(false);
+    setDesignOptimizationTarget(null);
+    setDesignOptimizationGenerating(false);
+    setDesignOptimizationCandidate(null);
+    setDesignOptimizationStream('');
+    setDesignOptimizationMessages([]);
+    setDesignOptimizationSessionId(null);
+  }, []);
   const handleApplyDesignOptimizationCandidate = useCallback(() => {
     if (!designOptimizationCandidate) return;
+    latestEditingConfigRef.current = designOptimizationCandidate.candidateConfig;
     dispatch({ type: 'SET_EDITING_CONFIG', payload: designOptimizationCandidate.candidateConfig });
-    setDesignOptimizationCandidate(null);
-    setDesignOptimizationDialogOpen(false);
-    setDesignOptimizationStream('');
+    handleCloseDesignOptimizationDialog();
     setDesignTab('orchestration');
     toast('success', 'AI 优化建议已应用到当前工作流草稿，请记得保存配置');
-  }, [designOptimizationCandidate, dispatch, toast]);
+  }, [designOptimizationCandidate, dispatch, handleCloseDesignOptimizationDialog, toast]);
   const handleDiscardDesignOptimizationCandidate = useCallback(() => {
     setDesignOptimizationCandidate(null);
   }, []);
@@ -6405,7 +6435,7 @@ export default function WorkbenchPage({
   }, [viewMode, viewingHistoryRun, configFile, initialRunId, runId, selectedRun?.id, cacheWorkflowStatusPayload]);
 
   useEffect(() => {
-    if (isDesignMode && workflowConfig) {
+    if (isDesignMode && workflowConfig && !hasUnsavedDesignConfigChangesRef.current) {
       dispatch({ type: 'SET_EDITING_CONFIG', payload: JSON.parse(JSON.stringify(workflowConfig)) });
     }
   }, [viewMode, workflowConfig]);
@@ -6617,21 +6647,26 @@ export default function WorkbenchPage({
     }
     try {
       const { config, agents: loadedAgents } = await configApi.getConfig(configFile);
+      const shouldHydrateDraft = !background || !isDesignMode || !hasUnsavedDesignConfigChangesRef.current;
       dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
-      dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
+      if (shouldHydrateDraft) {
+        dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
+      }
       dispatch({ type: 'SET_AGENTS_CONFIG', payload: loadedAgents || [] });
-      dispatch({ type: 'SET_PROJECT_ROOT', payload: config.context?.projectRoot || '' });
-      dispatch({ type: 'SET_WORKSPACE_MODE', payload: config.context?.workspaceMode || 'isolated-copy' });
-      dispatch({ type: 'SET_REQUIREMENTS', payload: config.context?.requirements || '' });
-      dispatch({ type: 'SET_TIMEOUT_MINUTES', payload: config.context?.timeoutMinutes || 30 });
-      const loadedExecutionPolicy = resolveWorkflowExecutionPolicy(config.context);
-      dispatch({ type: 'SET_ENGINE', payload: loadedExecutionPolicy.defaultEngine || '' });
-      setWorkflowDefaultModel(loadedExecutionPolicy.defaultModel || '');
-      setWorkflowAutoCompactOnStepChange(loadedExecutionPolicy.autoCompactOnStepChange === true);
-      setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
-      dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
-      dispatch({ type: 'SET_MCP_SERVERS', payload: config.context?.mcpServers || [] });
-      dispatch({ type: 'SET_RAG_KNOWLEDGE_BASES', payload: Array.isArray(config.context?.capabilitySkills?.rag?.knowledgeBases) ? config.context.capabilitySkills.rag.knowledgeBases : [] });
+      if (shouldHydrateDraft) {
+        dispatch({ type: 'SET_PROJECT_ROOT', payload: config.context?.projectRoot || '' });
+        dispatch({ type: 'SET_WORKSPACE_MODE', payload: config.context?.workspaceMode || 'isolated-copy' });
+        dispatch({ type: 'SET_REQUIREMENTS', payload: config.context?.requirements || '' });
+        dispatch({ type: 'SET_TIMEOUT_MINUTES', payload: config.context?.timeoutMinutes || 30 });
+        const loadedExecutionPolicy = resolveWorkflowExecutionPolicy(config.context);
+        dispatch({ type: 'SET_ENGINE', payload: loadedExecutionPolicy.defaultEngine || '' });
+        setWorkflowDefaultModel(loadedExecutionPolicy.defaultModel || '');
+        setWorkflowAutoCompactOnStepChange(loadedExecutionPolicy.autoCompactOnStepChange === true);
+        setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
+        dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
+        dispatch({ type: 'SET_MCP_SERVERS', payload: config.context?.mcpServers || [] });
+        dispatch({ type: 'SET_RAG_KNOWLEDGE_BASES', payload: Array.isArray(config.context?.capabilitySkills?.rag?.knowledgeBases) ? config.context.capabilitySkills.rag.knowledgeBases : [] });
+      }
       if (config.context?.specCodingEnabled === false || config.context?.skipSpecCoding === true) {
         setCreationSessionSummary(null);
         setSpecCodingSummary(null);
@@ -6929,22 +6964,35 @@ export default function WorkbenchPage({
   const handleEventRef = useRef(handleEvent);
   handleEventRef.current = handleEvent;
 
+  const syncSavedWorkflowConfig = useCallback((config: any) => {
+    latestEditingConfigRef.current = config;
+    hasUnsavedDesignConfigChangesRef.current = false;
+    dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
+    dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
+    queryClient.setQueryData(queryKeys.config(configFile), (previous: any) => ({
+      ...(previous && typeof previous === 'object' ? previous : {}),
+      config,
+    }));
+    void queryClient.invalidateQueries({ queryKey: ['configs'] });
+    setSavedWorkflowRevision((revision) => revision + 1);
+  }, [configFile, dispatch, queryClient]);
+
   const saveConfig = async () => {
-    if (!workflowConfig) return;
+    const draftConfig = latestEditingConfigRef.current || editingConfig;
+    if (!workflowConfig || !draftConfig) return;
     setSaving(true);
     try {
       const configBase = {
         ...workflowConfig,
-        workflow: editingConfig?.workflow || workflowConfig.workflow,
+        workflow: draftConfig?.workflow || workflowConfig.workflow,
         context: {
           ...(workflowConfig.context || {}),
-          ...(editingConfig?.context || {}),
+          ...(draftConfig?.context || {}),
         },
       };
       const config = buildWorkflowDesignConfigForSave(configBase, currentWorkflowDesignDraftState);
       await configApi.saveConfig(configFile, config);
-      dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
-      dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
+      syncSavedWorkflowConfig(config);
       toast('success', '配置已保存');
     } catch (error: any) {
       toast('error', '保存失败: ' + error.message);
@@ -6958,10 +7006,10 @@ export default function WorkbenchPage({
     try {
       const config = { ...workflowConfig, workflow: { ...workflowConfig.workflow, name: newName.trim() } };
       await configApi.saveConfig(configFile, config);
-      dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
+      syncSavedWorkflowConfig(config);
     } catch { /* non-critical */ }
     setEditingName(false);
-  }, [configFile, dispatch, workflowConfig]);
+  }, [configFile, syncSavedWorkflowConfig, workflowConfig]);
 
   const hasContextEditableRun = Boolean(runId || initialRunId || selectedRun?.id);
 
@@ -9815,10 +9863,11 @@ export default function WorkbenchPage({
   }, []);
 
   const handleSaveConfig = useCallback(async (): Promise<boolean> => {
-    if (!editingConfig) return false;
+    const draftConfig = latestEditingConfigRef.current || editingConfig;
+    if (!draftConfig) return false;
     setSaving(true);
     try {
-      const rawConfig = buildWorkflowDesignConfigForSave(editingConfig, currentWorkflowDesignDraftState);
+      const rawConfig = buildWorkflowDesignConfigForSave(draftConfig, currentWorkflowDesignDraftState);
       const config = specCodingDisabled ? stripSpecBindingsFromWorkflowConfig(rawConfig) : rawConfig;
       const specCodingDocument = !specCodingDisabled && specCodingSummary && specCodingDetails ? {
         id: specCodingSummary.id,
@@ -9842,8 +9891,7 @@ export default function WorkbenchPage({
         specCoding: specCodingDocument,
       });
       toast('success', '配置已保存，后续运行将使用新策略');
-      dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
-      dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
+      syncSavedWorkflowConfig(config);
       return true;
     } catch (error: any) {
       toast('error', '保存失败: ' + error.message);
@@ -9861,6 +9909,7 @@ export default function WorkbenchPage({
     specCodingDetails,
     specCodingSummary,
     stripSpecBindingsFromWorkflowConfig,
+    syncSavedWorkflowConfig,
     toast,
     workflowConfig?.workflow?.name,
   ]);
@@ -12135,6 +12184,7 @@ export default function WorkbenchPage({
           <div className={styles.workbenchPreviewCanvas}>
             {workflowConfig?.workflow?.mode === 'state-machine' ? (
               <StateMachineExecutionView
+                key={`preview-state-machine-${configFile}-${savedWorkflowRevision}`}
                 states={workflowConfig.workflow.states || []}
                 agents={agentConfigs}
                 currentState={null}
@@ -12177,6 +12227,7 @@ export default function WorkbenchPage({
               />
             ) : workflowConfig?.workflow ? (
               <FlowDiagram
+                key={`preview-flow-${configFile}-${savedWorkflowRevision}`}
                 workflow={workflowConfig.workflow}
                 currentPhase=""
                 currentStep=""
@@ -13686,18 +13737,17 @@ export default function WorkbenchPage({
           {renderSpecCodingExplorer()}
         </DialogContent>
       </Dialog>
-      <Dialog open={designOptimizationDialogOpen} onOpenChange={(open) => {
-        setDesignOptimizationDialogOpen(open);
-        if (!open) {
-          setDesignOptimizationTarget(null);
-          setDesignOptimizationGenerating(false);
-          setDesignOptimizationCandidate(null);
-          setDesignOptimizationStream('');
-          setDesignOptimizationMessages([]);
-          setDesignOptimizationSessionId(null);
-        }
-      }}>
-        <DialogContent className="max-w-5xl w-[94vw] h-[86vh] overflow-hidden p-0">
+      <Dialog
+        open={designOptimizationDialogOpen}
+        onOpenChange={(open) => {
+          if (open) setDesignOptimizationDialogOpen(true);
+        }}
+      >
+        <DialogContent
+          className="max-w-5xl w-[94vw] h-[86vh] overflow-hidden p-0"
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+        >
           <DialogTitle className="sr-only">
             {designOptimizationTarget ? getDesignOptimizationDialogTitle(designOptimizationTarget) : 'AI 工作流优化'}
           </DialogTitle>
@@ -13711,9 +13761,22 @@ export default function WorkbenchPage({
                       {getDesignOptimizationTargetLabel(designOptimizationTarget)} · {getDesignOptimizationScopeHint(designOptimizationTarget)}
                     </div>
                   </div>
-                  <Badge variant="outline" className="text-[10px]">
-                    {designOptimizationTarget.workflowMode}
-                  </Badge>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Badge variant="outline" className="text-[10px]">
+                      {designOptimizationTarget.workflowMode}
+                    </Badge>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                      onClick={handleCloseDesignOptimizationDialog}
+                      aria-label="关闭 AI 工作流优化窗口"
+                      title="关闭"
+                    >
+                      <span className="material-symbols-outlined text-[18px] leading-none">close</span>
+                    </Button>
+                  </div>
                 </div>
               </div>
               <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">

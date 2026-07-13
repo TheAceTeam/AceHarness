@@ -85,3 +85,51 @@ export async function apiFetch(
 
   return response;
 }
+
+export function apiUploadWithProgress<T>(
+  path: string,
+  formData: FormData,
+  options: {
+    method?: string;
+    authRedirect?: boolean;
+    onProgress?: (progress: { loaded: number; total: number; percent: number }) => void;
+  } = {},
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    xhr.open(options.method || 'POST', withBasePath(normalizedPath), true);
+    xhr.withCredentials = true;
+    for (const [key, value] of Object.entries(getAuthHeaders())) {
+      xhr.setRequestHeader(key, value);
+    }
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      options.onProgress?.({ loaded: event.loaded, total: event.total, percent });
+    };
+    xhr.onerror = () => reject(new ApiError('网络错误，上传失败', xhr.status || 0));
+    xhr.onabort = () => reject(new ApiError('上传已取消', xhr.status || 0));
+    xhr.onload = () => {
+      if (xhr.status === 401 && options.authRedirect !== false) {
+        handleUnauthorized(true);
+      }
+      const payload = (() => {
+        try {
+          return xhr.responseText ? JSON.parse(xhr.responseText) : {};
+        } catch {
+          return xhr.responseText;
+        }
+      })();
+      if ((xhr.status < 200 || xhr.status >= 300) && !(payload && typeof payload === 'object' && Array.isArray((payload as any).results))) {
+        const message = typeof payload === 'object' && payload && 'error' in payload
+          ? String((payload as { error: unknown }).error)
+          : `Request failed with status ${xhr.status}`;
+        reject(new ApiError(message, xhr.status, payload));
+        return;
+      }
+      resolve(payload as T);
+    };
+    xhr.send(formData);
+  });
+}
