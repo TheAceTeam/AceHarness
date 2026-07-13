@@ -8195,8 +8195,21 @@ export default function WorkbenchPage({
       .trim();
   };
 
+  const stripLegacyRuntimeToolStatusText = (text: string): string => {
+    if (!text) return text;
+    return text
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return true;
+        if (trimmed.includes('<ace-process>') || trimmed.includes('</ace-process>')) return true;
+        return !/^[^<\r\n]{1,12000}\s+\((?:pending|queued|running|in_progress|completed)\)(?::\s*[^<\r\n]{0,12000})?$/i.test(trimmed);
+      })
+      .join('\n');
+  };
+
   const prepareChunkForDisplay = (text: string): string => {
-    return sanitizeProtocolBlocksForDisplay(mergeSubtaskDetails(text));
+    return sanitizeProtocolBlocksForDisplay(stripLegacyRuntimeToolStatusText(mergeSubtaskDetails(text)));
   };
 
   const extractStepConclusion = (text: string): string => {

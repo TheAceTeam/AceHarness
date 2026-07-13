@@ -30,6 +30,7 @@ const KNOWN_TOOLS = new Set([
   'websearch',
   'ls',
   'skill',
+  'context-compression',
   'multiedit',
   'patch',
 ]);
@@ -74,6 +75,7 @@ export function getAceToolTitle(toolName: string): string {
     webfetch: '🌐 获取网页',
     websearch: '🔎 搜索网页',
     skill: '技能文档',
+    'context-compression': '上下文压缩',
   };
   return titleMap[toolName] || `🔧 ${toolName}`;
 }
@@ -197,6 +199,8 @@ export function resolveAceToolName(titleOrName: string, rawInput?: UnknownRecord
   const input = rawInput || {};
   if (KNOWN_TOOLS.has(title)) return title;
 
+  if (isContextCompressionToolInput(input)) return 'context-compression';
+
   const command = typeof input.command === 'string' ? input.command : '';
   if (command) return inferCommandToolName(command);
   if ('content' in input && ('filePath' in input || 'path' in input) && !('oldString' in input) && !('old_string' in input)) return 'write';
@@ -212,6 +216,18 @@ export function resolveAceToolName(titleOrName: string, rawInput?: UnknownRecord
   if ('filePath' in input || 'file_path' in input) return 'read';
   if ('path' in input) return 'ls';
   return title || 'tool';
+}
+
+function isContextCompressionToolInput(input: UnknownRecord): boolean {
+  if (typeof input.topic !== 'string') return false;
+  if (!Array.isArray(input.content)) return false;
+  return input.content.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const record = item as UnknownRecord;
+    return typeof record.startId === 'string'
+      && typeof record.endId === 'string'
+      && typeof record.summary === 'string';
+  });
 }
 
 function stripPlanJsonFence(text: string): string {
@@ -507,6 +523,19 @@ function extractExitCode(raw: UnknownRecord): number | undefined {
   return undefined;
 }
 
+function isFileMutationTool(toolName: string): boolean {
+  return ['write', 'edit', 'multiedit', 'patch'].includes(toolName);
+}
+
+function compactFileChange(change: AceNormalizedFileChange): AceNormalizedFileChange {
+  return {
+    toolName: change.toolName,
+    title: change.title,
+    filePath: change.filePath,
+    kind: change.kind,
+  };
+}
+
 export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange | null {
   if (!change || typeof change !== 'object') return null;
   const source = change as UnknownRecord;
@@ -582,13 +611,15 @@ export function formatAceFileChangesResult(params: {
     .filter((change): change is AceNormalizedFileChange => Boolean(change));
   if (normalized.length === 0 && !params.output) return '';
 
-  const primary = normalized[0];
+  const mutationTool = isFileMutationTool(params.fallbackToolName || normalized[0]?.toolName || '');
+  const displayChanges = mutationTool ? normalized.map(compactFileChange) : normalized;
+  const primary = displayChanges[0];
   return wrapAceProcessBlock('tool-result', {
     toolName: primary?.toolName || params.fallbackToolName || 'edit',
     title: primary?.title || params.fallbackTitle || getAceToolTitle(params.fallbackToolName || 'edit'),
-    changes: normalized,
-    output: params.output ? safeToolResultText(params.output) : '',
-    ...(normalized.length === 1 ? primary : {}),
+    changes: displayChanges,
+    output: !mutationTool && params.output ? safeToolResultText(params.output) : '',
+    ...(displayChanges.length === 1 ? primary : {}),
   }, '');
 }
 
@@ -625,7 +656,6 @@ export function formatAceToolCall(params: {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
-        content: inputText(rawInput.content ?? rawInput.text ?? rawInput.new_string ?? rawInput.newString),
       }, '');
       break;
     case 'edit':
@@ -635,8 +665,6 @@ export function formatAceToolCall(params: {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
-        oldString: inputText(rawInput.old_string ?? rawInput.oldString),
-        newString: inputText(rawInput.new_string ?? rawInput.newString),
       }, '');
       break;
     case 'read':
@@ -765,8 +793,28 @@ export function formatAceToolResult(params: {
         changes: obj.changes,
         fallbackToolName: toolName,
         fallbackTitle: title,
-        output: extractTextFromUnknown(obj.output),
+        output: isFileMutationTool(toolName) ? '' : extractTextFromUnknown(obj.output),
       });
+    }
+    if (isFileMutationTool(toolName)) {
+      const filePath = normalizeFilePath(obj);
+      const exitCode = extractExitCode(obj);
+      return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+        toolName,
+        title,
+        ...(filePath ? { filePath } : {}),
+        ...(exitCode != null ? { exitCode } : {}),
+      }, ''), params.toolId);
+    }
+    if (toolName === 'read') {
+      const filePath = normalizeFilePath(obj);
+      const exitCode = extractExitCode(obj);
+      return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+        toolName,
+        title,
+        ...(filePath ? { filePath } : {}),
+        ...(exitCode != null ? { exitCode } : {}),
+      }, ''), params.toolId);
     }
     if (typeof obj.content === 'string' && toolName === 'skill') {
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
@@ -782,7 +830,6 @@ export function formatAceToolResult(params: {
         toolName,
         title,
         filePath: normalizeFilePath(obj),
-        content: safeToolResultText(obj.content),
       }, ''), params.toolId);
     }
     if (Array.isArray(obj.todos)) {
@@ -866,6 +913,9 @@ export function formatAceToolResult(params: {
 
   const text = safeToolResultText(extractTextFromUnknown(raw).trim());
   if (!text) return '';
+  if (toolName === 'read') {
+    return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', { toolName, title }, ''), params.toolId);
+  }
   if (toolName === 'skill') {
     return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
       toolName,

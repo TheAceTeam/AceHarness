@@ -3898,6 +3898,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return Math.round(Math.max(0, Math.min(10, normalized)) * 10) / 10;
   }
 
+  private isWorkflowFinalReviewJsonResponse(text: string): boolean {
+    const parsed = this.extractJsonObject(text);
+    if (!parsed || typeof parsed !== 'object') return false;
+    const candidate = parsed as any;
+    return typeof candidate.summary === 'string'
+      && Array.isArray(candidate.nextFocus)
+      && Array.isArray(candidate.experience)
+      && Array.isArray(candidate.scoreCards);
+  }
+
   /**
    * Initialize the AI engine based on workflow config first, then global config.
    */
@@ -8936,19 +8946,23 @@ try {
         throw new Error(answer.trim() || 'Agent 查询失败');
       }
       replaceAgentStateSessionId(agentState, result.runtimeSessionId);
-      
-      this.agentFlow.push({
-        id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        type: 'response',
-        fromAgent: agentName,
-        toAgent: 'supervisor',
-        message: answer,
-        stateName: this.currentState || '',
-        stepName: '',
-        round: 0,
-        timestamp: new Date().toISOString(),
-      });
-      this.emit('agent-flow', { agentFlow: this.agentFlow });
+
+      const isSupervisorFinalReviewJson = agentName === this.currentSupervisorAgent
+        && this.isWorkflowFinalReviewJsonResponse(answer);
+      if (!isSupervisorFinalReviewJson) {
+        this.agentFlow.push({
+          id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'response',
+          fromAgent: agentName,
+          toAgent: 'supervisor',
+          message: answer,
+          stateName: this.currentState || '',
+          stepName: '',
+          round: 0,
+          timestamp: new Date().toISOString(),
+        });
+        this.emit('agent-flow', { agentFlow: this.agentFlow });
+      }
       
       return answer;
     } catch (error) {
