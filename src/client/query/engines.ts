@@ -73,6 +73,14 @@ export type DetectedEngineModel = {
   recommended?: boolean;
 };
 
+export function selectEngineDefaultModel(
+  models: Array<{ value: string; isDefault?: boolean }>,
+  currentModel = '',
+): string {
+  if (currentModel && models.some((model) => model.value === currentModel)) return currentModel;
+  return models.find((model) => model.isDefault)?.value || models[0]?.value || '';
+}
+
 export type EngineModelSmokeResult = {
   model: string;
   ok: boolean;
@@ -387,11 +395,9 @@ export function useRefreshEngineAvailabilityMutation() {
 export function useSaveEngineConfigMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: Record<string, unknown>): Promise<EngineConfig> => Promise.resolve({
-      engine: typeof payload.engine === 'string' ? payload.engine : '',
-      defaultModel: typeof payload.defaultModel === 'string' ? payload.defaultModel : '',
-      migrationOnly: true,
-      notice: 'Engine selection is now derived from runtime agents and model routes.',
+    mutationFn: (payload: Record<string, unknown>): Promise<EngineConfig> => apiRequest<EngineConfig>('/api/engine', {
+      method: 'POST',
+      body: payload,
     }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.engines() });

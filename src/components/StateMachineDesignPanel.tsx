@@ -35,6 +35,7 @@ import EditNodeModal from './EditNodeModal';
 import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
 import { useWorkflowConfigQuery } from '@/client/query/configs';
 import { useSaveConfigMutation } from '@/client/query/workflow-mutations';
+import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
 
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
@@ -1474,8 +1475,9 @@ export default function StateMachineDesignPanel({
                       value={selectedState.name}
                       onChange={(e) => {
                         const newName = e.target.value;
+                        const previousName = selectedState.name;
                         setSelectedStateName(newName);
-                        updateState({ ...selectedState, name: newName });
+                        onStatesChange(renameStateAndReferences(states, previousName, newName));
                       }}
                     />
                   </div>

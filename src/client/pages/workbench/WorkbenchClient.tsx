@@ -9814,8 +9814,8 @@ export default function WorkbenchPage({
     return next;
   }, []);
 
-  const handleSaveConfig = useCallback(async () => {
-    if (!editingConfig) return;
+  const handleSaveConfig = useCallback(async (): Promise<boolean> => {
+    if (!editingConfig) return false;
     setSaving(true);
     try {
       const rawConfig = buildWorkflowDesignConfigForSave(editingConfig, currentWorkflowDesignDraftState);
@@ -9841,11 +9841,13 @@ export default function WorkbenchPage({
         creationSessionId: creationSessionSummary?.id,
         specCoding: specCodingDocument,
       });
-      toast('success', '配置已保存，下次运行时生效');
+      toast('success', '配置已保存，后续运行将使用新策略');
       dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
       dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
+      return true;
     } catch (error: any) {
       toast('error', '保存失败: ' + error.message);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -12969,7 +12971,9 @@ export default function WorkbenchPage({
                               </p>
                               <div className="mt-3 flex flex-wrap gap-2 text-xs">
                                 <Badge variant="outline">
-                                  默认引擎: {getEngineMeta(engine)?.name || engine || '未设置'}
+                                  默认引擎: {engine
+                                    ? (getEngineMeta(engine)?.name || engine)
+                                    : (globalEngine ? `跟随全局 (${getEngineMeta(globalEngine)?.name || globalEngine})` : '跟随全局')}
                                 </Badge>
                                 <Badge variant="outline">
                                   默认模型: {workflowDefaultModel ? workflowDefaultModel : (globalDefaultModel ? `跟随全局 (${globalDefaultModel})` : '跟随全局')}
@@ -14107,8 +14111,8 @@ export default function WorkbenchPage({
                 <div className="mt-1 text-xs text-muted-foreground">
                   为当前工作流设置默认引擎和模型，并仅对本工作流涉及的 Agent 做局部覆盖。
                 </div>
-                <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
-                  这里的修改只会写入当前工作流草稿，仍需点击页面右上角“保存配置”后才会真正写入 YAML。
+                <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+                  点击“保存并应用”会立即写入当前工作流 YAML，并用于后续运行。
                 </div>
               </div>
               <div className="flex-1 overflow-auto px-6 py-5 space-y-6">
@@ -14265,8 +14269,17 @@ export default function WorkbenchPage({
                 </section>
               </div>
               <div className="border-t px-6 py-4 flex justify-end gap-2">
-                <Button type="button" variant="ghost" onClick={() => setExecutionPolicyDialogOpen(false)}>
+                <Button type="button" variant="ghost" onClick={() => setExecutionPolicyDialogOpen(false)} disabled={saving}>
                   关闭
+                </Button>
+                <Button
+                  type="button"
+                  onClick={async () => {
+                    if (await handleSaveConfig()) setExecutionPolicyDialogOpen(false);
+                  }}
+                  disabled={saving || !editingConfig}
+                >
+                  {saving ? '保存中...' : '保存并应用'}
                 </Button>
               </div>
             </div>

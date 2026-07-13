@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   runtimeAgentsToEngineAvailabilityMap,
   runtimeAgentsToEngineAvailabilityReports,
+  selectEngineDefaultModel,
   type RuntimeAgentListItem,
 } from '@/client/query/engines';
 
@@ -116,5 +117,21 @@ describe('client engine availability adapters', () => {
     expect(reports.kiro).toMatchObject({ engine: 'kiro', available: false });
     expect(reports['claude-code']).toBeUndefined();
     expect(reports['kiro-cli']).toBeUndefined();
+  });
+
+  test('keeps a compatible default model when switching engines', () => {
+    expect(selectEngineDefaultModel([
+      { value: 'model-a' },
+      { value: 'model-b', isDefault: true },
+    ], 'model-a')).toBe('model-a');
+  });
+
+  test('selects the engine default route or first imported model', () => {
+    expect(selectEngineDefaultModel([
+      { value: 'model-a' },
+      { value: 'model-b', isDefault: true },
+    ], 'incompatible-model')).toBe('model-b');
+    expect(selectEngineDefaultModel([{ value: 'model-a' }])).toBe('model-a');
+    expect(selectEngineDefaultModel([])).toBe('');
   });
 });
