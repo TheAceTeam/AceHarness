@@ -1,6 +1,6 @@
 <svg width="1200" height="820" viewBox="0 0 1200 820" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness 核心机制工作台</title>
-  <desc id="desc">以工程控制台构图展示 ACEHarness 的 Spec 计划、状态机运行、Supervisor 治理、协作记忆、扩展诊断与渠道接入。</desc>
+  <title id="title">CSIHarness 核心机制工作台</title>
+  <desc id="desc">以工程控制台构图展示 CSIHarness 的 Spec 计划、状态机运行、Supervisor 治理、协作记忆、扩展诊断与渠道接入。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#060914"/>
@@ -48,7 +48,7 @@
   <path d="M0 712C220 656 392 732 612 704C842 674 1006 626 1200 664V820H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
   <g class="font">
-    <text x="70" y="82" class="title">ACEHarness 核心机制工作台</text>
+    <text x="70" y="82" class="title">CSIHarness 核心机制工作台</text>
     <text x="70" y="116" class="subtitle">把封面里的 Spec/状态机、Supervisor 对抗、Agora/Notebook、模型引擎与渠道治理组织成一个可执行工程控制面。</text>
   </g>
 

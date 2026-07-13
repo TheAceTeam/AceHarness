@@ -275,8 +275,8 @@ export async function startWeChatOfficialBridge(input: {
     lastEventAt: Date.now(),
   };
   bridges.set(key, runtime);
-  console.log(`[ACEHarness WeChat] bridge start account=${input.accountId} integration=${input.integrationId}`);
-  console.log(`[ACEHarness WeChat] inbound webhook => ${input.webhookUrl}`);
+  console.log(`[CSIHarness WeChat] bridge start account=${input.accountId} integration=${input.integrationId}`);
+  console.log(`[CSIHarness WeChat] inbound webhook => ${input.webhookUrl}`);
 
   void runWeChatOfficialBridge({
     integrationId: input.integrationId,
@@ -290,17 +290,17 @@ export async function startWeChatOfficialBridge(input: {
       current.lastEventAt = Date.now();
       if (event.endsWith('error')) {
         current.lastError = String(payload?.error || 'unknown error');
-        console.error(`[ACEHarness WeChat] ${event}: ${current.lastError}`);
+        console.error(`[CSIHarness WeChat] ${event}: ${current.lastError}`);
       } else if (event === 'inbound') {
         console.log(
-          `[ACEHarness WeChat] inbound ${String(payload?.conversationId || 'unknown')} <= ${String(payload?.userId || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
+          `[CSIHarness WeChat] inbound ${String(payload?.conversationId || 'unknown')} <= ${String(payload?.userId || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
         );
       } else if (event === 'outbound') {
         console.log(
-          `[ACEHarness WeChat] outbound -> ${String(payload?.to || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
+          `[CSIHarness WeChat] outbound -> ${String(payload?.to || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
         );
       } else {
-        console.log(`[ACEHarness WeChat] ${event}`);
+        console.log(`[CSIHarness WeChat] ${event}`);
       }
     },
   }).catch((error: any) => {
@@ -309,7 +309,7 @@ export async function startWeChatOfficialBridge(input: {
     current.running = false;
     current.lastEventAt = Date.now();
     current.lastError = error?.message || '微信桥接器启动失败';
-    console.error(`[ACEHarness WeChat] bridge-crash: ${current.lastError}`);
+    console.error(`[CSIHarness WeChat] bridge-crash: ${current.lastError}`);
   });
 
   return runtime;
@@ -423,13 +423,13 @@ export async function restoreWeChatOfficialBridges(input: {
   }
 
   if (restored.length > 0) {
-    console.log(`[ACEHarness WeChat] restored ${restored.length} official bridge(s)`);
+    console.log(`[CSIHarness WeChat] restored ${restored.length} official bridge(s)`);
   }
   for (const item of skipped) {
-    console.warn(`[ACEHarness WeChat] skipped restore integration=${item.integrationId}: ${item.reason}`);
+    console.warn(`[CSIHarness WeChat] skipped restore integration=${item.integrationId}: ${item.reason}`);
   }
   for (const item of cleaned) {
-    console.warn(`[ACEHarness WeChat] removed invalid restore integration=${item.integrationId}: ${item.reason}`);
+    console.warn(`[CSIHarness WeChat] removed invalid restore integration=${item.integrationId}: ${item.reason}`);
   }
 
   return { restored, skipped, cleaned };
@@ -450,7 +450,7 @@ export function scheduleWeChatOfficialBridgeRestore(input: {
   const delayMs = input.delayMs ?? (Number.isFinite(configuredDelay) && configuredDelay >= 0 ? configuredDelay : 3000);
   const timer = setTimeout(() => {
     void restoreWeChatOfficialBridges({ origin: input.origin }).catch((error: any) => {
-      console.error('[ACEHarness WeChat] bridge restore failed:', error?.message || error);
+      console.error('[CSIHarness WeChat] bridge restore failed:', error?.message || error);
     });
   }, delayMs);
   if (typeof (timer as any)?.unref === 'function') {

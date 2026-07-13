@@ -1328,7 +1328,7 @@ export default function DashboardPage() {
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="lg"
-                tooltip="ACEHarness"
+                tooltip="CSIHarness"
                 onClick={() => {
                   setSecondarySidebarOpen(true);
                   setActivePanel('chat');
@@ -1337,7 +1337,7 @@ export default function DashboardPage() {
               >
                 <RobotLogo size={30} />
                 <span className="flex min-w-0 flex-col">
-                  <span className="truncate font-semibold">ACEHarness</span>
+                  <span className="truncate font-semibold">CSIHarness</span>
                   <span className="truncate text-[11px] text-sidebar-foreground/60">v{pkgJson.version}</span>
                 </span>
               </SidebarMenuButton>

@@ -4642,7 +4642,7 @@ export default function WorkbenchPage({
   const attentionSignal = useAttentionSignal({
     active: Boolean(pendingHumanAttentionTitle),
     title: pendingHumanAttentionTitle || `待人工审查 · ${workflowBaseTitle}`,
-    notificationTitle: `ACEHarness - ${pendingHumanQuestionKindLabel ? `待${pendingHumanQuestionKindLabel}` : '待人工审查'}`,
+    notificationTitle: `CSIHarness - ${pendingHumanQuestionKindLabel ? `待${pendingHumanQuestionKindLabel}` : '待人工审查'}`,
     notificationBody: `${workflowBaseTitle} ${pendingHumanQuestionKindLabel ? `等待${pendingHumanQuestionKindLabel}` : '进入人工审查点'}，请及时处理。`,
     toast,
     toastMessage: `${workflowBaseTitle} ${pendingHumanQuestionKindLabel ? `等待${pendingHumanQuestionKindLabel}` : '已进入人工审查点'}`,

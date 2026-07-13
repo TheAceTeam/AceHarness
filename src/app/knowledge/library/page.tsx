@@ -106,7 +106,7 @@ function KnowledgePageContent() {
   useDocumentTitle('知识库');
   const { isDashboardShell } = useDashboardShellHeader({
     title: '知识库',
-    subtitle: 'ACEHarness 原生 LanceDB RAG 数据库，管理来源、向量行和检索验证。',
+    subtitle: 'CSIHarness 原生 LanceDB RAG 数据库，管理来源、向量行和检索验证。',
   }, []);
 
   const [knowledgeBases, setKnowledgeBases] = useState<RagKnowledgeBase[]>([]);
@@ -405,7 +405,7 @@ function KnowledgePageContent() {
               </Link>
               <div>
                 <h1 className="text-2xl font-semibold">知识库</h1>
-                <p className="mt-1 text-sm text-muted-foreground">ACEHarness 原生 LanceDB RAG 数据库，管理来源、向量行和检索验证。</p>
+                <p className="mt-1 text-sm text-muted-foreground">CSIHarness 原生 LanceDB RAG 数据库，管理来源、向量行和检索验证。</p>
               </div>
             </div>
             <div className="flex items-center gap-2">

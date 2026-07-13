@@ -85,7 +85,7 @@ const TOUR_STEPS: ProductTourStep[] = [
     id: 'dashboard-overview',
     route: '/dashboard',
     targetId: 'dashboard-overview',
-    eyebrow: 'ACEHarness',
+    eyebrow: 'CSIHarness',
     title: '先建立全局视角',
     body: '这里是对话、工作区标签页和运行健康度总览。默认从对话开始，也可以把工作流、运行记录和管理页拖拽成左右分屏。',
     position: 'bottom-start',

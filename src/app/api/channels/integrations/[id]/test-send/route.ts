@@ -17,7 +17,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const binding = typeof body?.bindingId === 'string'
       ? bindings.find((item) => item.id === body.bindingId && item.integrationId === integration.id) || null
       : bindings.find((item) => item.integrationId === integration.id) || null;
-    const text = String(body?.text || 'ACEHarness 渠道测试消息').trim();
+    const text = String(body?.text || 'CSIHarness 渠道测试消息').trim();
     const result = await sendOutboundChannelMessage(integration, {
       title: '渠道联通测试',
       text,

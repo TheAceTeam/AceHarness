@@ -577,7 +577,7 @@ export class WorkflowManager extends EventEmitter {
       }
     }
     if (needed.size === 0) {
-      // 没有指定 skills 时，只逐项链接非 ACEHarness 内置 skill，避免镜像整棵目录。
+      // 没有指定 skills 时，只逐项链接非 CSIHarness 内置 skill，避免镜像整棵目录。
       await mkdir(workspaceSkillsDir, { recursive: true });
       const entries = await readdir(serverSkillsDir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {

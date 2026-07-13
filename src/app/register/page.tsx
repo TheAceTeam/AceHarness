@@ -129,7 +129,7 @@ export default function RegisterPage() {
           <RobotLogo size={56} className="animate-robotPulse" />
           <div>
             <h1 className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-3xl font-bold text-transparent">
-              ACEHarness
+              CSIHarness
             </h1>
             <p className="text-xs text-muted-foreground">Your team of AIs, collaborating to get work done.</p>
           </div>

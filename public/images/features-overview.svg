@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness 核心能力总览</title>
-  <desc id="desc">六张能力卡片展示 ACEHarness 的需求计划建模、工作流编排、多 Agent 协作、知识沉淀、能力扩展和外部渠道接入。</desc>
+  <title id="title">CSIHarness 核心能力总览</title>
+  <desc id="desc">六张能力卡片展示 CSIHarness 的需求计划建模、工作流编排、多 Agent 协作、知识沉淀、能力扩展和外部渠道接入。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#07111F"/>
@@ -38,7 +38,7 @@
   <path d="M0 858C292 756 560 920 824 884C1134 842 1340 716 1600 780V1040H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
   <g class="font">
-    <text x="80" y="126" fill="#F8FAFC" font-size="52" font-weight="800">ACEHarness 核心能力</text>
+    <text x="80" y="126" fill="#F8FAFC" font-size="52" font-weight="800">CSIHarness 核心能力</text>
     <text x="80" y="172" fill="#CBD5E1" font-size="20">围绕规划、执行、协作、沉淀、扩展和接入，组织真实工程任务的 AI 协作闭环。</text>
   </g>
 
@@ -121,7 +121,7 @@
     <text x="1144" y="642" class="title">外部渠道接入</text>
     <text x="1112" y="686" class="muted">
       <tspan x="1112" dy="0">首页对话可绑定微信 ClawBot 会话。</tspan>
-      <tspan x="1112" dy="28">外部消息进入同一个 ACEHarness 上下文。</tspan>
+      <tspan x="1112" dy="28">外部消息进入同一个 CSIHarness 上下文。</tspan>
       <tspan x="1112" dy="28">工作流人工检查点可通过 WeChat 和邮件触达。</tspan>
     </text>
     <rect x="1112" y="768" width="318" height="34" rx="17" class="chip"/>
@@ -131,6 +131,6 @@
   <g class="font">
     <rect x="80" y="880" width="1440" height="74" rx="24" fill="#0B1220" fill-opacity="0.86" stroke="#334155"/>
     <text x="122" y="925" fill="#F8FAFC" font-size="21" font-weight="700">定位</text>
-    <text x="188" y="925" fill="#CBD5E1" font-size="18">ACEHarness 将 AI 工程任务从一次性对话升级为可规划、可协作、可治理、可沉淀的本地工作系统。</text>
+    <text x="188" y="925" fill="#CBD5E1" font-size="18">CSIHarness 将 AI 工程任务从一次性对话升级为可规划、可协作、可治理、可沉淀的本地工作系统。</text>
   </g>
 </svg>

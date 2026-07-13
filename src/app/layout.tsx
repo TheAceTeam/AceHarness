@@ -5,8 +5,8 @@ import './globals.css';
 import { Providers } from './providers';
 
 export const metadata: Metadata = {
-  title: 'ACEHarness',
-  description: 'ACEHarness - Agent Centric Engineering Harness',
+  title: 'CSIHarness',
+  description: 'CSIHarness - Agent Centric Engineering Harness',
 };
 
 export default function RootLayout({

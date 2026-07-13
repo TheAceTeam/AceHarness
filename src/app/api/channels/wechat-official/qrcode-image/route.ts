@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     const upstream = await fetch(source, {
       headers: {
         referer: '',
-        'user-agent': 'Mozilla/5.0 ACEHarness WeChat QR Proxy',
+        'user-agent': 'Mozilla/5.0 CSIHarness WeChat QR Proxy',
       },
       signal: AbortSignal.timeout(20_000),
       cache: 'no-store',

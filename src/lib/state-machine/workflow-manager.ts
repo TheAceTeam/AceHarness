@@ -1005,7 +1005,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
     if (needed.size === 0) {
-      // 没有指定 skills 时，只逐项链接非 ACEHarness 内置 skill，避免镜像整棵目录。
+      // 没有指定 skills 时，只逐项链接非 CSIHarness 内置 skill，避免镜像整棵目录。
       await mkdir(workspaceSkillsDir, { recursive: true });
       const entries = await readdir(serverSkillsDir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
@@ -3635,7 +3635,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const childSpecDeltas = await this.collectChildSpecDeltaSummaries();
 
     const summaryPrompt = [
-      '你是 ACEHarness 的工作流指挥官，请输出本次工作流的结算结果。',
+      '你是 CSIHarness 的工作流指挥官，请输出本次工作流的结算结果。',
       '请严格输出 JSON，不要附加其他说明。',
       'scoreCards.score 使用 10 分制，范围 0-10，可保留 1 位小数。',
       'JSON 结构：',

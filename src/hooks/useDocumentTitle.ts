@@ -1,6 +1,6 @@
 import * as React from 'react'
 
-const DEFAULT_TITLE = 'ACEHarness'
+const DEFAULT_TITLE = 'CSIHarness'
 
 function formatTitle(segment?: string | null): string {
   const normalized = segment?.trim()

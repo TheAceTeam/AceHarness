@@ -1,6 +1,6 @@
 <svg width="1200" height="820" viewBox="0 0 1200 820" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness Core Mechanism Workbench</title>
-  <desc id="desc">A control-console composition showing ACEHarness Spec planning, state-machine runtime, Supervisor governance, collaborative memory, extension diagnostics, and channel integration.</desc>
+  <title id="title">CSIHarness Core Mechanism Workbench</title>
+  <desc id="desc">A control-console composition showing CSIHarness Spec planning, state-machine runtime, Supervisor governance, collaborative memory, extension diagnostics, and channel integration.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#060914"/>
@@ -48,7 +48,7 @@
   <path d="M0 712C220 656 392 732 612 704C842 674 1006 626 1200 664V820H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
   <g class="font">
-    <text x="70" y="82" class="title">ACEHarness Core Mechanism Workbench</text>
+    <text x="70" y="82" class="title">CSIHarness Core Mechanism Workbench</text>
     <text x="70" y="116" class="subtitle">A control plane for the cover themes: Spec/state machine, Supervisor review, Agora/Notebook, model engines, and channel governance.</text>
   </g>
 

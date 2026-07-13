@@ -74,6 +74,7 @@ import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assem
 import { cn } from '@/lib/core/utils';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { formatLegacyProductPathForDisplay } from '@/lib/core/branding';
 import {
   WORKFLOW_CLARIFICATION_FACTS_KIND,
   WORKFLOW_CLARIFICATION_GAPS_KIND,
@@ -444,7 +445,7 @@ export function buildWorkflowConversationContext(messages: Array<{ role?: string
 
 function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, baseContext: string): string {
   return [
-    '你正在 ACEHarness 的分步工作流创建向导中工作。',
+    '你正在 CSIHarness 的分步工作流创建向导中工作。',
     `当前小点名称：${step.name}`,
     `当前小点类型：${step.kind}`,
     '请完成当前小点，并在回复末尾输出机器可读结果。',
@@ -4650,6 +4651,7 @@ export function ChatPageContent({
   const pinnedChatWorkspacePath = activeChatWorkspacePath;
   const defaultChatWorkspacePath = fallbackWorkingDirectory;
   const resolvedChatWorkspacePath = pinnedChatWorkspacePath;
+  const displayedChatWorkspacePath = formatLegacyProductPathForDisplay(resolvedChatWorkspacePath);
   const chatWorkspaceShellEnabled = Boolean(activeSessionId || activeSession);
   const chatWorkspaceTitle = activeSession?.title?.trim() || '新对话';
   const chatWorkspaceSyncKey = useMemo(() => JSON.stringify({
@@ -5183,7 +5185,7 @@ export function ChatPageContent({
                   </TabsTrigger>
                 </TabsList>
                 <div className="hidden max-w-[44%] truncate text-xs text-muted-foreground md:block">
-                  {resolvedChatWorkspacePath || '准备工作区...'}
+                  {displayedChatWorkspacePath || '准备工作区...'}
                 </div>
               </div>
               ) : null}
@@ -5244,7 +5246,7 @@ export function ChatPageContent({
                             animate={{ opacity: 1, y: 0 }}
                             className="text-2xl font-bold bg-gradient-to-r from-primary via-blue-500 to-purple-500 bg-clip-text text-transparent mb-2"
                           >
-                            aceharness
+                            CSIHarness
                           </motion.h2>
                           <motion.p
                             initial={{ opacity: 0 }}
@@ -5834,7 +5836,7 @@ export function ChatPageContent({
                 新目录：<span className="break-all font-mono">{chatWorkspaceCleanupConfirm?.nextPath || '默认工作目录'}</span>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">
-                只会删除 ACEHarness 自动创建并绑定到该会话的工作目录；用户手动选择的目录不会出现这个选项。
+                只会删除 CSIHarness 自动创建并绑定到该会话的工作目录；用户手动选择的目录不会出现这个选项。
               </p>
             </div>
             <DialogFooter>
@@ -6035,4 +6037,3 @@ export function ChatPageContent({
     </div>
   );
 }
-

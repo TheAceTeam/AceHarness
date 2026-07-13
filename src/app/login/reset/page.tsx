@@ -110,7 +110,7 @@ export default function ResetPasswordPage() {
               <div className="flex items-center gap-3">
                 <RobotLogo size={44} className="animate-robotPulse" />
                 <div>
-                  <h1 className="text-2xl font-bold">ACEHarness</h1>
+                  <h1 className="text-2xl font-bold">CSIHarness</h1>
                   <p className="text-xs text-muted-foreground">Account Recovery</p>
                 </div>
               </div>
@@ -221,7 +221,7 @@ export default function ResetPasswordPage() {
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border bg-primary/5 p-6 text-center">
                 <CheckCircle2 className="mx-auto h-12 w-12 text-primary" />
                 <h3 className="mt-4 text-lg font-semibold">密码已重置</h3>
-                <p className="mt-2 text-sm text-muted-foreground">现在可以使用新密码登录 ACEHarness。</p>
+                <p className="mt-2 text-sm text-muted-foreground">现在可以使用新密码登录 CSIHarness。</p>
                 <Button className="mt-6 h-11 w-full" onClick={() => router.push('/login')}>
                   返回登录
                 </Button>

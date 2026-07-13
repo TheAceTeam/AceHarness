@@ -137,7 +137,7 @@ const DEFAULT_SHELL_HEADERS: Record<DashboardDockTab['kind'], { title: string; s
   schedules: { title: '定时任务', subtitle: '管理自动运行计划' },
   'run-history': { title: '运行记录', subtitle: '查看历史运行和 Token 排行' },
   knowledge: { title: '知识库', subtitle: '知识库与全局 Notebook' },
-  'knowledge-library': { title: '知识库', subtitle: 'ACEHarness 原生 RAG 容器' },
+  'knowledge-library': { title: '知识库', subtitle: 'CSIHarness 原生 RAG 容器' },
   'api-docs': { title: 'API 文档', subtitle: '接口示例、请求参数与在线调试' },
   office: { title: '一人公司', subtitle: '办公室、协作、记忆和工作流聚合桌面' },
   notebook: { title: 'Cangjie Notebook', subtitle: '编辑、整理和运行 Notebook' },

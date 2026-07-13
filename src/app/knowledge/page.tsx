@@ -61,7 +61,7 @@ function KnowledgePageContent() {
   useDocumentTitle('知识管理');
   const { isDashboardShell } = useDashboardShellHeader({
     title: '知识管理',
-    subtitle: '进入 ACEHarness 原生 RAG 知识库，或继续使用全局 Notebook。',
+    subtitle: '进入 CSIHarness 原生 RAG 知识库，或继续使用全局 Notebook。',
   }, []);
 
   const openGlobalNotebook = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -104,7 +104,7 @@ function KnowledgePageContent() {
               </Link>
               <div>
                 <h1 className="text-2xl font-semibold">知识管理</h1>
-                <p className="mt-1 text-sm text-muted-foreground">进入 ACEHarness 原生 RAG 知识库，或继续使用全局 Notebook。</p>
+                <p className="mt-1 text-sm text-muted-foreground">进入 CSIHarness 原生 RAG 知识库，或继续使用全局 Notebook。</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -121,7 +121,7 @@ function KnowledgePageContent() {
           <EntryCard
             href="/knowledge/library"
             title="知识库"
-            description="进入 ACEHarness 原生 RAG 容器，管理知识库、导入外部 RAG 内容、预览 chunks 并测试检索。"
+            description="进入 CSIHarness 原生 RAG 容器，管理知识库、导入外部 RAG 内容、预览 chunks 并测试检索。"
             icon={<BookOpen className="h-7 w-7" />}
             badge="RAG"
             onClick={openKnowledgeLibrary}

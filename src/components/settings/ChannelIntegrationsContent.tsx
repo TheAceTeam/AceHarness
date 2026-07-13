@@ -162,13 +162,13 @@ export default function ChannelIntegrationsContent() {
         <div className="grid gap-3 md:grid-cols-3">
           <div className="rounded-lg border bg-muted/20 p-4">
             <div className="text-xs text-muted-foreground">你需要准备</div>
-            <div className="mt-1 font-medium">一台运行 ACEHarness 的电脑</div>
-            <div className="mt-1 text-sm text-muted-foreground">本机或服务器都可以，只要微信桥接器能访问到 ACEHarness。</div>
+            <div className="mt-1 font-medium">一台运行 CSIHarness 的电脑</div>
+            <div className="mt-1 text-sm text-muted-foreground">本机或服务器都可以，只要微信桥接器能访问到 CSIHarness。</div>
           </div>
           <div className="rounded-lg border bg-muted/20 p-4">
             <div className="text-xs text-muted-foreground">你需要准备</div>
             <div className="mt-1 font-medium">个人微信号</div>
-            <div className="mt-1 text-sm text-muted-foreground">桥接器负责扫码登录和保活，ACEHarness 只负责接收和处理消息。</div>
+            <div className="mt-1 text-sm text-muted-foreground">桥接器负责扫码登录和保活，CSIHarness 只负责接收和处理消息。</div>
           </div>
           <div className="rounded-lg border bg-muted/20 p-4">
             <div className="text-xs text-muted-foreground">你需要准备</div>
@@ -182,7 +182,7 @@ export default function ChannelIntegrationsContent() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h3 className="text-lg font-semibold">第一步：生成接入地址</h3>
-            <p className="mt-1 text-sm text-muted-foreground">这一页只生成 ACEHarness 的 webhook 地址和密钥，不要求你先理解内部绑定配置。</p>
+            <p className="mt-1 text-sm text-muted-foreground">这一页只生成 CSIHarness 的 webhook 地址和密钥，不要求你先理解内部绑定配置。</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => void loadIntegrations()} disabled={loading}>刷新</Button>
@@ -247,7 +247,7 @@ export default function ChannelIntegrationsContent() {
                   <div className="mt-3 space-y-2 text-sm text-muted-foreground">
                     <div>1. 在微信桥接器里，把消息回调地址指向上面的 Webhook URL。</div>
                     <div>2. 把 Shared Secret 一并配置进去，桥接器发消息时放到 `x-ace-channel-secret` 请求头，或放在 JSON 里的 `secret` 字段。</div>
-                    <div>3. 微信扫码、保活、消息收发由桥接器负责，ACEHarness 只接标准化消息。</div>
+                    <div>3. 微信扫码、保活、消息收发由桥接器负责，CSIHarness 只接标准化消息。</div>
                     <div>4. 同一个微信会话第一次发消息时，系统会优先自动绑定到你当前正在运行的 workflow。</div>
                     <div>5. 如果你先不扫码，可以先跑仓库里的 `npm run wechat:relay`，它会把入站和出站消息打印到命令行，先验证链路。</div>
                   </div>
@@ -308,11 +308,11 @@ export default function ChannelIntegrationsContent() {
       <section className="space-y-4 rounded-xl border p-6">
         <div>
           <h3 className="text-lg font-semibold">推荐适配器</h3>
-          <p className="mt-1 text-sm text-muted-foreground">优先复用成熟三方适配器。二维码由适配器自己打印，ACEHarness 只接后面的桥接与运行时。</p>
+          <p className="mt-1 text-sm text-muted-foreground">优先复用成熟三方适配器。二维码由适配器自己打印，CSIHarness 只接后面的桥接与运行时。</p>
         </div>
         <div className="grid gap-4 xl:grid-cols-2">
           <CommandBlock
-            title="ACEHarness TS 官方适配器"
+            title="CSIHarness TS 官方适配器"
             content={[
               'npm run wechat:official -- login',
               '',

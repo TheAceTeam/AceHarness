@@ -21,7 +21,7 @@ function buildSubject(prefix: string | undefined, question: HumanQuestion): stri
 
 function buildBody(question: HumanQuestion): string {
   return [
-    'ACEHarness 检测到一个需要人工处理的工作流审查事项。',
+    'CSIHarness 检测到一个需要人工处理的工作流审查事项。',
     '',
     `标题: ${question.title || '未命名问题'}`,
     `工作流配置: ${question.configFile || '未知'}`,
@@ -34,7 +34,7 @@ function buildBody(question: HumanQuestion): string {
     '',
     question.supervisorAdvice ? `Supervisor 建议:\n${question.supervisorAdvice}` : '',
     '',
-    '请前往 ACEHarness 中的工作流运行面板或待处理人工审查列表完成回复。',
+    '请前往 CSIHarness 中的工作流运行面板或待处理人工审查列表完成回复。',
   ].filter(Boolean).join('\n');
 }
 

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
   <title id="title">Extend ICE Fix Loop</title>
-  <desc id="desc">The ACEHarness end-to-end loop for fixing Issue #3112 Extend ICE, from reproduction to validation with adversarial review and human inspection.</desc>
+  <desc id="desc">The CSIHarness end-to-end loop for fixing Issue #3112 Extend ICE, from reproduction to validation with adversarial review and human inspection.</desc>
   <defs>
     <linearGradient id="bg3112" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0a1120"/>

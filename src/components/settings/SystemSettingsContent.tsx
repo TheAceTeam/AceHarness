@@ -784,7 +784,7 @@ export default function SystemSettingsContent() {
               <Input
                 value={emailForm.fromName}
                 onChange={(event) => setEmailForm((prev) => ({ ...prev, fromName: event.target.value }))}
-                placeholder="例如：ACEHarness"
+                placeholder="例如：CSIHarness"
                 disabled={emailSaving}
               />
             </div>
@@ -802,7 +802,7 @@ export default function SystemSettingsContent() {
               <Input
                 value={emailForm.subjectPrefix}
                 onChange={(event) => setEmailForm((prev) => ({ ...prev, subjectPrefix: event.target.value }))}
-                placeholder="可选：例如 [ACEHarness]"
+                placeholder="可选：例如 [CSIHarness]"
                 disabled={emailSaving}
               />
             </div>

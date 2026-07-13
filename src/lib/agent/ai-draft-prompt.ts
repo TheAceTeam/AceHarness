@@ -15,7 +15,7 @@ export function buildAgentDraftPrompt(input: BuildAgentDraftPromptInput): string
   const defaultStyle = input.style || '专业、直接、可靠';
 
   return [
-    '请按 ACEHarness Agent 创建引导流程生成结构化结果。',
+    '请按 CSIHarness Agent 创建引导流程生成结构化结果。',
     '',
     `显示名称: ${input.displayName}`,
     `建议队伍: ${input.team}`,
@@ -58,7 +58,7 @@ export function buildAgentCreationItemRepairPrompt(input: {
   currentState?: unknown;
 }): string {
   return [
-    '请补发 ACEHarness Agent 创建流程中的当前结构块。',
+    '请补发 CSIHarness Agent 创建流程中的当前结构块。',
     `当前 kind: ${input.kind}`,
     `显示名称: ${input.displayName}`,
     `建议队伍: ${input.team}`,

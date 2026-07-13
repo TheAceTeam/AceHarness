@@ -203,11 +203,11 @@ export async function requireRuntimeDatabaseGrant(request: Request): Promise<{ g
 export function buildRuntimeDatabaseEnv(grant: RuntimeDatabaseGrant | null | undefined, runtimeUrl?: string): Record<string, string> {
   if (!grant) return {};
   return {
-    ACEHARNESS_RUNTIME_URL: runtimeUrl || resolveRuntimeUrl(),
-    ACEHARNESS_RUNTIME_TOKEN: grant.token,
-    ACEHARNESS_RUN_ID: grant.runId || '',
-    ACEHARNESS_CHAT_SESSION_ID: grant.chatSessionId || '',
-    ACEHARNESS_WORKSPACE_ROOT: grant.workspaceRoot,
+    CSIHARNESS_RUNTIME_URL: runtimeUrl || resolveRuntimeUrl(),
+    CSIHARNESS_RUNTIME_TOKEN: grant.token,
+    CSIHARNESS_RUN_ID: grant.runId || '',
+    CSIHARNESS_CHAT_SESSION_ID: grant.chatSessionId || '',
+    CSIHARNESS_WORKSPACE_ROOT: grant.workspaceRoot,
   };
 }
 
@@ -220,7 +220,7 @@ export async function writeRuntimeDatabaseEnvFile(grant: RuntimeDatabaseGrant | 
 }
 
 export function resolveRuntimeUrl(): string {
-  const explicit = process.env.ACEHARNESS_RUNTIME_URL
+  const explicit = process.env.CSIHARNESS_RUNTIME_URL
     || process.env.ACE_INTERNAL_BASE_URL
     || process.env.ACE_PUBLIC_ORIGIN
     || process.env.NEXT_PUBLIC_APP_URL
@@ -235,9 +235,9 @@ export function resolveRuntimeUrl(): string {
 export function buildDatabaseCapabilityPrompt(grant: RuntimeDatabaseGrant | null | undefined, skillsDir: string): string {
   if (!grant || (!grant.rag?.enabled && !grant.sqlite?.enabled)) return '';
   const lines: string[] = [
-    '# ACEHarness 数据库能力',
+    '# CSIHarness 数据库能力',
     '',
-    '当前运行启用了受控数据库能力。需要使用时，先阅读对应 Skill 的 SKILL.md，然后通过 Skill 内置 Python 脚本调用 ACEHarness runtime API；不要直接读写 LanceDB、SQLite 文件或 ACEHarness 内部数据库。',
+    '当前运行启用了受控数据库能力。需要使用时，先阅读对应 Skill 的 SKILL.md，然后通过 Skill 内置 Python 脚本调用 CSIHarness runtime API；不要直接读写 LanceDB、SQLite 文件或 CSIHarness 内部数据库。',
     '',
   ];
   if (grant.rag?.enabled) {

@@ -808,11 +808,11 @@ export default function EnginesPage() {
             <p className="text-xs">安装后刷新可用性检查，即可切换使用 Trae CLI 引擎。</p>
             <p className="mt-2"><strong>配置 Magic CLI：</strong></p>
             <p className="text-xs">从仓库克隆后，确保当前运行环境可以直接调用 magic-cli.sh；完成后刷新可用性检查，即可切换使用 Magic CLI 引擎。</p>
-            <p className="mt-3"><strong>ACE Service 使用指导：</strong></p>
+            <p className="mt-3"><strong>CSIHarness Service 使用指导：</strong></p>
             <div className="rounded-lg border border-border/60 bg-background/50 p-3 text-xs leading-6 text-muted-foreground space-y-1.5">
-              <p>全局安装后，使用 <code>ace</code> 或 <code>ace start</code> 启动本地 ACE Service。首次启动会引导你完成语言、默认引擎、默认模型、管理员账号和网络模式配置。</p>
+              <p>全局安装后，使用 <code>ace</code> 或 <code>ace start</code> 启动本地 CSIHarness Service。首次启动会引导你完成语言、默认引擎、默认模型、管理员账号和网络模式配置。</p>
               <p>启动向导里可直接开启后台运行。后台模式会把服务脱离当前终端继续运行，适合常驻使用。</p>
-              <p>若同时启用守护进程，ACE 会以 daemon 模式托管后台服务；当后台实例异常退出时，会自动重新拉起。</p>
+              <p>若同时启用守护进程，CSI 会以 daemon 模式托管后台服务；当后台实例异常退出时，会自动重新拉起。</p>
               <p>服务启动后，可用 <code>ace service</code> 查看当前受管实例，并按提示停止指定实例。</p>
             </div>
           </div>

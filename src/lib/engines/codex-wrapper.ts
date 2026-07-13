@@ -240,7 +240,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         model_provider: 'aceharness_openai_env',
         model_providers: {
           aceharness_openai_env: {
-            name: 'ACEHarness OpenAI',
+            name: 'CSIHarness OpenAI',
             base_url: baseUrl,
             wire_api: 'responses',
             requires_openai_auth: true,

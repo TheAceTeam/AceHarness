@@ -3369,7 +3369,7 @@ export default function OfficePage({ embedded = false }: { embedded?: boolean } 
           )}
 
           <section className="mx-auto w-full max-w-5xl text-center">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.42em] text-blue-600">ACE Harness</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.42em] text-blue-600">CSIHarness</div>
             <h1 className="mt-2 text-4xl font-black tracking-normal sm:text-6xl">OPC Company Roles</h1>
             <p className="mt-3 text-lg font-semibold text-slate-700 dark:text-slate-300">One Team. AI-Powered. Maximum Impact.</p>
           </section>

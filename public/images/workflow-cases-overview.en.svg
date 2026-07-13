@@ -25,7 +25,7 @@
   <circle cx="1330" cy="860" r="240" fill="url(#glowOrange)"/>
   <path d="M0 180C320 120 420 360 700 310C930 270 1040 110 1600 180V0H0Z" fill="#ffffff" fill-opacity="0.025"/>
 
-  <text x="112" y="108" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">ACEHARNESS CASES</text>
+  <text x="112" y="108" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">CSIHARNESS CASES</text>
   <text x="112" y="164" fill="#f8fafc" font-size="44" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Workflow Case Overview</text>
   <text x="112" y="208" fill="#cbd5e1" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">From compiler bug fixes to performance work and production migration, all driven by state machines and multi-agent collaboration.</text>
 

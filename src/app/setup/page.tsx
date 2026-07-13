@@ -91,7 +91,7 @@ export default function SetupPage() {
       return;
     }
 
-    const welcomeMessage = '\u6b22\u8fce\u4f7f\u7528 ACEHarness';
+    const welcomeMessage = '\u6b22\u8fce\u4f7f\u7528 CSIHarness';
     setTypedWelcome('');
     setShowContinue(false);
 
@@ -447,7 +447,7 @@ export default function SetupPage() {
 
                 <motion.p
                   initial={{ opacity: 0 }}
-                  animate={{ opacity: typedWelcome.length === '\u6b22\u8fce\u4f7f\u7528 ACEHarness'.length ? 1 : 0.35 }}
+                  animate={{ opacity: typedWelcome.length === '\u6b22\u8fce\u4f7f\u7528 CSIHarness'.length ? 1 : 0.35 }}
                   transition={{ duration: 0.3 }}
                   className="mt-4 text-sm text-muted-foreground"
                 >
@@ -480,7 +480,7 @@ export default function SetupPage() {
             <RobotLogo size={56} className="animate-robotPulse" />
             <div>
               <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">
-                ACEHarness
+                CSIHarness
               </h1>
               <p className="text-xs text-muted-foreground">Your team of AIs, collaborating to get work done.</p>
             </div>
@@ -556,7 +556,7 @@ export default function SetupPage() {
                 <div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs break-all text-muted-foreground">
                   {runtimeRoot || '加载中...'}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">该目录为 ACEHarness 系统数据保存目录（skill、工作流和对话的历史记录、agent配置、Notebook），仅展示不可修改</p>
+                <p className="text-xs text-muted-foreground mt-1">该目录为 CSIHarness 系统数据保存目录（skill、工作流和对话的历史记录、agent配置、Notebook），仅展示不可修改</p>
               </div>
 
               <div className="border-t pt-4">
@@ -600,7 +600,7 @@ export default function SetupPage() {
             <RobotLogo size={56} className="animate-robotPulse" />
             <div>
               <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">
-                ACEHarness
+                CSIHarness
               </h1>
               <p className="text-xs text-muted-foreground">Your team of AIs, collaborating to get work done.</p>
             </div>

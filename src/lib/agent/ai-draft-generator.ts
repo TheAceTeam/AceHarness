@@ -189,7 +189,7 @@ function fallbackDraft(input: {
     activeEngine: input.engine || '',
     capabilities: keywords.length > 0 ? keywords : [input.mission],
     systemPrompt: [
-      `你是 ${input.displayName}，这是你在 ACEHarness 中的角色身份。`,
+      `你是 ${input.displayName}，这是你在 CSIHarness 中的角色身份。`,
       '',
       '你的工作目标：',
       input.mission,
@@ -333,7 +333,7 @@ function summarizeAgentClarificationStateForPrompt(state: ReturnType<typeof crea
 
 function buildAgentClarificationItemSystemPrompt(step: AgentClarificationItemStep, baseContext: string): string {
   return [
-    '你正在 ACEHarness 的 Agent 创建引导中工作。',
+    '你正在 CSIHarness 的 Agent 创建引导中工作。',
     `当前小点名称：${step.name}`,
     `当前小点类型：${step.kind}`,
     '当前阶段只产出补充问答小点。',
@@ -699,7 +699,7 @@ export async function generateAgentDraft(
   const progress = (stage: string, message: string) => emit?.({ type: 'progress', stage, message });
 
   const systemPrompt = [
-    '你是 ACEHarness Agent 创建助手。',
+    '你是 CSIHarness Agent 创建助手。',
     '你的任务是把用户的角色需求整理成可解析的结构化 Agent 创建 item。',
     '机器结果统一使用 <result> 包裹，result 内是单个 JSON 对象，顶层包含 kind 和 data。',
     '自然语言说明保持简短，结构化字段使用用户输入语言。',

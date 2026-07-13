@@ -29,7 +29,7 @@
   <circle cx="260" cy="120" r="180" fill="#38bdf8" fill-opacity="0.08"/>
   <circle cx="1320" cy="620" r="180" fill="#f59e0b" fill-opacity="0.10"/>
 
-  <text x="120" y="88" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">ACEHARNESS ENGINE</text>
+  <text x="120" y="88" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">CSIHARNESS ENGINE</text>
   <text x="120" y="136" fill="#f8fafc" font-size="44" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">状态机工作流引擎</text>
   <text x="120" y="174" fill="#cbd5e1" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">不是线性流水线，而是可以根据 verdict 自动回退、审批、重试与恢复的闭环。</text>
 

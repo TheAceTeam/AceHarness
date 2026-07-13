@@ -524,7 +524,7 @@ async function runEngineDebug(input: {
     agent: 'engine-diagnostics',
     step: 'single-turn',
     prompt: `请记住验证码 ${MULTI_TURN_MEMORY_TOKEN}，后续我会询问。现在请只回复 ACE_OK，不要解释，不要调用工具。`,
-    systemPrompt: '你是 ACEHarness 引擎诊断助手。严格按用户要求回复。',
+    systemPrompt: '你是 CSIHarness 引擎诊断助手。严格按用户要求回复。',
   }, input.log, input.signal);
   throwIfAborted(input.signal);
   input.log?.({
@@ -573,7 +573,7 @@ async function runEngineDebug(input: {
       agent: 'engine-diagnostics',
       step: 'multi-turn',
       prompt: '这是第二轮。请回忆我上一轮让你记住的验证码。只回复 MEMORY=验证码，不要解释。',
-      systemPrompt: '你是 ACEHarness 引擎诊断助手。严格按用户要求回复。',
+      systemPrompt: '你是 CSIHarness 引擎诊断助手。严格按用户要求回复。',
     }, input.log, input.signal);
     throwIfAborted(input.signal);
     const remembered = String(multi.outputPreview || '').includes(MULTI_TURN_MEMORY_TOKEN);

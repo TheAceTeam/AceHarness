@@ -115,7 +115,7 @@ const SOURCE_COLORS: Record<string, string> = {
 const DEFAULT_SOURCE_COLOR = 'bg-slate-500/20 text-slate-300 border-slate-500/30';
 
 const SOURCE_LABELS: Record<string, string> = {
-  'ace-custom': 'ACE 自定义',
+  'ace-custom': 'CSI 自定义',
   anthropics: 'Anthropics',
 };
 
