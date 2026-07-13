@@ -804,8 +804,8 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       });
       if (singlePanelModeRef.current) {
         replacingSinglePanelRef.current = false;
-        addedPanel.api.setActive();
       }
+      addedPanel.api.setActive();
     }, []);
 
     const updateActiveWorkbenchSearch = useCallback((config: string, search: string) => {

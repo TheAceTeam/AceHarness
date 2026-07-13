@@ -60,7 +60,7 @@ import { useRunDocumentsQuery } from '@/client/query/documents';
 import { useSchedulesQuery, useTriggerScheduleMutation } from '@/client/query/schedules';
 import { useDeleteConfigMutation } from '@/client/query/workflow-mutations';
 import { useSyncWorkflowConfigsToDb, useWorkflowConfigRows } from '@/client/db/collections';
-import { buildWorkbenchPath, buildWorkbenchSearch } from '@/client/navigation/workbench-links';
+import { buildDashboardWorkbenchPath, buildWorkbenchPath, buildWorkbenchSearch } from '@/client/navigation/workbench-links';
 import type { WorkflowsSearch } from '@/routes/workflows';
 import type { RunRecord } from '@/lib/run/store';
 
@@ -399,7 +399,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
       router.push(`${shellPath}?${params.toString()}`, { scroll: false });
       return;
     }
-    router.push(route);
+    router.push(buildDashboardWorkbenchPath(filename, mode, runId));
   }, [dockWorkspace, router, searchParams]);
 
   useEffect(() => {
