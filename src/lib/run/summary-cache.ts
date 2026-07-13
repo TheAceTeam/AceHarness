@@ -8,6 +8,7 @@ import type { PersistedRunState } from '@/lib/run/state-persistence';
 const RUNS_DIR = getWorkspaceRunsDir();
 const SUMMARY_CACHE_FILE = 'summary.json';
 const SUMMARY_CACHE_VERSION = 1;
+const WINDOWS_REPLACE_RETRY_DELAYS_MS = [25, 50, 100, 200, 400, 800];
 
 export interface RunSummaryTokenUsage {
   inputTokens: number;
@@ -71,6 +72,38 @@ function stateFilePath(runId: string): string {
 
 export function runSummaryCachePath(runId: string): string {
   return resolve(runDir(runId), SUMMARY_CACHE_FILE);
+}
+
+function isRetryableReplaceError(error: unknown): boolean {
+  const code = typeof error === 'object' && error ? (error as { code?: unknown }).code : undefined;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+async function replaceFileWithRetry(temp: string, target: string, fallbackContent: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= WINDOWS_REPLACE_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await rename(temp, target);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableReplaceError(error) || attempt >= WINDOWS_REPLACE_RETRY_DELAYS_MS.length) break;
+      await sleep(WINDOWS_REPLACE_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  if (isRetryableReplaceError(lastError)) {
+    await writeFile(target, fallbackContent, 'utf-8');
+    await rm(temp, { force: true }).catch(() => {});
+    return;
+  }
+
+  await rm(temp, { force: true }).catch(() => {});
+  throw lastError;
 }
 
 function numberOrZero(value: unknown): number {
@@ -344,13 +377,9 @@ export async function saveRunSummaryCache(summary: RunSummaryCache): Promise<voi
   }
   const target = runSummaryCachePath(summary.runId);
   const temp = resolve(dir, `${SUMMARY_CACHE_FILE}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  await writeFile(temp, `${JSON.stringify(summary, null, 2)}\n`, 'utf-8');
-  try {
-    await rename(temp, target);
-  } catch (error) {
-    await rm(temp, { force: true }).catch(() => {});
-    throw error;
-  }
+  const content = `${JSON.stringify(summary, null, 2)}\n`;
+  await writeFile(temp, content, 'utf-8');
+  await replaceFileWithRetry(temp, target, content);
 }
 
 export async function loadRunSummaryCache(runId: string): Promise<RunSummaryCache | null> {

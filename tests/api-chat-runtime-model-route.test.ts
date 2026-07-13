@@ -225,7 +225,7 @@ describe('/api/chat runtime model route resolution', () => {
 
   test('streaming chat wraps acpx tool events as ace-process blocks', async () => {
     const { runTurn } = await setupImportedCodexGpt55Low();
-    runTurn.mockImplementation(async function* (_binding: any, input: any) {
+    runTurn.mockImplementation((async function* (_binding: any, input: any) {
       yield { type: 'text_delta', text: '我会先读取这个 skill 的入口说明。', stream: 'output' };
       yield {
         type: 'tool_call',
@@ -242,7 +242,7 @@ describe('/api/chat runtime model route resolution', () => {
         exit_code: 0,
       };
       yield { type: 'turn_completed', payload: {} };
-    });
+    }) as any);
 
     const { GET, POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {

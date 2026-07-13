@@ -1,11 +1,30 @@
 import { requestUrl, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
+import {
+  getWorkflowStartContextDefaults,
+  setWorkflowStartContextDefaults,
+} from '@/lib/workflow/start-context-store';
 
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody<any>(request, {});
     const { scope, phase, context, runId, configFile } = body;
+
+    if (scope === 'start-default') {
+      if (!configFile || typeof configFile !== 'string') {
+        return jsonOk(
+          { error: '保存启动上下文默认值需要 configFile' },
+          { status: 400 },
+        );
+      }
+      const defaults = await setWorkflowStartContextDefaults(configFile, {
+        globalContext: typeof body.globalContext === 'string' ? body.globalContext : '',
+        phaseContexts: body.phaseContexts && typeof body.phaseContexts === 'object' ? body.phaseContexts : {},
+        workingDirectory: typeof body.workingDirectory === 'string' ? body.workingDirectory : undefined,
+      });
+      return jsonOk({ success: true, message: '启动上下文默认值已保存', ...defaults });
+    }
 
     if (!scope || !['global', 'phase'].includes(scope)) {
       return jsonOk(
@@ -56,6 +75,17 @@ export async function GET(request: Request) {
   try {
     const runId = requestUrl(request).searchParams.get('runId');
     const configFile = requestUrl(request).searchParams.get('configFile');
+    const startDefault = requestUrl(request).searchParams.get('startDefault') === '1';
+
+    if (startDefault) {
+      if (!configFile) {
+        return jsonOk(
+          { error: '获取启动上下文默认值需要 configFile' },
+          { status: 400 },
+        );
+      }
+      return jsonOk(await getWorkflowStartContextDefaults(configFile));
+    }
 
     // Always read from state.yaml as source of truth
     if (runId) {

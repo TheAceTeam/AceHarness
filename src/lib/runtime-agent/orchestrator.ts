@@ -16,6 +16,7 @@ import type {
   RuntimeErrorDto,
   RuntimeEvent,
   RuntimeEventType,
+  RuntimePermissionPolicyId,
   RuntimeOrchestrator,
   RuntimeProfileSnapshot,
   RuntimeSessionRef,
@@ -659,7 +660,7 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
     return toContractModelRoute(resolved);
   }
 
-  private ensurePermissionPolicy(policyId: typeof defaultPermissionPolicy): void {
+  private ensurePermissionPolicy(policyId: RuntimePermissionPolicyId): void {
     this.store.upsertPermissionPolicy({
       policyId,
       displayName: policyId === 'unrestricted' ? 'Unrestricted' : policyId,

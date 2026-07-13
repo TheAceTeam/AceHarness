@@ -4,7 +4,7 @@ import { processManager } from '@/lib/core/process-manager';
 import { listRuns, listRunsByConfig } from '@/lib/run/store';
 import { loadRunState, saveRunState, type PersistedRunState } from '@/lib/run/state-persistence';
 
-const MANAGER_STOP_TIMEOUT_MS = 5000;
+const STOP_TIMEOUT_MS = 8000;
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -34,6 +34,31 @@ async function markRunStopped(runId: string, reason: string): Promise<PersistedR
   return state;
 }
 
+type StopStep = {
+  id: string;
+  label: string;
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+  detail?: string;
+  durationMs?: number;
+};
+
+async function runTimedStep<T>(steps: StopStep[], id: string, label: string, action: () => Promise<T>): Promise<T> {
+  const step: StopStep = { id, label, status: 'running' };
+  steps.push(step);
+  const startedAt = Date.now();
+  try {
+    const result = await action();
+    step.status = 'success';
+    return result;
+  } catch (error) {
+    step.status = 'failed';
+    step.detail = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    step.durationMs = Date.now() - startedAt;
+  }
+}
+
 function findActiveManagerByRunId(runId: string) {
   return workflowRegistry
     .getRunningManagers()
@@ -46,45 +71,60 @@ export async function POST(request: Request) {
     const body = await readJsonBody<any>(request, {});
     const { configFile, runId } = body as { configFile?: string; runId?: string };
     const touchedRunIds = new Set<string>();
-    const timedOutRunIds = new Set<string>();
-
-    if (runId) {
-      const state = await markRunStopped(runId, '用户手动停止');
-      if (state) touchedRunIds.add(runId);
-    }
+    const steps: StopStep[] = [{ id: 'request', label: '接收停止请求', status: 'success' }];
+    const cleanupErrors: string[] = [];
+    let managerStopResult: any = null;
 
     if (runId) {
       const manager = findActiveManagerByRunId(runId);
       if (manager) {
-        const stopped = await withTimeout(manager.stop().catch(() => null), MANAGER_STOP_TIMEOUT_MS);
-        if (stopped === null) timedOutRunIds.add(runId);
+        managerStopResult = await runTimedStep(steps, 'manager-stop', '停止运行实例', async () => {
+          const result = await withTimeout(Promise.resolve((manager as any).stop?.()), STOP_TIMEOUT_MS);
+          if (result === null) throw new Error(`停止运行实例超过 ${STOP_TIMEOUT_MS}ms`);
+          return result;
+        });
+        cleanupErrors.push(...(Array.isArray(managerStopResult?.cleanupErrors) ? managerStopResult.cleanupErrors : []));
       }
+      await runTimedStep(steps, 'state-persist', '落盘停止状态', async () => {
+        const state = await markRunStopped(runId, cleanupErrors.length ? `用户手动停止（清理异常: ${cleanupErrors.join('; ')}）` : '用户手动停止');
+        if (state) touchedRunIds.add(runId);
+      });
     } else if (configFile) {
       const manager = workflowRegistry.getRunningManager(configFile);
       if (manager) {
         const activeRunId = manager.getStatus().runId as string | undefined;
+        managerStopResult = await runTimedStep(steps, 'manager-stop', '停止运行实例', async () => {
+          const result = await withTimeout(Promise.resolve((manager as any).stop?.()), STOP_TIMEOUT_MS);
+          if (result === null) throw new Error(`停止运行实例超过 ${STOP_TIMEOUT_MS}ms`);
+          return result;
+        });
+        cleanupErrors.push(...(Array.isArray(managerStopResult?.cleanupErrors) ? managerStopResult.cleanupErrors : []));
         if (activeRunId) {
-          await markRunStopped(activeRunId, '用户手动停止');
-          touchedRunIds.add(activeRunId);
+          await runTimedStep(steps, 'state-persist', '落盘停止状态', async () => {
+            const state = await markRunStopped(activeRunId, cleanupErrors.length ? `用户手动停止（清理异常: ${cleanupErrors.join('; ')}）` : '用户手动停止');
+            if (state) touchedRunIds.add(activeRunId);
+          });
         }
-        const stopped = await withTimeout(manager.stop().catch(() => null), MANAGER_STOP_TIMEOUT_MS);
-        if (stopped === null && activeRunId) timedOutRunIds.add(activeRunId);
       }
     } else {
       // Stop all running workflows
       const running = workflowRegistry.getRunningManagers();
       for (const { manager } of running) {
         const activeRunId = manager.getStatus().runId as string | undefined;
+        const result = await runTimedStep(steps, `manager-stop-${activeRunId || touchedRunIds.size}`, `停止运行实例${activeRunId ? ` ${activeRunId}` : ''}`, async () => {
+          const stopResult = await withTimeout(Promise.resolve((manager as any).stop?.()), STOP_TIMEOUT_MS);
+          if (stopResult === null) throw new Error(`停止运行实例超过 ${STOP_TIMEOUT_MS}ms`);
+          return stopResult;
+        });
+        cleanupErrors.push(...(Array.isArray((result as any)?.cleanupErrors) ? (result as any).cleanupErrors : []));
         if (activeRunId) {
-          await markRunStopped(activeRunId, '用户手动停止');
-          touchedRunIds.add(activeRunId);
+          const state = await markRunStopped(activeRunId, cleanupErrors.length ? `用户手动停止（清理异常: ${cleanupErrors.join('; ')}）` : '用户手动停止');
+          if (state) touchedRunIds.add(activeRunId);
         }
-        const stopped = await withTimeout(manager.stop().catch(() => null), MANAGER_STOP_TIMEOUT_MS);
-        if (stopped === null && activeRunId) timedOutRunIds.add(activeRunId);
       }
     }
 
-    const { killed } = await processManager.killAllSystem();
+    const { killed, pids } = await runTimedStep(steps, 'process-cleanup', '清理残留进程', () => processManager.killAllSystem());
 
     // Fallback: if there is no active manager but run records are still marked
     // as running/preparing, force them to stopped so History view is consistent.
@@ -94,28 +134,23 @@ export async function POST(request: Request) {
     for (const run of candidateRuns) {
       if (run.status !== 'running' && run.status !== 'preparing') continue;
       if (touchedRunIds.has(run.id)) continue;
-      await markRunStopped(run.id, '用户手动停止（无活跃内存实例，已执行兜底终止）');
-      touchedRunIds.add(run.id);
+      const state = await markRunStopped(run.id, '用户手动停止（无活跃内存实例，已执行兜底终止）');
+      if (state) touchedRunIds.add(run.id);
     }
 
-    for (const runId of touchedRunIds) {
-      await markRunStopped(
-        runId,
-        timedOutRunIds.has(runId)
-          ? '用户手动停止（内存停止超时，已强制落盘）'
-          : '用户手动停止'
-      );
-    }
+    const success = cleanupErrors.length === 0 && steps.every((step) => step.status !== 'failed');
 
     return jsonOk({
-      success: true,
-      message: timedOutRunIds.size > 0
-        ? `工作流已标记停止，${timedOutRunIds.size} 个内存实例仍在后台清理`
-        : killed > 0
-          ? `工作流已停止，清理了 ${killed} 个残留进程`
-          : '工作流已停止',
+      success,
+      message: success
+        ? (killed > 0 ? `工作流已停止，清理了 ${killed} 个残留进程` : '工作流已停止')
+        : `工作流停止存在异常: ${cleanupErrors.join('; ') || '未知错误'}`,
       runIds: Array.from(touchedRunIds),
-      timedOutRunIds: Array.from(timedOutRunIds),
+      steps,
+      cleanupErrors,
+      killed,
+      pids,
+      managerStopResult,
     });
   } catch (error: any) {
     return jsonOk(

@@ -2320,6 +2320,43 @@ export const workflowApi = {
     return response.json();
   },
 
+  async getStartContextDefaults(configFile: string): Promise<{
+    globalContext: string;
+    phaseContexts: Record<string, string>;
+    workingDirectory?: string;
+    updatedAt?: string;
+  }> {
+    const params = new URLSearchParams();
+    params.set('configFile', configFile);
+    params.set('startDefault', '1');
+    const response = await authFetch(`${API_BASE}/workflow/context?${params.toString()}`);
+    if (!response.ok) throw new Error('获取启动上下文默认值失败');
+    return response.json();
+  },
+
+  async setStartContextDefaults(configFile: string, contexts: {
+    globalContext?: string;
+    phaseContexts?: Record<string, string>;
+    workingDirectory?: string;
+  }): Promise<ApiResponse> {
+    const response = await authFetch(`${API_BASE}/workflow/context`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'start-default',
+        configFile,
+        globalContext: contexts.globalContext || '',
+        phaseContexts: contexts.phaseContexts || {},
+        workingDirectory: contexts.workingDirectory || '',
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '保存启动上下文默认值失败');
+    }
+    return response.json();
+  },
+
   async rerunFromStep(runId: string, stepName: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/rerun-from-step`, {
       method: 'POST',

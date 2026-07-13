@@ -93,11 +93,13 @@ describe('runtime agent registry', () => {
 
     for (const agentId of REQUIRED_VISIBLE_AGENT_IDS) {
       const definition = definitionsById.get(agentId);
-      expect(definition?.tier).toMatch(/^(core|verified)$/);
-      expect(isLocalAgentIconPath(definition.iconPath), `${definition.id} icon must be a local asset path`).toBe(true);
-      expect(existsSync(path.join(process.cwd(), 'public', definition.iconPath))).toBe(true);
+      expect(definition, `${agentId} must be registered`).toBeDefined();
+      const registeredDefinition = definition!;
+      expect(registeredDefinition.tier).toMatch(/^(core|verified)$/);
+      expect(isLocalAgentIconPath(registeredDefinition.iconPath), `${registeredDefinition.id} icon must be a local asset path`).toBe(true);
+      expect(existsSync(path.join(process.cwd(), 'public', registeredDefinition.iconPath))).toBe(true);
     }
-    expect(getBuiltinAgentDefinitions().some((definition) => definition.tier === 'experimental')).toBe(false);
+    expect(getBuiltinAgentDefinitions().some((definition) => String(definition.tier) === 'experimental')).toBe(false);
   });
 
   test('merges builtin definitions with sqlite runtime state dto', () => {

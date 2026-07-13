@@ -1613,6 +1613,15 @@ export default function WorkbenchPage({
   const [startRequesting, setStartRequesting] = useState(false);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [stopProgressDialogOpen, setStopProgressDialogOpen] = useState(false);
+  const [stopProgressSummary, setStopProgressSummary] = useState('');
+  const [stopProgressSteps, setStopProgressSteps] = useState<Array<{
+    id: string;
+    label: string;
+    status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+    detail?: string;
+    durationMs?: number;
+  }>>([]);
   const [forceTransitioning, setForceTransitioning] = useState(false);
   const [forceCompleting, setForceCompleting] = useState(false);
   const [rehearsalMode, setRehearsalMode] = useState(false);
@@ -5310,10 +5319,40 @@ export default function WorkbenchPage({
     syncRuntimePayloadToDb(status, requestedRunId);
   }, [configFile, queryClient, resolveRuntimeRunId, syncRuntimePayloadToDb]);
 
+  const mergeLiveRunStatus = useCallback((status: any, requestedRunId?: string) => {
+    if (!status) return;
+    const resolvedRunId = resolveRuntimeRunId(status, requestedRunId) || requestedRunId;
+    if (!resolvedRunId) return;
+    const patch = {
+      id: resolvedRunId,
+      runId: resolvedRunId,
+      configFile,
+      status: status.status,
+      workflowStatus: status.status,
+      currentPhase: status.currentPhase || status.currentState || null,
+      currentState: status.currentState || status.currentPhase || null,
+      currentStep: status.currentStep || null,
+      startTime: status.startTime,
+      endTime: status.endTime || null,
+      updatedAt: new Date().toISOString(),
+      activeSteps: Array.isArray(status.activeSteps) ? status.activeSteps : undefined,
+      activeConcurrencyGroups: Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : undefined,
+      completedSteps: Array.isArray(status.completedSteps) ? status.completedSteps.length : undefined,
+      transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : undefined,
+    };
+    setHistoryRuns((prev) => prev.map((item) => item.id === resolvedRunId ? { ...item, ...patch } : item));
+    setSelectedRun((prev: any) => prev?.id === resolvedRunId ? { ...prev, ...patch } : prev);
+    setRunDetail((prev: any) => {
+      const prevRunId = String(prev?.id || prev?.runId || '');
+      return prevRunId === resolvedRunId ? { ...prev, ...patch } : prev;
+    });
+  }, [configFile, resolveRuntimeRunId]);
+
   const applyWorkflowStatusPayload = (status: any, requestedRunId?: string) => {
     if (!status?.status) return;
     if (!shouldApplyRuntimePayload(status)) return;
     syncRuntimePayloadToDb(status, requestedRunId);
+    mergeLiveRunStatus(status, requestedRunId);
       const smStatus = status as typeof status & {
         mode?: 'state-machine' | 'phase-based';
         currentState?: string | null;
@@ -6730,27 +6769,8 @@ export default function WorkbenchPage({
         break;
       }
       case 'status': {
-        const eventStatusIsTerminal = isTerminalWorkflowStatus(event.data.status);
-        dispatch({ type: 'SET_WORKFLOW_STATUS', payload: event.data.status });
-        if (typeof event.data.currentPhase === 'string') {
-          dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.currentPhase });
-        }
-        if (eventStatusIsTerminal) {
-          dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
-        } else if (typeof event.data.currentStep === 'string') {
-          dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.currentStep });
-        }
-        if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
-        if (event.data.workflowFrontendSessionId) setWorkflowFrontendSessionId(event.data.workflowFrontendSessionId);
-        if (Array.isArray(event.data.activeSteps) || eventStatusIsTerminal) setActiveSteps(eventStatusIsTerminal ? [] : event.data.activeSteps);
-        if (Array.isArray(event.data.completedSteps)) dispatch({ type: 'SET_COMPLETED_STEPS', payload: event.data.completedSteps });
-        if (Array.isArray(event.data.failedSteps)) dispatch({ type: 'SET_FAILED_STEPS', payload: event.data.failedSteps });
-        if (Array.isArray(event.data.activeConcurrencyGroups) || eventStatusIsTerminal) setActiveConcurrencyGroups(eventStatusIsTerminal ? [] : event.data.activeConcurrencyGroups);
-        if (event.data.startTime) setRunStartTime(event.data.startTime);
-        if (event.data.endTime) setRunEndTime(event.data.endTime);
-        if (!specCodingDisabled && event.data.specCodingSummary) setSpecCodingSummary(event.data.specCodingSummary);
-        if (!specCodingDisabled && event.data.specCodingDetails) setSpecCodingDetails(event.data.specCodingDetails);
-        applyWorkflowStatusSnapshot(event.data);
+        cacheWorkflowStatusPayload(event.data, event.data?.runId || statusQueryRunId);
+        applyWorkflowStatusPayload(event.data, event.data?.runId || statusQueryRunId);
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         if (event.data.workingDirectory) dispatch({ type: 'SET_WORKING_DIRECTORY', payload: event.data.workingDirectory });
         addLog('system', 'info', event.data.message);
@@ -7025,6 +7045,7 @@ export default function WorkbenchPage({
     const nextPhaseDrafts = Object.fromEntries(
       startContextTargets.map((name: string) => [name, phaseContexts[name] || ''])
     ) as Record<string, string>;
+    const fallbackWorkingDirectory = state.workingDirectory || '';
     setPendingStartRequest({
       mode,
       skipPreflight: options?.skipPreflight,
@@ -7033,9 +7054,18 @@ export default function WorkbenchPage({
     });
     setStartGlobalContextDraft(globalContext || '');
     setStartPhaseContextDrafts(nextPhaseDrafts);
-    setStartWorkingDirectoryDraft('');
+    setStartWorkingDirectoryDraft(fallbackWorkingDirectory);
     setShowStartWorkflowDialog(true);
     try {
+      const savedDefaults = await workflowApi.getStartContextDefaults(configFile).catch(() => null);
+      if (savedDefaults) {
+        const savedPhaseDrafts = Object.fromEntries(
+          startContextTargets.map((name: string) => [name, savedDefaults.phaseContexts?.[name] || ''])
+        ) as Record<string, string>;
+        setStartGlobalContextDraft(savedDefaults.globalContext || '');
+        setStartPhaseContextDrafts(savedPhaseDrafts);
+        setStartWorkingDirectoryDraft(savedDefaults.workingDirectory || fallbackWorkingDirectory);
+      }
       let preflightPreview: Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null = null;
       if (!options?.skipPreflight) {
         preflightPreview = await workflowApi.preflightPreview(configFile);
@@ -7051,7 +7081,7 @@ export default function WorkbenchPage({
     } finally {
       setStartRequesting(false);
     }
-  }, [configFile, globalContext, phaseContexts, rehearsalMode, startContextTargets, startRequesting, starting, toast]);
+  }, [configFile, globalContext, phaseContexts, rehearsalMode, startContextTargets, startRequesting, starting, state.workingDirectory, toast]);
 
   useEffect(() => {
     if (autoStartHandledRef.current) return;
@@ -7129,6 +7159,13 @@ export default function WorkbenchPage({
       if (normalizedWorkingDirectory) {
         dispatch({ type: 'SET_WORKING_DIRECTORY', payload: normalizedWorkingDirectory });
       }
+      workflowApi.setStartContextDefaults(configFile, {
+        globalContext: normalizedGlobalContext,
+        phaseContexts: normalizedPhaseContexts,
+        workingDirectory: normalizedWorkingDirectory || undefined,
+      }).catch((error: any) => {
+        addLog('system', 'warning', `保存下次启动上下文默认值失败: ${error?.message || '未知错误'}`);
+      });
       setStartupProgressMode(mode);
       setRehearsalProgressSteps([
         isRehearsalStart
@@ -7306,9 +7343,35 @@ export default function WorkbenchPage({
 
   const stopWorkflow = useCallback(async () => {
     setStopping(true);
+    setStopProgressDialogOpen(true);
+    setStopProgressSummary('正在发送停止请求。');
+    setStopProgressSteps([
+      { id: 'request', label: '发送停止请求', status: 'running' },
+      { id: 'manager-stop', label: '停止运行实例', status: 'pending' },
+      { id: 'process-cleanup', label: '清理残留进程', status: 'pending' },
+      { id: 'state-persist', label: '落盘停止状态', status: 'pending' },
+      { id: 'refresh', label: '刷新运行状态', status: 'pending' },
+    ]);
     try {
       const targetRunId = actionRunId || runId || selectedRun?.id || initialRunId || undefined;
-      const stopResult = await workflowApi.stop(configFile, targetRunId) as { runIds?: string[] };
+      const stopResult = await workflowApi.stop(configFile, targetRunId) as {
+        success?: boolean;
+        message?: string;
+        runIds?: string[];
+        steps?: Array<{ id: string; label: string; status: 'pending' | 'running' | 'success' | 'failed' | 'skipped'; detail?: string; durationMs?: number }>;
+        cleanupErrors?: string[];
+      };
+      setStopProgressSteps((prev) => {
+        const backendSteps = Array.isArray(stopResult.steps) ? stopResult.steps : [];
+        const byId = new Map(prev.map((step) => [step.id, step]));
+        for (const step of backendSteps) byId.set(step.id, step);
+        byId.set('request', { ...(byId.get('request') || { id: 'request', label: '发送停止请求' }), status: 'success' });
+        return Array.from(byId.values());
+      });
+      setStopProgressSummary(stopResult.message || (stopResult.success === false ? '停止工作流失败。' : '停止请求已完成。'));
+      if (stopResult.success === false) {
+        throw new Error(stopResult.message || stopResult.cleanupErrors?.join('; ') || '停止工作流失败');
+      }
       const stoppedAt = new Date().toISOString();
       const stoppedRunIds = new Set(
         (Array.isArray(stopResult.runIds) ? stopResult.runIds : [])
@@ -7362,7 +7425,15 @@ export default function WorkbenchPage({
       addLog('system', 'warning', '工作流已停止');
       await loadHistory();
       await fetchCurrentStatus();
+      setStopProgressSteps((prev) => prev.map((step) => (
+        step.id === 'refresh' ? { ...step, status: 'success', detail: '运行状态已刷新。' } : step
+      )));
+      setStopProgressSummary(stopResult.message || '工作流已停止。');
     } catch (error: any) {
+      setStopProgressSteps((prev) => prev.map((step) => (
+        step.status === 'running' ? { ...step, status: 'failed', detail: error.message || '停止失败' } : step
+      )));
+      setStopProgressSummary(error.message || '停止工作流失败。');
       addLog('system', 'error', `停止失败: ${error.message}`);
     } finally {
       setStopping(false);
@@ -15029,6 +15100,73 @@ export default function WorkbenchPage({
                   关闭
                 </Button>
               )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stopProgressDialogOpen} onOpenChange={(open) => { if (!stopping) setStopProgressDialogOpen(open); }}>
+        <DialogContent className="sm:max-w-lg p-0 overflow-hidden">
+          <div className="flex flex-col">
+            <div className="border-b px-6 py-4">
+              <DialogTitle className="flex items-center gap-2">
+                <span className={cn('material-symbols-outlined', stopping ? 'animate-spin text-primary' : stopProgressSteps.some((step) => step.status === 'failed') ? 'text-red-500' : 'text-emerald-500')}>
+                  {stopping ? 'progress_activity' : stopProgressSteps.some((step) => step.status === 'failed') ? 'error' : 'check_circle'}
+                </span>
+                停止工作流
+              </DialogTitle>
+              <DialogDescription className="mt-1 text-xs">
+                {stopProgressSummary || '正在停止运行实例并清理运行资源。'}
+              </DialogDescription>
+            </div>
+            <div className="space-y-3 px-6 py-4">
+              <Progress
+                value={Math.round((stopProgressSteps.filter((step) => step.status === 'success' || step.status === 'skipped').length / Math.max(stopProgressSteps.length, 1)) * 100)}
+                className="h-2"
+              />
+              <div className="space-y-2">
+                {stopProgressSteps.map((step) => {
+                  const icon = step.status === 'running'
+                    ? 'progress_activity'
+                    : step.status === 'success'
+                      ? 'check_circle'
+                      : step.status === 'failed'
+                        ? 'error'
+                        : step.status === 'skipped'
+                          ? 'remove_circle'
+                          : 'radio_button_unchecked';
+                  const tone = step.status === 'running'
+                    ? 'animate-spin text-primary'
+                    : step.status === 'success'
+                      ? 'text-emerald-500'
+                      : step.status === 'failed'
+                        ? 'text-red-500'
+                        : 'text-muted-foreground';
+                  return (
+                    <div key={step.id} className="rounded-lg border bg-muted/20 px-3 py-2">
+                      <div className="flex items-start gap-3">
+                        <span className={cn('material-symbols-outlined mt-0.5 text-sm', tone)}>{icon}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm font-medium text-foreground">{step.label}</div>
+                            {typeof step.durationMs === 'number' ? (
+                              <div className="shrink-0 text-[11px] text-muted-foreground">{step.durationMs}ms</div>
+                            ) : null}
+                          </div>
+                          {step.detail ? (
+                            <div className="mt-1 break-words text-xs leading-5 text-muted-foreground">{step.detail}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t px-6 py-4">
+              <Button variant="outline" onClick={() => setStopProgressDialogOpen(false)} disabled={stopping}>
+                关闭
+              </Button>
             </div>
           </div>
         </DialogContent>

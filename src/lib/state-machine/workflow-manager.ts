@@ -1509,6 +1509,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.stepLogs = [];
       this.qualityChecks = [...preflightChecks];
       this.currentState = null;
+      this.currentStep = null;
+      this.agents = [];
       this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
       this.latestSupervisorReview = null;
       this.specRevisionVote = null;
@@ -1522,6 +1524,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.stepTaskBindingsSnapshot = [];
       this.bindingValidation = undefined;
       this.runStartTime = new Date().toISOString();
+      this.runEndTime = null;
+      this.statusReason = null;
       this.accumulatedWaitMs = 0;
       this.waitStartedAt = null;
       this.currentConfigFile = configFile;
@@ -1880,16 +1884,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = null;
       this.resumeStateName = null;
       this.resumeStepKey = null;
-      this.emit('status', {
-        status: 'running',
-        message: '状态机工作流已启动',
-        runId,
-        startTime: this.runStartTime,
-        endTime: this.runEndTime,
-        currentConfigFile: this.currentConfigFile,
-        workingDirectory: this.getWorkingDirectory(),
-        workflowFrontendSessionId: this._frontendSessionId || null,
-      });
+      this.emitRuntimeStatus('状态机工作流已启动');
       await this.persistState();
 
       this.startWorkflowAgentPrewarm(workflowConfig);
@@ -1932,9 +1927,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(): Promise<{ stopped: boolean; cleanupErrors: string[]; cancelledProcesses: boolean }> {
+    const cleanupErrors: string[] = [];
     this.shouldStop = true;
     this.status = 'stopped';
+    this.statusReason = '用户手动停止';
+    this.runEndTime = this.runEndTime || new Date().toISOString();
     const childRunId = this.activeSubworkflowRunId;
     if (childRunId) {
       const runtime = this.getActiveSubworkflowRuntime(childRunId);
@@ -1959,24 +1957,29 @@ export class StateMachineWorkflowManager extends EventEmitter {
           const { workflowRegistry } = await import('@/lib/workflow/registry');
           const childManager = await workflowRegistry.getManagerByRunId(childRunId);
           await (childManager as any)?.stop?.();
-        } catch {
+        } catch (error) {
+          cleanupErrors.push(`子工作流停止失败: ${error instanceof Error ? error.message : String(error)}`);
           // best-effort child stop; parent stop must continue.
         }
       }
     }
     this.clearRuntimeActivity();
-    this.emit('status', {
-      status: 'stopped',
-      message: '工作流已停止',
-      startTime: this.runStartTime,
-      endTime: this.runEndTime,
-      currentConfigFile: this.currentConfigFile
-    });
+    this.emitRuntimeStatus('工作流已停止');
 
     // Kill any running child processes immediately
-    this.cancelCurrentProcesses();
+    const cancelledProcesses = this.cancelCurrentProcesses();
+    try {
+      this.cleanupCurrentEngine();
+    } catch (error) {
+      cleanupErrors.push(`引擎清理失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
-    await this.finalizeRun('stopped');
+    try {
+      await this.persistState('stopped');
+    } catch (error) {
+      cleanupErrors.push(`状态落盘失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { stopped: cleanupErrors.length === 0, cleanupErrors, cancelledProcesses };
   }
 
   private cleanupCurrentEngine(): void {
@@ -3121,6 +3124,25 @@ export class StateMachineWorkflowManager extends EventEmitter {
       workflowFrontendSessionId: this._frontendSessionId || null,
       specRevisionVote: this.specRevisionVote,
       specRevisionVoteHistory: this.specRevisionVoteHistory,
+      ...this.buildRunSpecCodingStatusPayload(),
+    });
+  }
+
+  private emitRuntimeStatus(message?: string): void {
+    this.emit('status', {
+      status: this.status,
+      message,
+      runId: this.currentRunId,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      currentPhase: this.currentState,
+      currentStep: this.currentStep,
+      activeSteps: Array.from(this.activeStepKeys),
+      completedSteps: this.completedSteps,
+      failedSteps: this.failedSteps,
+      currentConfigFile: this.currentConfigFile,
+      workingDirectory: this.getWorkingDirectory(),
+      workflowFrontendSessionId: this._frontendSessionId || null,
       ...this.buildRunSpecCodingStatusPayload(),
     });
   }
@@ -4467,6 +4489,8 @@ try {
       state: this.currentState,
       message: `进入状态: ${this.currentState}`,
     });
+    this.emitRuntimeStatus(`进入状态: ${this.currentState}`);
+    await this.persistState();
 
     while (this.currentState && !this.shouldStop) {
       // Check max transitions
@@ -4501,15 +4525,19 @@ try {
             result: finalResult,
           }, config);
         }
-        this.emit('state-change', {
-          state: this.currentState,
-          message: `到达终止状态: ${this.currentState}`,
-        });
-        break;
+      this.emit('state-change', {
+        state: this.currentState,
+        message: `到达终止状态: ${this.currentState}`,
+      });
+      this.emitRuntimeStatus(`到达终止状态: ${this.currentState}`);
+      break;
       }
 
       // Execute current state
       const result = await this.executeState(stateConfig, config, requirements);
+      if (this.shouldStop) {
+        break;
+      }
 
       // Evaluate transitions
       // Remember whether this transition was forced by the user so we can skip human approval
@@ -5199,6 +5227,7 @@ try {
       state: state.name,
       stepCount: state.steps.length,
     });
+    this.emitRuntimeStatus(`执行状态: ${state.name}`);
     if (this.currentRunSpecCoding) {
       this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
         stateName: state.name,
@@ -5321,6 +5350,9 @@ try {
           }
         }
       } catch (stepError: any) {
+        if (this.shouldStop) {
+          break;
+        }
         const errorMsg = stepError.message || String(stepError);
         stepOutputs.push(`ERROR: ${errorMsg}`);
 
@@ -6333,6 +6365,7 @@ try {
       validation: `Step started: ${state.name} / ${step.name}`,
     });
     this.emit('agents', { agents: this.agents });
+    this.emitRuntimeStatus(`开始执行步骤: ${state.name} / ${step.name}`);
     
     this.agentFlow.push({
       id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,

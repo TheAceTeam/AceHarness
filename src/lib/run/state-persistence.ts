@@ -12,9 +12,19 @@ const RUNS_DIR = getWorkspaceRunsDir();
 const streamPersistedLengths = new Map<string, number>();
 const runStateWriteQueues = new Map<string, Promise<void>>();
 const streamWriteQueues = new Map<string, Promise<void>>();
+const WINDOWS_REPLACE_RETRY_DELAYS_MS = [25, 50, 100, 200, 400, 800];
 
 /** Separator used to delimit output chunks in persisted stream files */
 export const STREAM_CHUNK_SEPARATOR = '\n\n<!-- chunk-boundary -->\n\n';
+
+function isRetryableReplaceError(error: unknown): boolean {
+  const code = typeof error === 'object' && error ? (error as { code?: unknown }).code : undefined;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
 
 export interface PersistedTokenUsage {
   inputTokens: number;
@@ -730,6 +740,29 @@ function buildRunSnapshotFromState(state: PersistedRunState, summary: ReturnType
   };
 }
 
+async function replaceFileWithRetry(temp: string, target: string, fallbackContent: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= WINDOWS_REPLACE_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await rename(temp, target);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableReplaceError(error) || attempt >= WINDOWS_REPLACE_RETRY_DELAYS_MS.length) break;
+      await sleep(WINDOWS_REPLACE_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  if (isRetryableReplaceError(lastError)) {
+    await writeFile(target, fallbackContent, 'utf-8');
+    await rm(temp, { force: true }).catch(() => {});
+    return;
+  }
+
+  await rm(temp, { force: true }).catch(() => {});
+  throw lastError;
+}
+
 async function writeRunStateNow(state: PersistedRunState): Promise<void> {
   const dir = runDir(state.runId);
   if (!existsSync(dir)) {
@@ -740,12 +773,7 @@ async function writeRunStateNow(state: PersistedRunState): Promise<void> {
   const target = stateFilePath(state.runId);
   const temp = resolve(dir, `state.yaml.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await writeFile(temp, yamlContent, 'utf-8');
-  try {
-    await rename(temp, target);
-  } catch (error) {
-    await rm(temp, { force: true }).catch(() => {});
-    throw error;
-  }
+  await replaceFileWithRetry(temp, target, yamlContent);
   const summary = buildRunSummaryCacheFromState(state);
   if (summary) {
     await saveRunSummaryCache(summary).catch((error) => {
