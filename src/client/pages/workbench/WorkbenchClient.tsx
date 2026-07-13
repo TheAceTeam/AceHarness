@@ -5652,7 +5652,9 @@ export default function WorkbenchPage({
   useEffect(() => {
     if (viewMode !== 'run') return;
     const routeSection = effectiveSearchParams.get('section') || '';
-    if (routeSection.startsWith('preview')) {
+    const requestedRunId = effectiveSearchParams.get('runId') || effectiveSearchParams.get('run') || '';
+    const hasHistoryRun = effectiveSearchParams.get('history') === '1' || Boolean(requestedRunId);
+    if (routeSection.startsWith('preview') && !hasHistoryRun) {
       setWorkbenchNavSection((current) => current === 'preview' ? current : 'preview');
       setRunRecordDrilled((current) => current ? false : current);
       const nextPreviewSection = routeSection === 'preview-state'
@@ -5667,8 +5669,6 @@ export default function WorkbenchPage({
       setRunDetailSection((current) => current === nextPreviewSection ? current : nextPreviewSection);
       return;
     }
-    const requestedRunId = effectiveSearchParams.get('runId') || effectiveSearchParams.get('run') || '';
-    const hasHistoryRun = effectiveSearchParams.get('history') === '1' || Boolean(requestedRunId);
     if (!hasHistoryRun) return;
 
     if (requestedRunId && returnedRunIdRef.current === requestedRunId) {
@@ -7312,9 +7312,11 @@ export default function WorkbenchPage({
       // Fetch status shortly after start to catch initial state
       setTimeout(fetchCurrentStatus, 500);
     } catch (error: any) {
-      if (isRehearsalStart) {
-        setRehearsalProgressSteps((prev) => [...prev, `演练启动失败：${error.message}`]);
-      }
+      setRehearsalProgressSteps((prev) => [
+        ...prev,
+        isRehearsalStart ? `演练启动失败：${error.message}` : `正式启动失败：${error.message}`,
+      ]);
+      setRehearsalProgressDialogOpen(true);
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
       addLog('system', 'error', `启动失败: ${error.message}`);
     } finally {

@@ -932,7 +932,7 @@ try {
 
     // Set up stream handler for the engine
     const streamHandler = (event: WorkflowRuntimeStreamEvent) => {
-      if (event.type !== 'text') return;
+      if (event.type !== 'text' && event.type !== 'tool') return;
       fullStreamContent += event.content;
       const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
       processManager.emit('stream', {

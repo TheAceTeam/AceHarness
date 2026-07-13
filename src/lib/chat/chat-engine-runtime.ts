@@ -77,7 +77,7 @@ export interface ChatRuntimeStreamEvent {
   metadata?: any;
 }
 
-type RuntimeToolState = {
+export type RuntimeToolState = {
   toolName: string;
   rawInput?: Record<string, unknown>;
   toolId: string;
@@ -622,7 +622,7 @@ function summarizeToolPayload(payload: unknown): string {
   return [name, status].filter(Boolean).join(' ');
 }
 
-function formatRuntimeToolEvent(
+export function formatRuntimeToolEvent(
   type: RuntimeEvent['type'],
   payload: unknown,
   eventToolCallId: string | undefined,
@@ -638,12 +638,13 @@ function formatRuntimeToolEvent(
   const rawOutput = resolveToolRawOutput(payload);
   const toolName = pending?.toolName || resolveRuntimeToolName(payload, rawInput);
   const title = getAceToolTitle(toolName);
+  const hasDisplayableInput = rawInput ? hasDisplayableToolInput(toolName, rawInput) : false;
   const shouldEmitCall = type === 'tool.started'
     || type === 'tool.updated'
-    || (!['completed', 'failed', 'done', 'success'].includes(status) && rawInput && Object.keys(rawInput).length > 0);
+    || (!['completed', 'failed', 'done', 'success'].includes(status) && hasDisplayableInput);
   const callKey = toolId || stableToolCallKey(toolName, rawInput);
 
-  if (shouldEmitCall && rawInput && Object.keys(rawInput).length > 0 && !seenToolCalls.has(callKey)) {
+  if (shouldEmitCall && rawInput && hasDisplayableInput && !seenToolCalls.has(callKey)) {
     seenToolCalls.add(callKey);
     if (toolId) {
       pendingTools.set(toolId, { toolName, rawInput, toolId });
@@ -673,6 +674,16 @@ function formatRuntimeToolEvent(
   }
 
   return '';
+}
+
+function hasDisplayableToolInput(toolName: string, rawInput: Record<string, unknown>): boolean {
+  const keys = Object.keys(rawInput);
+  if (keys.length === 0) return false;
+  if (typeof rawInput.command === 'string' && rawInput.command.trim()) return true;
+  if (toolName === 'execute' || toolName === 'bash' || toolName === 'cmd' || toolName === 'powershell') return false;
+
+  const structuralKeys = new Set(['cwd', 'workdir', 'workingDirectory', 'timeout', 'timeoutMs', 'description']);
+  return keys.some((key) => !structuralKeys.has(key));
 }
 
 function enrichRuntimeToolOutput(rawOutput: unknown, rawInput?: Record<string, unknown>): unknown {

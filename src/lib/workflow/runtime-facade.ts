@@ -11,6 +11,7 @@ import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import {
   executeChatRuntimeWithContextRecovery,
   compactChatRuntimeContextManually,
+  formatRuntimeToolEvent,
   getConfiguredChatRuntimeEngine,
   resolveRequestedChatRuntimeEngineType,
   resolveRecoveredRuntimeSessionId,
@@ -20,6 +21,7 @@ import {
   type ChatRuntimeStreamEvent,
   type ChatRuntimeTokenUsage,
   type EngineContextRecoveryOptions,
+  type RuntimeToolState,
 } from '@/lib/chat/chat-engine-runtime';
 import { createRuntimeOrchestrator } from '@/lib/runtime-agent/orchestrator';
 import { createRuntimeAdapterRegistry } from '@/lib/runtime-agent/adapters/adapter-registry';
@@ -44,6 +46,8 @@ export type WorkflowRuntimeOptions = ChatRuntimeEngineOptions;
 export interface WorkflowRuntimeProjectionState {
   hasMessageText: boolean;
   toolObservedAfterMessage: boolean;
+  seenToolCalls?: Set<string>;
+  pendingTools?: Map<string, RuntimeToolState>;
 }
 
 export interface WorkflowRuntimeJsonResult {
@@ -225,6 +229,8 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
     const projectionState: WorkflowRuntimeProjectionState = {
       hasMessageText: false,
       toolObservedAfterMessage: false,
+      seenToolCalls: new Set<string>(),
+      pendingTools: new Map<string, RuntimeToolState>(),
     };
 
     try {
@@ -252,7 +258,7 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
         }
         const projection = projectWorkflowRuntimeEvent(event, projectionState);
         if (projection) this.emit('stream', projection);
-        if (projection?.type === 'text') output += projection.content;
+        if (projection?.type === 'text' || projection?.type === 'tool') output += projection.content;
         if (event.type === 'turn.failed') {
           success = false;
           error = extractMessage(event.payload) || 'Runtime turn failed';
@@ -472,8 +478,14 @@ export function projectWorkflowRuntimeEvent(
     return content ? { type: 'thought', content, metadata: event.payload } : null;
   }
   if (event.type.startsWith('tool.')) {
-    const content = extractText(event.payload) || summarizeToolPayload(event.payload);
-    return content ? { type: 'tool', content, metadata: event.payload } : null;
+    const content = formatRuntimeToolEvent(
+      event.type,
+      event.payload,
+      event.toolCallId,
+      state.seenToolCalls || (state.seenToolCalls = new Set<string>()),
+      state.pendingTools || (state.pendingTools = new Map<string, RuntimeToolState>()),
+    );
+    return content ? { type: 'text', content, metadata: event.payload } : null;
   }
   if (event.type === 'turn.failed') {
     return { type: 'error', content: extractMessage(event.payload) || 'Runtime turn failed', metadata: event.payload };
@@ -538,13 +550,6 @@ function extractStopReason(payload: unknown): string | undefined {
     : isRecord(payload) && typeof payload.reason === 'string'
       ? payload.reason
       : undefined;
-}
-
-function summarizeToolPayload(payload: unknown): string {
-  if (!isRecord(payload)) return '';
-  const name = typeof payload.name === 'string' ? payload.name : typeof payload.tool === 'string' ? payload.tool : '';
-  const status = typeof payload.status === 'string' ? payload.status : typeof payload.state === 'string' ? payload.state : '';
-  return [name, status].filter(Boolean).join(' ');
 }
 
 function numberOrZero(value: unknown): number {

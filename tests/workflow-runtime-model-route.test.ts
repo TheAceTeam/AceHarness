@@ -27,6 +27,20 @@ function runtimeEvent(type: string, text = ''): any {
   };
 }
 
+function runtimeToolEvent(type: string, payload: Record<string, unknown>, toolCallId = 'tool-1'): any {
+  return {
+    id: `${type}-${toolCallId}`,
+    sessionId: 'session-1',
+    traceId: 'trace-1',
+    seq: 1,
+    type,
+    payload,
+    toolCallId,
+    redacted: true,
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
 describe('workflow runtime model selection', () => {
   beforeEach(() => {
     resolveRuntimeModelRoute.mockReset();
@@ -74,7 +88,7 @@ describe('workflow runtime stream projection', () => {
     expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第一'), state)?.content).toBe('第一');
     expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '段'), state)?.content).toBe('段');
     expect(projectWorkflowRuntimeEvent(runtimeEvent('thought.delta', '思考'), state)?.content).toBe('思考');
-    expect(projectWorkflowRuntimeEvent(runtimeEvent('tool.updated', 'read completed'), state)?.type).toBe('tool');
+    expect(projectWorkflowRuntimeEvent(runtimeToolEvent('tool.started', { name: 'read', input: { filePath: 'README.md' } }), state)?.type).toBe('text');
     expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第二段'), state)?.content)
       .toBe(`${ACE_CHUNK_BOUNDARY}<!-- timestamp: 1970-01-01T00:00:00.000Z -->\n第二段`);
     expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '继续'), state)?.content).toBe('继续');
@@ -88,5 +102,47 @@ describe('workflow runtime stream projection', () => {
 
     projectWorkflowRuntimeEvent(runtimeEvent('tool.updated', 'read completed'), state);
     expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第一段'), state)?.content).toBe('第一段');
+  });
+
+  test('does not leak unformatted tool status text as live output', () => {
+    const state: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
+    const command = 'if (-not (Test-Path -LiteralPath "C:\\Users\\Shawn\\AppData\\Roaming\\ACEHarness\\runs\\run-1")) { throw "Missing run directory" }; "ready"';
+    expect(projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      text: 'bash (pending)',
+      title: 'bash',
+      status: 'pending',
+      kind: 'execute',
+      rawInput: { cwd: 'C:\\Users\\Shawn\\Desktop\\speclang' },
+    }), state)).toBeNull();
+    const projected = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: command,
+      status: 'in_progress',
+      kind: 'execute',
+      text: `ready\n${command} (in_progress): ${command}`,
+      rawInput: { command, cwd: 'C:\\Users\\Shawn\\Desktop\\speclang' },
+    }), state);
+
+    expect(projected?.type).toBe('text');
+    expect(projected?.content).toContain('<ace-process>');
+    expect(projected?.content).toContain('"command"');
+    expect(projected?.content).not.toContain('(in_progress):');
+  });
+
+  test('ignores empty pending search tool placeholders', () => {
+    const state: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
+
+    expect(projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      text: 'grep (pending)',
+      title: 'grep',
+      status: 'pending',
+      kind: 'search',
+      rawInput: {},
+    }), state)).toBeNull();
   });
 });

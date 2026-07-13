@@ -1102,6 +1102,23 @@ describe('engine-level failure detection', () => {
     expect(isEngineLevelFailure('模型调用失败 (401): 无效的令牌 (request id: abc)')).toBe(true);
   });
 
+  test('treats HTTP auth status with context as an engine-level failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure('HTTP 401 Unauthorized: invalid api key')).toBe(true);
+    expect(isEngineLevelFailure('request failed with statusCode 403')).toBe(true);
+  });
+
+  test('does not treat markdown line numbers as HTTP auth failures', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure([
+      '<ace-process>{"toolName":"read","output":"<content>"}',
+      '399: ### 4.4 性能与实现建议（仓颉）',
+      '401: - 长文本（商户名/地址）使用省略或自动换行',
+      '403: - 列表滚动时底部栏固定不随动',
+      '</ace-process>',
+    ].join('\n'))).toBe(false);
+  });
+
   test('does not treat AI file-read ENOENT as an engine-level failure', async () => {
     const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
     expect(isEngineLevelFailure(

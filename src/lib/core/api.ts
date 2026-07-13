@@ -2055,7 +2055,11 @@ export const workflowApi = {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.error || '启动工作流失败');
     }
-    return response.json();
+    const data = await response.json();
+    if (data?.error) {
+      throw new Error(data.message ? `${data.error}: ${data.message}` : data.error);
+    }
+    return data;
   },
 
   async stop(configFile?: string, runId?: string): Promise<ApiResponse> {

@@ -114,5 +114,7 @@ export async function deleteRun(id: string): Promise<void> {
   if (existsSync(runDir)) {
     await rm(runDir, { recursive: true, force: true });
   }
-  await deleteChatSessionsByWorkflowRun(id);
+  await deleteChatSessionsByWorkflowRun(id).catch((error) => {
+    console.warn(`[run-store] failed to delete chat sessions for run ${id}:`, error);
+  });
 }

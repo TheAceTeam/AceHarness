@@ -544,6 +544,11 @@ function isStepToolFailure(message: string): boolean {
     || /permission denied/i.test(message);
 }
 
+function isHttpAuthStatusFailure(message: string): boolean {
+  return /(?:HTTP|status|statusCode|response|request|code)[^\r\n]{0,40}\b(?:401|403)\b/i.test(message)
+    || /\b(?:401|403)\b[^\r\n]{0,80}(?:unauthorized|forbidden|invalid token|invalid api key|authentication failed|无效的令牌|令牌无效|认证失败|鉴权失败)/i.test(message);
+}
+
 export function isEngineLevelFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
@@ -555,7 +560,7 @@ export function isEngineLevelFailure(message: string): boolean {
     || /模型调用失败(?:\s*\(\s*\d{3}\s*\))?\s*:/i.test(normalized)
     || /(?:unauthorized|invalid token|invalid api key|authentication failed|permission denied)/i.test(normalized)
     || /(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/i.test(normalized)
-    || /(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)
+    || isHttpAuthStatusFailure(normalized)
     || /context window limit/i.test(normalized)
     || /reached (its |the )?context window limit/i.test(normalized)
     || /maximum context length/i.test(normalized)
@@ -572,7 +577,7 @@ function isTransientEngineFailure(message: string): boolean {
   if (!normalized.trim()) return false;
   if (/(?:unauthorized|invalid token|invalid api key|authentication failed)/i.test(normalized)) return false;
   if (/(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/.test(normalized)) return false;
-  if (/(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)) return false;
+  if (isHttpAuthStatusFailure(normalized)) return false;
   if (/context window limit|maximum context length|prompt is too long/i.test(normalized)) return false;
 
   return /acp\s+connection\s+closed/i.test(normalized)
@@ -4009,8 +4014,8 @@ try {
           return;
         }
 
-        // Only accumulate 'text' events into the preview stream.
-        if (event.type !== 'text') return;
+        // Accumulate visible message text and structured tool blocks into the preview stream.
+        if (event.type !== 'text' && event.type !== 'tool') return;
 
         fullStreamContent += event.content;
         const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;

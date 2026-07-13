@@ -1,10 +1,10 @@
-import { stat, rm, readFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
-import { deleteChatSessionsByWorkflowRun } from '@/lib/chat/persistence';
+import { deleteRun } from '@/lib/run/store';
 import { jsonOk } from '@/server/api-route-runtime/request-utils';
 
 const RUNS_DIR = getWorkspaceRunsDir();
@@ -16,22 +16,6 @@ export async function DELETE(
   try {
     const runId = (await params).id;
     const runDir = resolve(RUNS_DIR, runId);
-    // Check if run exists
-    if (!existsSync(runDir)) {
-      return jsonOk(
-        { error: '运行记录不存在' },
-        { status: 404 }
-      );
-    }
-
-    // Verify it's a directory
-    const stats = await stat(runDir);
-    if (!stats.isDirectory()) {
-      return jsonOk(
-        { error: '运行记录路径无效' },
-        { status: 400 }
-      );
-    }
 
     // Read state.yaml to get workingDirectory and check if running
     let configFile: string | null = null;
@@ -55,15 +39,11 @@ export async function DELETE(
       } catch { /* ignore */ }
     }
 
-    // Delete the run directory
-    await rm(runDir, { recursive: true, force: true });
-    const chatCleanup = await deleteChatSessionsByWorkflowRun(runId);
+    await deleteRun(runId);
 
     return jsonOk({
       success: true,
       message: '运行记录已删除',
-      deletedChatSessionsCount: chatCleanup.deletedCount,
-      deletedChatSessionIds: chatCleanup.sessionIds,
     });
   } catch (error: any) {
     return jsonOk(

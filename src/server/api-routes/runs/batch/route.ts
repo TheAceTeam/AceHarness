@@ -4,9 +4,10 @@ import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow/registry';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import { jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
-const RUNS_DIR = resolve(process.cwd(), 'runs');
+const RUNS_DIR = getWorkspaceRunsDir();
 
 export async function POST(request: Request) {
   try {
