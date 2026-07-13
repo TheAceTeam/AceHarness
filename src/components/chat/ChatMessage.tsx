@@ -32,6 +32,7 @@ import {
   type AceToolCallPayload,
   type AceToolResultPayload,
 } from '@/lib/chat/ai-process-blocks';
+import { getAceToolTitle } from '@/lib/chat/ace-process-formatters';
 import { workspaceApi } from '@/lib/core/api';
 import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
 import type { BundledLanguage } from 'shiki';
@@ -539,9 +540,10 @@ function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
     if (block.kind !== 'tool-result') continue;
 
     const meta = block.meta as AceToolResultPayload;
-    const toolName = String(meta.toolName || '').trim() || 'tool';
+    const rawToolName = String(meta.toolName || '').trim() || 'tool';
     const toolId = String(meta.toolId || '').trim();
     const resultBody = normalizeProcessBody(block.body);
+    const toolName = normalizeResultToolName(rawToolName, meta as Record<string, unknown>, resultBody);
     const toolFingerprint = buildToolFingerprint(toolName, meta, resultBody);
     const targetIndex = toolId && entryIndexesByToolId.has(toolId)
       ? entryIndexesByToolId.get(toolId)!
@@ -549,13 +551,18 @@ function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
         ? pendingEntryIndexesByFingerprint.get(toolFingerprint)!
         : (() => {
           const uniquePending = findUniquePendingToolIndex(entries, toolName);
-          return uniquePending >= 0 ? uniquePending : findFirstPendingToolIndex(entries, toolName);
+          if (uniquePending >= 0) return uniquePending;
+          const firstPending = findFirstPendingToolIndex(entries, toolName);
+          if (firstPending >= 0) return firstPending;
+          return rawToolName !== toolName ? findFirstPendingToolIndex(entries, rawToolName) : -1;
         })();
 
     if (targetIndex >= 0) {
       const target = entries[targetIndex];
       clearPendingToolIdentity(targetIndex, target);
       target.result = mergeProcessText(target.result, resultBody);
+      target.toolName = toolName;
+      target.title = toolName === 'skill' ? getAceToolTitle('skill') : target.title;
       target.toolId = target.toolId || toolId;
       target.toolFingerprint = target.toolFingerprint || toolFingerprint;
       target.resultMeta = meta;
@@ -770,6 +777,16 @@ function extractSkillDocument(entry: ToolProcessEntry): null | { name: string; b
   body = body.trim();
   if (!body) return null;
   return { name, body };
+}
+
+function containsSkillContentBlock(text: string): boolean {
+  return /<skill_content\b[\s\S]*?<\/skill_content>/i.test(String(text || ''));
+}
+
+function normalizeResultToolName(toolName: string, meta: Record<string, unknown> | null, resultBody: string): string {
+  if (toolName === 'skill') return toolName;
+  const output = asString(meta?.output) || asString(meta?.content) || asString(meta?.message);
+  return containsSkillContentBlock(resultBody) || containsSkillContentBlock(output) ? 'skill' : toolName;
 }
 
 function getReadFilePath(entry: ToolProcessEntry): string {
