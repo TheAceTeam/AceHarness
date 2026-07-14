@@ -10,12 +10,87 @@ import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 const streamPersistedLengths = new Map<string, number>();
+const streamConsumedLengths = new Map<string, number>();
+const streamLastSourceContent = new Map<string, string>();
+const streamPendingProtocolFrames = new Map<string, string>();
 const runStateWriteQueues = new Map<string, Promise<void>>();
 const streamWriteQueues = new Map<string, Promise<void>>();
 const WINDOWS_REPLACE_RETRY_DELAYS_MS = [25, 50, 100, 200, 400, 800];
+const ACE_PROCESS_OPEN_TAG = '<ace-process>';
+const ACE_PROCESS_CLOSE_TAG = '</ace-process>';
 
 /** Separator used to delimit output chunks in persisted stream files */
 export const STREAM_CHUNK_SEPARATOR = '\n\n<!-- chunk-boundary -->\n\n';
+
+function splitCompleteStreamFrames(key: string, text: string): string[] {
+  const source = `${streamPendingProtocolFrames.get(key) || ''}${text}`;
+  streamPendingProtocolFrames.delete(key);
+  if (!source) return [];
+
+  const frames: string[] = [];
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const open = source.indexOf(ACE_PROCESS_OPEN_TAG, cursor);
+    if (open < 0) {
+      const tail = source.slice(cursor);
+      const prefixLength = longestAceProcessOpenTagPrefix(tail);
+      if (prefixLength > 0) {
+        const visible = tail.slice(0, tail.length - prefixLength);
+        if (visible) frames.push(visible);
+        streamPendingProtocolFrames.set(key, tail.slice(tail.length - prefixLength));
+      } else if (tail) {
+        frames.push(tail);
+      }
+      break;
+    }
+
+    if (open > cursor) {
+      frames.push(source.slice(cursor, open));
+    }
+
+    const close = source.indexOf(ACE_PROCESS_CLOSE_TAG, open + ACE_PROCESS_OPEN_TAG.length);
+    if (close < 0) {
+      streamPendingProtocolFrames.set(key, source.slice(open));
+      break;
+    }
+
+    const end = close + ACE_PROCESS_CLOSE_TAG.length;
+    frames.push(source.slice(open, end));
+    cursor = end;
+  }
+
+  return frames.filter((frame) => frame.length > 0);
+}
+
+function longestAceProcessOpenTagPrefix(text: string): number {
+  const maxLength = Math.min(ACE_PROCESS_OPEN_TAG.length - 1, text.length);
+  for (let length = maxLength; length > 0; length -= 1) {
+    const suffix = text.slice(text.length - length);
+    if (ACE_PROCESS_OPEN_TAG.startsWith(suffix)) return length;
+  }
+  return 0;
+}
+
+async function appendStreamChunkFrame(runId: string, stepName: string, safeName: string, key: string, frame: string): Promise<void> {
+  const dir = streamDir(runId);
+  const previousLength = streamPersistedLengths.get(key) || 0;
+  await appendFile(resolve(dir, `${safeName}.stream.md`), frame, 'utf-8');
+  const chunkFile = resolve(dir, `${safeName}.chunks.jsonl`);
+  const chunk = {
+    ts: new Date().toISOString(),
+    offset: previousLength,
+    text: frame,
+  };
+  await appendFile(chunkFile, `${JSON.stringify(chunk)}\n`, 'utf-8').catch(() => {});
+  await getWorkflowEventStore().append(runId, 'stream.chunk', {
+    stepName,
+    streamRef: `streams/${safeName}.chunks.jsonl`,
+    offset: previousLength,
+    bytes: Buffer.byteLength(frame, 'utf-8'),
+  }).catch(() => {});
+  streamPersistedLengths.set(key, previousLength + frame.length);
+}
 
 function isRetryableReplaceError(error: unknown): boolean {
   const code = typeof error === 'object' && error ? (error as { code?: unknown }).code : undefined;
@@ -928,35 +1003,37 @@ async function writeStreamContentNow(
   if (!existsSync(dir)) await mkdir(dir, { recursive: true });
   const safeName = safeStepFileName(stepName);
   const key = `${runId}:${safeName}`;
-  const previousLength = streamPersistedLengths.get(key) || 0;
+  const previousSource = streamLastSourceContent.get(key);
+  const previousLength = previousSource?.length ?? streamConsumedLengths.get(key) ?? streamPersistedLengths.get(key) ?? 0;
   const nextLength = content.length;
-  if (nextLength >= previousLength) {
+  if (!previousSource || content.startsWith(previousSource)) {
     const delta = content.slice(previousLength);
     if (delta) {
-      await appendFile(resolve(dir, `${safeName}.stream.md`), delta, 'utf-8');
-      const chunkFile = resolve(dir, `${safeName}.chunks.jsonl`);
-      const chunk = {
-        ts: new Date().toISOString(),
-        offset: previousLength,
-        text: delta,
-      };
-      await appendFile(chunkFile, `${JSON.stringify(chunk)}\n`, 'utf-8').catch(() => {});
-      await getWorkflowEventStore().append(runId, 'stream.chunk', {
-        stepName,
-        streamRef: `streams/${safeName}.chunks.jsonl`,
-        offset: previousLength,
-        bytes: Buffer.byteLength(delta, 'utf-8'),
-      }).catch(() => {});
+      const frames = splitCompleteStreamFrames(key, delta);
+      for (const frame of frames) {
+        await appendStreamChunkFrame(runId, stepName, safeName, key, frame);
+      }
     }
+    streamConsumedLengths.set(key, nextLength);
+    streamLastSourceContent.set(key, content);
   } else {
-    await writeFile(resolve(dir, `${safeName}.stream.md`), content, 'utf-8');
+    streamPendingProtocolFrames.delete(key);
+    await writeFile(resolve(dir, `${safeName}.stream.md`), '', 'utf-8');
+    await writeFile(resolve(dir, `${safeName}.chunks.jsonl`), '', 'utf-8');
+    streamPersistedLengths.set(key, 0);
+    const frames = splitCompleteStreamFrames(key, content);
+    for (const frame of frames) {
+      await appendStreamChunkFrame(runId, stepName, safeName, key, frame);
+    }
     await getWorkflowEventStore().append(runId, 'stream.rewritten', {
       stepName,
       streamRef: `streams/${safeName}.stream.md`,
       bytes: Buffer.byteLength(content, 'utf-8'),
     }).catch(() => {});
+    streamConsumedLengths.set(key, nextLength);
+    streamLastSourceContent.set(key, content);
+    return;
   }
-  streamPersistedLengths.set(key, nextLength);
 }
 
 async function appendStreamContentNow(
@@ -969,22 +1046,10 @@ async function appendStreamContentNow(
   if (!existsSync(dir)) await mkdir(dir, { recursive: true });
   const safeName = safeStepFileName(stepName);
   const key = `${runId}:${safeName}`;
-  const previousLength = streamPersistedLengths.get(key) || 0;
-  await appendFile(resolve(dir, `${safeName}.stream.md`), chunkText, 'utf-8');
-  const chunkFile = resolve(dir, `${safeName}.chunks.jsonl`);
-  const chunk = {
-    ts: new Date().toISOString(),
-    offset: previousLength,
-    text: chunkText,
-  };
-  await appendFile(chunkFile, `${JSON.stringify(chunk)}\n`, 'utf-8').catch(() => {});
-  await getWorkflowEventStore().append(runId, 'stream.chunk', {
-    stepName,
-    streamRef: `streams/${safeName}.chunks.jsonl`,
-    offset: previousLength,
-    bytes: Buffer.byteLength(chunkText, 'utf-8'),
-  }).catch(() => {});
-  streamPersistedLengths.set(key, previousLength + chunkText.length);
+  const frames = splitCompleteStreamFrames(key, chunkText);
+  for (const frame of frames) {
+    await appendStreamChunkFrame(runId, stepName, safeName, key, frame);
+  }
 }
 
 export async function saveStreamContent(
