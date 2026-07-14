@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/brand/RobotLogo';
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 
@@ -129,7 +130,7 @@ export default function RegisterPage() {
           <RobotLogo size={56} className="animate-robotPulse" />
           <div>
             <h1 className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-3xl font-bold text-transparent">
-              CSIHarness
+              {PRODUCT_DISPLAY_NAME}
             </h1>
             <p className="text-xs text-muted-foreground">Your team of AIs, collaborating to get work done.</p>
           </div>

@@ -44,6 +44,7 @@ import {
 } from '@/components/dashboard/DashboardShellHeader';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { cn } from '@/lib/core/utils';
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 import pkgJson from '../../../package.json';
 
 interface DashboardStats {
@@ -1328,7 +1329,7 @@ export default function DashboardPage() {
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="lg"
-                tooltip="CSIHarness"
+                tooltip={PRODUCT_DISPLAY_NAME}
                 onClick={() => {
                   setSecondarySidebarOpen(true);
                   setActivePanel('chat');
@@ -1337,7 +1338,7 @@ export default function DashboardPage() {
               >
                 <RobotLogo size={30} />
                 <span className="flex min-w-0 flex-col">
-                  <span className="truncate font-semibold">CSIHarness</span>
+                  <span className="truncate font-semibold">{PRODUCT_DISPLAY_NAME}</span>
                   <span className="truncate text-[11px] text-sidebar-foreground/60">v{pkgJson.version}</span>
                 </span>
               </SidebarMenuButton>

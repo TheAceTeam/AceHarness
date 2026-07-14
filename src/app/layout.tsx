@@ -3,10 +3,11 @@ import 'material-symbols/outlined.css';
 import 'dockview-react/dist/styles/dockview.css';
 import './globals.css';
 import { Providers } from './providers';
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 
 export const metadata: Metadata = {
-  title: 'CSIHarness',
-  description: 'CSIHarness - Agent Centric Engineering Harness',
+  title: PRODUCT_DISPLAY_NAME,
+  description: `${PRODUCT_DISPLAY_NAME} - Agent Centric Engineering Harness`,
 };
 
 export default function RootLayout({

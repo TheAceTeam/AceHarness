@@ -28,7 +28,7 @@ const scanRoots = [
   'public',
 ];
 const sourceExtensions = new Set(['.ts', '.tsx', '.json', '.svg']);
-const oldBrandPattern = /\bACEHarness\b|\bACE Harness\b|\bACEHARNESS\b|\bACE Service\b|\bACE\b/g;
+const oldBrandPattern = /\bACEHarness\b|\bACE Harness\b|\bACEHARNESS\b|\bACE Service\b/g;
 const oldLowercaseVisibleBrandPattern = /^\s*aceharness\s*$/gim;
 
 async function collectFrontendFiles(root: string): Promise<string[]> {

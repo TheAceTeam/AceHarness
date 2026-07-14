@@ -1,3 +1,5 @@
+export const PRODUCT_DISPLAY_NAME = 'CSIHarness Power By ACE/AET';
+
 export function formatLegacyProductPathForDisplay(value: string): string {
   return String(value || '').replace(/aceharness/gi, (match) => {
     if (match === match.toUpperCase()) return 'CSIHARNESS';
