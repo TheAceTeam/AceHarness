@@ -1,6 +1,6 @@
 {
   "name": "@cangjielang/aceharness",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0-rc.3",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
