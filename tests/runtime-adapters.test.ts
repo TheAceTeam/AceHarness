@@ -399,7 +399,7 @@ describe('runtime adapters', () => {
     try {
       rmSync(offTraceFile, { force: true });
       rmSync(onTraceFile, { force: true });
-      delete process.env.ACE_ACPX_DEBUG_TRACE;
+      process.env.ACE_ACPX_DEBUG_TRACE = 'false';
 
       const acpx = new AcpxAdapter({
         async *runTurn(_binding, input) {

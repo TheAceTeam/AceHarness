@@ -4,7 +4,12 @@ import path from 'path';
 import { parse as parseYaml } from 'yaml';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
-import type { OpenCodeDiscoveredCommand } from './opencode-http-adapter';
+
+export interface OpenCodeDiscoveredCommand {
+  name: string;
+  description?: string;
+  source?: string;
+}
 
 type DiscoverCommandFileOptions = {
   workingDirectory?: string;

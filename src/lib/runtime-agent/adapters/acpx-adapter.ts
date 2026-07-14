@@ -173,7 +173,21 @@ export function resolveAcpxCommand(agentId: string): AcpxCommandResolution {
 }
 
 export function formatAcpxCommandForRuntime(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string } = {}): string {
+  return resolveAcpxRuntimeAgent(command, options);
+}
+
+export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string } = {}): string {
+  if (shouldUseAcpxRegistryAgent(command, options.agentId)) {
+    return options.agentId || command.command;
+  }
   return getAcpxCommandAttemptsForRuntime(command, options)[0]?.command || '';
+}
+
+export function getAcpxAgentRegistryOverrides(): Record<string, string> {
+  return {
+    nga: 'ngagent --disable-update acp',
+    codegenie: 'codegenie acp',
+  };
 }
 
 export function getAcpxCommandAttemptsForRuntime(
@@ -216,6 +230,14 @@ function buildAcpxCommandAttemptParts(
     return [{ source: 'codegenie', parts: wrapWindowsCmdShellParts(resolvedCommand, args) }];
   }
   return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
+}
+
+function shouldUseAcpxRegistryAgent(command: AcpxCommandResolution, agentId?: string): boolean {
+  const id = String(agentId || '').trim();
+  if (!id) return false;
+  const definition = getBuiltinAgentDefinition(id);
+  if (!definition || definition.runtime !== 'acpx') return false;
+  return true;
 }
 
 function resolveWindowsCmdShim(command: string, searchPaths: string[]): string | null {

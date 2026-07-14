@@ -5,15 +5,13 @@
  * under engine-specific directories.
  */
 
-import type { EngineType } from './engine-factory';
-
 export const SHARED_AGENT_CONFIG_DIR = '.agents';
 
 /**
  * Get the workspace agent config directory for a given engine type.
  * All supported engines share `.agents` for ACE-provided agent metadata.
  */
-export function getEngineConfigDir(_engineType: EngineType | string): string {
+export function getEngineConfigDir(_engineType: string): string {
   return SHARED_AGENT_CONFIG_DIR;
 }
 
@@ -21,6 +19,6 @@ export function getEngineConfigDir(_engineType: EngineType | string): string {
  * Get the workspace skills subdirectory for a given engine type.
  * e.g. 'codex' → '.agents/skills', 'opencode' → '.agents/skills'
  */
-export function getEngineSkillsSubdir(engineType: EngineType | string): string {
+export function getEngineSkillsSubdir(engineType: string): string {
   return `${getEngineConfigDir(engineType)}/skills`;
 }

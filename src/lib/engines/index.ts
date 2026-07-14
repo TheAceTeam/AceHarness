@@ -1,27 +1,11 @@
 /**
  * Engines Module
  *
- * Exports all engine-related functionality
+ * Exports the remaining shared helpers used outside the deprecated
+ * Engine/wrapper runtime.
  */
 
-export * from './engine-interface';
-export * from './engine-factory';
-export * from './acp-engine';
-export * from './acp-wrapper-base';
-export * from './kiro-cli-wrapper';
-
-export * from './opencode-wrapper';
-export * from './opencode-sdk-wrapper';
-export * from './nga-wrapper';
-export * from './nga-sdk-wrapper';
-export * from './codegenie-wrapper';
-export * from './codegenie-sdk-wrapper';
-export * from './codex-wrapper';
-export * from './cursor-wrapper';
-export * from './claude-code-wrapper';
-export * from './claude-code-acp-wrapper';
 export * from './engine-config';
-export * from './cangjie-runtime-config';
-export * from './cangjie-runtime-wrapper';
-export * from './magic-cli-wrapper';
-export * from './trae-cli-wrapper';
+export * from './engine-output';
+export * from './opencode-command';
+export * from './opencode-command-files';

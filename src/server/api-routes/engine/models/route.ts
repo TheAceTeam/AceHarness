@@ -1,8 +1,6 @@
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
-import { getAcpxCommandAttemptsForRuntime, resolveAcpxCommand } from '@/lib/runtime-agent/adapters/acpx-adapter';
-import { discoverClaudeCodeModels } from '@/lib/engines/claude-code-model-discovery';
-import { discoverOpenCodeSdkModels } from '@/lib/engines/opencode-sdk-wrapper';
+import { getAcpxAgentRegistryOverrides, getAcpxCommandAttemptsForRuntime, resolveAcpxCommand, resolveAcpxRuntimeAgent } from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
 
 export const dynamic = 'force-dynamic';
@@ -118,7 +116,11 @@ async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
     throw new Error(`Unknown ACPX agent: ${agentId}`);
   }
   const cwd = process.cwd();
-  const attempts = getAcpxCommandAttemptsForRuntime(resolveAcpxCommand(agentId), { agentId, cwd });
+  const command = resolveAcpxCommand(agentId);
+  const runtimeAgent = resolveAcpxRuntimeAgent(command, { agentId, cwd });
+  const attempts = runtimeAgent
+    ? [{ command: runtimeAgent, source: agentId }]
+    : getAcpxCommandAttemptsForRuntime(command, { agentId, cwd });
   let lastError: unknown;
 
   for (const [index, attempt] of attempts.entries()) {
@@ -148,7 +150,9 @@ async function discoverViaAcpxCommand(
     sessionStore: createRuntimeStore({
       stateDir: getWorkspaceDataFile('acpx-runtime'),
     }),
-    agentRegistry: createAgentRegistry(),
+    agentRegistry: createAgentRegistry({
+      overrides: getAcpxAgentRegistryOverrides(),
+    }),
     permissionMode: 'approve-all',
     nonInteractivePermissions: 'deny',
   });
@@ -181,51 +185,13 @@ export async function GET(request: Request) {
 
   const agentId = normalizeEngineId(engine);
 
-  if (agentId === 'claude') {
-    try {
-      const result = await discoverClaudeCodeModels();
-      return jsonOk({
-        engine,
-        agentId,
-        source: result.fallback,
-        usedAnthropicApi: result.usedAnthropicApi,
-        models: uniqueModels(result.models.map((model) => ({
-          modelId: model.modelId,
-          name: model.name,
-          source: model.source,
-          recommended: Boolean(model.recommended),
-        }))),
-      });
-    } catch (error) {
-      console.error('[engine/models] Failed to discover Claude models:', error);
-      return jsonError(`Failed to discover models: ${errorMessage(error)}`, 500);
-    }
-  }
-
   try {
     const models = await discoverViaAcpx(agentId);
     if (models.length > 0) {
       return jsonOk({ engine, agentId, source: 'acpx', models });
     }
   } catch (error) {
-    if (agentId !== 'opencode') {
-      return jsonError(`Failed to discover models: ${errorMessage(error)}`, 500);
-    }
-  }
-
-  if (agentId === 'opencode') {
-    try {
-      const models = await discoverOpenCodeSdkModels();
-      return jsonOk({
-        engine,
-        agentId,
-        source: 'sdk-http',
-        models: uniqueModels(models),
-      });
-    } catch (error) {
-      console.error('[engine/models] OpenCode SDK model discovery failed:', error);
-      return jsonError(`Failed to discover models: ${errorMessage(error)}`, 500);
-    }
+    return jsonError(`Failed to discover models: ${errorMessage(error)}`, 500);
   }
 
   return jsonOk({

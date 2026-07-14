@@ -33,6 +33,7 @@ let cachedMtimeMs = -1;
 export function isAcpxDebugTraceEnabled(): boolean {
   const envValue = process.env.ACE_ACPX_DEBUG_TRACE?.trim().toLowerCase();
   if (envValue === '1' || envValue === 'true') return true;
+  if (envValue === '0' || envValue === 'false' || envValue === 'no' || envValue === 'off') return false;
 
   const now = Date.now();
   if (now - cachedCheckedAt < 2000) return cachedEnabled;

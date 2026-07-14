@@ -1,60 +1,42 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { delimiter, join, resolve } from 'node:path';
 
-const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-setupTsRuntime();
-
-const {
-  getBuiltinAgentDefinitions,
-  mergeAgentRuntimeState,
-} = require('../src/lib/runtime-agent/agent-registry.ts');
+const AGENT_OVERRIDES = {
+  nga: 'ngagent --disable-update acp',
+  codegenie: 'codegenie acp',
+};
+const DEFAULT_AGENTS = [
+  'codex',
+  'claude',
+  'opencode',
+  'nga',
+  'codegenie',
+  'cursor',
+  'kiro',
+  'trae',
+  'pi',
+  'openclaw',
+  'gemini',
+  'copilot',
+  'kilocode',
+  'kimi',
+  'mux',
+  'qoder',
+  'qwen',
+];
 
 const options = parseArgs(process.argv.slice(2));
-const definitions = getBuiltinAgentDefinitions(options.tiers);
-const agents = options.agentIds.length
-  ? definitions.filter((definition) => options.agentIds.includes(definition.id))
-  : definitions;
-
-const rows = agents.map((definition) => {
-  const commands = [
-    definition.command,
-    ...(definition.fallbackCommands ?? []),
-  ].filter(Boolean);
-  const resolved = commands.find((command) => commandExists(command));
-  return {
-    agentId: definition.id,
-    runtime: definition.runtime,
-    tier: definition.tier,
-    command: definition.command ?? '',
-    fallbackCommands: definition.fallbackCommands ?? [],
-    available: Boolean(resolved),
-    resolvedCommand: resolved ?? null,
-  };
-});
-
-const merged = mergeAgentRuntimeState(
-  rows.map((row) => ({
-    agentId: row.agentId,
-    availability: {
-      status: row.available ? 'available' : 'missing',
-      checkedAt: new Date().toISOString(),
-      message: row.available ? `Resolved ${row.resolvedCommand}` : 'No command found in PATH',
-    },
-  })),
-  definitions,
-);
+const agents = options.agentIds.length ? options.agentIds : DEFAULT_AGENTS;
+const rows = [];
+for (const agent of agents) rows.push(await probe(agent));
 
 const report = {
-  ok: rows.length > 0,
+  ok: rows.some((row) => row.available),
   checkedAt: new Date().toISOString(),
-  source: 'runtime-agent registry',
+  source: 'acpx/runtime doctor',
   rows,
-  mergedCount: merged.length,
 };
 
 if (options.json) {
@@ -63,9 +45,7 @@ if (options.json) {
   console.log('Runtime Availability Check');
   console.log(`source: ${report.source}`);
   for (const row of rows) {
-    const status = row.available ? 'available' : 'missing';
-    const command = row.resolvedCommand ?? ([row.command, ...row.fallbackCommands].filter(Boolean).join(' | ') || '(none)');
-    console.log(`- ${row.agentId} [${row.runtime}/${row.tier}]: ${status} (${command})`);
+    console.log(`- ${row.agentId}: ${row.available ? 'available' : 'missing'} (${row.message || row.code || 'no detail'})`);
   }
 }
 
@@ -74,84 +54,61 @@ process.exit(report.ok ? 0 : 1);
 function parseArgs(argv) {
   const parsed = {
     agentIds: [],
-    tiers: undefined,
     json: false,
   };
-
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if ((arg === '--agent' || arg === '--agent-id') && argv[index + 1]) {
-      parsed.agentIds.push(argv[++index]);
-    } else if (arg === '--tier' && argv[index + 1]) {
-      parsed.tiers = [...(parsed.tiers ?? []), argv[++index]];
-    } else if (arg === '--json') {
-      parsed.json = true;
-    } else if (arg === '--help' || arg === '-h') {
+    if ((arg === '--agent' || arg === '--agent-id') && argv[index + 1]) parsed.agentIds.push(argv[++index]);
+    else if (arg === '--json') parsed.json = true;
+    else if (arg === '--help' || arg === '-h') {
       console.log(`
 Runtime availability check
 
 Usage:
   npm run check:runtime:availability
-  npm run check:runtime:availability -- --agent codex
-  npm run check:runtime:availability -- --tier core --json
+  npm run check:runtime:availability -- --agent codex --json
 
-This runtime-first check reads the agent registry and probes agent commands.
-It does not import the old architecture engine factory.
+This check uses acpx/runtime doctor probes.
 `);
       process.exit(0);
     }
   }
-
   return parsed;
 }
 
-function setupTsRuntime() {
-  const tsNodeRegister = resolve(root, 'node_modules', 'ts-node', 'register', 'transpile-only.js');
-  const tsconfigPathsRegister = resolve(root, 'node_modules', 'tsconfig-paths', 'register.js');
-  if (!existsSync(tsNodeRegister)) {
-    throw new Error('Missing ts-node. Run npm install before runtime checks.');
-  }
-  process.env.TS_NODE_PROJECT = process.env.TS_NODE_PROJECT || resolve(root, 'tsconfig.json');
-  process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({
-    module: 'CommonJS',
-    moduleResolution: 'Node',
+async function probe(agentId) {
+  const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
+  const runtime = createAcpRuntime({
+    cwd: process.cwd(),
+    sessionStore: createRuntimeStore({
+      stateDir: resolve(root, '.acpx-runtime-availability-cache'),
+    }),
+    agentRegistry: createAgentRegistry({
+      overrides: AGENT_OVERRIDES,
+    }),
+    permissionMode: 'approve-reads',
+    nonInteractivePermissions: 'deny',
+    probeAgent: agentId,
+    timeoutMs: 15000,
   });
-  require(tsNodeRegister);
-  if (existsSync(tsconfigPathsRegister)) require(tsconfigPathsRegister);
-}
-
-function commandExists(command) {
-  if (!command || !/^[\w.-]+$/.test(command)) return false;
-  if (process.platform === 'win32') {
-    try {
-      execFileSync('where.exe', [command], { stdio: 'ignore' });
-      return true;
-    } catch {
-      return windowsFallbackDirs().some((dir) => existsNamedInDir(dir, command));
-    }
-  }
-
-  const env = {
-    ...process.env,
-    PATH: [join(root, 'node_modules', '.bin'), process.env.PATH ?? ''].filter(Boolean).join(delimiter),
-  };
   try {
-    execFileSync('bash', ['-lc', `command -v ${command}`], { stdio: 'ignore', env });
-    return true;
-  } catch {
-    return false;
+    const result = await runtime.doctor();
+    return {
+      agentId,
+      runtime: 'acpx',
+      available: Boolean(result.ok),
+      code: result.code,
+      message: result.message,
+      installCommand: result.installCommand,
+      details: result.details || [],
+    };
+  } catch (error) {
+    return {
+      agentId,
+      runtime: 'acpx',
+      available: false,
+      message: error instanceof Error ? error.message : String(error),
+      details: [],
+    };
   }
-}
-
-function windowsFallbackDirs() {
-  return [
-    join(root, 'node_modules', '.bin'),
-    process.env.INIT_CWD ? join(process.env.INIT_CWD, 'node_modules', '.bin') : '',
-    process.env.APPDATA ? join(process.env.APPDATA, 'npm') : '',
-    'C:\\Program Files\\nodejs',
-  ].filter(Boolean);
-}
-
-function existsNamedInDir(dir, command) {
-  return ['.exe', '.cmd', '.bat', ''].some((ext) => existsSync(join(dir, `${command}${ext}`)));
 }

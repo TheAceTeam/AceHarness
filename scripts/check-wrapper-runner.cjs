@@ -9,7 +9,7 @@ function setupTsRuntime() {
   const tsconfigPathsRegister = resolve(root, 'node_modules', 'tsconfig-paths', 'register.js');
 
   if (!existsSync(tsNodeRegister)) {
-    throw new Error('缺少 ts-node，无法从源码加载 wrapper。请先 npm install。');
+    throw new Error('缺少 ts-node，无法从源码加载 runtime。请先 npm install。');
   }
 
   process.env.TS_NODE_PROJECT = process.env.TS_NODE_PROJECT || resolve(root, 'tsconfig.json');
@@ -26,8 +26,8 @@ function setupTsRuntime() {
 
 function parseCommonArgs(argv, defaults = {}) {
   const options = {
-    engine: defaults.engine || 'opencode',
-    driver: defaults.driver || 'sdk',
+    agent: defaults.agent || defaults.engine || 'opencode',
+    engine: defaults.engine || defaults.agent || 'opencode',
     model: defaults.model || 'glm-4.7',
     cwd: defaults.cwd || process.cwd(),
     timeoutMs: Number(defaults.timeoutMs) || 180_000,
@@ -37,10 +37,11 @@ function parseCommonArgs(argv, defaults = {}) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if ((arg === '--engine' || arg === '-e') && argv[index + 1]) {
-      options.engine = String(argv[++index] || '').trim() || options.engine;
+    if ((arg === '--agent' || arg === '--agent-id' || arg === '--engine' || arg === '-e') && argv[index + 1]) {
+      options.agent = normalizeAgentId(String(argv[++index] || '').trim()) || options.agent;
+      options.engine = options.agent;
     } else if (arg === '--driver' && argv[index + 1]) {
-      options.driver = String(argv[++index] || '').trim() || options.driver;
+      index += 1;
     } else if (arg === '--model' && argv[index + 1]) {
       options.model = String(argv[++index] || '').trim() || options.model;
     } else if (arg === '--cwd' && argv[index + 1]) {
@@ -66,72 +67,134 @@ function printCommonHelp(scriptName, extra = '') {
 ${scriptName}
 
 选项:
-  --engine, -e      引擎类型，默认 opencode
-  --driver          sdk / stdio，默认 sdk
+  --agent, -e       Agent ID，默认 opencode
+  --engine          兼容旧参数，等价于 --agent
   --model           模型 ID，默认 glm-4.7
   --cwd             工作目录，默认当前目录
-  --timeout-ms      单次 wrapper.execute 超时，默认 180000
+  --timeout-ms      单次 runtime turn 超时，默认 180000
   --runs            重复执行次数，默认 1
   --json            输出 JSON 汇总
 ${extra}`.trim());
 }
 
-// SDK 模式下 model 不含 '/' 时不加前缀——SDK wrapper 的 parseProviderModel
-// 遇到无 '/' 的 model 会跳过 model override，让服务端使用已配置的默认模型。
-// 加 openai/ 前缀会导致 providerID 错误（实际 provider 是 volcengine），请求直接失败。
-function normalizeModel(engine, driver, model) {
-  const raw = String(model || '').trim();
-  return raw;
+function normalizeAgentId(value) {
+  const raw = String(value || '').trim();
+  const aliases = {
+    'claude-code': 'claude',
+    'claude-code-acp': 'claude',
+    'kiro-cli': 'kiro',
+    'trae-cli': 'trae',
+    'magic-cli': 'cangjie-magic',
+    'opencode-sdk': 'opencode',
+    'nga-sdk': 'nga',
+    'codegenie-sdk': 'codegenie',
+  };
+  return aliases[raw] || raw;
 }
 
-async function createEngineRunner(engine, driver) {
+function createModelRoute(options) {
+  return {
+    modelRouteId: `check:${options.agent}:${options.model || 'default'}`,
+    agentId: options.agent,
+    runtime: options.agent === 'cangjie-magic' ? 'magic' : 'acpx',
+    providerModel: options.model,
+    configOptions: {},
+    envRequirements: [],
+    capabilities: {
+      streaming: true,
+      cancel: true,
+      commands: true,
+      compact: false,
+      fork: false,
+      handoff: false,
+      permissions: true,
+      toolCalls: true,
+      usage: 'missing',
+    },
+  };
+}
+
+function createProfile(options) {
+  return {
+    agentId: options.agent,
+    modelRouteId: `check:${options.agent}:${options.model || 'default'}`,
+    cwd: options.cwd,
+    systemPromptHash: 'sha256:check-wrapper-runner',
+    skillsRevision: 'check-wrapper-runner',
+    mcpRevision: 'check-wrapper-runner',
+    permissionPolicyId: 'unrestricted',
+    interruptPolicy: 'queue',
+  };
+}
+
+async function createRuntimeRunner(options) {
   setupTsRuntime();
-  const { createEngine, createEngineForDriver, supportsDriverSelection } = require('../src/lib/engines/engine-factory');
-  const normalizedEngine = String(engine || '').trim();
-  const normalizedDriver = String(driver || '').trim();
-
-  if (!normalizedEngine) {
-    throw new Error('缺少 engine');
-  }
-
-  if (normalizedDriver && supportsDriverSelection(normalizedEngine)) {
-    return createEngineForDriver(normalizedEngine, normalizedDriver);
-  }
-  return createEngine(normalizedEngine);
+  const { createRuntimeAdapterRegistry } = require('../src/lib/runtime-agent/adapters/adapter-registry.ts');
+  const { createAcpxRuntimeClient } = require('../src/lib/runtime-agent/adapters/acpx-runtime-client.ts');
+  const registry = createRuntimeAdapterRegistry({
+    acpxClient: createAcpxRuntimeClient({ cwd: options.cwd }),
+  });
+  return registry.getAdapterForAgent(options.agent);
 }
 
-async function executeWrapperTurn(engine, input) {
-  return engine.execute({
-    agent: input.agent,
-    step: input.step,
-    prompt: input.prompt,
-    systemPrompt: input.systemPrompt,
-    model: input.model,
-    workingDirectory: input.cwd,
-    allowedTools: [],
-    timeoutMs: input.timeoutMs,
-    sessionId: input.sessionId,
-    appendSystemPrompt: input.appendSystemPrompt,
+async function executeRuntimeTurn(adapter, input) {
+  const runtimeSessionId = `check:${input.agent}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  const profileSnapshot = createProfile(input);
+  const binding = await adapter.createOrLoadSession({
+    runtimeSessionId,
+    agentId: input.agent,
+    modelRoute: createModelRoute(input),
+    profileSnapshot,
   });
+
+  let output = '';
+  let error = '';
+  let success = false;
+  let stopReason = '';
+  const turnId = `${runtimeSessionId}:turn`;
+
+  for await (const event of adapter.runTurn(binding, {
+    turnId,
+    requestId: `${turnId}:request`,
+    traceId: `${turnId}:trace`,
+    input: input.prompt,
+    interruptPolicy: 'queue',
+    profileSnapshot,
+  })) {
+    if (event.type === 'message.delta') {
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+      if (typeof payload.text === 'string') output += payload.text;
+    }
+    if (event.type === 'message.completed') {
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+      if (typeof payload.text === 'string' && !output.includes(payload.text)) output += payload.text;
+    }
+    if (event.type === 'turn.completed') {
+      success = true;
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+      stopReason = typeof payload.stopReason === 'string' ? payload.stopReason : '';
+    }
+    if (event.type === 'turn.failed') {
+      error = event.error?.message || 'runtime turn failed';
+    }
+  }
+
+  return {
+    success: success || Boolean(output.trim()),
+    output,
+    error,
+    sessionId: runtimeSessionId,
+    stopReason,
+  };
 }
 
 async function runCheckSuite(definition, options) {
-  const normalizedModel = normalizeModel(options.engine, options.driver, options.model);
+  options.agent = normalizeAgentId(options.agent || options.engine || definition.agent);
+  options.engine = options.agent;
   const runResults = [];
 
   for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
-    const engine = await createEngineRunner(options.engine, options.driver);
-    if (!engine) {
-      runResults.push({
-        ok: false,
-        firstAttemptOk: false,
-        run: runIndex + 1,
-        error: 'createEngine returned null',
-        attempts: [],
-      });
-      continue;
-    }
-
+    const adapter = await createRuntimeRunner(options);
     const messages = definition.createInitialMessages();
     let sessionId = '';
     let runOk = false;
@@ -143,101 +206,93 @@ async function runCheckSuite(definition, options) {
     const attempts = [];
     const startedAt = Date.now();
 
-    try {
-      for (let attempt = 1; attempt <= definition.maxRetries + 1; attempt += 1) {
-        const turn = messages[messages.length - 1];
-        const attemptStart = Date.now();
-        const attemptRecord = {
-          attempt,
-          prompt: turn.content,
-          output: '',
-          durationMs: 0,
-          stage: '',
-          error: '',
-          validationErrors: [],
-        };
+    for (let attempt = 1; attempt <= definition.maxRetries + 1; attempt += 1) {
+      const turn = messages[messages.length - 1];
+      const attemptStart = Date.now();
+      const attemptRecord = {
+        attempt,
+        prompt: turn.content,
+        output: '',
+        durationMs: 0,
+        stage: '',
+        error: '',
+        validationErrors: [],
+      };
 
-        const result = await executeWrapperTurn(engine, {
-          agent: definition.agent,
-          step: definition.step,
-          prompt: turn.content,
-          systemPrompt: definition.systemPrompt,
-          model: normalizedModel,
-          cwd: options.cwd,
-          timeoutMs: options.timeoutMs,
-          sessionId,
-          appendSystemPrompt: !sessionId,
-        });
+      const result = await executeRuntimeTurn(adapter, {
+        agent: options.agent,
+        step: definition.step,
+        prompt: [definition.systemPrompt, turn.content].filter(Boolean).join('\n\n'),
+        model: options.model,
+        cwd: options.cwd,
+        timeoutMs: options.timeoutMs,
+        sessionId,
+      });
 
-        sessionId = result.sessionId || sessionId;
-        attemptRecord.durationMs = Date.now() - attemptStart;
+      sessionId = result.sessionId || sessionId;
+      attemptRecord.durationMs = Date.now() - attemptStart;
 
-        if (!result.success) {
-          finalError = result.error || 'wrapper 返回失败';
-          attemptRecord.output = result.output || '';
-          attemptRecord.stage = 'execution_error';
-          attemptRecord.error = finalError;
-          attempts.push(attemptRecord);
-          if (attempt > definition.maxRetries) break;
-          messages.push({ role: 'assistant', content: result.output || '' });
-          messages.push({ role: 'user', content: definition.buildExecutionErrorPrompt(finalError) });
-          continue;
-        }
-
-        const output = String(result.output || '');
-        finalOutput = output;
-        attemptRecord.output = output;
-
-        const extracted = definition.extractResult(output);
-        if (extracted.error) {
-          finalError = extracted.error;
-          attemptRecord.stage = 'extract_error';
-          attemptRecord.error = extracted.error;
-          attempts.push(attemptRecord);
-          if (attempt > definition.maxRetries) break;
-          messages.push({ role: 'assistant', content: output });
-          messages.push({ role: 'user', content: definition.buildRepairPrompt({ stage: 'extract', error: extracted.error, output }) });
-          continue;
-        }
-
-        const validation = definition.validate(extracted.parsed);
-        finalParsed = extracted.parsed;
-        if (!validation.valid) {
-          finalValidationErrors = validation.errors || [];
-          finalError = finalValidationErrors.join('; ');
-          attemptRecord.stage = 'validation_error';
-          attemptRecord.error = finalError;
-          attemptRecord.validationErrors = finalValidationErrors;
-          attempts.push(attemptRecord);
-          if (attempt > definition.maxRetries) break;
-          messages.push({ role: 'assistant', content: output });
-          messages.push({
-            role: 'user',
-            content: definition.buildRepairPrompt({
-              stage: 'validate',
-              error: finalError,
-              output,
-              parsed: extracted.parsed,
-              errors: finalValidationErrors,
-            }),
-          });
-          continue;
-        }
-
-        attemptRecord.stage = 'success';
+      if (!result.success) {
+        finalError = result.error || 'runtime 返回失败';
+        attemptRecord.output = result.output || '';
+        attemptRecord.stage = 'execution_error';
+        attemptRecord.error = finalError;
         attempts.push(attemptRecord);
-        runOk = true;
-        if (attempt === 1) firstAttemptOk = true;
-        finalError = '';
-        if (definition.onSuccess) {
-          await definition.onSuccess(extracted.parsed, { cwd: options.cwd, run: runIndex + 1, sessionId });
-        }
-        break;
+        if (attempt > definition.maxRetries) break;
+        messages.push({ role: 'assistant', content: result.output || '' });
+        messages.push({ role: 'user', content: definition.buildExecutionErrorPrompt(finalError) });
+        continue;
       }
-    } finally {
-      try {
-        engine.cancel();
-      } catch {}
+
+      const output = String(result.output || '');
+      finalOutput = output;
+      attemptRecord.output = output;
+
+      const extracted = definition.extractResult(output);
+      if (extracted.error) {
+        finalError = extracted.error;
+        attemptRecord.stage = 'extract_error';
+        attemptRecord.error = extracted.error;
+        attempts.push(attemptRecord);
+        if (attempt > definition.maxRetries) break;
+        messages.push({ role: 'assistant', content: output });
+        messages.push({ role: 'user', content: definition.buildRepairPrompt({ stage: 'extract', error: extracted.error, output }) });
+        continue;
+      }
+
+      const validation = definition.validate(extracted.parsed);
+      finalParsed = extracted.parsed;
+      if (!validation.valid) {
+        finalValidationErrors = validation.errors || [];
+        finalError = finalValidationErrors.join('; ');
+        attemptRecord.stage = 'validation_error';
+        attemptRecord.error = finalError;
+        attemptRecord.validationErrors = finalValidationErrors;
+        attempts.push(attemptRecord);
+        if (attempt > definition.maxRetries) break;
+        messages.push({ role: 'assistant', content: output });
+        messages.push({
+          role: 'user',
+          content: definition.buildRepairPrompt({
+            stage: 'validate',
+            error: finalError,
+            output,
+            parsed: extracted.parsed,
+            errors: finalValidationErrors,
+          }),
+        });
+        continue;
+      }
+
+      attemptRecord.stage = 'success';
+      attempts.push(attemptRecord);
+      runOk = true;
+      if (attempt === 1) firstAttemptOk = true;
+      finalError = '';
+      if (definition.onSuccess) {
+        await definition.onSuccess(extracted.parsed, { cwd: options.cwd, run: runIndex + 1, sessionId });
+      }
+      break;
     }
 
     runResults.push({
@@ -262,9 +317,10 @@ async function runCheckSuite(definition, options) {
     firstAttemptPassRate: runResults.length ? firstAttemptPassed / runResults.length : 0,
     total: runResults.length,
     passRate: runResults.length ? runResults.filter((item) => item.ok).length / runResults.length : 0,
-    engine: options.engine,
-    driver: options.driver,
-    model: normalizedModel,
+    engine: options.agent,
+    agent: options.agent,
+    driver: 'runtime',
+    model: options.model,
     runs: runResults,
   };
 }
@@ -320,10 +376,7 @@ function findBalancedJsonObjectBounds(text) {
       continue;
     }
     if (inString) continue;
-    if (char === '{') {
-      depth += 1;
-      continue;
-    }
+    if (char === '{') depth += 1;
     if (char === '}') {
       depth -= 1;
       if (depth === 0) return { start, end: index + 1 };
@@ -333,9 +386,9 @@ function findBalancedJsonObjectBounds(text) {
 }
 
 module.exports = {
-  createEngineRunner,
+  createRuntimeRunner,
   extractResultTag,
-  normalizeModel,
+  normalizeAgentId,
   parseCommonArgs,
   printCommonHelp,
   runCheckSuite,

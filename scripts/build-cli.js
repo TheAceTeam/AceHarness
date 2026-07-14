@@ -19,10 +19,7 @@ const entryFiles = [
   path.join(srcDir, 'lib', 'core', 'user-store.ts'),
   path.join(srcDir, 'lib', 'core', 'markdown-utils.ts'),
   path.join(srcDir, 'lib', 'run', 'runtime-configs.ts'),
-  path.join(srcDir, 'lib', 'engines', 'acp-engine.ts'),
   path.join(srcDir, 'lib', 'engines', 'engine-output.ts'),
-  path.join(srcDir, 'lib', 'engines', 'acp-wrapper-base.ts'),
-  path.join(srcDir, 'lib', 'engines', 'magic-cli-wrapper.ts'),
   path.join(srcDir, 'lib', 'rag', 'store.ts'),
 ];
 

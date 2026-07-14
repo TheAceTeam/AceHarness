@@ -15,7 +15,7 @@ import type {
   RuntimeBinding,
 } from '../contracts';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
-import { formatAcpxCommandForRuntime, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
+import { formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
 
 export interface CreateAcpxRuntimeClientOptions {
   cwd?: string;
@@ -293,7 +293,9 @@ async function createRuntime(options: CreateAcpxRuntimeClientOptions, permission
     sessionStore: module.createRuntimeStore({
       stateDir: options.stateDir ?? getWorkspaceDataFile('acpx-runtime'),
     }),
-    agentRegistry: module.createAgentRegistry(),
+    agentRegistry: module.createAgentRegistry({
+      overrides: getAcpxAgentRegistryOverrides(),
+    }),
     ...permissionConfig,
   });
 }

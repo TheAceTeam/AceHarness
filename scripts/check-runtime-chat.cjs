@@ -5,9 +5,14 @@ const { resolve } = require('node:path');
 setupTsRuntime();
 
 const { createRuntimeAdapterRegistry } = require('../src/lib/runtime-agent/adapters/adapter-registry.ts');
+const { createAcpxRuntimeClient } = require('../src/lib/runtime-agent/adapters/acpx-runtime-client.ts');
 
 const options = parseArgs(process.argv.slice(2));
-const registry = createRuntimeAdapterRegistry();
+const registry = createRuntimeAdapterRegistry({
+  acpxClient: createAcpxRuntimeClient({
+    cwd: options.cwd,
+  }),
+});
 const adapter = registry.getAdapterForAgent(options.agentId);
 
 run().catch((error) => {
@@ -38,7 +43,7 @@ async function run() {
   const report = {
     ok: events.some((event) => event.type === 'turn.started'),
     executable: !events.some((event) => event.error?.code === 'ADAPTER_UNAVAILABLE'),
-    mode: 'adapter skeleton',
+    mode: 'acpx/runtime',
     agentId: options.agentId,
     runtime: binding.runtime,
     eventTypes: events.map((event) => event.type),
@@ -92,8 +97,7 @@ Usage:
   npm run check:runtime:chat -- --agent cangjie-magic --json
 
 This skeleton exercises runtime adapters through runtime-agent contracts.
-Without an injected runtime client, ADAPTER_UNAVAILABLE is an expected
-runtime-first skeleton result, not a old architecture engine fallback.
+This check uses the real acpx/runtime client.
 `);
       process.exit(0);
     }
