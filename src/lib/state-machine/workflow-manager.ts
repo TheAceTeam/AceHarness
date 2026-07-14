@@ -274,6 +274,16 @@ export function stripNonAiStreamArtifacts(text: string): string {
     .trim();
 }
 
+function stripAceProcessBlocks(text: string): string {
+  let output = String(text || '').replace(/<ace-process>[\s\S]*?<\/ace-process>/gi, '\n');
+  const lastOpen = output.toLowerCase().lastIndexOf('<ace-process>');
+  const lastClose = output.toLowerCase().lastIndexOf('</ace-process>');
+  if (lastOpen !== -1 && lastOpen > lastClose) {
+    output = output.slice(0, lastOpen);
+  }
+  return output;
+}
+
 function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): boolean {
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
 }
@@ -2382,7 +2392,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private parseHumanHelpRequests(output: string, config: StateMachineWorkflowConfig): HumanHelpRequest[] {
     if (!this.isHumanHelpEnabled(config)) return [];
     const requests: HumanHelpRequest[] = [];
-    for (const block of extractTaggedBlocks(output, 'human-help')) {
+    for (const block of extractTaggedBlocks(stripAceProcessBlocks(output), 'human-help')) {
       let parsed: any = null;
       try {
         parsed = JSON.parse(block);
@@ -7294,6 +7304,7 @@ try {
     let accumulatedDuration = 0;
     let autoRecoveryAttempts = 0;
     let transientEngineRetryAttempts = 0;
+    let humanHelpStreamInterrupted = false;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
@@ -7368,6 +7379,15 @@ try {
       } else if (this.currentRunId && content) {
         scheduleTrailingFlush(2000 - (now - lastFlush));
       }
+      if (
+        !humanHelpStreamInterrupted
+        && this.isHumanHelpEnabled(config)
+        && extractTaggedBlocks(stripAceProcessBlocks(content), 'human-help').length > 0
+      ) {
+        humanHelpStreamInterrupted = true;
+        watchdogTriggeredForProcess = currentProcessId;
+        processManager.killProcess(currentProcessId);
+      }
     };
     processManager.on('stream', streamFlushHandler);
     const idleWatchdog = setInterval(() => {
@@ -7415,6 +7435,23 @@ try {
         if (this.shouldStop) {
           throw new Error('工作流已停止');
         }
+        if (humanHelpStreamInterrupted) {
+          const proc = processManager.getProcess(currentProcessId);
+          if (proc?.streamContent) {
+            flushProcessStream(proc.streamContent);
+          }
+          result = {
+            result: proc?.streamContent || accumulatedStreamPreview || '',
+            runtimeSessionId: proc?.sessionId || currentSessionId || '',
+            stop_reason: 'cancelled',
+            is_error: false,
+            cost_usd: 0,
+            duration_ms: 0,
+            duration_api_ms: 0,
+            num_turns: 0,
+            usage: ZERO_ENGINE_USAGE,
+          };
+        } else
         // If force transition killed the process, return partial output and let main loop handle it
         if (this.pendingForceTransition) {
           console.log(`[SM-ForceTransition] 进程被强制跳转终止，目标: ${this.pendingForceTransition}`);
@@ -7434,7 +7471,7 @@ try {
           };
         }
         // If interrupted with feedback, resume with feedback
-        if (this.interruptFlag && this.liveFeedback.length > 0) {
+        else if (this.interruptFlag && this.liveFeedback.length > 0) {
           const isFeedbackOnly = this.feedbackInterrupt;
           this.interruptFlag = false;
           this.feedbackInterrupt = false;
@@ -7476,7 +7513,9 @@ try {
           this.emitLiveFeedbackStatus(feedbackEntries, 'delivered', feedbackTimestamp);
           continue;
         }
-        throw err;
+        else {
+          throw err;
+        }
       }
 
       // Accumulate stream content
@@ -7487,6 +7526,52 @@ try {
 
       if (this.shouldStop) {
         throw new Error('工作流已停止');
+      }
+
+      if (humanHelpStreamInterrupted && !this.shouldStop) {
+        const streamOutput = proc?.streamContent || result.result || '';
+        const humanHelpRequests = this.parseHumanHelpRequests(streamOutput, config);
+        if (humanHelpRequests.length > 0) {
+          humanHelpStreamInterrupted = false;
+          currentSessionId = result.runtimeSessionId || currentSessionId || undefined;
+          const resumePrompt = await this.handleHumanHelpRequests({
+            requests: humanHelpRequests,
+            output: streamOutput,
+            step,
+            state: this.currentWorkflowConfig?.workflow?.states?.find((item) => item.name === this.currentState)
+              || config.workflow.states.find((item) => (item.steps || []).some((stateStep) => stateStep === step || stateStep.name === step.name))
+              || ({ name: this.currentState || '', steps: [step], transitions: [], isInitial: false, isFinal: false } as StateMachineState),
+            config,
+            runtimeAgentName,
+          });
+          if (resumePrompt) {
+            appendFeedbackMarker(resumePrompt);
+            currentPrompt = currentSessionId ? resumePrompt : `${context}\n\n${resumePrompt}`;
+            currentProcessId = stepId || currentProcessId;
+            currentProcessStreamLength = 0;
+            lastStreamAt = Date.now();
+            watchdogTriggeredForProcess = '';
+            if (agent) {
+              agent.status = 'running';
+              agent.currentTask = step.name;
+              this.emit('agents', { agents: this.agents });
+            }
+            this.upsertCurrentProcess({
+              pid: Date.now(),
+              id: currentProcessId,
+              agent: runtimeAgentName,
+              step: streamStepName,
+              stepId,
+              startTime: new Date().toISOString(),
+            });
+            this.emit('step-start', {
+              state: this.currentState,
+              step: streamStepName,
+              agent: runtimeAgentName,
+            });
+            continue;
+          }
+        }
       }
 
       if (result.is_error && this.interruptFlag && this.liveFeedback.length > 0 && !this.shouldStop) {
@@ -7525,7 +7610,7 @@ try {
         continue;
       }
 
-      if (result.stop_reason === 'cancelled') {
+      if (result.stop_reason === 'cancelled' && !humanHelpStreamInterrupted) {
         throw new Error('运行时执行已取消');
       }
 
@@ -7614,6 +7699,7 @@ try {
       currentSessionId = result.runtimeSessionId || undefined;
 
       if (humanHelpRequests.length > 0 && !this.shouldStop) {
+        humanHelpStreamInterrupted = false;
         const resumePrompt = await this.handleHumanHelpRequests({
           requests: humanHelpRequests,
           output: roundOutput,

@@ -81,31 +81,24 @@ interface Message {
 }
 
 export default function ChatModal() {
-  const { isOpen, toggleChat, closeChat, model: ctxModel, effectiveEngine: ctxEffectiveEngine, isModelSelectionReady } = useChat();
+  const { isOpen, toggleChat, closeChat, model: ctxModel, isModelSelectionReady } = useChat();
   const [messages, setMessages] = useState<Message[]>(createInitialMessages);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [model, setModel] = useState(() => ctxModel || '');
-  const [engine, setEngine] = useState(() => ctxEffectiveEngine || '');
+  const [model, setModel] = useState('');
+  const [engine, setEngine] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [draft, setDraft] = useState('');
   const [currentUser, setCurrentUser] = useState<AuthViewer | null>(() => readStoredAuthUser());
   const effectiveEngine = useCurrentEngine(engine);
-  const isComposerReady = isModelSelectionReady && Boolean(model && effectiveEngine);
+  const effectiveModel = model || ctxModel;
+  const isComposerReady = isModelSelectionReady && Boolean(effectiveModel && effectiveEngine);
   const runtimeDisplay = useMemo(() => resolveChatRuntimeDisplay({
     engine: effectiveEngine,
-    model,
+    model: effectiveModel,
     isStreaming: loading,
     hasError: messages.some((message) => message.role === 'error'),
-  }), [effectiveEngine, loading, messages, model]);
-
-  useEffect(() => {
-    if (!model && ctxModel) setModel(ctxModel);
-  }, [ctxModel, model]);
-
-  useEffect(() => {
-    if (!engine && ctxEffectiveEngine) setEngine(ctxEffectiveEngine);
-  }, [ctxEffectiveEngine, engine]);
+  }), [effectiveEngine, effectiveModel, loading, messages]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -138,7 +131,7 @@ export default function ChatModal() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ message: trimmed, model, engine: effectiveEngine, sessionId }),
+        body: JSON.stringify({ message: trimmed, model: effectiveModel, engine: effectiveEngine, sessionId }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -157,7 +150,7 @@ export default function ChatModal() {
           rawContent: data.result,
           costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
           engine: effectiveEngine,
-          model,
+          model: effectiveModel,
           timestamp: Date.now(),
         }]);
       }

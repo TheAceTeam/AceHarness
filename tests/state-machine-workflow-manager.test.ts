@@ -1380,6 +1380,24 @@ describe('human-help runtime output', () => {
 
     expect(requests).toEqual([]);
   });
+
+  test('ignores human-help tags embedded in ace-process tool blocks', async () => {
+    const output = [
+      '<ace-process>{"toolName":"powershell","title":"write","command":"Set-Content -Value \'<human-help>{\\"title\\":\\"wrong\\",\\"question\\":\\"wrong\\"}</human-help>\'","kind":"tool-call"}</ace-process>',
+      '<human-help>{"title":"Need input","question":"What should stage 1 build?","answerType":"text"}</human-help>',
+    ].join('\n\n');
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig({ workflow: { humanHelp: { enabled: true } } });
+
+    const requests = (manager as any).parseHumanHelpRequests(output, config);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      title: 'Need input',
+      question: 'What should stage 1 build?',
+      answerType: 'text',
+    });
+  });
 });
 
 describe('state machine live feedback', () => {

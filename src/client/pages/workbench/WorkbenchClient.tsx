@@ -94,6 +94,7 @@ import { WrapperProcessBlocks } from '@/components/chat/ChatMessage';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import WorkflowSupervisorAgoraPanel from '@/components/workflow/WorkflowSupervisorAgoraPanel';
+import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
 import { getStreamingAceProcessReadyContent, mergeAceProcessChunkItems, mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
@@ -5480,10 +5481,10 @@ export default function WorkbenchPage({
       setQualityChecks((status as any).qualityChecks || []);
       setMemoryLayers((status as any).memoryLayers || null);
       const statusCurrentState = String((status as any).currentState || '');
+      const statusPendingHumanQuestion = (status as any).pendingHumanQuestion || null;
       const statusHasActiveHumanApproval = statusCurrentState === '__human_approval__' || Boolean((status as any).pendingCheckpoint);
-      const nextPendingHumanQuestion = statusHasActiveHumanApproval
-        ? ((status as any).pendingHumanQuestion || null)
-        : null;
+      const nextPendingHumanQuestion = statusPendingHumanQuestion
+        || (statusHasActiveHumanApproval ? ((status as any).pendingHumanQuestion || null) : null);
       const shouldRestorePendingHumanQuestion = nextPendingHumanQuestion
         && nextPendingHumanQuestion.status === 'unanswered';
       if (shouldRestorePendingHumanQuestion) {
@@ -8189,7 +8190,12 @@ export default function WorkbenchPage({
 
   const sanitizeProtocolBlocksForDisplay = (text: string): string => {
     if (!text) return text;
-    return text
+    const withoutCompleteHumanHelp = text.replace(/<human-help>\s*[\s\S]*?\s*<\/human-help>/gi, '');
+    const openHumanHelpIndex = withoutCompleteHumanHelp.toLowerCase().lastIndexOf('<human-help>');
+    const visibleText = openHumanHelpIndex >= 0
+      ? withoutCompleteHumanHelp.slice(0, openHumanHelpIndex)
+      : withoutCompleteHumanHelp;
+    return visibleText
       .replace(/<step-conclusion>\s*([\s\S]*?)\s*<\/step-conclusion>/gi, '$1')
       .replace(/<\/?step-conclusion\s*>?/gi, '')
       .trim();
@@ -12059,8 +12065,21 @@ export default function WorkbenchPage({
   );
 
   const renderRunLiveOutputPanel = () => (
-    <div className="h-full min-h-0 overflow-hidden bg-muted/10">
-      {renderLiveStreamPanel()}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/10">
+      {pendingHumanQuestion?.status === 'unanswered' ? (
+        <div className="shrink-0 border-b bg-background/95 p-4 shadow-sm">
+          <HumanQuestionCard
+            question={pendingHumanQuestion}
+            submitting={submittingHumanQuestion}
+            collapsible={false}
+            autoFocus
+            onSubmit={handleSubmitHumanQuestion}
+          />
+        </div>
+      ) : null}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {renderLiveStreamPanel()}
+      </div>
     </div>
   );
 
