@@ -363,7 +363,7 @@ export default function WorkspaceDirectoryPicker({
       quickAccessRoots={quickAccessRoots}
       disabled={disabled}
       className={className}
-      emptyDisplayValue={emptyDisplayValue}
+      emptyDisplayValue={value ? undefined : emptyDisplayValue}
       onResolvePath={resolveInputPath}
       onNavigateUp={navigateUp}
       onNavigateHome={navigateHome}
