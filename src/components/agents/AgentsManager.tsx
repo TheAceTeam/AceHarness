@@ -661,7 +661,7 @@ export default function AgentsManager({
 
         <PageToolbar
           className={cn(
-            'sticky z-20 rounded-xl border border-border bg-card px-4 shadow-none',
+            'sticky z-40 rounded-xl border border-border bg-card px-4 shadow-none',
             embedded ? 'top-0' : 'top-[4.5rem]',
           )}
           search={(
@@ -890,7 +890,7 @@ export default function AgentsManager({
                                 className="group relative min-w-0 cursor-pointer"
                                 onClick={() => handleEditAgent(agent)}
                               >
-                                <div className="absolute right-3 top-3 z-20 rounded-md border border-border bg-background p-1.5 opacity-70 transition-opacity duration-150 group-hover:opacity-100">
+                                <div className="absolute right-3 top-3 z-10 rounded-md border border-border bg-background p-1.5 opacity-70 transition-opacity duration-150 group-hover:opacity-100">
                                   <Checkbox
                                     checked={isSelected}
                                     onCheckedChange={() => toggleAgentSelection(agent.name)}
