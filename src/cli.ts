@@ -28,9 +28,6 @@ import {
 import { refreshBundledAceHarnessSkillsOnStartup } from '@/lib/run/runtime-skills';
 import { getLoginPasswordError, PASSWORD_POLICY_DESCRIPTION } from '@/lib/auth/password-policy';
 
-process.chdir(getRepoRoot());
-refreshBundledAceHarnessSkillsOnStartup();
-
 type Locale = 'zh' | 'en';
 
 interface SystemSettings {
@@ -79,6 +76,7 @@ interface CliMessages {
   setupCancelled: string;
   welcome: string;
   statusLabel: string;
+  versionLabel: (version: string) => string;
   runtimeHome: string;
   localeStatus: (value: string) => string;
   adminStatus: (configured: boolean) => string;
@@ -172,6 +170,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     setupCancelled: '初始化已取消',
     welcome: '[ACE] 本地配置检查',
     statusLabel: '[ACE] 当前状态',
+    versionLabel: (version: string) => `[ACE] 版本：${version}`,
     runtimeHome: '系统数据保存目录',
     localeStatus: (value: string) => `语言: ${value}`,
     adminStatus: (configured: boolean) => `管理员: ${configured ? '已配置' : '未配置'}`,
@@ -185,6 +184,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '  ace service      查看并停止 ACE 进程',
       '  ace update [tag|version] 从 npm 更新 ACEHarness',
       '  ace reset --force 重置本地 ACE 配置',
+      '  ace --version    查看版本号',
       '  ace --help       查看帮助',
     ].join('\n'),
     unknownCommand: (command: string) => `[ACE] 无效命令：${command}`,
@@ -257,6 +257,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     setupCancelled: 'Setup cancelled',
     welcome: '[ACE] Local configuration check',
     statusLabel: '[ACE] Current status',
+    versionLabel: (version: string) => `[ACE] Version: ${version}`,
     runtimeHome: 'System data directory',
     localeStatus: (value: string) => `Language: ${value}`,
     adminStatus: (configured: boolean) => `Admin: ${configured ? 'configured' : 'missing'}`,
@@ -270,6 +271,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '  ace service       Inspect and stop ACE processes',
       '  ace update [tag|version] Update ACEHarness from npm',
       '  ace reset --force Reset local ACE state',
+      '  ace --version     Show version',
       '  ace --help        Show help',
     ].join('\n'),
     unknownCommand: (command: string) => `[ACE] Unknown command: ${command}`,
@@ -356,20 +358,23 @@ function resolveCliLocale(): Locale {
   return normalizeLocale(process.env.ACE_LOCALE || process.env.LANG || process.env.LC_ALL);
 }
 
-type CliCommand = '' | 'start' | 'reset' | 'help' | 'servive' | 'service' | 'update' | '__run-server' | '__daemon';
+type CliCommand = '' | 'start' | 'reset' | 'help' | 'version' | 'servive' | 'service' | 'update' | '__run-server' | '__daemon';
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
   const help = args.includes('--help') || args.includes('-h');
+  const version = args.length === 1 && (args[0] === '--version' || args[0] === '-v');
   const positionals = args.filter((arg) => !arg.startsWith('-'));
-  const command = help ? 'help' : (positionals[0] || '');
-  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help', 'servive', 'service', 'update', '__run-server', '__daemon']);
+  const command = help ? 'help' : version ? 'version' : (positionals[0] || '');
+  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help', 'version', 'servive', 'service', 'update', '__run-server', '__daemon']);
   const commandIsValid = validCommands.has(command as CliCommand);
   const allowedOptions = command === 'reset'
     ? new Set(['--force', '--help', '-h'])
     : command === 'update'
       ? new Set(['--force', '--yes', '-y', '--dry-run', '--stop-running', '--tag', '--version', '--target', '--help', '-h'])
-      : new Set(['--help', '-h', '--service-id', '-V', '--verbose']);
+      : command === 'version'
+        ? new Set(['--version', '-v'])
+        : new Set(['--help', '-h', '--service-id', '-V', '--verbose']);
   const unknownOption = args.find((arg) => arg.startsWith('-') && !allowedOptions.has(arg));
   const serviceIdIndex = args.findIndex((arg) => arg === '--service-id');
   const getOptionValue = (names: string[]) => {
@@ -1152,9 +1157,17 @@ function spawnCliProcess(args: string[], env: NodeJS.ProcessEnv, detached: boole
   });
 }
 
+function initializeCliRuntime(): void {
+  process.chdir(getRepoRoot());
+  refreshBundledAceHarnessSkillsOnStartup();
+}
+
 async function startAceServerRuntime(): Promise<void> {
   const startScript = join(getRepoRoot(), 'scripts', 'start-tanstack-start.mjs');
-  await import(pathToFileURL(startScript).href);
+  if (!existsSync(startScript)) {
+    throw new Error(`Missing server startup script: ${startScript}`);
+  }
+  await Function('specifier', 'return import(specifier)')(pathToFileURL(startScript).href);
 }
 
 async function startServerProcess(settings: SystemSettings, serviceId: string): Promise<void> {
@@ -1176,6 +1189,7 @@ async function startServerProcess(settings: SystemSettings, serviceId: string): 
     }
   }, 1200);
   console.log(messages.startingServer(url));
+  console.log(messages.versionLabel(getCurrentAcePackageVersion()));
   console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
   await startAceServerRuntime();
 }
@@ -1265,6 +1279,7 @@ async function startManagedBackground(settings: SystemSettings): Promise<void> {
   const state = buildServiceState(serviceId, settings, mode, mode === 'daemon' ? (child.pid ?? null) : null, mode === 'background' ? (child.pid ?? null) : null);
   await saveServiceState(state);
   console.log(messages.startingServer(state.url));
+  console.log(messages.versionLabel(getCurrentAcePackageVersion()));
   console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
 }
 
@@ -1367,6 +1382,10 @@ async function main() {
   const locale = resolveCliLocale();
   const messages = getLocaleMessages(locale);
 
+  if (command === 'version') {
+    console.log(getCurrentAcePackageVersion());
+    return;
+  }
   if (command === 'help') {
     printUsage(locale);
     return;
@@ -1381,6 +1400,7 @@ async function main() {
     printUsage(locale, process.stderr);
     process.exit(1);
   }
+  initializeCliRuntime();
   if (command === 'reset') {
     await resetAceState(force);
     return;
