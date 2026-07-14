@@ -104,6 +104,7 @@ const RUNTIME_AVAILABILITY_ENGINE_IDS = [
   'kiro',
   'opencode',
   'nga',
+  'codeagent',
   'codegenie',
   'codex',
   'cursor',

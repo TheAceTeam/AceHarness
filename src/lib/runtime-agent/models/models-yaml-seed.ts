@@ -61,6 +61,7 @@ const preRuntimeAgentIdBySourceName: Record<string, string> = {
   codex: 'codex',
   opencode: 'opencode',
   nga: 'nga',
+  codeagent: 'codeagent',
   codegenie: 'codegenie',
   cursor: 'cursor',
   trae: 'trae',

@@ -15,7 +15,7 @@ import type {
   RuntimeBinding,
 } from '../contracts';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
-import { formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
+import { applyAcpxAgentSessionEnv, formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
 
 export interface CreateAcpxRuntimeClientOptions {
   cwd?: string;
@@ -440,5 +440,5 @@ function resolveEnv(input: AdapterSessionInput): Record<string, string> | undefi
     if (item.secret) continue;
     if (typeof item.value === 'string') env[item.key] = item.value;
   }
-  return Object.keys(env).length > 0 ? env : undefined;
+  return applyAcpxAgentSessionEnv(input.profileSnapshot.agentId, env);
 }

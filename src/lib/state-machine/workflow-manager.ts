@@ -1167,7 +1167,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
           this.currentStep = `复制工作目录（建立清单：已扫描 ${scannedFiles} 文件）`;
           this.emit('status', {
             status: 'preparing',
-            message: `准备中：建立清单，已扫描 ${scannedFiles} 文件`,
             runId,
             startTime: this.runStartTime,
             currentPhase: '准备阶段',
@@ -1226,7 +1225,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = stepText;
       this.emit('status', {
         status: 'preparing',
-        message: `准备中：${stepText}`,
         runId,
         startTime: this.runStartTime,
         currentPhase: '准备阶段',
@@ -1463,7 +1461,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     await this.syncRunSpecCodingDelta();
     this.emit('status', {
       status: this.status,
-      message: '已从 workspace delta spec 导入用户修订',
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -1713,7 +1710,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       this.emit('status', {
         status: 'preparing',
-        message: '准备中...',
         runId,
         startTime: this.runStartTime,
         currentPhase: '准备阶段',
@@ -1755,11 +1751,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
         await this.persistState();
       }
 
-      const reportPreparingProgress = async (message: string, step: string) => {
+      const reportPreparingProgress = async (_message: string, step: string) => {
         this.currentStep = step;
         this.emit('status', {
           status: 'preparing',
-          message,
           runId,
           startTime: this.runStartTime,
           currentPhase: '准备阶段',
@@ -1889,7 +1884,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = null;
       this.resumeStateName = null;
       this.resumeStepKey = null;
-      this.emitRuntimeStatus('状态机工作流已启动');
+      this.emitRuntimeStatus();
       await this.persistState();
 
       this.startWorkflowAgentPrewarm(workflowConfig);
@@ -1902,7 +1897,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.completeRunSpecCoding('工作流执行完成。');
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           runId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -1919,7 +1913,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -1969,7 +1962,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
     this.clearRuntimeActivity();
-    this.emitRuntimeStatus('工作流已停止');
+    this.emitRuntimeStatus();
 
     // Kill any running child processes immediately
     const cancelledProcesses = this.cancelCurrentProcesses();
@@ -2037,7 +2030,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
       currentStep: this.currentStep,
       activeSteps: Array.from(this.activeStepKeys),
       activeConcurrencyGroups: this.activeConcurrencyGroups,
-      message: `正在强制跳转到 ${targetState}`,
     });
     this.emit('force-transition', { targetState, from: this.currentState, instruction, actor });
     if (fromState !== '__human_approval__' && fromState !== targetState && this.currentWorkflowConfig) {
@@ -3116,10 +3108,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     ].filter(Boolean).join('\n\n');
   }
 
-  private emitSpecRevisionVoteStatus(message?: string): void {
+  private emitSpecRevisionVoteStatus(_message?: string): void {
     this.emit('status', {
       status: this.status,
-      message,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -3133,10 +3124,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     });
   }
 
-  private emitRuntimeStatus(message?: string): void {
+  private emitRuntimeStatus(_message?: string): void {
     this.emit('status', {
       status: this.status,
-      message,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -4502,9 +4492,8 @@ try {
 
     this.emit('state-change', {
       state: this.currentState,
-      message: `进入状态: ${this.currentState}`,
     });
-    this.emitRuntimeStatus(`进入状态: ${this.currentState}`);
+    this.emitRuntimeStatus();
     await this.persistState();
 
     while (this.currentState && !this.shouldStop) {
@@ -4542,9 +4531,8 @@ try {
         }
       this.emit('state-change', {
         state: this.currentState,
-        message: `到达终止状态: ${this.currentState}`,
       });
-      this.emitRuntimeStatus(`到达终止状态: ${this.currentState}`);
+      this.emitRuntimeStatus();
       break;
       }
 
@@ -4768,30 +4756,9 @@ try {
         const fromState = fromStateName
           ? config.workflow.states.find(s => s.name === fromStateName)
           : undefined;
-        const toState = config.workflow.states.find(s => s.name === humanSelectedState);
-        if (fromState && toState && fromState.steps.length > 0 && toState.steps.length > 0) {
-          const fromAgent = fromState.steps[fromState.steps.length - 1].agent;
-          const toAgent = toState.steps[0].agent;
-          if (fromAgent !== toAgent) {
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'stream',
-              fromAgent,
-              toAgent,
-              message: `状态流转: ${fromState.name} -> ${toState.name} (人工审查后)`,
-              stateName: fromState.name,
-              stepName: fromState.steps[fromState.steps.length - 1].name,
-              round: 0,
-              timestamp: new Date().toISOString(),
-            });
-            this.emit('agent-flow', { agentFlow: this.agentFlow });
-          }
-        }
-
         this.currentState = humanSelectedState;
         this.emit('state-change', {
           state: this.currentState,
-          message: `进入状态: ${this.currentState}`,
         });
       } else {
         // No human approval needed, proceed automatically
@@ -4812,32 +4779,9 @@ try {
           issues: result.issues,
         });
 
-        // 添加状态切换的流转线
-        const fromState = config.workflow.states.find(s => s.name === this.currentState);
-        const toState = config.workflow.states.find(s => s.name === nextState);
-        if (fromState && toState && fromState.steps.length > 0 && toState.steps.length > 0) {
-          const fromAgent = fromState.steps[fromState.steps.length - 1].agent;
-          const toAgent = toState.steps[0].agent;
-          if (fromAgent !== toAgent) {
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'stream',
-              fromAgent: fromAgent,
-              toAgent: toAgent,
-              message: `状态流转: ${fromState.name} -> ${toState.name}`,
-              stateName: fromState.name,
-              stepName: fromState.steps[fromState.steps.length - 1].name,
-              round: 0,
-              timestamp: new Date().toISOString(),
-            });
-            this.emit('agent-flow', { agentFlow: this.agentFlow });
-          }
-        }
-
         this.currentState = nextState;
         this.emit('state-change', {
           state: this.currentState,
-          message: `进入状态: ${this.currentState}`,
         });
       }
     }
@@ -5242,7 +5186,7 @@ try {
       state: state.name,
       stepCount: state.steps.length,
     });
-    this.emitRuntimeStatus(`执行状态: ${state.name}`);
+    this.emitRuntimeStatus();
     if (this.currentRunSpecCoding) {
       this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
         stateName: state.name,
@@ -5511,7 +5455,6 @@ try {
     });
     this.emit('status', {
       status: this.status,
-      message: `Spec Coding tasks.md 已由系统更新 ${taskIds.length} 项`,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -6380,20 +6323,7 @@ try {
       validation: `Step started: ${state.name} / ${step.name}`,
     });
     this.emit('agents', { agents: this.agents });
-    this.emitRuntimeStatus(`开始执行步骤: ${state.name} / ${step.name}`);
-    
-    this.agentFlow.push({
-      id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: 'stream',
-      fromAgent: runtimeAgentName,
-      toAgent: runtimeAgentName,
-      message: `开始执行步骤: ${step.name}`,
-      stateName: state.name,
-      stepName: step.name,
-      round: 0,
-      timestamp: new Date().toISOString(),
-    });
-    this.emit('agent-flow', { agentFlow: this.agentFlow });
+    this.emitRuntimeStatus();
     await this.persistState();
 
     this.emit('step-start', {
@@ -6549,27 +6479,6 @@ try {
         dedupeKey: `workflow-step-complete-${stepId}`,
         speakerName: runtimeAgentName,
       });
-
-      // 记录步骤完成的流转线
-      const currentStepIndex = state.steps.findIndex(s => s.name === step.name);
-      if (currentStepIndex >= 0 && currentStepIndex < state.steps.length - 1) {
-        const nextStep = state.steps[currentStepIndex + 1];
-        const nextRuntimeAgentName = nextStep ? getStepRuntimeAgentName(nextStep) : '';
-        if (nextStep && nextRuntimeAgentName !== runtimeAgentName) {
-          this.agentFlow.push({
-            id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            type: 'stream',
-            fromAgent: runtimeAgentName,
-            toAgent: nextRuntimeAgentName,
-            message: `步骤流转: ${step.name} -> ${nextStep.name}`,
-            stateName: state.name,
-            stepName: step.name,
-            round: 0,
-            timestamp: new Date().toISOString(),
-          });
-          this.emit('agent-flow', { agentFlow: this.agentFlow });
-        }
-      }
 
       // Save output to file system
       if (this.currentRunId) {
@@ -8081,7 +7990,6 @@ try {
 
     this.emit('status', {
       status: 'running',
-      message: '恢复运行中...',
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -8110,7 +8018,6 @@ try {
       this.currentStep = resumeStepKey;
       this.emit('status', {
         status: 'running',
-        message: `恢复运行：将从步骤 ${resumeStepKey} 继续`,
         runId: this.currentRunId,
         startTime: this.runStartTime,
         endTime: this.runEndTime,
@@ -8267,7 +8174,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -8283,7 +8189,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -8686,7 +8591,6 @@ try {
 
     this.emit('status', {
       status: 'running',
-      message: `从状态 ${stateName} 重新运行...`,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
       currentConfigFile: this.currentConfigFile
@@ -8724,7 +8628,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           startTime: this.runStartTime,
           endTime: this.runEndTime,
           currentConfigFile: this.currentConfigFile
@@ -8738,7 +8641,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
           currentConfigFile: this.currentConfigFile
@@ -8812,7 +8714,6 @@ try {
 
     this.emit('status', {
       status: 'running',
-      message: `从已结束运行强制跳转到状态 ${targetState} 并恢复执行...`,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -8851,7 +8752,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -8867,7 +8767,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,

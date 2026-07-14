@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { getEngineConfigDir, getEngineSkillsSubdir } from '@/lib/engines/engine-config';
 import { resolveAgentSelection, resolveWorkflowAgentSelection } from '@/lib/agent/engine-selection';
+import { normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
 
 describe('engine config', () => {
   test('getEngineConfigDir returns the shared .agents workspace directory for each engine type', () => {
@@ -31,6 +32,11 @@ describe('engine config', () => {
 
   test('getEngineSkillsSubdir uses .agents/skills for unknown engine types', () => {
     expect(getEngineSkillsSubdir('unknown')).toBe('.agents/skills');
+  });
+
+  test('codeagent remains an independent runtime engine id', () => {
+    expect(normalizeRuntimeEngineId('codeagent')).toBe('codeagent');
+    expect(normalizeRuntimeEngineId('claude-code')).toBe('claude');
   });
 
 });
@@ -114,10 +120,10 @@ describe('resolveWorkflowAgentSelection', () => {
     expect(result.effectiveModel).toBe('opus');
   });
 
-  test('agent active engine wins when workflow has no engine policy', () => {
+  test('workflow defaults to global selection even when agent has an active engine', () => {
     const result = resolveWorkflowAgentSelection(
       { name: 'architect', engineModels: { codex: 'gpt-5.4' }, activeEngine: 'codex' },
-      { engine: 'opencode', defaultModel: 'glm-5' },
+      { engine: 'codex', defaultModel: 'gpt-5.5' },
       {
         agentName: 'architect',
         workflowContext: {
@@ -129,9 +135,21 @@ describe('resolveWorkflowAgentSelection', () => {
       },
     );
 
-    expect(result.followsSystem).toBe(false);
+    expect(result.followsSystem).toBe(true);
     expect(result.effectiveEngine).toBe('codex');
-    expect(result.effectiveModel).toBe('gpt-5.4');
+    expect(result.effectiveModel).toBe('gpt-5.5');
+  });
+
+  test('workflow ignores agent model config instead of using it as fallback', () => {
+    const result = resolveWorkflowAgentSelection(
+      { name: 'architect', engineModels: { codex: 'gpt-5.4' }, activeEngine: 'codex' },
+      {},
+      { agentName: 'architect', workflowContext: { executionPolicy: { agentOverrides: {} } } },
+    );
+
+    expect(result.followsSystem).toBe(true);
+    expect(result.effectiveEngine).toBe('');
+    expect(result.effectiveModel).toBe('');
   });
 
   test('workflow default policy overrides global selection for all agents', () => {
@@ -179,5 +197,29 @@ describe('resolveWorkflowAgentSelection', () => {
     expect(result.configuredEngine).toBe('cursor');
     expect(result.effectiveEngine).toBe('cursor');
     expect(result.effectiveModel).toBe('cursor-fast');
+  });
+
+  test('workflow agent override without model does not read agent model config', () => {
+    const result = resolveWorkflowAgentSelection(
+      { name: 'reviewer', engineModels: { cursor: 'cursor-fast' }, activeEngine: 'cursor' },
+      { engine: 'codex', defaultModel: 'gpt-5.5' },
+      {
+        workflowContext: {
+          executionPolicy: {
+            agentOverrides: {
+              reviewer: {
+                enabled: true,
+                engine: 'cursor',
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.followsSystem).toBe(false);
+    expect(result.configuredEngine).toBe('cursor');
+    expect(result.effectiveEngine).toBe('cursor');
+    expect(result.effectiveModel).toBe('gpt-5.5');
   });
 });

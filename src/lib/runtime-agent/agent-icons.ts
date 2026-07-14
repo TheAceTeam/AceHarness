@@ -8,6 +8,7 @@ export const AGENT_ICON_PATHS = {
   kiro: `${ENGINE_ICON_BASE_PATH}/kiro.svg`,
   trae: `${ENGINE_ICON_BASE_PATH}/trae.svg`,
   nga: `${ENGINE_ICON_BASE_PATH}/code-agent.svg`,
+  codeagent: `${ENGINE_ICON_BASE_PATH}/codeagent.svg`,
   codegenie: `${ENGINE_ICON_BASE_PATH}/code-genie.svg`,
   cangjieMagic: `${ENGINE_ICON_BASE_PATH}/magic-cli.svg`,
   pi: `${ENGINE_ICON_BASE_PATH}/pi.svg`,

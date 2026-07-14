@@ -114,6 +114,7 @@ const ENGINE_TO_AGENT: Record<string, string> = {
   trae: 'trae',
   nga: 'nga',
   'nga-sdk': 'nga',
+  codeagent: 'codeagent',
   codegenie: 'codegenie',
   'codegenie-sdk': 'codegenie',
   'magic-cli': 'cangjie-magic',
@@ -375,6 +376,7 @@ function runtimeAgentLabel(agentId: string): string {
     opencode: 'OpenCode',
     codex: 'Codex',
     claude: 'Claude Code',
+    codeagent: 'CodeAgent',
     gemini: 'Gemini',
   };
   return labels[agentId] || agentId;

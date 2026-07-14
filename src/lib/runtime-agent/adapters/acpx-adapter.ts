@@ -186,8 +186,27 @@ export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options:
 export function getAcpxAgentRegistryOverrides(): Record<string, string> {
   return {
     nga: 'ngagent --disable-update acp',
+    codeagent: 'ngagent acp',
     codegenie: 'codegenie acp',
   };
+}
+
+const OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS = new Set([
+  'opencode',
+  'nga',
+  'codegenie',
+]);
+
+export function applyAcpxAgentSessionEnv(
+  agentId: string | undefined,
+  env?: Record<string, string>,
+): Record<string, string> | undefined {
+  const next = { ...(env || {}) };
+  const normalizedAgentId = String(agentId || '').trim().toLowerCase();
+  if (OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS.has(normalizedAgentId)) {
+    next.OPENCODE_SKIP_SAFE_CHECK = '1';
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export function getAcpxCommandAttemptsForRuntime(
@@ -211,7 +230,14 @@ function buildAcpxCommandAttemptParts(
   command: AcpxCommandResolution,
   options: { cwd?: string; agentId?: string },
 ): Array<{ source: string; parts: string[] }> {
-  if (options.agentId === 'nga' || command.command === 'ngagent' || command.command === 'nga') {
+  if (options.agentId === 'codeagent') {
+    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+    const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || (!isWindows() ? findCommand('ngagent', searchPaths) : null);
+    const args = ['acp'];
+    if (options.cwd) args.push('--cwd', options.cwd);
+    return [{ source: 'codeagent', parts: wrapWindowsCmdShellParts(ngagent || 'ngagent', args) }];
+  }
+  if (options.agentId === 'nga' || (!options.agentId && (command.command === 'ngagent' || command.command === 'nga'))) {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
     const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || (!isWindows() ? findCommand('ngagent', searchPaths) : null);
     const args = ['--disable-update', 'acp'];

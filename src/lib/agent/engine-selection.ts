@@ -62,18 +62,16 @@ export function resolveWorkflowAgentSelection(
   const workflowPolicy = resolveWorkflowExecutionPolicy(options?.workflowContext);
   const agentName = options?.agentName || roleConfig?.name || '';
   const override = agentName ? workflowPolicy.agentOverrides?.[agentName] : undefined;
-  const baseSelection = resolveAgentSelection(roleConfig, globalSelection, workflowPolicy.defaultEngine || undefined);
-  const engineModels = roleConfig?.engineModels || {};
-  const fallbackModel = findFirstConfiguredModel(engineModels) || globalSelection?.defaultModel || '';
-  const hasWorkflowPolicy = Boolean(workflowPolicy.defaultEngine || workflowPolicy.defaultModel || Object.keys(workflowPolicy.agentOverrides || {}).length > 0);
 
   if (override?.enabled) {
-    const effectiveEngine = override.engine || workflowPolicy.defaultEngine || baseSelection.effectiveEngine;
+    const effectiveEngine = override.engine
+      || workflowPolicy.defaultEngine
+      || globalSelection?.engine
+      || '';
     const effectiveModel = override.model
-      || (effectiveEngine ? engineModels[effectiveEngine] : '')
       || workflowPolicy.defaultModel
       || globalSelection?.defaultModel
-      || fallbackModel;
+      || '';
     return {
       configuredEngine: override.engine || '',
       effectiveEngine,
@@ -82,19 +80,16 @@ export function resolveWorkflowAgentSelection(
     };
   }
 
-  if (hasWorkflowPolicy) {
-    const effectiveEngine = workflowPolicy.defaultEngine || baseSelection.effectiveEngine;
-    const effectiveModel = workflowPolicy.defaultModel
-      || (effectiveEngine ? engineModels[effectiveEngine] : '')
-      || globalSelection?.defaultModel
-      || fallbackModel;
-    return {
-      configuredEngine: '',
-      effectiveEngine,
-      effectiveModel,
-      followsSystem: true,
-    };
-  }
-
-  return baseSelection;
+  const effectiveEngine = workflowPolicy.defaultEngine
+    || globalSelection?.engine
+    || '';
+  const effectiveModel = workflowPolicy.defaultModel
+    || globalSelection?.defaultModel
+    || '';
+  return {
+    configuredEngine: '',
+    effectiveEngine,
+    effectiveModel,
+    followsSystem: true,
+  };
 }

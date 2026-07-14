@@ -8,6 +8,7 @@ export type AgentId =
   | 'kiro'
   | 'trae'
   | 'nga'
+  | 'codeagent'
   | 'codegenie'
   | 'cangjie-magic'
   | 'pi'
@@ -299,6 +300,16 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
     iconPath: AGENT_ICON_PATHS.nga,
     family: 'opencode-compatible',
     capabilities: OPENCODE_COMPATIBLE_CAPABILITIES,
+  }),
+  acpxAgent({
+    id: 'codeagent',
+    displayName: 'CodeAgent',
+    tier: 'verified',
+    command: 'ngagent',
+    args: ['acp'],
+    fallbackCommands: ['nga'],
+    iconPath: AGENT_ICON_PATHS.codeagent,
+    family: 'claude',
   }),
   acpxAgent({
     id: 'codegenie',

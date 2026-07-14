@@ -14,12 +14,14 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 const AGENT_OVERRIDES = {
   nga: 'ngagent --disable-update acp',
+  codeagent: 'ngagent acp',
   codegenie: 'codegenie acp',
 };
 
 const ENGINE_ALIASES = {
   'claude-code': 'claude',
   'claude-code-acp': 'claude',
+  codeagent: 'codeagent',
   'kiro-cli': 'kiro',
   'trae-cli': 'trae',
   'opencode-sdk': 'opencode',
@@ -32,6 +34,7 @@ const SUPPORTED_AGENTS = [
   'claude',
   'opencode',
   'nga',
+  'codeagent',
   'codegenie',
   'cursor',
   'kiro',
@@ -46,6 +49,11 @@ const SUPPORTED_AGENTS = [
   'qoder',
   'qwen',
 ];
+
+function sessionEnvForAgent(agent) {
+  if (agent === 'opencode' || agent === 'nga' || agent === 'codegenie') return { OPENCODE_SKIP_SAFE_CHECK: '1' };
+  return undefined;
+}
 
 function parseArgs(argv) {
   const options = {
@@ -228,6 +236,7 @@ async function run() {
       cwd: options.cwd,
       sessionOptions: {
         ...(options.model ? { model: options.model } : {}),
+        ...(sessionEnvForAgent(agent) ? { env: sessionEnvForAgent(agent) } : {}),
       },
     }), options.timeoutMs, 'ensureSession');
     pushPhase(report, 'ensureSession', 'ok', {

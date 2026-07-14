@@ -1,6 +1,6 @@
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
-import { getAcpxAgentRegistryOverrides, getAcpxCommandAttemptsForRuntime, resolveAcpxCommand, resolveAcpxRuntimeAgent } from '@/lib/runtime-agent/adapters/acpx-adapter';
+import { applyAcpxAgentSessionEnv, getAcpxAgentRegistryOverrides, getAcpxCommandAttemptsForRuntime, resolveAcpxCommand, resolveAcpxRuntimeAgent } from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
 
 export const dynamic = 'force-dynamic';
@@ -162,6 +162,9 @@ async function discoverViaAcpxCommand(
     agent: command,
     mode: 'oneshot',
     cwd,
+    sessionOptions: {
+      env: applyAcpxAgentSessionEnv(agentId),
+    },
   });
 
   try {

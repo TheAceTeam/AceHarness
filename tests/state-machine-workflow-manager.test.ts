@@ -1287,6 +1287,101 @@ describe('engine-level failure detection', () => {
   });
 });
 
+describe('human-help runtime output', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('turns streamed complete human-help output into a pending question, waits, then resumes', async () => {
+    const humanHelpBlock = '<human-help>{"title":"Need product decision","question":"Which release channel should this use?","reason":"The implementation path depends on the channel.","answerType":"single-choice","options":[{"label":"Beta","value":"beta"},{"label":"Stable","value":"stable"}]}</human-help>';
+    const engine = new MockEngine();
+    let callCount = 0;
+    engine.executeImpl = async (options) => {
+      callCount += 1;
+      if (callCount === 1) {
+        engine.emitStream(humanHelpBlock);
+        return {
+          success: true,
+          output: humanHelpBlock,
+          sessionId: 'session-human-help',
+          metadata: { usage: { input_tokens: 1, output_tokens: 1 } },
+        };
+      }
+      expect(options.prompt).toContain('人工客服回复');
+      expect(options.prompt).toContain('stable');
+      const output = '{"verdict":"pass","summary":"resumed after human answer"}';
+      engine.emitStream(output);
+      return {
+        success: true,
+        output,
+        sessionId: 'session-human-help',
+        metadata: { usage: { input_tokens: 1, output_tokens: 1 } },
+      };
+    };
+
+    const manager = await createManagerForTest(engine);
+    (manager as any).currentState = '设计';
+    (manager as any).currentWorkflowConfig = makeConfig({
+      workflow: {
+        humanHelp: {
+          enabled: true,
+          supervisorReviewEnabled: false,
+          blockUntilAnswered: true,
+        },
+      },
+    });
+
+    const requiredEvents: any[] = [];
+    manager.on('human-question-required', async (payload) => {
+      requiredEvents.push(payload);
+      await manager.answerHumanQuestion(payload.question.id, { selectedOption: 'stable', text: 'Use the stable channel.' });
+    });
+
+    const state = (manager as any).currentWorkflowConfig.workflow.states[0];
+    const step = state.steps[0];
+    const output = await (manager as any).executeWorkflowStepDispatch(
+      step,
+      state,
+      (manager as any).currentWorkflowConfig,
+      'Build a feature',
+    );
+
+    expect(output).toContain('"verdict":"pass"');
+    expect(callCount).toBe(2);
+    expect(requiredEvents).toHaveLength(1);
+    expect(requiredEvents[0].question).toMatchObject({
+      status: 'unanswered',
+      kind: 'choice',
+      title: 'Need product decision',
+      source: {
+        type: 'human-help',
+        stateName: '设计',
+        stepName: 'design-step',
+        agent: 'developer',
+      },
+      answerSchema: {
+        type: 'single-choice',
+        required: true,
+      },
+    });
+    expect((manager as any).humanQuestions[0]).toMatchObject({
+      status: 'answered',
+      answer: expect.objectContaining({ selectedOption: 'stable' }),
+    });
+    expect((manager as any).pendingHumanQuestionId).toBeNull();
+  });
+
+  test('does not parse a human-help block closed with </human>', async () => {
+    const malformedBlock = '<human-help>{"title":"Need product decision","question":"Which release channel should this use?"}</human>';
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig({ workflow: { humanHelp: { enabled: true } } });
+
+    const requests = (manager as any).parseHumanHelpRequests(malformedBlock, config);
+
+    expect(requests).toEqual([]);
+  });
+});
+
 describe('state machine live feedback', () => {
   beforeEach(() => {
     vi.clearAllMocks();

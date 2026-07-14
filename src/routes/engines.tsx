@@ -10,6 +10,7 @@ const VALID_ENGINE_IDS = new Set([
   'kiro-cli',
   'opencode',
   'nga',
+  'codeagent',
   'codegenie',
   'codex',
   'cursor',

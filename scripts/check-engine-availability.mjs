@@ -10,6 +10,7 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 const AGENT_OVERRIDES = {
   nga: 'ngagent --disable-update acp',
+  codeagent: 'ngagent acp',
   codegenie: 'codegenie acp',
 };
 
@@ -28,6 +29,7 @@ const DEFAULT_AGENTS = [
   'claude',
   'opencode',
   'nga',
+  'codeagent',
   'codegenie',
   'cursor',
   'kiro',

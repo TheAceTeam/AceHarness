@@ -159,6 +159,7 @@ const ENGINE_TO_AGENT: Record<string, string> = {
   trae: 'trae',
   nga: 'nga',
   'nga-sdk': 'nga',
+  codeagent: 'codeagent',
   codegenie: 'codegenie',
   'codegenie-sdk': 'codegenie',
   'magic-cli': 'cangjie-magic',

@@ -237,7 +237,7 @@ function DashboardSidebarFooter({ onUseClassicMode }: { onUseClassicMode: () => 
         onClick={onUseClassicMode}
         title={t('dashboard.sidebar.classicMode')}
       >
-        <PanelLeftClose className="h-4 w-4" />
+        <Grid2X2 className="h-4 w-4" />
         <span className="group-data-[collapsible=icon]:hidden">{t('dashboard.sidebar.classicMode')}</span>
       </Button>
     </SidebarFooter>
@@ -1690,28 +1690,29 @@ export default function DashboardPage() {
                       </>
                     )}
                   />
-                  <PageToolbar
-                    actions={(
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/workflows')}>{t('dashboard.quickActions.workflows')}</Button>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/models')}>{t('dashboard.quickActions.models')}</Button>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/schedules')}>{t('dashboard.quickActions.schedules')}</Button>
-                      </div>
-                    )}
-                    activeFilters={(
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span>操作概览：优先开始、继续、检查。</span>
-                        <span className="h-1 w-1 rounded-full bg-border" />
-                        <button type="button" className="font-medium text-foreground hover:text-primary" onClick={() => setActivePanel('agents')}>
-                          {t('dashboard.quickActions.manageAgents')}
-                        </button>
-                        <span className="h-1 w-1 rounded-full bg-border" />
-                        <button type="button" className="font-medium text-foreground hover:text-primary" onClick={() => setActiveRoute('/account/system-settings')}>
-                          {t('dashboard.quickActions.envVars')}
-                        </button>
-                      </div>
-                    )}
-                  />
+                  {isClassicDashboard ? (
+                    <PageToolbar
+                      actions={(
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActivePanel('agents')}>{t('dashboard.quickActions.manageAgents')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActivePanel('skills')}>{t('dashboard.quickActions.skills')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActivePanel('settings')}>{t('dashboard.quickActions.envVars')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/workflows')}>{t('dashboard.quickActions.workflows')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/models')}>{t('dashboard.quickActions.models')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/engines')}>{t('dashboard.quickActions.engines')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/schedules')}>{t('dashboard.quickActions.schedules')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/run-history')}>{t('dashboard.quickActions.runHistory')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/knowledge')}>{t('dashboard.quickActions.knowledge')}</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveRoute('/api-docs')}>{t('dashboard.quickActions.apiDocs')}</Button>
+                        </div>
+                      )}
+                      activeFilters={(
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <span>操作概览：优先开始、继续、检查。</span>
+                        </div>
+                      )}
+                    />
+                  ) : null}
                   <div className="mx-auto w-full max-w-[1500px] space-y-6 px-6 py-6">
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4" data-tour-step-id="dashboard-stats">
                       <StatCard icon={Workflow} label={t('dashboard.stats.activeWorkflows')} value={stats.activeWorkflows} meta={`${stats.runningProcesses} 个进程`} />

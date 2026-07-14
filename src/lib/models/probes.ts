@@ -32,6 +32,7 @@ const DEFAULT_HISTORY_LIMIT = 60;
 const ENGINE_ENDPOINT_HINTS: Record<string, string[]> = {
   'claude-code': ['anthropic'],
   'claude-code-acp': ['anthropic'],
+  codeagent: ['anthropic'],
   'codex': ['openai'],
 };
 

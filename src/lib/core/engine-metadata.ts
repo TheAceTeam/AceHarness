@@ -12,6 +12,7 @@ export type EngineMetadataId =
   | 'opencode-sdk'
   | 'nga'
   | 'nga-sdk'
+  | 'codeagent'
   | 'codegenie'
   | 'codegenie-sdk'
   | 'trae'
@@ -79,6 +80,11 @@ export const ENGINE_META: Record<EngineMetadataId, EngineMeta> = {
     id: 'nga-sdk',
     name: 'NGA (SDK)',
     iconPath: AGENT_ICON_PATHS.nga,
+  },
+  codeagent: {
+    id: 'codeagent',
+    name: 'CodeAgent',
+    iconPath: AGENT_ICON_PATHS.codeagent,
   },
   codegenie: {
     id: 'codegenie',
