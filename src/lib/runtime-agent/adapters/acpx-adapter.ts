@@ -197,16 +197,8 @@ const OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS = new Set([
   'codegenie',
 ]);
 
-export function applyAcpxAgentSessionEnv(
-  agentId: string | undefined,
-  env?: Record<string, string>,
-): Record<string, string> | undefined {
-  const next = { ...(env || {}) };
-  const normalizedAgentId = String(agentId || '').trim().toLowerCase();
-  if (OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS.has(normalizedAgentId)) {
-    next.OPENCODE_SKIP_SAFE_CHECK = '1';
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
+export function shouldSkipOpencodeSafeCheck(agentId: string | undefined): boolean {
+  return OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS.has(String(agentId || '').trim().toLowerCase());
 }
 
 export function getAcpxCommandAttemptsForRuntime(

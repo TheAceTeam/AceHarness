@@ -1,6 +1,6 @@
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
-import { applyAcpxAgentSessionEnv, getAcpxAgentRegistryOverrides, getAcpxCommandAttemptsForRuntime, resolveAcpxCommand, resolveAcpxRuntimeAgent } from '@/lib/runtime-agent/adapters/acpx-adapter';
+import { getAcpxAgentRegistryOverrides, getAcpxCommandAttemptsForRuntime, resolveAcpxCommand, resolveAcpxRuntimeAgent, shouldSkipOpencodeSafeCheck } from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
 
 export const dynamic = 'force-dynamic';
@@ -156,15 +156,15 @@ async function discoverViaAcpxCommand(
     permissionMode: 'approve-all',
     nonInteractivePermissions: 'deny',
   });
+  if (shouldSkipOpencodeSafeCheck(agentId)) {
+    process.env.OPENCODE_SKIP_SAFE_CHECK = process.env.OPENCODE_SKIP_SAFE_CHECK || '1';
+  }
 
   const handle = await runtime.ensureSession({
     sessionKey: `model-discovery:${agentId}`,
     agent: command,
     mode: 'oneshot',
     cwd,
-    sessionOptions: {
-      env: applyAcpxAgentSessionEnv(agentId),
-    },
   });
 
   try {

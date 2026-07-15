@@ -50,9 +50,10 @@ const SUPPORTED_AGENTS = [
   'qwen',
 ];
 
-function sessionEnvForAgent(agent) {
-  if (agent === 'opencode' || agent === 'nga' || agent === 'codegenie') return { OPENCODE_SKIP_SAFE_CHECK: '1' };
-  return undefined;
+function applyProcessEnvForAgent(agent) {
+  if (agent === 'opencode' || agent === 'nga' || agent === 'codegenie') {
+    process.env.OPENCODE_SKIP_SAFE_CHECK = process.env.OPENCODE_SKIP_SAFE_CHECK || '1';
+  }
 }
 
 function parseArgs(argv) {
@@ -215,6 +216,7 @@ async function run() {
   let handle;
   try {
     const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
+    applyProcessEnvForAgent(agent);
     runtime = createAcpRuntime({
       cwd: options.cwd,
       sessionStore: createRuntimeStore({
@@ -236,7 +238,6 @@ async function run() {
       cwd: options.cwd,
       sessionOptions: {
         ...(options.model ? { model: options.model } : {}),
-        ...(sessionEnvForAgent(agent) ? { env: sessionEnvForAgent(agent) } : {}),
       },
     }), options.timeoutMs, 'ensureSession');
     pushPhase(report, 'ensureSession', 'ok', {

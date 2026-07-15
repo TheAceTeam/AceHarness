@@ -15,7 +15,7 @@ import type {
   RuntimeBinding,
 } from '../contracts';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
-import { applyAcpxAgentSessionEnv, formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
+import { formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, shouldSkipOpencodeSafeCheck, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
 
 export interface CreateAcpxRuntimeClientOptions {
   cwd?: string;
@@ -53,6 +53,7 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
     async ensureSession(input) {
       const runtime = await getRuntime(input.session.profileSnapshot.permissionPolicyId);
       const session = input.session;
+      applyProcessEnvForAgent(session.profileSnapshot.agentId);
       const handle = await runtime.ensureSession({
         sessionKey: session.runtimeSessionId,
         agent: formatAcpxCommandForRuntime(input.command, {
@@ -440,5 +441,12 @@ function resolveEnv(input: AdapterSessionInput): Record<string, string> | undefi
     if (item.secret) continue;
     if (typeof item.value === 'string') env[item.key] = item.value;
   }
-  return applyAcpxAgentSessionEnv(input.profileSnapshot.agentId, env);
+  delete env.OPENCODE_SKIP_SAFE_CHECK;
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function applyProcessEnvForAgent(agentId: string | undefined): void {
+  if (shouldSkipOpencodeSafeCheck(agentId)) {
+    process.env.OPENCODE_SKIP_SAFE_CHECK = process.env.OPENCODE_SKIP_SAFE_CHECK || '1';
+  }
 }
