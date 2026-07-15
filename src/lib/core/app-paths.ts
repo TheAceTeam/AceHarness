@@ -119,7 +119,7 @@ export function getWorkspaceAgentsDir(): string {
 }
 
 export function getWorkspaceSkillsDir(): string {
-  return getWorkspaceDataFile('skills');
+  return getWorkspacePath('skills');
 }
 
 export function getWorkspaceSkillPath(...segments: string[]): string {
