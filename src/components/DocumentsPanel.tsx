@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/core/api';
 import { Badge } from '@/components/ui/badge';
@@ -72,6 +72,8 @@ interface DocTreeGroup {
 interface DocFolderGroup {
   key: string;
   label: string;
+  rawLabel: string;
+  order: number;
   files: DocFile[];
 }
 
@@ -86,13 +88,47 @@ interface DocumentsPanelProps {
   focusRequest?: { requestId: number; stepName: string; filename?: string } | null;
   onOpenWorkspaceDirectory?: (path: string) => void;
   previewPresentation?: 'inline' | 'drawer';
+  phaseDefinitions?: Array<{ name: string; label?: string; order: number }>;
 }
 
 type SortField = 'name' | 'time' | 'size';
 type SortOrder = 'asc' | 'desc';
 type DocFilter = 'all' | 'conclusion' | 'detail';
 
+export type DocumentHighlightKind = 'conclusion' | 'risk' | 'action' | 'evidence' | 'summary';
+
+export interface DocumentHighlight {
+  kind: DocumentHighlightKind;
+  heading: string;
+  points: string[];
+}
+
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/;
+
+const DOCUMENT_PHASE_LABELS: Record<string, string> = {
+  evidence_intake: '证据接收与核验',
+  metric_calc: '指标计算',
+  contradiction_analysis: '矛盾与风险分析',
+  advocacy: '正反论证',
+  report_checkpoint: '最终汇总与检查',
+};
+
+const DOCUMENT_PHASE_TOKEN_LABELS: Record<string, string> = {
+  evidence: '证据', intake: '接收', metric: '指标', calc: '计算', calculation: '计算',
+  contradiction: '矛盾', analysis: '分析', advocacy: '论证', report: '报告', checkpoint: '检查点',
+  review: '审查', summary: '汇总', validation: '验证', verify: '核验', risk: '风险', final: '最终',
+};
+
+export function formatDocumentPhaseLabel(name: string, configuredLabel?: string): string {
+  const raw = normalizeDocumentFolderLabel(name);
+  const configured = normalizeDocumentFolderLabel(configuredLabel || '');
+  if (configured && configured !== raw) return configured;
+  const key = normalizeDocumentFolderKey(raw);
+  if (DOCUMENT_PHASE_LABELS[key]) return DOCUMENT_PHASE_LABELS[key];
+  const tokens = raw.split(/[\s_-]+/).filter(Boolean);
+  const translated = tokens.map((token) => DOCUMENT_PHASE_TOKEN_LABELS[token.toLowerCase()] || token);
+  return translated.join(' · ') || raw || '其他阶段';
+}
 
 function hasTimestamp(filename: string): boolean {
   return TIMESTAMP_RE.test(filename);
@@ -100,6 +136,124 @@ function hasTimestamp(filename: string): boolean {
 
 function stripTimestampPrefix(filename: string): string {
   return filename.replace(TIMESTAMP_RE, '');
+}
+
+const HIGHLIGHT_RULES: Array<{ kind: DocumentHighlightKind; pattern: RegExp }> = [
+  { kind: 'conclusion', pattern: /结论|裁决|决策|审批意见|核心发现|关键发现|verdict|decision|conclusion/i },
+  { kind: 'risk', pattern: /风险|阻塞|问题|矛盾|异常|缺口|risk|blocker|issue|conflict/i },
+  { kind: 'action', pattern: /建议|行动|下一步|待办|跟进|整改|措施|recommendation|action|next\s*step|todo/i },
+  { kind: 'evidence', pattern: /证据|依据|数据|指标|核验|evidence|metric|verification/i },
+  { kind: 'summary', pattern: /摘要|概览|总结|要点|summary|overview|highlights/i },
+];
+
+function cleanHighlightPoint(value: string): string {
+  const cleaned = value
+    .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)/, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > 220 ? `${cleaned.slice(0, 217).trimEnd()}...` : cleaned;
+}
+
+/** Extract a compact, deterministic overview without changing the original run document. */
+export function extractDocumentHighlights(content: string): DocumentHighlight[] {
+  const lines = String(content || '').split(/\r?\n/);
+  const sections: Array<{ heading: string; body: string[] }> = [];
+  let current: { heading: string; body: string[] } | null = null;
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (headingMatch) {
+      if (current) sections.push(current);
+      current = { heading: cleanHighlightPoint(headingMatch[1]), body: [] };
+    } else if (current) {
+      current.body.push(line);
+    }
+  }
+  if (current) sections.push(current);
+
+  const highlights = sections.flatMap<DocumentHighlight>((section) => {
+    const rule = HIGHLIGHT_RULES.find((candidate) => candidate.pattern.test(section.heading));
+    if (!rule) return [];
+    const points = section.body
+      .filter((line) => /^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*|[^#\s].{8,})/.test(line))
+      .map(cleanHighlightPoint)
+      .filter((point) => point.length >= 6 && !/^[-|:]+$/.test(point))
+      .slice(0, 3);
+    return points.length > 0 ? [{ kind: rule.kind, heading: section.heading, points }] : [];
+  });
+
+  if (highlights.length > 0) return highlights.slice(0, 6);
+
+  const fallbackPoints = lines
+    .filter((line) => /^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)/.test(line))
+    .map(cleanHighlightPoint)
+    .filter((point) => point.length >= 8)
+    .slice(0, 5);
+  return fallbackPoints.length >= 2
+    ? [{ kind: 'summary', heading: '重点摘要', points: fallbackPoints }]
+    : [];
+}
+
+function getWorkspacePathFilename(path: string): string {
+  let decoded = String(path || '');
+  try { decoded = decodeURIComponent(decoded); } catch {}
+  const normalized = decoded.replace(/\\/g, '/').split(/[?#]/, 1)[0].replace(/\/+$/, '');
+  return normalized.slice(normalized.lastIndexOf('/') + 1);
+}
+
+export function findRunDocumentByWorkspacePath(files: DocFile[], path: string): DocFile | null {
+  const filename = getWorkspacePathFilename(path);
+  if (!filename) return null;
+  return files.find((file) => file.filename === filename || file.baseName === filename) || null;
+}
+
+const HIGHLIGHT_PRESENTATION: Record<DocumentHighlightKind, { label: string; icon: string; className: string }> = {
+  conclusion: { label: '关键结论', icon: 'gavel', className: 'border-emerald-500/25 bg-emerald-500/[0.06]' },
+  risk: { label: '风险与问题', icon: 'warning', className: 'border-amber-500/25 bg-amber-500/[0.06]' },
+  action: { label: '后续行动', icon: 'task_alt', className: 'border-blue-500/25 bg-blue-500/[0.06]' },
+  evidence: { label: '关键证据', icon: 'fact_check', className: 'border-violet-500/25 bg-violet-500/[0.06]' },
+  summary: { label: '重点摘要', icon: 'summarize', className: 'border-border bg-muted/35' },
+};
+
+function DocumentHighlightsView({ highlights }: { highlights: DocumentHighlight[] }) {
+  if (highlights.length === 0) return null;
+  return (
+    <section className="mb-5 rounded-xl border border-border/70 bg-muted/15 p-3" aria-label="文档重点速览">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="material-symbols-outlined text-base text-primary">filter_alt</span>
+        <div>
+          <div className="text-sm font-semibold">重点速览</div>
+          <div className="text-[11px] text-muted-foreground">按结论、风险、行动和证据自动聚合，完整原文见下方</div>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        {highlights.map((highlight, index) => {
+          const presentation = HIGHLIGHT_PRESENTATION[highlight.kind];
+          return (
+            <article key={`${highlight.heading}-${index}`} className={`rounded-lg border p-3 ${presentation.className}`}>
+              <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold">
+                <span className="material-symbols-outlined text-sm">{presentation.icon}</span>
+                <span>{presentation.label}</span>
+                {highlight.heading !== presentation.label ? (
+                  <span className="truncate font-normal text-muted-foreground">· {highlight.heading}</span>
+                ) : null}
+              </div>
+              <ul className="space-y-1 text-xs leading-5 text-foreground/85">
+                {highlight.points.map((point, pointIndex) => (
+                  <li key={`${point}-${pointIndex}`} className="flex gap-2">
+                    <span className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-current opacity-50" />
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function getDisplayFileName(file: DocFile): string {
@@ -275,6 +429,7 @@ export default function DocumentsPanel({
   focusRequest,
   onOpenWorkspaceDirectory,
   previewPresentation = 'inline',
+  phaseDefinitions = [],
 }: DocumentsPanelProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -454,16 +609,43 @@ export default function DocumentsPanel({
   }, [files, docFilter]);
 
   // Build left folder groups from workflow metadata first, with filename fallback.
+  const phaseDefinitionMap = useMemo(() => new Map(
+    phaseDefinitions.map((phase) => [normalizeDocumentFolderKey(phase.name), phase]),
+  ), [phaseDefinitions]);
+
   const folderGroups = useMemo<DocFolderGroup[]>(() => {
     const map = new Map<string, DocFolderGroup>();
     tabFiles.forEach(f => {
       const group = getDocumentFolderGroup(f);
-      const existing = map.get(group.key) || { key: group.key, label: group.label, files: [] };
+      const definition = phaseDefinitionMap.get(group.key);
+      const existing = map.get(group.key) || {
+        key: group.key,
+        label: formatDocumentPhaseLabel(group.label, definition?.label),
+        rawLabel: group.label,
+        order: definition?.order ?? Number.MAX_SAFE_INTEGER,
+        files: [],
+      };
       existing.files.push(f);
       map.set(group.key, existing);
     });
-    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
-  }, [tabFiles]);
+    return Array.from(map.values()).sort((a, b) => (
+      a.order - b.order || a.label.localeCompare(b.label, 'zh-CN')
+    ));
+  }, [phaseDefinitionMap, tabFiles]);
+
+  const priorityGroup = useMemo(() => {
+    if (folderGroups.length === 0) return null;
+    const ordered = folderGroups.filter((group) => Number.isFinite(group.order) && group.order < Number.MAX_SAFE_INTEGER);
+    return ordered.length > 0 ? ordered[ordered.length - 1] : folderGroups[folderGroups.length - 1];
+  }, [folderGroups]);
+
+  const recommendedFile = useMemo(() => {
+    const candidates = priorityGroup?.files.filter((file) => !hasTimestamp(file.filename)) || [];
+    return [...candidates].sort((a, b) => {
+      const score = (file: DocFile) => /汇总|总结|执行摘要|summary|report|checkpoint/i.test(file.filename) ? 1 : 0;
+      return score(b) - score(a) || new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime();
+    })[0] || null;
+  }, [priorityGroup]);
 
   // Filtered + sorted files
   const scopedFiles = useMemo(() => {
@@ -528,6 +710,64 @@ export default function DocumentsPanel({
     if (!runId) return;
     setPreviewFile(file);
   }, [runId]);
+
+  const previewHighlights = useMemo(
+    () => extractDocumentHighlights(previewContent),
+    [previewContent],
+  );
+
+  const openLinkedRunDocument = useCallback(async (absolutePath: string) => {
+    const currentMatch = findRunDocumentByWorkspacePath(
+      previewFile ? [previewFile, ...files] : files,
+      absolutePath,
+    );
+    if (currentMatch) {
+      await selectFile(currentMatch);
+      return;
+    }
+    if (!runId) return;
+
+    try {
+      const [rootDocuments, childDocuments] = await Promise.all([
+        runsApi.listDocuments(runId, { scope: 'root', documentKind: 'detail', pageSize: 500 }),
+        runsApi.listDocuments(runId, { scope: 'children', documentKind: 'detail', pageSize: 500 }),
+      ]);
+      const discoveredFiles = [...(rootDocuments.files || []), ...(childDocuments.files || [])];
+      syncDocumentsMetadataToDb(runId, discoveredFiles);
+      const linkedDocument = findRunDocumentByWorkspacePath(discoveredFiles, absolutePath);
+      if (!linkedDocument) {
+        toast('error', `未找到运行产物：${getWorkspacePathFilename(absolutePath)}`);
+        return;
+      }
+      setFiles((previous) => {
+        const existing = new Set(previous.map(getDocKey));
+        return [...previous, ...discoveredFiles.filter((file) => !existing.has(getDocKey(file)))];
+      });
+      await selectFile(linkedDocument);
+    } catch {
+      toast('error', '打开运行产物失败');
+    }
+  }, [files, previewFile, runId, selectFile, toast]);
+
+  const handlePreviewLinkCapture = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null;
+    const workspaceLink = target?.closest<HTMLElement>('[data-workspace-absolute-path]');
+    const absolutePath = workspaceLink?.dataset.workspaceAbsolutePath;
+    if (!absolutePath) return;
+
+    const linkedDocument = findRunDocumentByWorkspacePath(
+      previewFile ? [previewFile, ...files] : files,
+      absolutePath,
+    );
+    const linkedFilename = getWorkspacePathFilename(absolutePath);
+    if (!linkedDocument && !hasTimestamp(linkedFilename)) return;
+
+    // Run artifacts live in the run document store, not necessarily in the project workspace.
+    // Stop the generic workspace handler and keep document-to-document navigation in this panel.
+    event.preventDefault();
+    event.stopPropagation();
+    void openLinkedRunDocument(absolutePath);
+  }, [files, openLinkedRunDocument, previewFile]);
 
   useEffect(() => {
     if (!previewFile) return;
@@ -818,7 +1058,10 @@ export default function DocumentsPanel({
   // --- Left sidebar: folder tree ---
   const folderTree = () => (
     <div className="flex h-full w-full flex-col overflow-hidden border-r border-border bg-muted/20">
-      <div className="px-3 py-2 text-xs font-semibold text-muted-foreground border-b border-border/50">文件夹</div>
+      <div className="px-3 py-2 border-b border-border/50">
+        <div className="text-xs font-semibold text-muted-foreground">按执行阶段</div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground/80">从上到下为工作流执行顺序</div>
+      </div>
       <div className="flex-1 overflow-y-auto">
         <div
           className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === null ? 'bg-accent text-accent-foreground font-medium' : ''}`}
@@ -828,14 +1071,25 @@ export default function DocumentsPanel({
           <span className="flex-1">全部文件</span>
           <span className="text-[10px] text-muted-foreground">{tabFiles.length}</span>
         </div>
-        {folderGroups.map(group => (
+        {folderGroups.map((group, index) => (
           <div
             key={group.key}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === group.key ? 'bg-accent text-accent-foreground font-medium' : ''}`}
+            className={`flex items-center gap-2 px-3 py-2 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === group.key ? 'bg-accent text-accent-foreground font-medium' : ''}`}
             onClick={() => setActiveGroup(group.key)}
+            title={`${index + 1}. ${group.label} (${group.rawLabel})`}
           >
-            <span className="material-symbols-outlined text-sm">folder</span>
-            <span className="flex-1 truncate">{group.label}</span>
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border bg-background text-[10px] font-semibold">{index + 1}</span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-1 truncate font-medium">
+                {group.label}
+                {priorityGroup?.key === group.key ? (
+                  <Badge className="h-4 shrink-0 px-1 text-[9px]">先看</Badge>
+                ) : null}
+              </span>
+              {group.rawLabel !== group.label ? (
+                <span className="block truncate text-[9px] font-normal text-muted-foreground">{group.rawLabel}</span>
+              ) : null}
+            </span>
             <span className="text-[10px] text-muted-foreground">{group.files.length}</span>
           </div>
         ))}
@@ -989,6 +1243,9 @@ export default function DocumentsPanel({
             子流程
           </Badge>
         )}
+        {recommendedFile && getDocKey(recommendedFile) === docKey ? (
+          <Badge className="h-4 shrink-0 px-1 text-[9px]">推荐</Badge>
+        ) : null}
         {hasTimestamp(file.filename) && (
           <Badge variant="outline" className="text-[9px] h-4 px-1 shrink-0 text-muted-foreground">
             {parseTimestamp(file.filename)}
@@ -1205,7 +1462,17 @@ export default function DocumentsPanel({
             {loadingPreview ? (
               <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>
             ) : (
-              <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+              <div onClickCapture={handlePreviewLinkCapture}>
+                <DocumentHighlightsView highlights={previewHighlights} />
+                {previewHighlights.length > 0 ? (
+                  <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    <span className="h-px flex-1 bg-border" />
+                    完整内容
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                ) : null}
+                <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+              </div>
             )}
           </div>
         </>
@@ -1274,7 +1541,17 @@ export default function DocumentsPanel({
               {loadingPreview ? (
                 <div className="py-10 text-center text-xs text-muted-foreground">加载中...</div>
               ) : (
-                <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+                <div onClickCapture={handlePreviewLinkCapture}>
+                  <DocumentHighlightsView highlights={previewHighlights} />
+                  {previewHighlights.length > 0 ? (
+                    <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <span className="h-px flex-1 bg-border" />
+                      完整内容
+                      <span className="h-px flex-1 bg-border" />
+                    </div>
+                  ) : null}
+                  <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+                </div>
               )}
             </DetailDrawerBody>
           </>
@@ -1287,6 +1564,24 @@ export default function DocumentsPanel({
     <>
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
         <div className="shrink-0 border-b border-border">{toolbar()}</div>
+        {recommendedFile && priorityGroup ? (
+          <button
+            type="button"
+            className="mx-3 mt-3 flex shrink-0 items-center gap-3 rounded-lg border border-primary/25 bg-primary/[0.05] px-3 py-2 text-left transition-colors hover:bg-primary/[0.09]"
+            onClick={() => {
+              setActiveGroup(priorityGroup.key);
+              void selectFile(recommendedFile);
+            }}
+          >
+            <span className="material-symbols-outlined text-lg text-primary">recommend</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-semibold text-primary">建议优先查看</span>
+              <span className="block truncate text-xs font-medium">{getDisplayFileName(recommendedFile)}</span>
+              <span className="block truncate text-[10px] text-muted-foreground">最终阶段：{priorityGroup.label} · 点击直接打开结论</span>
+            </span>
+            <span className="material-symbols-outlined text-base text-muted-foreground">arrow_forward</span>
+          </button>
+        ) : null}
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {folderTreeVisible ? (
             <>
