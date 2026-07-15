@@ -34,6 +34,7 @@ import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assem
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
+import { writeAcpxDebugTrace, type AcpxDebugTraceStage } from '@/lib/runtime-agent/acpx-debug-trace';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 1200;
@@ -43,6 +44,10 @@ const LIVE_SESSION_SAVE_INTERVAL_MS = 5000;
 function numberOrUndefined(value: unknown): number | undefined {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeUsage(metadata?: ChatRuntimeResultMetadata): Partial<ChatRuntimeTokenUsage> | undefined {
@@ -77,6 +82,29 @@ function resolveStreamRecoveryKey(frontendSessionId?: string, streamScope?: stri
   if (!frontendSessionId) return undefined;
   const normalizedScope = typeof streamScope === 'string' ? streamScope.trim().replace(/[^a-zA-Z0-9_-]/g, '-') : '';
   return normalizedScope ? `${frontendSessionId}:${normalizedScope}` : frontendSessionId;
+}
+
+function writeChatStreamDebugTrace(input: {
+  stage: AcpxDebugTraceStage;
+  chatId?: string;
+  frontendSessionId?: string;
+  runtimeSessionId?: string;
+  requestId?: string;
+  traceId?: string;
+  payload: unknown;
+}): void {
+  writeAcpxDebugTrace({
+    stage: input.stage,
+    context: {
+      runtimeSessionId: input.runtimeSessionId,
+      frontendSessionId: input.frontendSessionId,
+      chatId: input.chatId,
+      requestId: input.requestId,
+      traceId: input.traceId,
+      runtime: 'chat',
+    },
+    payload: input.payload,
+  });
 }
 
 function genId(): string {
@@ -291,6 +319,22 @@ export async function POST(request: Request) {
     // Non-Claude engines: stream through Engine wrapper events
     if (engine) {
       registerEngineStream(chatId, streamRecoveryKey, configuredEngine, useModel);
+      writeChatStreamDebugTrace({
+        stage: 'chat.stream.registered',
+        chatId,
+        frontendSessionId: streamRecoveryKey || frontendSessionId,
+        runtimeSessionId: validRuntimeSessionId,
+        requestId: chatId,
+        payload: {
+          configuredEngine,
+          model: useModel,
+          streamRecoveryKey,
+          frontendSessionId,
+          hasValidRuntimeSessionId: Boolean(validRuntimeSessionId),
+          shouldTrackLiveSession,
+          liveAssistantMessageId,
+        },
+      });
       const saveLiveSessionSnapshot = createLiveSessionSaver();
       if (baseLiveSession) {
         setEngineStreamLiveSession(chatId, baseLiveSession);
@@ -307,6 +351,23 @@ export async function POST(request: Request) {
       const onEngineStream = (evt: any) => {
         if ((evt?.type === 'text' || evt?.type === 'tool') && evt.content) {
           appendEngineStreamContent(chatId, evt.content);
+          const stateAfterAppend = getEngineStream(chatId);
+          writeChatStreamDebugTrace({
+            stage: 'chat.stream.append',
+            chatId,
+            frontendSessionId: streamRecoveryKey || frontendSessionId,
+            runtimeSessionId: stateAfterAppend?.runtimeSessionId || validRuntimeSessionId,
+            requestId: chatId,
+            traceId: stateAfterAppend?.traceId,
+            payload: {
+              eventType: evt.type,
+              content: evt.content,
+              appendedLength: String(evt.content || '').length,
+              streamContentLength: String(stateAfterAppend?.streamContent || '').length,
+              streamContentPreview: String(stateAfterAppend?.streamContent || '').slice(0, 200),
+              streamContentTail: String(stateAfterAppend?.streamContent || '').slice(-200),
+            },
+          });
           processManager.appendStreamContent(chatId, evt.content);
           if (baseLiveSession && liveAssistantMessageId) {
             const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
@@ -336,6 +397,20 @@ export async function POST(request: Request) {
         } else if (evt?.type === 'session' && evt.content) {
           setEngineStreamSessionId(chatId, evt.content);
           if (proc) proc.sessionId = evt.content;
+          const stateAfterSession = getEngineStream(chatId);
+          writeChatStreamDebugTrace({
+            stage: 'chat.stream.session',
+            chatId,
+            frontendSessionId: streamRecoveryKey || frontendSessionId,
+            runtimeSessionId: String(evt.content),
+            requestId: chatId,
+            traceId: stateAfterSession?.traceId,
+            payload: {
+              content: evt.content,
+              streamContentLength: String(stateAfterSession?.streamContent || '').length,
+              status: stateAfterSession?.status,
+            },
+          });
           if (baseLiveSession) {
             const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
               if (!session) return session;
@@ -349,6 +424,19 @@ export async function POST(request: Request) {
           }
           engineStreamEvents.emit(chatId, { type: 'session', runtimeSessionId: evt.content, sessionId: evt.content });
         } else if (evt?.type === 'thought' && evt.content) {
+          const stateAtThought = getEngineStream(chatId);
+          writeChatStreamDebugTrace({
+            stage: 'chat.stream.thought',
+            chatId,
+            frontendSessionId: streamRecoveryKey || frontendSessionId,
+            runtimeSessionId: stateAtThought?.runtimeSessionId || validRuntimeSessionId,
+            requestId: chatId,
+            traceId: stateAtThought?.traceId,
+            payload: {
+              content: evt.content,
+              contentLength: String(evt.content || '').length,
+            },
+          });
           if (baseLiveSession && liveAssistantMessageId) {
             const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
               if (!session) return session;
@@ -370,6 +458,18 @@ export async function POST(request: Request) {
           }
           engineStreamEvents.emit(chatId, { type: 'thinking', content: evt.content });
         } else if (evt?.type === 'error' && evt.content) {
+          const stateAtError = getEngineStream(chatId);
+          writeChatStreamDebugTrace({
+            stage: 'chat.stream.error',
+            chatId,
+            frontendSessionId: streamRecoveryKey || frontendSessionId,
+            runtimeSessionId: stateAtError?.runtimeSessionId || validRuntimeSessionId,
+            requestId: chatId,
+            traceId: stateAtError?.traceId,
+            payload: {
+              content: evt.content,
+            },
+          });
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: evt.content });
         }
       };
@@ -428,6 +528,30 @@ export async function POST(request: Request) {
           is_error: !result.success,
           error: result.error || undefined,
         };
+        writeChatStreamDebugTrace({
+          stage: 'chat.stream.final_payload',
+          chatId,
+          frontendSessionId: streamRecoveryKey || frontendSessionId,
+          runtimeSessionId: resolvedRuntimeSessionId || validRuntimeSessionId,
+          requestId: chatId,
+          traceId: state?.traceId,
+          payload: {
+            success: result.success,
+            output,
+            outputLength: String(output || '').length,
+            stateStreamContentLength: String(state?.streamContent || '').length,
+            stateStreamContentPreview: String(state?.streamContent || '').slice(0, 200),
+            stateStreamContentTail: String(state?.streamContent || '').slice(-200),
+            responsePayload: {
+              result: responsePayload.result,
+              runtimeSessionId: responsePayload.runtimeSessionId,
+              duration_ms: responsePayload.duration_ms,
+              usage: responsePayload.usage,
+              is_error: responsePayload.is_error,
+              error: responsePayload.error,
+            },
+          },
+        });
         if (baseLiveSession && liveAssistantMessageId) {
           const finalSession = updateEngineStreamLiveSession(chatId, (session) => {
             if (!session) return session;
@@ -579,6 +703,27 @@ export async function GET(request: Request) {
     const recoveryKey = resolveStreamRecoveryKey(checkSession, streamScope);
     const engineState = recoveryKey ? getEngineStreamByFrontendSessionId(recoveryKey) : undefined;
     if (engineState) {
+      writeChatStreamDebugTrace({
+        stage: 'chat.stream.check_active',
+        chatId: engineState.chatId,
+        frontendSessionId: recoveryKey || checkSession,
+        runtimeSessionId: engineState.runtimeSessionId,
+        requestId: engineState.chatId,
+        traceId: engineState.traceId,
+        payload: {
+          source: 'engine_state',
+          active: engineState.status === 'running',
+          found: true,
+          status: engineState.status,
+          engine: engineState.engine || '',
+          model: engineState.model || '',
+          streamContent: engineState.streamContent || '',
+          streamContentLength: String(engineState.streamContent || '').length,
+          streamContentPreview: String(engineState.streamContent || '').slice(0, 200),
+          streamContentTail: String(engineState.streamContent || '').slice(-200),
+          hasLiveSession: Boolean(engineState.liveSession),
+        },
+      });
       return jsonOk({
         active: engineState.status === 'running',
         found: true,
@@ -597,6 +742,23 @@ export async function GET(request: Request) {
     const activeChatId = recoveryKey ? processManager.getActiveStreamChatId(recoveryKey) : undefined;
     if (activeChatId && activeChats.has(activeChatId)) {
       const proc = processManager.getProcess(activeChatId);
+      writeChatStreamDebugTrace({
+        stage: 'chat.stream.check_active',
+        chatId: activeChatId,
+        frontendSessionId: recoveryKey || checkSession,
+        runtimeSessionId: proc?.sessionId,
+        requestId: activeChatId,
+        payload: {
+          source: 'process_manager',
+          active: true,
+          found: true,
+          status: proc?.status || 'running',
+          streamContent: proc?.streamContent || '',
+          streamContentLength: String(proc?.streamContent || '').length,
+          streamContentPreview: String(proc?.streamContent || '').slice(0, 200),
+          streamContentTail: String(proc?.streamContent || '').slice(-200),
+        },
+      });
       return jsonOk({
         active: true,
         found: true,
@@ -607,6 +769,16 @@ export async function GET(request: Request) {
         model: '',
       });
     }
+    writeChatStreamDebugTrace({
+      stage: 'chat.stream.check_active',
+      frontendSessionId: recoveryKey || checkSession,
+      requestId: recoveryKey || checkSession,
+      payload: {
+        source: 'none',
+        active: false,
+        found: false,
+      },
+    });
     return jsonOk({ active: false });
   }
 
@@ -628,6 +800,22 @@ export async function GET(request: Request) {
       const send = (event: string, data: any) => {
         if (closed) return;
         try {
+          const state = getEngineStream(chatId);
+          writeChatStreamDebugTrace({
+            stage: 'chat.stream.sse_send',
+            chatId,
+            frontendSessionId: state?.frontendSessionId,
+            runtimeSessionId: state?.runtimeSessionId || stringOrUndefined(data?.runtimeSessionId) || stringOrUndefined(data?.sessionId),
+            requestId: chatId,
+            traceId: state?.traceId,
+            payload: {
+              event,
+              data,
+              streamContentLength: String(state?.streamContent || '').length,
+              streamContentPreview: String(state?.streamContent || '').slice(0, 200),
+              streamContentTail: String(state?.streamContent || '').slice(-200),
+            },
+          });
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         } catch {
           closed = true;

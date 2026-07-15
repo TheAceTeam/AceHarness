@@ -9,10 +9,20 @@ export type AcpxDebugTraceStage =
   | 'adapter.normalized_event'
   | 'chat.formatted_chunk'
   | 'chat.turn_result'
-  | 'runtime.formatted_chunk';
+  | 'runtime.formatted_chunk'
+  | 'chat.stream.registered'
+  | 'chat.stream.append'
+  | 'chat.stream.session'
+  | 'chat.stream.thought'
+  | 'chat.stream.error'
+  | 'chat.stream.check_active'
+  | 'chat.stream.sse_send'
+  | 'chat.stream.final_payload';
 
 export interface AcpxDebugTraceContext {
   runtimeSessionId?: string;
+  frontendSessionId?: string;
+  chatId?: string;
   turnId?: string;
   requestId?: string;
   traceId?: string;
@@ -75,8 +85,8 @@ export function writeAcpxDebugTrace(entry: AcpxDebugTraceEntry): void {
 }
 
 function traceFilePath(directory: string, context: AcpxDebugTraceContext | undefined): string {
-  const session = safeSegment(context?.runtimeSessionId) || 'unknown-session';
-  const turn = safeSegment(context?.turnId) || safeSegment(context?.requestId) || 'session';
+  const session = safeSegment(context?.runtimeSessionId) || safeSegment(context?.frontendSessionId) || safeSegment(context?.chatId) || 'unknown-session';
+  const turn = safeSegment(context?.turnId) || safeSegment(context?.requestId) || safeSegment(context?.chatId) || 'session';
   return join(directory, `${session}__${turn}.ndjson`);
 }
 

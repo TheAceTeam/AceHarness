@@ -136,6 +136,8 @@
     "@tiptap/y-tiptap": "^3.0.3",
     "@types/yazl": "^3.3.1",
     "acpx": "^0.12.0",
+    "ag-grid-community": "^34.3.1",
+    "ag-grid-react": "^34.3.1",
     "ai": "^6.0.184",
     "ai-json-repair": "^1.0.4",
     "ansi-to-react": "^6.2.6",

@@ -1,9 +1,14 @@
 "use client"
 
 import * as React from "react"
+import { createRoot, type Root } from "react-dom/client"
 import dynamic from "@/lib/navigation/dynamic"
 import { useTheme } from "next-themes"
-import { Loader2, FileCode2, Play, Eye, RefreshCw, Maximize2, X } from "lucide-react"
+import { Loader2, FileCode2, Play, Eye, RefreshCw, Maximize2 } from "lucide-react"
+import { AgGridReact } from "ag-grid-react"
+import { AllCommunityModule, ModuleRegistry, type ColDef, type GridApi, type GridReadyEvent } from "ag-grid-community"
+import "ag-grid-community/styles/ag-grid.css"
+import "ag-grid-community/styles/ag-theme-quartz.css"
 import { NotebookEditor } from "@/components/notebook/NotebookEditor"
 import { AnsiLogBlock } from "@/components/AnsiLogBlock"
 import Markdown from "@/components/Markdown"
@@ -21,6 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Menubar,
   MenubarContent,
@@ -39,6 +45,25 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import previewStyles from "./EditorPanelPreview.module.css"
+
+ModuleRegistry.registerModules([AllCommunityModule])
+
+const NDJSON_TRACE_GRID_SELECTION_STYLE_ID = "ndjson-trace-grid-selection-style"
+
+function ensureNdjsonTraceGridSelectionStyle(): void {
+  if (typeof document === "undefined") return
+  if (document.getElementById(NDJSON_TRACE_GRID_SELECTION_STYLE_ID)) return
+  const style = document.createElement("style")
+  style.id = NDJSON_TRACE_GRID_SELECTION_STYLE_ID
+  style.textContent = `
+    .ndjson-trace-detail,
+    .ndjson-trace-detail * {
+      -webkit-user-select: text !important;
+      user-select: text !important;
+    }
+  `
+  document.head.appendChild(style)
+}
 
 const MonacoEditor = dynamic(
   async () => {
@@ -81,6 +106,7 @@ const OFFICE_PREVIEW_EXTENSIONS = new Set([
 
 const HTML_PREVIEW_EXTENSIONS = new Set(["html", "htm"])
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set(["md", "markdown", "mdx"])
+const NDJSON_PREVIEW_EXTENSIONS = new Set(["ndjson", "jsonl"])
 
 interface EditorPanelProps {
   filePath: string | null
@@ -243,6 +269,445 @@ function formatFileSize(bytes: number | null | undefined): string {
   return `${bytes} B`
 }
 
+type NdjsonPreviewRow = {
+  lineNumber: number
+  valid: boolean
+  timestamp: string
+  stage: string
+  source: string
+  status: string
+  event: string
+  text: string
+  usage: string
+  runtimeSessionId: string
+  frontendSessionId: string
+  chatId: string
+  turnId: string
+  requestId: string
+  traceId: string
+  payload: string
+  raw: string
+  error: string
+}
+
+function readFlatValue(source: unknown, key: string): string {
+  if (!source || typeof source !== "object") return ""
+  const value = (source as Record<string, unknown>)[key]
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+    ? String(value)
+    : ""
+}
+
+function stringifyGridValue(value: unknown): string {
+  if (value == null) return ""
+  if (typeof value === "string") return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function shortenTraceText(value: string, limit = 220): string {
+  const text = String(value || "").replace(/\s+/g, " ").trim()
+  return text.length > limit ? `${text.slice(0, limit)}...` : text
+}
+
+function readPayloadText(payload: any): string {
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : {}
+  const nestedPayload = payload?.payload && typeof payload.payload === "object" ? payload.payload : {}
+  const candidates = [
+    payload?.content,
+    payload?.text,
+    payload?.message,
+    payload?.output,
+    payload?.error,
+    payload?.result,
+    data?.content,
+    data?.text,
+    data?.message,
+    nestedPayload?.text,
+    nestedPayload?.message,
+  ]
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return shortenTraceText(value)
+  }
+  return ""
+}
+
+function readTraceEvent(payload: any): string {
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : {}
+  const candidates = [
+    payload?.event,
+    payload?.eventType,
+    payload?.type,
+    payload?.tag,
+    payload?.stopReason,
+    payload?.source,
+    data?.event,
+    data?.type,
+  ]
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value
+  }
+  return ""
+}
+
+function readTraceStatus(payload: any): string {
+  const parts: string[] = []
+  if (typeof payload?.status === "string") parts.push(payload.status)
+  if (typeof payload?.success === "boolean") parts.push(payload.success ? "success" : "failed")
+  if (typeof payload?.active === "boolean") parts.push(payload.active ? "active" : "inactive")
+  if (typeof payload?.found === "boolean") parts.push(payload.found ? "found" : "not_found")
+  if (typeof payload?.is_error === "boolean") parts.push(payload.is_error ? "error" : "ok")
+  return parts.join(" / ")
+}
+
+function readTraceUsage(payload: any): string {
+  const usage = payload?.usage && typeof payload.usage === "object" ? payload.usage : payload?.responsePayload?.usage
+  if (usage && typeof usage === "object") {
+    const input = (usage as any).input_tokens ?? (usage as any).inputTokens
+    const output = (usage as any).output_tokens ?? (usage as any).outputTokens
+    const total = (usage as any).total_tokens ?? (usage as any).totalTokens
+    const cacheRead = (usage as any).cache_read_input_tokens ?? (usage as any).cacheReadInputTokens
+    return [
+      input != null ? `in ${input}` : "",
+      output != null ? `out ${output}` : "",
+      cacheRead != null ? `cache ${cacheRead}` : "",
+      total != null ? `total ${total}` : "",
+    ].filter(Boolean).join(" / ")
+  }
+  if (payload?.used != null || payload?.size != null) return `${payload?.used ?? "-"} / ${payload?.size ?? "-"}`
+  return ""
+}
+
+function parseNdjsonPreviewRows(content: string): { rows: NdjsonPreviewRow[]; stages: string[]; invalidCount: number } {
+  const rows: NdjsonPreviewRow[] = []
+  const stages = new Set<string>()
+  let invalidCount = 0
+  String(content || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .forEach((line, index) => {
+      const raw = line.trim()
+      if (!raw) return
+      const lineNumber = index + 1
+      try {
+        const parsed = JSON.parse(raw)
+        const context = parsed?.context && typeof parsed.context === "object" ? parsed.context : {}
+        const payload = parsed?.payload
+        const stage = readFlatValue(parsed, "stage")
+        if (stage) stages.add(stage)
+        rows.push({
+          lineNumber,
+          valid: true,
+          timestamp: readFlatValue(parsed, "timestamp"),
+          stage,
+          source: readFlatValue(payload, "source") || readFlatValue(context, "runtime"),
+          status: readTraceStatus(payload),
+          event: readTraceEvent(payload),
+          text: readPayloadText(payload),
+          usage: readTraceUsage(payload),
+          runtimeSessionId: readFlatValue(context, "runtimeSessionId"),
+          frontendSessionId: readFlatValue(context, "frontendSessionId"),
+          chatId: readFlatValue(context, "chatId"),
+          turnId: readFlatValue(context, "turnId"),
+          requestId: readFlatValue(context, "requestId"),
+          traceId: readFlatValue(context, "traceId"),
+          payload: stringifyGridValue(payload),
+          raw,
+          error: "",
+        })
+      } catch (error) {
+        invalidCount += 1
+        stages.add("invalid")
+        rows.push({
+          lineNumber,
+          valid: false,
+          timestamp: "",
+          stage: "invalid",
+          source: "",
+          status: "invalid",
+          event: "",
+          text: "",
+          usage: "",
+          runtimeSessionId: "",
+          frontendSessionId: "",
+          chatId: "",
+          turnId: "",
+          requestId: "",
+          traceId: "",
+          payload: raw,
+          raw,
+          error: error instanceof Error ? error.message : "JSON parse failed",
+        })
+      }
+    })
+  return {
+    rows,
+    stages: Array.from(stages).sort((a, b) => a.localeCompare(b)),
+    invalidCount,
+  }
+}
+
+function NdjsonAgGridPreview({ content, filePath, fullscreen = false }: { content: string; filePath?: string | null; fullscreen?: boolean }) {
+  const { resolvedTheme } = useTheme()
+  const gridApiRef = React.useRef<GridApi<NdjsonPreviewRow> | null>(null)
+  const [selectedStages, setSelectedStages] = React.useState<string[]>([])
+  const [stagePanelOpen, setStagePanelOpen] = React.useState(false)
+  const [selectedRow, setSelectedRow] = React.useState<NdjsonPreviewRow | null>(null)
+  const parsed = React.useMemo(() => parseNdjsonPreviewRows(content), [content])
+  const activeStages = selectedStages.length > 0 ? selectedStages : parsed.stages
+  const rowData = React.useMemo(() => (
+    activeStages.length === parsed.stages.length ? parsed.rows : parsed.rows.filter((row) => activeStages.includes(row.stage))
+  ), [activeStages, parsed.rows, parsed.stages.length])
+  const themeClass = resolvedTheme === "dark" ? "ag-theme-quartz-dark" : "ag-theme-quartz"
+
+  React.useEffect(() => {
+    ensureNdjsonTraceGridSelectionStyle()
+  }, [])
+
+  React.useEffect(() => {
+    setSelectedStages((current) => current.filter((stage) => parsed.stages.includes(stage)))
+  }, [parsed.stages])
+
+  const handleGridReady = React.useCallback((event: GridReadyEvent<NdjsonPreviewRow>) => {
+    gridApiRef.current = event.api
+  }, [])
+
+  const handleCopyCellSelection = React.useCallback(() => {
+    gridApiRef.current?.copySelectedRangeToClipboard()
+  }, [])
+
+  const defaultColDef = React.useMemo<ColDef<NdjsonPreviewRow>>(() => ({
+    sortable: true,
+    filter: false,
+    floatingFilter: false,
+    resizable: true,
+    minWidth: 90,
+    wrapText: false,
+    autoHeight: false,
+  }), [])
+
+  const columnDefs = React.useMemo<ColDef<NdjsonPreviewRow>[]>(() => [
+    {
+      field: "lineNumber",
+      headerName: "Line",
+      width: 92,
+      pinned: "left",
+      filter: "agNumberColumnFilter",
+      sort: "asc",
+    },
+    {
+      field: "timestamp",
+      headerName: "Time",
+      width: 215,
+    },
+    {
+      field: "stage",
+      headerName: "Stage",
+      width: 240,
+      filter: true,
+      floatingFilter: true,
+    },
+    {
+      field: "source",
+      headerName: "Source",
+      width: 130,
+    },
+    {
+      field: "status",
+      headerName: "Status",
+      width: 150,
+    },
+    {
+      field: "event",
+      headerName: "Event",
+      width: 180,
+    },
+    {
+      field: "text",
+      headerName: "Text",
+      minWidth: 280,
+      flex: 1,
+      tooltipField: "text",
+    },
+    {
+      field: "runtimeSessionId",
+      headerName: "Runtime",
+      width: 280,
+    },
+    {
+      field: "frontendSessionId",
+      headerName: "Frontend",
+      width: 190,
+    },
+    {
+      field: "requestId",
+      headerName: "Request ID",
+      width: 260,
+    },
+    {
+      field: "traceId",
+      headerName: "Trace ID",
+      width: 260,
+    },
+    {
+      field: "usage",
+      headerName: "Usage",
+      width: 190,
+    },
+    {
+      field: "error",
+      headerName: "Error",
+      width: 260,
+      hide: parsed.invalidCount === 0,
+    },
+    {
+      field: "raw",
+      headerName: "Raw",
+      width: 520,
+      hide: true,
+      tooltipField: "raw",
+    },
+  ], [parsed.invalidCount])
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="shrink-0 border-b px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 min-w-[240px] justify-between font-normal"
+              onClick={() => setStagePanelOpen((value) => !value)}
+            >
+              <span className="truncate">
+                Stage: {activeStages.length === parsed.stages.length ? "全部" : `${activeStages.length} 项`}
+              </span>
+            </Button>
+            {stagePanelOpen ? (
+              <div className="absolute left-0 top-9 z-30 w-[360px] rounded-md border bg-popover p-2 shadow-lg">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelectedStages([...parsed.stages])}>
+                    全选
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelectedStages([])}>
+                    清空
+                  </Button>
+                </div>
+                <div className="max-h-72 overflow-auto pr-1">
+                  {parsed.stages.map((stage) => {
+                    const checked = activeStages.includes(stage)
+                    return (
+                      <label key={stage} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(next) => {
+                            setSelectedStages((current) => {
+                              const base = current.length > 0 ? current : parsed.stages
+                              return next === true
+                                ? Array.from(new Set([...base, stage]))
+                                : base.filter((item) => item !== stage)
+                            })
+                          }}
+                        />
+                        <span className="truncate font-mono">{stage}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {rowData.length} / {parsed.rows.length} 行{parsed.invalidCount ? `，${parsed.invalidCount} 行解析失败` : ""}
+          </div>
+          <Button type="button" variant="outline" size="sm" className="h-8" onClick={handleCopyCellSelection}>
+            复制选区
+          </Button>
+        </div>
+        {fullscreen && filePath ? (
+          <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{filePath}</div>
+        ) : null}
+      </div>
+      <div className={cn(themeClass, "ndjson-trace-grid min-h-0 flex-[1_1_0]")}>
+        <AgGridReact<NdjsonPreviewRow>
+          rowData={rowData}
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          onGridReady={handleGridReady}
+          onRowClicked={(event) => setSelectedRow(event.data || null)}
+          animateRows={false}
+          cellSelection
+          ensureDomOrder
+          pagination={rowData.length > 2000}
+          paginationPageSize={500}
+          paginationPageSizeSelector={[100, 500, 1000, 2000]}
+          tooltipShowDelay={250}
+        />
+      </div>
+      <div className="ndjson-trace-detail min-h-[180px] max-h-[38%] shrink-0 border-t bg-muted/20">
+        {selectedRow ? (
+          <div className="grid h-full min-h-0 grid-cols-[minmax(260px,360px)_1fr]">
+            <div className="min-h-0 overflow-auto border-r p-3 text-xs">
+              <div className="mb-2 font-medium">选中记录</div>
+              <dl className="grid grid-cols-[86px_1fr] gap-x-2 gap-y-1">
+                <dt className="text-muted-foreground">Line</dt><dd className="font-mono">{selectedRow.lineNumber}</dd>
+                <dt className="text-muted-foreground">Time</dt><dd className="font-mono break-all">{selectedRow.timestamp || "-"}</dd>
+                <dt className="text-muted-foreground">Stage</dt><dd className="font-mono break-all">{selectedRow.stage || "-"}</dd>
+                <dt className="text-muted-foreground">Status</dt><dd className="break-all">{selectedRow.status || "-"}</dd>
+                <dt className="text-muted-foreground">Event</dt><dd className="break-all">{selectedRow.event || "-"}</dd>
+                <dt className="text-muted-foreground">Session</dt><dd className="font-mono break-all">{selectedRow.runtimeSessionId || selectedRow.frontendSessionId || selectedRow.chatId || "-"}</dd>
+                <dt className="text-muted-foreground">Request</dt><dd className="font-mono break-all">{selectedRow.requestId || selectedRow.turnId || "-"}</dd>
+              </dl>
+            </div>
+            <div className="min-h-0 overflow-auto p-3">
+              <div className="mb-2 text-xs font-medium">Payload</div>
+              <pre className="whitespace-pre-wrap break-words rounded border bg-background p-3 font-mono text-[11px] leading-relaxed">
+                {selectedRow.error ? `${selectedRow.error}\n\n${selectedRow.raw}` : selectedRow.payload || selectedRow.raw}
+              </pre>
+            </div>
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+            选择一行查看 payload 详情
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function openReactPreviewWindow(title: string, node: React.ReactNode): Window | null {
+  if (typeof window === "undefined") return null
+  const previewWindow = window.open("", "_blank", "popup=yes")
+  if (!previewWindow) return null
+
+  previewWindow.document.write(`<!doctype html><html><head><title>${title.replace(/[<>&"]/g, "")}</title></head><body><div id="root"></div></body></html>`)
+  previewWindow.document.close()
+
+  document.querySelectorAll<HTMLLinkElement | HTMLStyleElement>('link[rel="stylesheet"], style').forEach((element) => {
+    previewWindow.document.head.appendChild(element.cloneNode(true))
+  })
+
+  const style = previewWindow.document.createElement("style")
+  style.textContent = `
+    html, body, #root { height: 100%; margin: 0; }
+    body { background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 222.2 84% 4.9%)); overflow: hidden; }
+  `
+  previewWindow.document.head.appendChild(style)
+
+  const mount = previewWindow.document.getElementById("root")
+  if (!mount) return previewWindow
+  const root: Root = createRoot(mount)
+  root.render(node)
+  previewWindow.addEventListener("beforeunload", () => root.unmount(), { once: true })
+  return previewWindow
+}
+
 export function EditorPanel({
   filePath,
   workspacePath,
@@ -282,10 +747,9 @@ export function EditorPanel({
   const [notebookTocOpen, setNotebookTocOpen] = React.useState(false)
   const [notebookDependencyGraphOpen, setNotebookDependencyGraphOpen] = React.useState(false)
   const [htmlPreviewOpen, setHtmlPreviewOpen] = React.useState(false)
-  const [htmlPreviewModalOpen, setHtmlPreviewModalOpen] = React.useState(false)
   const [htmlPreviewVersion, setHtmlPreviewVersion] = React.useState(0)
   const [markdownPreviewOpen, setMarkdownPreviewOpen] = React.useState(false)
-  const [markdownPreviewModalOpen, setMarkdownPreviewModalOpen] = React.useState(false)
+  const [ndjsonPreviewOpen, setNdjsonPreviewOpen] = React.useState(false)
   const cangjieRegistered = React.useRef(false)
   const cmakeRegistered = React.useRef(false)
   const suggestionDecorationIdsRef = React.useRef<string[]>([])
@@ -633,8 +1097,19 @@ export function EditorPanel({
       && !error
       && !oversize,
   )
+  const canPreviewNdjson = Boolean(
+    mode === 'default'
+      && filePath
+      && fileType
+      && NDJSON_PREVIEW_EXTENSIONS.has(fileType)
+      && editorContent != null
+      && !loading
+      && !error
+      && !oversize,
+  )
   const markdownPreviewContent = editorContent ?? ""
-  const editorSplitPreviewOpen = (canPreviewHtml && htmlPreviewOpen) || (canPreviewMarkdown && markdownPreviewOpen)
+  const ndjsonPreviewContent = editorContent ?? ""
+  const editorSplitPreviewOpen = (canPreviewHtml && htmlPreviewOpen) || (canPreviewMarkdown && markdownPreviewOpen) || (canPreviewNdjson && ndjsonPreviewOpen)
   const htmlPreviewUrl = React.useMemo(() => {
     if (!canPreviewHtml || !workspacePath || !filePath) return ""
     try {
@@ -643,6 +1118,28 @@ export function EditorPanel({
       return ""
     }
   }, [canPreviewHtml, filePath, htmlPreviewVersion, workspacePath])
+
+  const openHtmlPreviewWindow = React.useCallback(() => {
+    if (!htmlPreviewUrl) return
+    const opened = window.open(htmlPreviewUrl, "_blank", "noopener,noreferrer")
+    if (!opened) toast("error", "浏览器阻止了新窗口")
+  }, [htmlPreviewUrl, toast])
+
+  const openMarkdownPreviewWindow = React.useCallback(() => {
+    const opened = openReactPreviewWindow("Markdown 预览", (
+      <div className="h-full overflow-auto bg-background px-8 py-6">
+        <Markdown>{markdownPreviewContent}</Markdown>
+      </div>
+    ))
+    if (!opened) toast("error", "浏览器阻止了新窗口")
+  }, [markdownPreviewContent, toast])
+
+  const openNdjsonPreviewWindow = React.useCallback(() => {
+    const opened = openReactPreviewWindow("NDJSON 表格预览", (
+      <NdjsonAgGridPreview content={ndjsonPreviewContent} filePath={filePath} fullscreen />
+    ))
+    if (!opened) toast("error", "浏览器阻止了新窗口")
+  }, [filePath, ndjsonPreviewContent, toast])
 
   React.useEffect(() => {
     if (!isNotebook) {
@@ -654,16 +1151,20 @@ export function EditorPanel({
   React.useEffect(() => {
     if (!canPreviewHtml) {
       setHtmlPreviewOpen(false)
-      setHtmlPreviewModalOpen(false)
     }
   }, [canPreviewHtml])
 
   React.useEffect(() => {
     if (!canPreviewMarkdown) {
       setMarkdownPreviewOpen(false)
-      setMarkdownPreviewModalOpen(false)
     }
   }, [canPreviewMarkdown])
+
+  React.useEffect(() => {
+    if (!canPreviewNdjson) {
+      setNdjsonPreviewOpen(false)
+    }
+  }, [canPreviewNdjson])
 
   React.useEffect(() => {
     const isPreviewableFile = Boolean(fileBlob && fileType && PREVIEW_EXTENSIONS.has(fileType))
@@ -775,7 +1276,7 @@ export function EditorPanel({
                   >
                     HTML 预览
                   </MenubarCheckboxItem>
-                  <MenubarItem onClick={() => setHtmlPreviewModalOpen(true)}>
+                  <MenubarItem onClick={openHtmlPreviewWindow}>
                     全屏预览
                   </MenubarItem>
                 </>
@@ -789,8 +1290,22 @@ export function EditorPanel({
                   >
                     Markdown 预览
                   </MenubarCheckboxItem>
-                  <MenubarItem onClick={() => setMarkdownPreviewModalOpen(true)}>
+                  <MenubarItem onClick={openMarkdownPreviewWindow}>
                     全屏预览
+                  </MenubarItem>
+                </>
+              )}
+              {canPreviewNdjson && (
+                <>
+                  <MenubarSeparator />
+                  <MenubarCheckboxItem
+                    checked={ndjsonPreviewOpen}
+                    onCheckedChange={(checked) => setNdjsonPreviewOpen(checked === true)}
+                  >
+                    NDJSON 表格预览
+                  </MenubarCheckboxItem>
+                  <MenubarItem onClick={openNdjsonPreviewWindow}>
+                    全屏表格预览
                   </MenubarItem>
                 </>
               )}
@@ -824,7 +1339,7 @@ export function EditorPanel({
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => setHtmlPreviewModalOpen(true)}
+                  onClick={openHtmlPreviewWindow}
                   className="h-7 w-7"
                   title="全屏 HTML 预览"
                 >
@@ -848,12 +1363,36 @@ export function EditorPanel({
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => setMarkdownPreviewModalOpen(true)}
+                  onClick={openMarkdownPreviewWindow}
                   className="h-7 w-7"
                   title="全屏 Markdown 预览"
                 >
                   <Maximize2 className="h-3.5 w-3.5" />
                   <span className="sr-only">全屏 Markdown 预览</span>
+                </Button>
+              </>
+            )}
+            {canPreviewNdjson && (
+              <>
+                <Button
+                  variant={ndjsonPreviewOpen ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setNdjsonPreviewOpen((value) => !value)}
+                  className="h-7 gap-1.5"
+                  title="切换 NDJSON 表格预览"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  表格
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={openNdjsonPreviewWindow}
+                  className="h-7 w-7"
+                  title="全屏 NDJSON 表格预览"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  <span className="sr-only">全屏 NDJSON 表格预览</span>
                 </Button>
               </>
             )}
@@ -1119,7 +1658,7 @@ export function EditorPanel({
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        onClick={() => setHtmlPreviewModalOpen(true)}
+                        onClick={openHtmlPreviewWindow}
                         title="全屏预览"
                       >
                         <Maximize2 className="h-3.5 w-3.5" />
@@ -1144,7 +1683,7 @@ export function EditorPanel({
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
-                      onClick={() => setMarkdownPreviewModalOpen(true)}
+                      onClick={openMarkdownPreviewWindow}
                       title="全屏预览"
                     >
                       <Maximize2 className="h-3.5 w-3.5" />
@@ -1156,81 +1695,30 @@ export function EditorPanel({
                   </div>
                 </div>
               ) : null}
+              {canPreviewNdjson && ndjsonPreviewOpen ? (
+                <div className="flex min-h-0 w-1/2 flex-col bg-background">
+                  <div className="flex h-9 shrink-0 items-center justify-between border-b px-3 text-xs text-muted-foreground">
+                    <span className="truncate">NDJSON 表格预览</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={openNdjsonPreviewWindow}
+                      title="全屏表格预览"
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                      <span className="sr-only">全屏表格预览</span>
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <NdjsonAgGridPreview content={ndjsonPreviewContent} filePath={filePath} />
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
         </div>
       </div>
-
-      <Dialog open={htmlPreviewModalOpen && canPreviewHtml} onOpenChange={setHtmlPreviewModalOpen}>
-        <DialogContent className="flex h-screen w-screen max-w-none flex-col gap-0 rounded-none p-0">
-          <DialogHeader className="shrink-0 border-b px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <DialogTitle className="text-sm">静态 HTML 全屏预览</DialogTitle>
-                <DialogDescription className="truncate text-xs">
-                  {filePath || "HTML 文件"}
-                </DialogDescription>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setHtmlPreviewVersion((value) => value + 1)}
-                  className="h-8 gap-1.5"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  刷新
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setHtmlPreviewModalOpen(false)}
-                  className="h-8 w-8"
-                  title="关闭预览"
-                >
-                  <X className="h-4 w-4" />
-                  <span className="sr-only">关闭预览</span>
-                </Button>
-              </div>
-            </div>
-          </DialogHeader>
-          <iframe
-            key={`modal-${htmlPreviewUrl}`}
-            src={htmlPreviewUrl}
-            title="HTML 全屏预览"
-            className="min-h-0 w-full flex-1 bg-white"
-            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
-          />
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={markdownPreviewModalOpen && canPreviewMarkdown} onOpenChange={setMarkdownPreviewModalOpen}>
-        <DialogContent className="flex h-screen w-screen max-w-none flex-col gap-0 rounded-none p-0">
-          <DialogHeader className="shrink-0 border-b px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <DialogTitle className="text-sm">Markdown 全屏预览</DialogTitle>
-                <DialogDescription className="truncate text-xs">
-                  {filePath || "Markdown 文件"}
-                </DialogDescription>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setMarkdownPreviewModalOpen(false)}
-                className="h-8 w-8 shrink-0"
-                title="关闭预览"
-              >
-                <X className="h-4 w-4" />
-                <span className="sr-only">关闭预览</span>
-              </Button>
-            </div>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-auto px-8 py-6">
-            <Markdown>{markdownPreviewContent}</Markdown>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={runDialogOpen} onOpenChange={setRunDialogOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-hidden flex flex-col">
