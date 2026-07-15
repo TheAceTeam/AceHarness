@@ -193,6 +193,7 @@ const WORKBENCH_OUTER_QUERY_KEYS = [
   'run',
   'runId',
   'workspace',
+  'workspaceRoot',
   'workspaceFile',
   'workspaceLine',
   'workspaceColumn',

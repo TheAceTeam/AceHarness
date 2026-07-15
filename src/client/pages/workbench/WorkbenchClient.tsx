@@ -140,7 +140,7 @@ import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPan
 import { cn } from '@/lib/core/utils';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { resolveDockviewTabPolicy } from '@/lib/navigation/dockview-tab-policy';
-import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
+import { resolveWorkspaceLinkTarget, resolveWorkspaceRootFromRoute } from '@/lib/workspace/link-target';
 import { VirtualList } from '@/client/virtual/VirtualList';
 import { parseAceSseEventData, storeAceAgentMessage, storeChatStreamSseEventAsAgentMessage, storeWorkflowSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import styles from './page.module.css';
@@ -542,6 +542,7 @@ const WORKBENCH_OUTER_QUERY_KEYS = [
   'run',
   'runId',
   'workspace',
+  'workspaceRoot',
   'workspaceFile',
   'workspaceLine',
   'workspaceColumn',
@@ -1666,6 +1667,7 @@ export default function WorkbenchPage({
       section: null,
       tab: 'workspace',
       workspace: '1',
+      workspaceRoot: path,
       changes: null,
       workspaceFile: relativeFilePath,
       workspaceLine: lineNumber && lineNumber > 0 ? String(lineNumber) : null,
@@ -1686,12 +1688,13 @@ export default function WorkbenchPage({
       section: null,
       tab: 'workspace',
       workspace: filePath ? '1' : null,
+      workspaceRoot: workspaceEditorPath || null,
       changes: null,
       workspaceFile: filePath,
       workspaceLine: lineNumber && lineNumber > 0 ? String(lineNumber) : null,
       workspaceColumn: column && column > 0 ? String(column) : null,
     });
-  }, [updateUrl]);
+  }, [updateUrl, workspaceEditorPath]);
 
   const handlePreviewWorkspaceEditorFileLocationChange = useCallback((filePath: string | null, lineNumber?: number | null, column?: number | null) => {
     updateUrl({
@@ -2701,9 +2704,11 @@ export default function WorkbenchPage({
   );
   const previewWorkspacePath = resolvedProjectRoot || projectRoot || '';
   const requestedWorkspaceFile = effectiveSearchParams.get('workspaceFile') || '';
+  const requestedWorkspaceRoot = effectiveSearchParams.get('workspaceRoot') || '';
   const requestedWorkspaceLineNumber = parseOptionalPositiveInt(effectiveSearchParams.get('workspaceLine'));
   const requestedWorkspaceColumn = parseOptionalPositiveInt(effectiveSearchParams.get('workspaceColumn'));
   const appliedWorkspaceFileRequestRef = useRef('');
+  const workspaceRouteRunId = runId || selectedRun?.id || '';
   const configGitBaselineEnabled = workflowConfig?.context?.gitBaselineEnabled !== false;
   const effectiveGitBaselineEnabled = configGitBaselineEnabled && runtimeGitBaselineEnabled;
   const workspaceChangeSummaryQuery = useGitBrowserSummaryQuery(
@@ -2721,9 +2726,36 @@ export default function WorkbenchPage({
   }, [workflowConfig?.context?.gitBaselineEnabled]);
 
   useEffect(() => {
-    if (!requestedWorkspaceFile || !currentRunWorkspacePath) return;
+    if (requestedWorkspaceRoot || !requestedWorkspaceFile || !workspaceRouteRunId) return;
+    const requestedFilename = requestedWorkspaceFile.split(/[\\/]/).filter(Boolean).pop() || '';
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-.+\.(?:md|txt)$/i.test(requestedFilename)) return;
+
+    let cancelled = false;
+    void runsApi.listDocuments(workspaceRouteRunId, {
+      scope: 'root',
+      documentKind: 'detail',
+      pageSize: 500,
+    }).then((documents) => {
+      if (cancelled || !documents.documentDirectory) return;
+      const isRunDocument = (documents.files || []).some((file) => file.filename === requestedFilename);
+      if (!isRunDocument) return;
+      const documentRoot = documents.documentDirectory;
+      setWorkspaceEditorPath(documentRoot);
+      setWorkspaceEditorTitle(requestedFilename);
+      setWorkspaceEditorFilePath(requestedFilename);
+      updateUrl({ workspaceRoot: documentRoot });
+    }).catch(() => {
+      // Keep the project workspace fallback when the historical run is no longer available.
+    });
+
+    return () => { cancelled = true; };
+  }, [requestedWorkspaceFile, requestedWorkspaceRoot, updateUrl, workspaceRouteRunId]);
+
+  useEffect(() => {
+    if ((!requestedWorkspaceFile && !requestedWorkspaceRoot) || !currentRunWorkspacePath) return;
+    const requestedRoot = resolveWorkspaceRootFromRoute(currentRunWorkspacePath, requestedWorkspaceRoot);
     const requestKey = [
-      currentRunWorkspacePath,
+      requestedRoot,
       requestedWorkspaceFile,
       requestedWorkspaceLineNumber || '',
       requestedWorkspaceColumn || '',
@@ -2731,29 +2763,35 @@ export default function WorkbenchPage({
     if (appliedWorkspaceFileRequestRef.current === requestKey) return;
     appliedWorkspaceFileRequestRef.current = requestKey;
     setRunWorkbenchTab('workspace');
-    setWorkspaceEditorPath(currentRunWorkspacePath);
-    setWorkspaceEditorTitle(requestedWorkspaceFile.split(/[\\/]/).filter(Boolean).pop() || requestedWorkspaceFile);
-    setWorkspaceEditorFilePath(requestedWorkspaceFile);
+    setWorkspaceEditorPath(requestedRoot);
+    setWorkspaceEditorTitle(requestedWorkspaceFile.split(/[\\/]/).filter(Boolean).pop() || '工作区');
+    setWorkspaceEditorFilePath(requestedWorkspaceFile || null);
     setWorkspaceEditorLineNumber(requestedWorkspaceLineNumber);
     setWorkspaceEditorColumn(requestedWorkspaceColumn);
     setWorkbenchNavSection('runs');
     setRunRecordDrilled(true);
     setRunDetailSection('workspace');
-  }, [currentRunWorkspacePath, requestedWorkspaceColumn, requestedWorkspaceFile, requestedWorkspaceLineNumber]);
+  }, [currentRunWorkspacePath, requestedWorkspaceColumn, requestedWorkspaceFile, requestedWorkspaceLineNumber, requestedWorkspaceRoot]);
 
   const handleRunWorkbenchTabChange = useCallback((tab: RunWorkbenchTab) => {
     setRunWorkbenchTab(tab);
+    if (tab === 'workspace') {
+      setWorkspaceEditorPath(currentRunWorkspacePath);
+      setWorkspaceEditorTitle('工作区');
+      setWorkspaceEditorFilePath(null);
+      setWorkspaceEditorLineNumber(null);
+      setWorkspaceEditorColumn(null);
+    }
     updateUrl({
       tab,
       workspace: tab === 'workspace' ? '1' : null,
+      workspaceRoot: tab === 'workspace' ? currentRunWorkspacePath : null,
       changes: tab === 'changes' ? '1' : null,
-      ...(tab === 'workspace' ? {} : {
-        workspaceFile: null,
-        workspaceLine: null,
-        workspaceColumn: null,
-      }),
+      workspaceFile: null,
+      workspaceLine: null,
+      workspaceColumn: null,
     });
-  }, [updateUrl]);
+  }, [currentRunWorkspacePath, updateUrl]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -5684,6 +5722,7 @@ export default function WorkbenchPage({
         section: null,
         tab: null,
         workspace: null,
+        workspaceRoot: null,
         changes: null,
         workspaceFile: null,
         workspaceLine: null,
@@ -5708,6 +5747,7 @@ export default function WorkbenchPage({
         history: null,
         tab: null,
         workspace: null,
+        workspaceRoot: null,
         changes: null,
         workspaceFile: null,
         workspaceLine: null,
@@ -6214,6 +6254,7 @@ export default function WorkbenchPage({
         history: null,
         tab: null,
         workspace: null,
+        workspaceRoot: null,
         changes: null,
         workspaceFile: null,
         workspaceLine: null,
@@ -6649,6 +6690,7 @@ export default function WorkbenchPage({
         section: null,
         tab: 'overview',
         workspace: null,
+        workspaceRoot: null,
         changes: null,
         workspaceFile: null,
         workspaceLine: null,
@@ -7293,6 +7335,7 @@ export default function WorkbenchPage({
           section: null,
           tab: 'overview',
           workspace: null,
+          workspaceRoot: null,
           changes: null,
           workspaceFile: null,
           workspaceLine: null,
@@ -11770,6 +11813,7 @@ export default function WorkbenchPage({
       history: null,
       tab: null,
       workspace: null,
+      workspaceRoot: null,
       changes: null,
       workspaceFile: null,
       workspaceLine: null,
@@ -11800,6 +11844,7 @@ export default function WorkbenchPage({
       history: null,
       tab: null,
       workspace: null,
+      workspaceRoot: null,
       changes: null,
       workspaceFile: null,
       workspaceLine: null,
@@ -11814,17 +11859,23 @@ export default function WorkbenchPage({
     setRunRecordDrilled(true);
     setRunDetailSection(section);
     setRunWorkbenchTab(tab);
+    if (section === 'workspace') {
+      setWorkspaceEditorPath(currentRunWorkspacePath);
+      setWorkspaceEditorTitle('工作区');
+      setWorkspaceEditorFilePath(null);
+      setWorkspaceEditorLineNumber(null);
+      setWorkspaceEditorColumn(null);
+    }
     updateUrl({
       mode: 'run',
       section: null,
       tab,
       workspace: section === 'workspace' ? '1' : null,
+      workspaceRoot: section === 'workspace' ? currentRunWorkspacePath : null,
       changes: section === 'changes' ? '1' : null,
-      ...(section === 'workspace' ? {} : {
-        workspaceFile: null,
-        workspaceLine: null,
-        workspaceColumn: null,
-      }),
+      workspaceFile: null,
+      workspaceLine: null,
+      workspaceColumn: null,
     });
   };
 
@@ -12236,6 +12287,7 @@ export default function WorkbenchPage({
                     section: null,
                     tab: null,
                     workspace: null,
+                    workspaceRoot: null,
                     changes: null,
                     workspaceFile: null,
                     workspaceLine: null,
@@ -12682,6 +12734,11 @@ export default function WorkbenchPage({
                       <DocumentsPanel
                         runId={runId || selectedRun?.id || null}
                         focusRequest={documentFocusRequest}
+                        phaseDefinitions={(workflowConfig?.workflow?.states || []).map((state: any, order: number) => ({
+                          name: String(state?.name || ''),
+                          label: String(state?.label || state?.title || state?.displayName || ''),
+                          order,
+                        }))}
                         onOpenWorkspaceDirectory={(path: string) => openWorkspaceEditorAtPath(path, '文档目录')}
                         previewPresentation="drawer"
                       />

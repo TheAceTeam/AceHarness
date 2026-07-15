@@ -115,6 +115,7 @@ const WORKBENCH_SHELL_QUERY_KEYS = [
   'run',
   'runId',
   'workspace',
+  'workspaceRoot',
   'workspaceFile',
   'workspaceLine',
   'workspaceColumn',
@@ -2047,4 +2048,3 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
     </div>
   );
 }
-

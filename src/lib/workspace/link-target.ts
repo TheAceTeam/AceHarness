@@ -15,6 +15,16 @@ function isWorkspaceAbsolutePath(value: string): boolean {
   return value.startsWith("/") || WINDOWS_DRIVE_ABSOLUTE_PATH.test(value) || UNC_ABSOLUTE_PATH.test(value);
 }
 
+/** Restore a persisted workspace root only when it is an absolute filesystem path. */
+export function resolveWorkspaceRootFromRoute(
+  currentWorkspacePath: string | null | undefined,
+  requestedWorkspaceRoot: string | null | undefined,
+): string {
+  const current = normalizeWorkspacePathValue(currentWorkspacePath).replace(/\/+$/g, "");
+  const requested = normalizeWorkspacePathValue(requestedWorkspaceRoot).replace(/\/+$/g, "");
+  return requested && isWorkspaceAbsolutePath(requested) ? requested : current;
+}
+
 function toPositiveInteger(value: string | undefined): number | null {
   if (!value) return null;
   const parsed = Number.parseInt(value, 10);
