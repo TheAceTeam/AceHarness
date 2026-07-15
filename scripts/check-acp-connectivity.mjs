@@ -14,7 +14,7 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 const AGENT_OVERRIDES = {
   nga: 'ngagent --disable-update acp',
-  codeagent: 'ngagent acp',
+  codeagent: 'codeagent acp',
   codegenie: 'codegenie acp',
 };
 
