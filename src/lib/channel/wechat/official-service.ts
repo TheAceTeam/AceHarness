@@ -68,15 +68,15 @@ function hostForUrl(host: string): string {
 function resolveLocalOrigin(origin?: string): string {
   const explicit = String(
     origin
-    || process.env.ACE_PUBLIC_ORIGIN
-    || process.env.NEXT_PUBLIC_ACE_ORIGIN
+    || process.env.CSIHARNESS_PUBLIC_ORIGIN
+    || process.env.NEXT_PUBLIC_CSIHARNESS_ORIGIN
     || process.env.NEXT_PUBLIC_APP_ORIGIN
     || ''
   ).trim();
   if (explicit) return trimTrailingSlash(explicit);
 
-  const host = hostForUrl(String(process.env.ACE_HOST || '127.0.0.1').trim() || '127.0.0.1');
-  const port = String(process.env.PORT || process.env.ACE_PORT || '3000').trim() || '3000';
+  const host = hostForUrl(String(process.env.CSIHARNESS_HOST || '127.0.0.1').trim() || '127.0.0.1');
+  const port = String(process.env.CSIHARNESS_PORT || process.env.PORT || '3001').trim() || '3001';
   if (host.startsWith('http://') || host.startsWith('https://')) return trimTrailingSlash(host);
   return `http://${host}:${port}`;
 }
@@ -439,14 +439,14 @@ export function scheduleWeChatOfficialBridgeRestore(input: {
   origin?: string;
   delayMs?: number;
 } = {}): void {
-  if (process.env.ACE_WECHAT_AUTO_RESTORE === '0' || process.env.ACE_WECHAT_AUTO_RESTORE === 'false') return;
+  if (process.env.CSIHARNESS_WECHAT_AUTO_RESTORE === '0' || process.env.CSIHARNESS_WECHAT_AUTO_RESTORE === 'false') return;
   if (process.env.NEXT_PHASE === 'phase-production-build') return;
 
   const globalScope = globalThis as typeof globalThis & Record<string, boolean | undefined>;
   if (globalScope[RESTORE_GUARD_KEY]) return;
   globalScope[RESTORE_GUARD_KEY] = true;
 
-  const configuredDelay = Number(process.env.ACE_WECHAT_RESTORE_DELAY_MS || '');
+  const configuredDelay = Number(process.env.CSIHARNESS_WECHAT_RESTORE_DELAY_MS || '');
   const delayMs = input.delayMs ?? (Number.isFinite(configuredDelay) && configuredDelay >= 0 ? configuredDelay : 3000);
   const timer = setTimeout(() => {
     void restoreWeChatOfficialBridges({ origin: input.origin }).catch((error: any) => {

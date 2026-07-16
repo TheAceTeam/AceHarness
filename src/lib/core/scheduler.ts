@@ -236,9 +236,9 @@ export class SchedulerService extends EventEmitter {
 
   private _getInternalBaseUrl(baseUrl?: string): string {
     const raw = baseUrl?.trim()
-      || process.env.ACE_INTERNAL_BASE_URL?.trim()
+      || process.env.CSIHARNESS_INTERNAL_BASE_URL?.trim()
       || process.env.NEXT_PUBLIC_APP_URL?.trim()
-      || `http://127.0.0.1:${process.env.PORT || process.env.ACE_PORT || 3000}`;
+      || `http://127.0.0.1:${process.env.CSIHARNESS_PORT || process.env.PORT || 3001}`;
     return raw.replace(/\/+$/, '');
   }
 

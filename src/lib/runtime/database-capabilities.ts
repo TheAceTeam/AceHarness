@@ -207,7 +207,7 @@ export function buildRuntimeDatabaseEnv(grant: RuntimeDatabaseGrant | null | und
     CSIHARNESS_RUNTIME_TOKEN: grant.token,
     CSIHARNESS_RUN_ID: grant.runId || '',
     CSIHARNESS_CHAT_SESSION_ID: grant.chatSessionId || '',
-    CSIHARNESS_WORKSPACE_ROOT: grant.workspaceRoot,
+    CSIHARNESS_WORKSPCSIHARNESS_ROOT: grant.workspaceRoot,
   };
 }
 
@@ -221,14 +221,14 @@ export async function writeRuntimeDatabaseEnvFile(grant: RuntimeDatabaseGrant | 
 
 export function resolveRuntimeUrl(): string {
   const explicit = process.env.CSIHARNESS_RUNTIME_URL
-    || process.env.ACE_INTERNAL_BASE_URL
-    || process.env.ACE_PUBLIC_ORIGIN
+    || process.env.CSIHARNESS_INTERNAL_BASE_URL
+    || process.env.CSIHARNESS_PUBLIC_ORIGIN
     || process.env.NEXT_PUBLIC_APP_URL
-    || process.env.NEXT_PUBLIC_ACE_ORIGIN
+    || process.env.NEXT_PUBLIC_CSIHARNESS_ORIGIN
     || process.env.NEXT_PUBLIC_APP_ORIGIN;
   if (explicit?.trim()) return explicit.trim().replace(/\/+$/, '');
-  const host = process.env.ACE_HOST || process.env.HOST || '127.0.0.1';
-  const port = process.env.ACE_PORT || process.env.PORT || '3001';
+  const host = process.env.CSIHARNESS_HOST || process.env.HOST || '127.0.0.1';
+  const port = process.env.CSIHARNESS_PORT || process.env.PORT || '3001';
   return `http://${host}:${port}`;
 }
 

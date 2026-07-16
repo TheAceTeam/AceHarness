@@ -6,7 +6,7 @@ import { totalmem } from 'os';
 import { spawn, ChildProcess } from 'child_process';
 import { commandExists } from '@/lib/core/command-exists';
 import {
-  ACE_PACKAGE_NAME,
+  CSI_PACKAGE_NAME,
   DEFAULT_UPDATE_TARGET,
   buildNpmPackageSpec,
   fetchNpmPackageVersion,
@@ -30,6 +30,9 @@ import {
 } from '@/lib/core/app-paths';
 import { assertSafeRuntimeTargets, ensureRuntimeHomeInitialized } from '@/lib/core/runtime-home';
 import { SERVICE_STATE_DIR_NAME } from '@/lib/core/product-identity';
+import { resolveRuntimePort } from '@/lib/core/runtime-network';
+import { ensureRuntimeConfigsSeeded } from '@/lib/run/runtime-configs';
+import { ensureRuntimeSkillsSeeded } from '@/lib/run/runtime-skills';
 
 process.chdir(getRepoRoot());
 
@@ -178,6 +181,8 @@ async function ensureRuntimeHome(): Promise<void> {
     mkdir(getWorkspaceDirectory('data'), { recursive: true }),
     mkdir(getWorkspaceDirectory('cache'), { recursive: true }),
     mkdir(getWorkspaceDirectory('logs'), { recursive: true }),
+    ensureRuntimeConfigsSeeded(),
+    ensureRuntimeSkillsSeeded(),
   ]);
 }
 
@@ -196,26 +201,26 @@ const ENGINE_META: Array<{ id: EngineType; name: string }> = [
 const CLI_MESSAGES: Record<Locale, CliMessages> = {
   zh: {
     setupCancelled: '初始化已取消',
-    welcome: '[ACE] 本地配置检查',
-    statusLabel: '[ACE] 当前状态',
+    welcome: '[CSI] 本地配置检查',
+    statusLabel: '[CSI] 当前状态',
     runtimeHome: '系统数据保存目录',
     localeStatus: (value: string) => `语言: ${value}`,
     engineStatus: (value: string) => `默认引擎: ${value}`,
     adminStatus: (configured: boolean) => `管理员: ${configured ? '已配置' : '未配置'}`,
-    resetRequiresForce: '[ACE] 请使用 `ace reset --force` 确认重置本地 ACE 配置。',
-    resetDone: '[ACE] 重置完成。下次运行 `ace` 时会重新初始化。',
-    resetTarget: '[ACE] 已清理',
+    resetRequiresForce: '[CSI] 请使用 `csiharness reset --force` 确认重置本地 CSIHarness 配置。',
+    resetDone: '[CSI] 重置完成。下次运行 `csiharness` 时会重新初始化。',
+    resetTarget: '[CSI] 已清理',
     usage: [
       '用法:',
-      '  ace              启动 ACEHarness',
-      '  ace start        启动 ACEHarness',
-      '  ace service      查看并停止 ACE 进程',
-      '  ace update [tag|version] 从 npm 更新 ACEHarness',
-      '  ace reset --force 重置本地 ACE 配置',
-      '  ace --help       查看帮助',
+      '  csiharness              启动 CSIHarness',
+      '  csiharness start        启动 CSIHarness',
+      '  csiharness service      查看并停止 CSIHarness 进程',
+      '  csiharness update [tag|version] 从 npm 更新 CSIHarness',
+      '  csiharness reset --force 重置本地 CSIHarness 配置',
+      '  csiharness --help       查看帮助',
     ].join('\n'),
-    unknownCommand: (command: string) => `[ACE] 无效命令：${command}`,
-    unknownOption: (option: string) => `[ACE] 无效选项：${option}`,
+    unknownCommand: (command: string) => `[CSI] 无效命令：${command}`,
+    unknownOption: (option: string) => `[CSI] 无效选项：${option}`,
     languagePrompt: '请选择语言',
     languageChoices: [
       { title: '中文', value: 'zh' },
@@ -224,7 +229,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     detectEngines: '现在检测可用引擎吗？',
     chooseEngine: '选择默认引擎',
     chooseModel: '选择默认模型',
-    noEnginesDetected: '[ACE] 未检测到受支持的引擎，将使用当前/默认引擎。',
+    noEnginesDetected: '[CSI] 未检测到受支持的引擎，将使用当前/默认引擎。',
     createAdmin: '现在创建管理员账号吗？',
     adminUsername: '管理员用户名',
     adminEmail: '管理员邮箱',
@@ -241,13 +246,13 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     lanAccessPrompt: '启用局域网访问吗？',
     backgroundPrompt: '启动后是否转入后台运行？',
     daemonPrompt: '后台运行时是否启用进程守护与异常自动重启？',
-    serviceEmpty: '[ACE] 当前没有受管的 ACE 进程。',
-    serviceHeader: '[ACE] 当前 ACE 进程：',
-    serviceStopped: '[ACE] 已发送停止请求。',
-    serviceStopping: '[ACE] 正在停止实例...',
-    serviceStopTimeout: '[ACE] 停止请求已发送，但进程尚未退出，请稍后刷新。',
-    serviceStopFailed: (message: string) => `[ACE] 停止失败：${message}`,
-    serviceSelectPrompt: '选择要管理的 ACE 实例',
+    serviceEmpty: '[CSI] 当前没有受管的 CSIHarness 进程。',
+    serviceHeader: '[CSI] 当前 CSIHarness 进程：',
+    serviceStopped: '[CSI] 已发送停止请求。',
+    serviceStopping: '[CSI] 正在停止实例...',
+    serviceStopTimeout: '[CSI] 停止请求已发送，但进程尚未退出，请稍后刷新。',
+    serviceStopFailed: (message: string) => `[CSI] 停止失败：${message}`,
+    serviceSelectPrompt: '选择要管理的 CSIHarness 实例',
     serviceActionPrompt: '选择操作',
     serviceActionBack: '返回',
     serviceActionStop: '停止该实例',
@@ -258,54 +263,54 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     serviceModeBackground: '后台',
     serviceModeDaemon: '守护',
     serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => `${state.serviceId} | ${state.url} | ${modeLabel} | daemon ${state.daemonPid ?? '-'} | server ${state.serverPid ?? '-'} | ${status}`,
-    updateChecking: (spec: string) => `[ACE] 正在检查更新：${spec}`,
-    updateCurrentVersion: (version: string) => `[ACE] 当前版本：${version}`,
-    updateTargetVersion: (target: string, version: string) => `[ACE] 目标 ${target} 版本：${version}`,
-    updateAlreadyCurrent: '[ACE] 当前已经是目标版本。如需重新安装，请使用 `ace update --force`。',
-    updateDryRun: (spec: string) => `[ACE] dry-run：将执行 npm install -g ${spec}`,
-    updateRunningHeader: '[ACE] 检测到运行中的 ACE 实例：',
+    updateChecking: (spec: string) => `[CSI] 正在检查更新：${spec}`,
+    updateCurrentVersion: (version: string) => `[CSI] 当前版本：${version}`,
+    updateTargetVersion: (target: string, version: string) => `[CSI] 目标 ${target} 版本：${version}`,
+    updateAlreadyCurrent: '[CSI] 当前已经是目标版本。如需重新安装，请使用 `csiharness update --force`。',
+    updateDryRun: (spec: string) => `[CSI] dry-run：将执行 npm install -g ${spec}`,
+    updateRunningHeader: '[CSI] 检测到运行中的 CSIHarness 实例：',
     updateRunningPrompt: '升级前如何处理这些运行中的实例？',
     updateRunningStop: '停止后升级',
     updateRunningContinue: '继续升级但不停止',
     updateRunningCancel: '取消升级',
-    updateRunningBlocked: '[ACE] 检测到运行中的 ACE 实例。非交互模式请使用 `--stop-running` 停止后升级，或使用 `--force` 继续升级但不停止。',
-    updateContinuingWithRunning: '[ACE] 将在 ACE 实例仍运行时继续升级；这些实例需要重启后才会使用新版本。',
-    updateStoppingServices: '[ACE] 正在停止运行中的 ACE 实例...',
-    updateStoppedServices: '[ACE] 运行中的 ACE 实例已停止。',
-    updateStopFailed: '[ACE] 部分 ACE 实例未能停止，请先运行 `ace service` 手动处理。',
-    updateInstalling: (spec: string) => `[ACE] 正在安装：${spec}`,
-    updateDone: (version: string) => `[ACE] 更新完成：${version}`,
-    updateRestartNeeded: '[ACE] 如需继续使用，请重新运行 `ace` 启动服务。',
-    updateFailed: (message: string) => `[ACE] 更新失败：${message}`,
+    updateRunningBlocked: '[CSI] 检测到运行中的 CSIHarness 实例。非交互模式请使用 `--stop-running` 停止后升级，或使用 `--force` 继续升级但不停止。',
+    updateContinuingWithRunning: '[CSI] 将在 CSIHarness 实例仍运行时继续升级；这些实例需要重启后才会使用新版本。',
+    updateStoppingServices: '[CSI] 正在停止运行中的 CSIHarness 实例...',
+    updateStoppedServices: '[CSI] 运行中的 CSIHarness 实例已停止。',
+    updateStopFailed: '[CSI] 部分 CSIHarness 实例未能停止，请先运行 `csiharness service` 手动处理。',
+    updateInstalling: (spec: string) => `[CSI] 正在安装：${spec}`,
+    updateDone: (version: string) => `[CSI] 更新完成：${version}`,
+    updateRestartNeeded: '[CSI] 如需继续使用，请重新运行 `csiharness` 启动服务。',
+    updateFailed: (message: string) => `[CSI] 更新失败：${message}`,
     yes: '是',
     no: '否',
     skip: '跳过',
-    openBrowserFallback: (url: string) => `[ACE] 请在浏览器中打开 ${url}`,
-    startingServer: (url: string) => `[ACE] 正在启动服务：${url}`,
-    failedToStart: (message: string) => `[ACE] 启动失败：${message}`,
+    openBrowserFallback: (url: string) => `[CSI] 请在浏览器中打开 ${url}`,
+    startingServer: (url: string) => `[CSI] 正在启动服务：${url}`,
+    failedToStart: (message: string) => `[CSI] 启动失败：${message}`,
   },
   en: {
     setupCancelled: 'Setup cancelled',
-    welcome: '[ACE] Local configuration check',
-    statusLabel: '[ACE] Current status',
+    welcome: '[CSI] Local configuration check',
+    statusLabel: '[CSI] Current status',
     runtimeHome: 'System data directory',
     localeStatus: (value: string) => `Language: ${value}`,
     engineStatus: (value: string) => `Default engine: ${value}`,
     adminStatus: (configured: boolean) => `Admin: ${configured ? 'configured' : 'missing'}`,
-    resetRequiresForce: '[ACE] Re-run with `ace reset --force` to confirm resetting local ACE state.',
-    resetDone: '[ACE] Reset complete. The next `ace` run will initialize again.',
-    resetTarget: '[ACE] Removed',
+    resetRequiresForce: '[CSI] Re-run with `csiharness reset --force` to confirm resetting local CSIHarness state.',
+    resetDone: '[CSI] Reset complete. The next `csiharness` run will initialize again.',
+    resetTarget: '[CSI] Removed',
     usage: [
       'Usage:',
-      '  ace               Start ACEHarness',
-      '  ace start         Start ACEHarness',
-      '  ace service       Inspect and stop ACE processes',
-      '  ace update [tag|version] Update ACEHarness from npm',
-      '  ace reset --force Reset local ACE state',
-      '  ace --help        Show help',
+      '  csiharness               Start CSIHarness',
+      '  csiharness start         Start CSIHarness',
+      '  csiharness service       Inspect and stop CSIHarness processes',
+      '  csiharness update [tag|version] Update CSIHarness from npm',
+      '  csiharness reset --force Reset local CSIHarness state',
+      '  csiharness --help        Show help',
     ].join('\n'),
-    unknownCommand: (command: string) => `[ACE] Unknown command: ${command}`,
-    unknownOption: (option: string) => `[ACE] Unknown option: ${option}`,
+    unknownCommand: (command: string) => `[CSI] Unknown command: ${command}`,
+    unknownOption: (option: string) => `[CSI] Unknown option: ${option}`,
     languagePrompt: 'Choose your language',
     languageChoices: [
       { title: 'English', value: 'en' },
@@ -314,7 +319,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     detectEngines: 'Detect available engines now?',
     chooseEngine: 'Choose a default engine',
     chooseModel: 'Choose a default model',
-    noEnginesDetected: '[ACE] No supported engines were detected. Using the current/default engine.',
+    noEnginesDetected: '[CSI] No supported engines were detected. Using the current/default engine.',
     createAdmin: 'Create an admin account now?',
     adminUsername: 'Admin username',
     adminEmail: 'Admin email',
@@ -331,13 +336,13 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     lanAccessPrompt: 'Enable LAN access?',
     backgroundPrompt: 'Run the service in the background after startup?',
     daemonPrompt: 'Enable process supervision with automatic restart for the background service?',
-    serviceEmpty: '[ACE] No managed ACE process is running.',
-    serviceHeader: '[ACE] Current ACE processes:',
-    serviceStopped: '[ACE] Stop request sent.',
-    serviceStopping: '[ACE] Stopping instance...',
-    serviceStopTimeout: '[ACE] Stop request sent, but the process is still exiting. Refresh shortly.',
-    serviceStopFailed: (message: string) => `[ACE] Failed to stop service: ${message}`,
-    serviceSelectPrompt: 'Choose an ACE instance',
+    serviceEmpty: '[CSI] No managed CSIHarness process is running.',
+    serviceHeader: '[CSI] Current CSIHarness processes:',
+    serviceStopped: '[CSI] Stop request sent.',
+    serviceStopping: '[CSI] Stopping instance...',
+    serviceStopTimeout: '[CSI] Stop request sent, but the process is still exiting. Refresh shortly.',
+    serviceStopFailed: (message: string) => `[CSI] Failed to stop service: ${message}`,
+    serviceSelectPrompt: 'Choose an CSIHarness instance',
     serviceActionPrompt: 'Choose an action',
     serviceActionBack: 'Back',
     serviceActionStop: 'Stop this instance',
@@ -348,31 +353,31 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     serviceModeBackground: 'background',
     serviceModeDaemon: 'daemon',
     serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => `${state.serviceId} | ${state.url} | ${modeLabel} | daemon ${state.daemonPid ?? '-'} | server ${state.serverPid ?? '-'} | ${status}`,
-    updateChecking: (spec: string) => `[ACE] Checking update: ${spec}`,
-    updateCurrentVersion: (version: string) => `[ACE] Current version: ${version}`,
-    updateTargetVersion: (target: string, version: string) => `[ACE] Target ${target} version: ${version}`,
-    updateAlreadyCurrent: '[ACE] Already on the target version. Use `ace update --force` to reinstall it.',
-    updateDryRun: (spec: string) => `[ACE] dry-run: would run npm install -g ${spec}`,
-    updateRunningHeader: '[ACE] Running ACE instances detected:',
+    updateChecking: (spec: string) => `[CSI] Checking update: ${spec}`,
+    updateCurrentVersion: (version: string) => `[CSI] Current version: ${version}`,
+    updateTargetVersion: (target: string, version: string) => `[CSI] Target ${target} version: ${version}`,
+    updateAlreadyCurrent: '[CSI] Already on the target version. Use `csiharness update --force` to reinstall it.',
+    updateDryRun: (spec: string) => `[CSI] dry-run: would run npm install -g ${spec}`,
+    updateRunningHeader: '[CSI] Running CSIHarness instances detected:',
     updateRunningPrompt: 'How should these running instances be handled before update?',
     updateRunningStop: 'Stop then update',
     updateRunningContinue: 'Update without stopping',
     updateRunningCancel: 'Cancel update',
-    updateRunningBlocked: '[ACE] Running ACE instances detected. In non-interactive mode, use `--stop-running` to stop them before updating, or `--force` to update without stopping.',
-    updateContinuingWithRunning: '[ACE] Continuing while ACE instances are still running. Restart them to use the new version.',
-    updateStoppingServices: '[ACE] Stopping running ACE instances...',
-    updateStoppedServices: '[ACE] Running ACE instances stopped.',
-    updateStopFailed: '[ACE] Some ACE instances did not stop. Run `ace service` and handle them manually.',
-    updateInstalling: (spec: string) => `[ACE] Installing: ${spec}`,
-    updateDone: (version: string) => `[ACE] Update complete: ${version}`,
-    updateRestartNeeded: '[ACE] Run `ace` again to start the service.',
-    updateFailed: (message: string) => `[ACE] Update failed: ${message}`,
+    updateRunningBlocked: '[CSI] Running CSIHarness instances detected. In non-interactive mode, use `--stop-running` to stop them before updating, or `--force` to update without stopping.',
+    updateContinuingWithRunning: '[CSI] Continuing while CSIHarness instances are still running. Restart them to use the new version.',
+    updateStoppingServices: '[CSI] Stopping running CSIHarness instances...',
+    updateStoppedServices: '[CSI] Running CSIHarness instances stopped.',
+    updateStopFailed: '[CSI] Some CSIHarness instances did not stop. Run `csiharness service` and handle them manually.',
+    updateInstalling: (spec: string) => `[CSI] Installing: ${spec}`,
+    updateDone: (version: string) => `[CSI] Update complete: ${version}`,
+    updateRestartNeeded: '[CSI] Run `csiharness` again to start the service.',
+    updateFailed: (message: string) => `[CSI] Update failed: ${message}`,
     yes: 'yes',
     no: 'no',
     skip: 'skip',
-    openBrowserFallback: (url: string) => `[ACE] Open ${url} in your browser.`,
-    startingServer: (url: string) => `[ACE] Starting server on ${url}`,
-    failedToStart: (message: string) => `[ACE] Failed to start: ${message}`,
+    openBrowserFallback: (url: string) => `[CSI] Open ${url} in your browser.`,
+    startingServer: (url: string) => `[CSI] Starting server on ${url}`,
+    failedToStart: (message: string) => `[CSI] Failed to start: ${message}`,
   },
 };
 
@@ -394,7 +399,7 @@ function formatEngineLabel(engine?: EngineType): string {
 }
 
 function resolveCliLocale(): Locale {
-  return normalizeLocale(process.env.ACE_LOCALE || process.env.LANG || process.env.LC_ALL);
+  return normalizeLocale(process.env.CSIHARNESS_LOCALE || process.env.LANG || process.env.LC_ALL);
 }
 
 type CliCommand = '' | 'start' | 'reset' | 'help' | 'servive' | 'service' | 'update' | '__run-server' | '__daemon';
@@ -575,7 +580,7 @@ function isPidRunning(pid: number | null | undefined): boolean {
 
 function serviceUrlFromSettings(settings: SystemSettings): string {
   const host = settings.host || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
-  const port = settings.port || 3000;
+  const port = resolveRuntimePort(process.env, settings.port);
   const urlHost = host === '0.0.0.0' ? '127.0.0.1' : host;
   return `http://${urlHost}:${port}`;
 }
@@ -588,7 +593,7 @@ function buildServiceState(
   serverPid: number | null,
 ): AceServiceState {
   const host = settings.host || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
-  const port = settings.port || 3000;
+  const port = resolveRuntimePort(process.env, settings.port);
   const now = new Date().toISOString();
   return {
     serviceId,
@@ -887,7 +892,7 @@ async function promptForNetworkSettings(settings: SystemSettings, locale: Locale
       type: 'number',
       name: 'port',
       message: messages.portPrompt,
-      initial: settings.port || 3000,
+      initial: resolveRuntimePort(process.env, settings.port),
       min: 1,
       max: 65535,
     },
@@ -923,7 +928,7 @@ async function promptForNetworkSettings(settings: SystemSettings, locale: Locale
   return {
     ...settings,
     locale,
-    port: Number(networkForm.port || settings.port || 3000),
+    port: Number(networkForm.port || resolveRuntimePort(process.env, settings.port)),
     lanAccess,
     runInBackground,
     useDaemon,
@@ -1052,7 +1057,7 @@ async function runFirstLaunchWizard() {
 
 async function syncBrowserLocale(settings: SystemSettings) {
   if (!settings.locale) return;
-  process.env.ACE_LOCALE = settings.locale;
+  process.env.CSIHARNESS_LOCALE = settings.locale;
 }
 
 function tryOpenBrowser(url: string): boolean {
@@ -1097,14 +1102,14 @@ function tryOpenBrowser(url: string): boolean {
 
 function buildChildEnv(settings: SystemSettings): NodeJS.ProcessEnv {
   const host = settings.host || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
-  const port = String(settings.port || 3000);
+  const port = String(resolveRuntimePort(process.env, settings.port));
   return {
     ...process.env,
-    ACE_HOST: host,
-    ACE_PORT: port,
+    CSIHARNESS_HOST: host,
+    CSIHARNESS_PORT: port,
     PORT: port,
     NODE_ENV: process.env.NODE_ENV || 'production',
-    ACE_LOCALE: settings.locale || resolveCliLocale(),
+    CSIHARNESS_LOCALE: settings.locale || resolveCliLocale(),
   };
 }
 
@@ -1283,13 +1288,13 @@ async function updateCommand(
 ): Promise<void> {
   const messages = getLocaleMessages(locale);
   const target = normalizeUpdateTarget(options.updateTarget || DEFAULT_UPDATE_TARGET);
-  const npmCommand = resolveNpmCommand(process.env.ACE_UPDATE_NPM_COMMAND);
-  const packageSpec = buildNpmPackageSpec(ACE_PACKAGE_NAME, target);
+  const npmCommand = resolveNpmCommand(process.env.CSIHARNESS_UPDATE_NPM_COMMAND);
+  const packageSpec = buildNpmPackageSpec(CSI_PACKAGE_NAME, target);
   const currentVersion = getCurrentAcePackageVersion();
 
   console.log(messages.updateChecking(packageSpec));
   const targetVersion = await fetchNpmPackageVersion({
-    packageName: ACE_PACKAGE_NAME,
+    packageName: CSI_PACKAGE_NAME,
     target,
     npmCommand,
   });
@@ -1312,7 +1317,7 @@ async function updateCommand(
 
   console.log(messages.updateInstalling(packageSpec));
   await installNpmPackageGlobally({
-    packageName: ACE_PACKAGE_NAME,
+    packageName: CSI_PACKAGE_NAME,
     target,
     npmCommand,
   });
@@ -1332,7 +1337,7 @@ const MAX_SERVER_HEAP_MB = 8192;
 // cap from physical RAM so the server gets headroom on capable machines without
 // over-committing on small ones.
 function resolveServerHeapMB(): number {
-  const override = Number(process.env.ACE_MAX_OLD_SPACE_MB);
+  const override = Number(process.env.CSIHARNESS_MAX_OLD_SPACE_MB);
   if (Number.isFinite(override) && override >= 1024) {
     return Math.floor(override);
   }
@@ -1378,7 +1383,7 @@ async function startServerProcess(settings: SystemSettings, serviceId: string): 
     }
   }, 1200);
   console.log(messages.startingServer(url));
-  console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
+  console.log(`[CSI] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
   require('../server.js');
 }
 
@@ -1409,7 +1414,7 @@ async function runDaemonSupervisor(serviceId: string): Promise<void> {
   const env = buildChildEnv(settings);
   // Mark the server child as supervised so its memory watchdog is allowed to
   // self-restart (this loop will respawn it). Unmanaged runs only warn.
-  env.ACE_MANAGED = '1';
+  env.CSIHARNESS_MANAGED = '1';
   let shuttingDown = false;
   let child: ChildProcess | null = null;
 
@@ -1467,7 +1472,7 @@ async function startManagedBackground(settings: SystemSettings): Promise<void> {
   const state = buildServiceState(serviceId, settings, mode, mode === 'daemon' ? (child.pid ?? null) : null, mode === 'background' ? (child.pid ?? null) : null);
   await saveServiceState(state);
   console.log(messages.startingServer(state.url));
-  console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
+  console.log(`[CSI] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
 }
 
 async function serviceCommand(locale: Locale): Promise<void> {
@@ -1597,7 +1602,7 @@ async function main() {
       await updateCommand(locale, { updateTarget, force, yes, dryRun, stopRunning });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(message.startsWith('[ACE]') ? message : messages.updateFailed(message));
+      console.error(message.startsWith('[CSI]') ? message : messages.updateFailed(message));
       process.exit(1);
     }
     return;

@@ -235,7 +235,7 @@ function hasRuntimeGlibc(): boolean {
 }
 
 function resolveClaudeNativeBinary(): string | undefined {
-  const envPath = getConfiguredEnvValueSync('ACE_CLAUDE_CODE_EXECUTABLE')
+  const envPath = getConfiguredEnvValueSync('CSIHARNESS_CLAUDE_CODE_EXECUTABLE')
     || getConfiguredEnvValueSync('CLAUDE_CODE_EXECUTABLE');
   if (envPath && isExecutable(envPath)) return envPath;
 
@@ -365,8 +365,8 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
       accumulated += normalized;
       this.emit('stream', { type: 'text', content: normalized } as EngineStreamEvent);
     };
-    const MAX_API_RETRY_ATTEMPTS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_ATTEMPTS', 12);
-    const MIN_API_RETRY_DELAY_MS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_MIN_DELAY_MS', 10_000);
+    const MAX_API_RETRY_ATTEMPTS = positiveIntFromEnv('CSIHARNESS_CLAUDE_API_RETRY_ATTEMPTS', 12);
+    const MIN_API_RETRY_DELAY_MS = positiveIntFromEnv('CSIHARNESS_CLAUDE_API_RETRY_MIN_DELAY_MS', 10_000);
     const execStartedAt = Date.now();
     let firstDeltaAt = 0;
     let lastDeltaAt = 0;
@@ -375,7 +375,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
     let deltaBytes = 0;
     let assistantTextBytesEmitted = 0;
     let assistantSnapshotCount = 0;
-    const streamDebug = process.env.ACE_CHAT_STREAM_DEBUG === '1';
+    const streamDebug = process.env.CSIHARNESS_CHAT_STREAM_DEBUG === '1';
     const seenMsgTypes = new Set<string>();
     const seenSystemSubtypes = new Set<string>();
     const seenDeltaTypes = new Set<string>();

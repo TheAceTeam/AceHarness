@@ -1,7 +1,7 @@
 {
-  "name": "@cangjielang/aceharness",
-  "version": "1.0.0-beta.90",
-  "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
+  "name": "csiharness",
+  "version": "0.1.0",
+  "description": "CSIHarness - an independent agent-centric engineering harness",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
     "build:cli": "node scripts/build-cli.js",
@@ -18,7 +18,7 @@
     "wechat:relay": "node scripts/wechat-bridge-relay.mjs",
     "wechat:qr-test": "node scripts/wechat-qr-test-runner.mjs",
     "wechat:official": "node -r ts-node/register -r tsconfig-paths/register scripts/wechat-official.ts",
-    "ace": "node ./bin/ace.js",
+    "csiharness": "node ./bin/csiharness.js",
     "check:engines": "node ./scripts/check-engine-availability.mjs",
     "check:engine-chat": "node ./scripts/check-engine-chat.cjs",
     "check:workflow-creator": "node ./scripts/check-workflow-creator.cjs",
@@ -37,15 +37,7 @@
     "orchestration",
     "claude"
   ],
-  "author": "CangjieLang",
-  "repository": {
-    "type": "git",
-    "url": "https://gitcode.com/Cangjie-SIG/ACEHarness.git"
-  },
-  "homepage": "https://gitcode.com/Cangjie-SIG/ACEHarness",
-  "bugs": {
-    "url": "https://gitcode.com/Cangjie-SIG/ACEHarness/issues"
-  },
+  "author": "CSIHarness Team",
   "license": "Apache 2.0",
   "engines": {
     "node": ">=20",
@@ -252,7 +244,7 @@
     "native/aceharness-cj-engine/artifacts"
   ],
   "bin": {
-    "ace": "bin/ace.js"
+    "csiharness": "bin/csiharness.js"
   },
   "directories": {
     "doc": "docs"

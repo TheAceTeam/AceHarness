@@ -10,19 +10,19 @@ import {
 
 describe('sendPromptWithOpenCodeHttp regressions', () => {
   test('uses a long default total timeout with a separate idle timeout for streaming prompts', () => {
-    const originalTotal = process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS;
-    const originalIdle = process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+    const originalTotal = process.env.CSIHARNESS_OPENCODE_STREAM_TIMEOUT_MS;
+    const originalIdle = process.env.CSIHARNESS_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
     try {
-      delete process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS;
-      delete process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+      delete process.env.CSIHARNESS_OPENCODE_STREAM_TIMEOUT_MS;
+      delete process.env.CSIHARNESS_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
 
       expect(getOpenCodeStreamTimeoutConfig()).toEqual({
         totalMs: 60 * 60 * 1000,
         idleMs: 10 * 60 * 1000,
       });
 
-      process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS = '7200000';
-      process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '900000';
+      process.env.CSIHARNESS_OPENCODE_STREAM_TIMEOUT_MS = '7200000';
+      process.env.CSIHARNESS_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '900000';
       expect(getOpenCodeStreamTimeoutConfig()).toEqual({
         totalMs: 7_200_000,
         idleMs: 900_000,
@@ -34,14 +34,14 @@ describe('sendPromptWithOpenCodeHttp regressions', () => {
       });
     } finally {
       if (originalTotal === undefined) {
-        delete process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS;
+        delete process.env.CSIHARNESS_OPENCODE_STREAM_TIMEOUT_MS;
       } else {
-        process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS = originalTotal;
+        process.env.CSIHARNESS_OPENCODE_STREAM_TIMEOUT_MS = originalTotal;
       }
       if (originalIdle === undefined) {
-        delete process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+        delete process.env.CSIHARNESS_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
       } else {
-        process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS = originalIdle;
+        process.env.CSIHARNESS_OPENCODE_STREAM_IDLE_TIMEOUT_MS = originalIdle;
       }
     }
   });

@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'vitest';
+import { readFile } from 'fs/promises';
+import path from 'path';
 import {
   CLI_COMMAND,
   DEFAULT_PORT,
@@ -16,5 +18,13 @@ describe('CSIHarness product identity', () => {
     expect(DEFAULT_PORT).toBe(3001);
     expect(RUNTIME_HOME_ENV).toBe('CSIHARNESS_HOME');
     expect(INSTALL_ROOT_ENV).toBe('CSIHARNESS_INSTALL_ROOT');
+  });
+
+  test('publishes only the independent npm package and CLI command', async () => {
+    const pkg = JSON.parse(await readFile(path.join(process.cwd(), 'package.json'), 'utf8'));
+    expect(pkg.name).toBe('csiharness');
+    expect(pkg.version).toBe('0.1.0');
+    expect(pkg.bin).toEqual({ csiharness: 'bin/csiharness.js' });
+    expect(pkg.bin).not.toHaveProperty('ace');
   });
 });

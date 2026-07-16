@@ -9,8 +9,8 @@ describe('models API route', () => {
   test('keeps deleted bundled models from being restored on refresh', async () => {
     await withTempDir('aceharness-test-install-', async (installRoot) => {
       await withIsolatedAceHome(async (aceHome) => {
-        const previousInstallRoot = process.env.ACE_INSTALL_ROOT;
-        process.env.ACE_INSTALL_ROOT = installRoot;
+        const previousInstallRoot = process.env.CSIHARNESS_INSTALL_ROOT;
+        process.env.CSIHARNESS_INSTALL_ROOT = installRoot;
 
         try {
           const installModelsDir = path.join(installRoot, 'configs', 'models');
@@ -64,8 +64,8 @@ describe('models API route', () => {
           const reloadBody = await responseJson<{ models: Array<{ value: string }> }>(reloadResponse);
           expect(reloadBody.models.map((model) => model.value)).toEqual(['bundled-a']);
         } finally {
-          if (previousInstallRoot === undefined) delete process.env.ACE_INSTALL_ROOT;
-          else process.env.ACE_INSTALL_ROOT = previousInstallRoot;
+          if (previousInstallRoot === undefined) delete process.env.CSIHARNESS_INSTALL_ROOT;
+          else process.env.CSIHARNESS_INSTALL_ROOT = previousInstallRoot;
         }
       });
     });
@@ -74,8 +74,8 @@ describe('models API route', () => {
   test('replaces a saved model engine list instead of merging deleted engines back', async () => {
     await withTempDir('aceharness-test-install-', async (installRoot) => {
       await withIsolatedAceHome(async (aceHome) => {
-        const previousInstallRoot = process.env.ACE_INSTALL_ROOT;
-        process.env.ACE_INSTALL_ROOT = installRoot;
+        const previousInstallRoot = process.env.CSIHARNESS_INSTALL_ROOT;
+        process.env.CSIHARNESS_INSTALL_ROOT = installRoot;
 
         try {
           const installModelsDir = path.join(installRoot, 'configs', 'models');
@@ -127,8 +127,8 @@ describe('models API route', () => {
           const reloadBody = await responseJson<{ models: Array<{ value: string; engines?: string[] }> }>(reloadResponse);
           expect(reloadBody.models.find((model) => model.value === 'shared-model')?.engines).toEqual(['opencode']);
         } finally {
-          if (previousInstallRoot === undefined) delete process.env.ACE_INSTALL_ROOT;
-          else process.env.ACE_INSTALL_ROOT = previousInstallRoot;
+          if (previousInstallRoot === undefined) delete process.env.CSIHARNESS_INSTALL_ROOT;
+          else process.env.CSIHARNESS_INSTALL_ROOT = previousInstallRoot;
         }
       });
     });

@@ -65,7 +65,7 @@ export interface ACPEngineConfig {
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
 
-/** `ACE_TIMING_DEBUG` / `ACE_ACP_TIMING_DEBUG`：1|true|on|yes 开；0|false|off|no 关；未设置时开发环境默认开。 */
+/** `CSIHARNESS_TIMING_DEBUG` / `CSIHARNESS_ACP_TIMING_DEBUG`：1|true|on|yes 开；0|false|off|no 关；未设置时开发环境默认开。 */
 function parseTimingDebugEnv(value: string | undefined): boolean | null {
   if (value == null) return null;
   const v = String(value).trim().toLowerCase();
@@ -76,14 +76,14 @@ function parseTimingDebugEnv(value: string | undefined): boolean | null {
 }
 
 /**
- * 是否打印 ACP / chat/stream 各阶段 `[ACE_TIMING]` 日志。
+ * 是否打印 ACP / chat/stream 各阶段 `[CSIHARNESS_TIMING]` 日志。
  * - 未设置环境变量且为本地开发（`NODE_ENV` 非 `production` / `test`）时默认开启，便于 `npm run dev` 分析。
- * - 生产或测试跑法默认关闭；需要时在部署环境设 `ACE_TIMING_DEBUG=1`。
+ * - 生产或测试跑法默认关闭；需要时在部署环境设 `CSIHARNESS_TIMING_DEBUG=1`。
  * - 任一变量的显式 `0` / `false` / `off` / `no` 会关闭（优先于默认开）。
  */
 export function isAceTimingDebug(): boolean {
-  const a = parseTimingDebugEnv(process.env.ACE_TIMING_DEBUG);
-  const b = parseTimingDebugEnv(process.env.ACE_ACP_TIMING_DEBUG);
+  const a = parseTimingDebugEnv(process.env.CSIHARNESS_TIMING_DEBUG);
+  const b = parseTimingDebugEnv(process.env.CSIHARNESS_ACP_TIMING_DEBUG);
   if (a === false || b === false) return false;
   if (a === true || b === true) return true;
   const nodeEnv = process.env.NODE_ENV;
@@ -94,7 +94,7 @@ export function logAcpTiming(engineType: string, phase: string, startedAt: numbe
   if (!isAceTimingDebug()) return;
   const ms = Date.now() - startedAt;
   const tail = extra ? ` | ${extra}` : '';
-  console.log(`[ACE_TIMING][${engineType}] ${phase}: ${ms}ms${tail}`);
+  console.log(`[CSIHARNESS_TIMING][${engineType}] ${phase}: ${ms}ms${tail}`);
 }
 
 const DEFAULT_ACP_PHASE_MS = 30_000;
@@ -110,27 +110,27 @@ function parseAcpPhaseTimeoutMs(raw: string | undefined, fallback: number): numb
   return Math.min(MAX_ACP_PHASE_MS, Math.max(MIN_ACP_PHASE_MS, n));
 }
 
-/** Timeout for `connection.initialize` (ms). Env: `ACE_ACP_INIT_TIMEOUT_MS`, default 30000. */
+/** Timeout for `connection.initialize` (ms). Env: `CSIHARNESS_ACP_INIT_TIMEOUT_MS`, default 30000. */
 export function getAcpInitTimeoutMs(): number {
-  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_INIT_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+  return parseAcpPhaseTimeoutMs(process.env.CSIHARNESS_ACP_INIT_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
 }
 
-/** Timeout for `connection.newSession` (ms). Env: `ACE_ACP_NEW_SESSION_TIMEOUT_MS`, default 60000. */
+/** Timeout for `connection.newSession` (ms). Env: `CSIHARNESS_ACP_NEW_SESSION_TIMEOUT_MS`, default 60000. */
 export function getAcpNewSessionTimeoutMs(): number {
-  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_NEW_SESSION_TIMEOUT_MS, DEFAULT_ACP_NEW_SESSION_MS);
+  return parseAcpPhaseTimeoutMs(process.env.CSIHARNESS_ACP_NEW_SESSION_TIMEOUT_MS, DEFAULT_ACP_NEW_SESSION_MS);
 }
 
-/** Timeout for `session/load` when resuming (ms). Env: `ACE_ACP_LOAD_SESSION_TIMEOUT_MS`, default 30000. */
+/** Timeout for `session/load` when resuming (ms). Env: `CSIHARNESS_ACP_LOAD_SESSION_TIMEOUT_MS`, default 30000. */
 export function getAcpLoadSessionTimeoutMs(): number {
-  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_LOAD_SESSION_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+  return parseAcpPhaseTimeoutMs(process.env.CSIHARNESS_ACP_LOAD_SESSION_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
 }
 
 /**
  * Outer timeout for GET /api/engine/models (full start + session + model list).
- * Env: `ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS`; if unset, uses init + newSession + 15s headroom.
+ * Env: `CSIHARNESS_ACP_MODEL_DISCOVERY_TIMEOUT_MS`; if unset, uses init + newSession + 15s headroom.
  */
 export function getAcpModelDiscoveryTimeoutMs(): number {
-  const raw = process.env.ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS;
+  const raw = process.env.CSIHARNESS_ACP_MODEL_DISCOVERY_TIMEOUT_MS;
   if (raw != null && String(raw).trim() !== '') {
     return parseAcpPhaseTimeoutMs(raw, getAcpInitTimeoutMs() + getAcpNewSessionTimeoutMs() + 15_000);
   }
@@ -531,7 +531,7 @@ export class ACPEngine extends EventEmitter {
   }
 
   private shouldDebugStreamEvents(): boolean {
-    const env = parseTimingDebugEnv(process.env.ACE_ACP_STREAM_DEBUG);
+    const env = parseTimingDebugEnv(process.env.CSIHARNESS_ACP_STREAM_DEBUG);
     if (env !== null) return env;
     return this.isDiagnosticLoggingEnabled();
   }
@@ -764,7 +764,7 @@ export class ACPEngine extends EventEmitter {
             () =>
               reject(
                 new Error(
-                  `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_INIT_TIMEOUT_MS to increase)`
+                  `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set CSIHARNESS_ACP_INIT_TIMEOUT_MS to increase)`
                 )
               ),
             initTimeoutMs
@@ -830,7 +830,7 @@ export class ACPEngine extends EventEmitter {
             () =>
               reject(
                 new Error(
-                  `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_NEW_SESSION_TIMEOUT_MS to increase)`
+                  `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set CSIHARNESS_ACP_NEW_SESSION_TIMEOUT_MS to increase)`
                 )
               ),
             sessionTimeoutMs
@@ -891,7 +891,7 @@ export class ACPEngine extends EventEmitter {
             () =>
               reject(
                 new Error(
-                  `ACP session/load timeout after ${loadTimeoutMs}ms. sessionId=${sessionId}. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_LOAD_SESSION_TIMEOUT_MS to increase)`
+                  `ACP session/load timeout after ${loadTimeoutMs}ms. sessionId=${sessionId}. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set CSIHARNESS_ACP_LOAD_SESSION_TIMEOUT_MS to increase)`
                 )
               ),
             loadTimeoutMs

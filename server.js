@@ -1,7 +1,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-process.env.ACE_INSTALL_ROOT = process.env.ACE_INSTALL_ROOT || __dirname;
+process.env.CSIHARNESS_INSTALL_ROOT = process.env.CSIHARNESS_INSTALL_ROOT || __dirname;
 process.chdir(__dirname);
 /**
  * Custom server 不会自动加载 Next 在 `next dev` 下注入的 .env*，需在 require('next') 之前合并进 process.env。
@@ -84,22 +84,22 @@ function normalizeRoutesManifest() {
         fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     }
     catch (error) {
-        console.warn('[ACEHarness] Failed to normalize routes-manifest.json:', error);
+        console.warn('[CSIHarness] Failed to normalize routes-manifest.json:', error);
     }
 }
 normalizeRoutesManifest();
-// ACEHarness: 运行模式显式化 —— 仅当显式传入 `dev` 才进开发模式，否则一律生产。
+// CSIHarness: 运行模式显式化 —— 仅当显式传入 `dev` 才进开发模式，否则一律生产。
 // 防止"启动方式不规范 → 误入 .next/dev 开发模式 → require.cache 堆积编译分片 → OOM"。
 const dev = process.argv.includes('dev');
 if (!dev) {
     process.env.NODE_ENV = process.env.NODE_ENV || 'production';
     if (!fs.existsSync(path.join(__dirname, '.next', 'BUILD_ID'))) {
-        console.error('[ACEHarness] 未找到生产构建产物 .next/BUILD_ID。请先执行 `npm run build`，再以生产模式启动（npm start / ace start）。');
+        console.error('[CSIHarness] 未找到生产构建产物 .next/BUILD_ID。请先执行 `npm run build`，再以生产模式启动（npm start / csiharness start）。');
         process.exit(1);
     }
 }
 else {
-    console.warn('[ACEHarness] ⚠ 正在以 DEV（开发）模式运行 —— 仅供本地开发；长期运行内存会持续增长直至 OOM，请勿用于部署。');
+    console.warn('[CSIHarness] ⚠ 正在以 DEV（开发）模式运行 —— 仅供本地开发；长期运行内存会持续增长直至 OOM，请勿用于部署。');
 }
 const next = require('next');
 const { WebSocketServer } = require('ws');
@@ -109,8 +109,9 @@ const awarenessProtocol = require('y-protocols/awareness');
 const encoding = require('lib0/encoding');
 const decoding = require('lib0/decoding');
 const { getWorkspaceDataFile, getWorkspaceNotebookRoot, } = require(path.join(__dirname, 'dist/lib/core/app-paths.js'));
-const host = process.env.ACE_HOST || '127.0.0.1';
-const port = Number(process.env.PORT || process.env.ACE_PORT || 3000);
+const { resolveRuntimePort } = require(path.join(__dirname, 'dist/lib/core/runtime-network.js'));
+const host = process.env.CSIHARNESS_HOST || '127.0.0.1';
+const port = resolveRuntimePort(process.env);
 const CHAT_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
 const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();
@@ -125,11 +126,11 @@ async function restoreScheduler() {
         const { scheduler } = require(schedulerModulePath);
         if (scheduler?.init) {
             await scheduler.init();
-            console.log('[ACEHarness] Scheduler restored');
+            console.log('[CSIHarness] Scheduler restored');
         }
     }
     catch (error) {
-        console.error('[ACEHarness] Scheduler restore failed:', error);
+        console.error('[CSIHarness] Scheduler restore failed:', error);
     }
 }
 function stripBasePath(pathname) {
@@ -496,21 +497,21 @@ function resolveCollabRoom(searchParams) {
         return { ok: false, reason: '路径不合法' };
     return { ok: true, roomId: `personal:${user.id}:${absPath}`, user, filePath };
 }
-// ACEHarness: 内存看门狗。dev 模式下编译分片会随运行无界堆积在 require.cache 直至 OOM。
-// 仅当受 daemon 监管(ACE_MANAGED=1)时才允许自重启(由守护进程拉起):
+// CSIHarness: 内存看门狗。dev 模式下编译分片会随运行无界堆积在 require.cache 直至 OOM。
+// 仅当受 daemon 监管(CSIHARNESS_MANAGED=1)时才允许自重启(由守护进程拉起):
 //   - 空闲(无在跑的 agent/流)且 heapUsed 超过软阈值 -> 优雅重启(用户基本无感);
 //   - heapUsed 超过硬红线 -> 强制重启(避免不可控的 OOM 崩溃)。
-// 非受管运行(如 npm run dev)只告警、不自杀。可用 ACE_MEM_WATCHDOG=0 关闭。
+// 非受管运行(如 npm run dev)只告警、不自杀。可用 CSIHARNESS_MEM_WATCHDOG=0 关闭。
 function startMemoryWatchdog() {
-    if (process.env.ACE_MEM_WATCHDOG === '0')
+    if (process.env.CSIHARNESS_MEM_WATCHDOG === '0')
         return;
     const v8 = require('v8');
     const heapLimit = v8.getHeapStatistics().heap_size_limit;
     if (!heapLimit || heapLimit < 1)
         return;
-    const managed = process.env.ACE_MANAGED === '1';
-    const softPct = Number(process.env.ACE_MEM_SOFT_PCT) || 0.80;
-    const hardPct = Number(process.env.ACE_MEM_HARD_PCT) || 0.92;
+    const managed = process.env.CSIHARNESS_MANAGED === '1';
+    const softPct = Number(process.env.CSIHARNESS_MEM_SOFT_PCT) || 0.80;
+    const hardPct = Number(process.env.CSIHARNESS_MEM_HARD_PCT) || 0.92;
     const soft = heapLimit * softPct;
     const hard = heapLimit * hardPct;
     const mb = (n) => Math.round(n / 1024 / 1024);
@@ -535,7 +536,7 @@ function startMemoryWatchdog() {
         if (restarting)
             return;
         restarting = true;
-        console.error(`[ACEHarness] 内存看门狗触发重启(${reason}): heapUsed=${mb(process.memoryUsage().heapUsed)}MB / limit=${mb(heapLimit)}MB。受管进程将由守护进程自动拉起。`);
+        console.error(`[CSIHarness] 内存看门狗触发重启(${reason}): heapUsed=${mb(process.memoryUsage().heapUsed)}MB / limit=${mb(heapLimit)}MB。受管进程将由守护进程自动拉起。`);
         setTimeout(() => process.exit(1), 1500); // 留点时间落日志/在途响应，再以非零码退出 -> supervisor 重启
     };
     const timer = setInterval(() => {
@@ -547,7 +548,7 @@ function startMemoryWatchdog() {
                 restart('硬红线');
             else if (!warnedUnmanaged) {
                 warnedUnmanaged = true;
-                console.warn(`[ACEHarness] ⚠ 内存逼近上限(heapUsed=${mb(heapUsed)}MB / limit=${mb(heapLimit)}MB),且非受管模式不会自动重启,请尽快手动重启进程。`);
+                console.warn(`[CSIHarness] ⚠ 内存逼近上限(heapUsed=${mb(heapUsed)}MB / limit=${mb(heapLimit)}MB),且非受管模式不会自动重启,请尽快手动重启进程。`);
             }
             return;
         }
@@ -630,8 +631,8 @@ app.prepare().then(() => {
         });
     });
     server.listen(port, host, () => {
-        console.log(`[ACEHarness] Server ready on http://${host}:${port}`);
-        process.env.ACE_INTERNAL_BASE_URL = process.env.ACE_INTERNAL_BASE_URL || `http://${host}:${port}`;
+        console.log(`[CSIHarness] Server ready on http://${host}:${port}`);
+        process.env.CSIHARNESS_INTERNAL_BASE_URL = process.env.CSIHARNESS_INTERNAL_BASE_URL || `http://${host}:${port}`;
         void restoreScheduler();
         startMemoryWatchdog();
     });

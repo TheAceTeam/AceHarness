@@ -64,11 +64,11 @@ describe('workflow event store', () => {
       const previousAceHome = process.env.CSIHARNESS_HOME;
       const previousAppData = process.env.APPDATA;
       const previousXdgDataHome = process.env.XDG_DATA_HOME;
-      const previousWorkflowEventStore = process.env.ACE_WORKFLOW_EVENT_STORE;
+      const previousWorkflowEventStore = process.env.CSIHARNESS_WORKFLOW_EVENT_STORE;
       process.env.CSIHARNESS_HOME = aceHome;
       process.env.APPDATA = baseDir;
       process.env.XDG_DATA_HOME = baseDir;
-      delete process.env.ACE_WORKFLOW_EVENT_STORE;
+      delete process.env.CSIHARNESS_WORKFLOW_EVENT_STORE;
 
       try {
         const { getWorkflowEventStore, resetWorkflowEventStoreForTests } = await loadEventStore();
@@ -89,8 +89,8 @@ describe('workflow event store', () => {
         else process.env.APPDATA = previousAppData;
         if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
         else process.env.XDG_DATA_HOME = previousXdgDataHome;
-        if (previousWorkflowEventStore === undefined) delete process.env.ACE_WORKFLOW_EVENT_STORE;
-        else process.env.ACE_WORKFLOW_EVENT_STORE = previousWorkflowEventStore;
+        if (previousWorkflowEventStore === undefined) delete process.env.CSIHARNESS_WORKFLOW_EVENT_STORE;
+        else process.env.CSIHARNESS_WORKFLOW_EVENT_STORE = previousWorkflowEventStore;
       }
     });
   });

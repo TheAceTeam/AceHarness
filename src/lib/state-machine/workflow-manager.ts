@@ -4038,7 +4038,7 @@ try {
   }
 
   private getSegmentHandoffDelayMs(config: StateMachineWorkflowConfig): number {
-    const raw = config.context?.segmentDelayMs ?? process.env.ACE_STATE_SEGMENT_DELAY_MS;
+    const raw = config.context?.segmentDelayMs ?? process.env.CSIHARNESS_STATE_SEGMENT_DELAY_MS;
     const parsed = typeof raw === 'number' ? raw : Number.parseInt(String(raw || '0'), 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
     return Math.min(parsed, 30000);

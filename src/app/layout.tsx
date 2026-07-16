@@ -15,7 +15,7 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const locale = process.env.ACE_LOCALE === 'en' ? 'en' : 'zh-CN';
+  const locale = process.env.CSIHARNESS_LOCALE === 'en' ? 'en' : 'zh-CN';
 
   return (
     <html lang={locale} suppressHydrationWarning>

@@ -37,8 +37,8 @@ function parseTimeoutEnv(value: string | undefined, fallback: number): number {
 export function getOpenCodeStreamTimeoutConfig(explicitTimeoutMs?: number): { totalMs: number; idleMs: number } {
   const totalMs = explicitTimeoutMs && Number.isFinite(explicitTimeoutMs)
     ? Math.max(MIN_OPENCODE_STREAM_TIMEOUT_MS, explicitTimeoutMs)
-    : parseTimeoutEnv(process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS, DEFAULT_OPENCODE_STREAM_TIMEOUT_MS);
-  const idleMs = parseTimeoutEnv(process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS, DEFAULT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
+    : parseTimeoutEnv(process.env.CSIHARNESS_OPENCODE_STREAM_TIMEOUT_MS, DEFAULT_OPENCODE_STREAM_TIMEOUT_MS);
+  const idleMs = parseTimeoutEnv(process.env.CSIHARNESS_OPENCODE_STREAM_IDLE_TIMEOUT_MS, DEFAULT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
   return {
     totalMs,
     idleMs: Math.min(totalMs, idleMs),
@@ -276,7 +276,7 @@ type OpenCodeAdapterLogFn = (entry: {
 const STABLE_ASSISTANT_COMPLETION_WINDOW_MS = 2_500;
 
 function isDebugEnabled(): boolean {
-  return process.env.ACE_TIMING_DEBUG === '1' || process.env.ACE_TIMING_DEBUG === 'true';
+  return process.env.CSIHARNESS_TIMING_DEBUG === '1' || process.env.CSIHARNESS_TIMING_DEBUG === 'true';
 }
 
 class PromptAlreadyStartedError extends Error {
