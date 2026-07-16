@@ -28,6 +28,8 @@ import {
   getRepoRoot,
   getWorkspaceDataFile,
 } from '@/lib/core/app-paths';
+import { assertSafeRuntimeTargets, ensureRuntimeHomeInitialized } from '@/lib/core/runtime-home';
+import { SERVICE_STATE_DIR_NAME } from '@/lib/core/product-identity';
 
 process.chdir(getRepoRoot());
 
@@ -166,9 +168,10 @@ const USERS_FILE = getWorkspaceDataFile('users.json');
 const TOKENS_FILE = getWorkspaceDataFile('tokens.json');
 const ADMIN_FILE = getWorkspaceDataFile('admin.json');
 const NOTEBOOK_SHARES_FILE = getWorkspaceDataFile('notebook-shares.json');
-const SERVICE_STATE_DIR = getWorkspaceDataFile('ace-services');
+const SERVICE_STATE_DIR = getWorkspaceDataFile(SERVICE_STATE_DIR_NAME);
 
 async function ensureRuntimeHome(): Promise<void> {
+  await ensureRuntimeHomeInitialized();
   await Promise.all([
     mkdir(getWorkspaceDirectory('workspace'), { recursive: true }),
     mkdir(getWorkspaceDirectory('config'), { recursive: true }),
@@ -472,6 +475,7 @@ async function resetAceState(force: boolean) {
     NOTEBOOK_SHARES_FILE,
     SERVICE_STATE_DIR,
   ];
+  await assertSafeRuntimeTargets(getWorkspaceDirectory('workspace'), targets);
 
   for (const target of targets) {
     await rm(target, { force: true, recursive: true });
