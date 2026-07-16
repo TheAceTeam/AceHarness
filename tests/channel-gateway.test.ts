@@ -7,12 +7,12 @@ describe('channel gateway', () => {
 
   beforeEach(() => {
     aceHome = mkdtempSync(join(tmpdir(), 'aceharness-channel-gateway-'));
-    process.env.ACE_HOME = aceHome;
+    process.env.CSIHARNESS_HOME = aceHome;
   });
 
   afterEach(() => {
     rmSync(aceHome, { recursive: true, force: true });
-    delete process.env.ACE_HOME;
+    delete process.env.CSIHARNESS_HOME;
     vi.restoreAllMocks();
   });
 

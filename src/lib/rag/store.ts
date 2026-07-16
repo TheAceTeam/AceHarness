@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import { createRequire } from 'module';
-import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { getRepoRoot, getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
 import type {
   RagBundleInput,
@@ -157,7 +157,7 @@ async function saveMeta(meta: RagMetaStore): Promise<void> {
 async function connectDb() {
   await mkdir(DB_URI, { recursive: true });
   if (!lancedbModule) {
-    const runtimeRoot = process.env.ACE_INSTALL_ROOT || process.cwd();
+    const runtimeRoot = getRepoRoot();
     const loaderPath = join(runtimeRoot, 'runtime', 'lancedb.cjs');
     const loader = runtimeRequire(loaderPath) as { loadLanceDb?: () => typeof import('@lancedb/lancedb') };
     if (typeof loader.loadLanceDb !== 'function') {

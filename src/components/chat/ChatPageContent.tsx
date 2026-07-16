@@ -166,7 +166,7 @@ const MIN_HOME_SIDEBAR_SIZE = 20;
 const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
 const CHAT_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
-const CHAT_ATTACHMENT_UPLOAD_DIR = '.aceharness/chat-attachments';
+const CHAT_ATTACHMENT_UPLOAD_DIR = '.csiharness/chat-attachments';
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 export function isChatAiBusy(input: {
   loading?: boolean;

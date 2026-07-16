@@ -18,7 +18,7 @@ async function git(cwd: string, args: string[]) {
 }
 
 async function loadWorkspaceStore(input: { aceHome: string; skillsDir?: string; linkThrows?: boolean }) {
-  process.env.ACE_HOME = input.aceHome;
+  process.env.CSIHARNESS_HOME = input.aceHome;
   vi.resetModules();
   vi.doMock('@/lib/run/runtime-skills', () => ({
     getRuntimeSkillsDirPath: vi.fn().mockResolvedValue(input.skillsDir || path.join(input.aceHome, 'skills')),
@@ -50,7 +50,7 @@ async function withStore<T>(
 }
 
 afterEach(() => {
-  delete process.env.ACE_HOME;
+  delete process.env.CSIHARNESS_HOME;
   vi.doUnmock('@/lib/run/runtime-skills');
   vi.doUnmock('@/lib/core/directory-links');
   vi.restoreAllMocks();

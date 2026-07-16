@@ -1,0 +1,9 @@
+export const PRODUCT_NAME = 'CSIHarness';
+export const NPM_PACKAGE_NAME = 'csiharness';
+export const CLI_COMMAND = 'csiharness';
+export const DEFAULT_PORT = 3001;
+export const RUNTIME_HOME_ENV = 'CSIHARNESS_HOME';
+export const INSTALL_ROOT_ENV = 'CSIHARNESS_INSTALL_ROOT';
+export const RUNTIME_DIR_NAME = '.csiharness';
+export const RUNTIME_MARKER_FILE = '.csiharness-root.json';
+export const SERVICE_STATE_DIR_NAME = 'csiharness-services';

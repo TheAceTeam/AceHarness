@@ -1,31 +1,53 @@
 import { homedir } from 'os';
-import { dirname, join, resolve } from 'path';
-import { isWindows } from '@/lib/core/runtime-platform';
+import path, { dirname, join, resolve } from 'path';
+import { INSTALL_ROOT_ENV, RUNTIME_DIR_NAME, RUNTIME_HOME_ENV } from '@/lib/core/product-identity';
 
 export type AppDirectoryKind = 'config' | 'data' | 'cache' | 'logs' | 'workspace';
 
-function resolveInstallRoot(): string {
-  const envInstallRoot = process.env.ACE_INSTALL_ROOT?.trim();
+export function resolveInstallRootFromEnvironment(env: NodeJS.ProcessEnv, fallbackCwd: string): string {
+  const envInstallRoot = env[INSTALL_ROOT_ENV]?.trim();
   if (envInstallRoot) return resolve(envInstallRoot);
 
-  return resolve(process.cwd());
+  return resolve(fallbackCwd);
 }
 
-const INSTALL_ROOT = resolveInstallRoot();
+const INSTALL_ROOT = resolveInstallRootFromEnvironment(process.env, process.cwd());
 
-function resolveRuntimeRoot(): string {
-  const aceHome = process.env.ACE_HOME?.trim();
-  if (aceHome) return resolve(aceHome);
-
-  if (isWindows()) {
-    const appData = process.env.APPDATA?.trim();
-    if (appData) return resolve(appData, 'ACEHarness');
+export function resolveRuntimeRootFromEnvironment(input: {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  home: string;
+}): string {
+  const pathApi = input.platform === 'win32' ? path.win32 : path.posix;
+  const configuredHome = input.env[RUNTIME_HOME_ENV]?.trim();
+  if (configuredHome) {
+    if (configuredHome === '~' || configuredHome.startsWith('~/') || configuredHome.startsWith('~\\')) {
+      const suffix = configuredHome.slice(1).replace(/^[/\\]+/, '');
+      return pathApi.resolve(input.home, suffix);
+    }
+    if (!pathApi.isAbsolute(configuredHome)) {
+      throw new Error(`${RUNTIME_HOME_ENV} must be an absolute path or start with ~/`);
+    }
+    return pathApi.resolve(configuredHome);
   }
 
-  const xdgDataHome = process.env.XDG_DATA_HOME?.trim();
-  if (xdgDataHome) return resolve(xdgDataHome, 'aceharness');
+  if (input.platform === 'win32') {
+    const appData = input.env.APPDATA?.trim();
+    if (appData) return pathApi.resolve(appData, 'CSIHarness');
+  }
 
-  return resolve(homedir(), '.aceharness');
+  const xdgDataHome = input.env.XDG_DATA_HOME?.trim();
+  if (xdgDataHome) return pathApi.resolve(xdgDataHome, 'csiharness');
+
+  return pathApi.resolve(input.home, RUNTIME_DIR_NAME);
+}
+
+function resolveRuntimeRoot(): string {
+  return resolveRuntimeRootFromEnvironment({
+    env: process.env,
+    platform: process.platform,
+    home: homedir(),
+  });
 }
 
 export function getWorkspaceRoot(): string {

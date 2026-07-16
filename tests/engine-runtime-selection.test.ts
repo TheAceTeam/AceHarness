@@ -74,7 +74,7 @@ describe('engine runtime selection', () => {
     runtimeMockState.kiroInstances.length = 0;
     aceHome = join(tmpdir(), `aceharness-engine-runtime-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     mkdirSync(aceHome, { recursive: true });
-    process.env.ACE_HOME = aceHome;
+    process.env.CSIHARNESS_HOME = aceHome;
   });
 
   test('engineRuntime=js does not probe or open napi-cj native addon', async () => {

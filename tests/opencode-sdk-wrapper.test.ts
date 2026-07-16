@@ -43,7 +43,7 @@ const BASE_OPTIONS: EngineOptions = {
 };
 
 let tempAceHome = '';
-const originalAceHome = process.env.ACE_HOME;
+const originalAceHome = process.env.CSIHARNESS_HOME;
 const originalLowerCaseKey = process.env.lower_case_key;
 const originalSdkToken = process.env.opencode_sdk_token;
 
@@ -65,7 +65,7 @@ describe('OpenCodeSdkEngineWrapper', () => {
     vi.clearAllMocks();
 
     tempAceHome = mkdtempSync(join(tmpdir(), 'aceharness-opencode-sdk-'));
-    process.env.ACE_HOME = tempAceHome;
+    process.env.CSIHARNESS_HOME = tempAceHome;
     delete process.env.lower_case_key;
     delete process.env.opencode_sdk_token;
 
@@ -97,9 +97,9 @@ describe('OpenCodeSdkEngineWrapper', () => {
     }
 
     if (originalAceHome === undefined) {
-      delete process.env.ACE_HOME;
+      delete process.env.CSIHARNESS_HOME;
     } else {
-      process.env.ACE_HOME = originalAceHome;
+      process.env.CSIHARNESS_HOME = originalAceHome;
     }
 
     if (originalLowerCaseKey === undefined) {

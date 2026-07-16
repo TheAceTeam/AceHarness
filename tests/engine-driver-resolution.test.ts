@@ -14,7 +14,7 @@ describe('engine driver resolution', () => {
     vi.restoreAllMocks();
     aceHome = join(tmpdir(), `aceharness-engine-driver-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     mkdirSync(aceHome, { recursive: true });
-    process.env.ACE_HOME = aceHome;
+    process.env.CSIHARNESS_HOME = aceHome;
   });
 
   test('claude-code with stdio driver prefers claude-code-acp and may fallback to sdk', async () => {
