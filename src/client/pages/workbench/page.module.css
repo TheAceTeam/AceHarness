@@ -940,6 +940,116 @@
   font-weight: 750;
 }
 
+.workbenchTimingLedger {
+  border: 1px solid #d9ddd4;
+  border-radius: 12px;
+  background: #fbfcfa;
+  padding: 16px 18px;
+}
+
+.workbenchTimingHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workbenchTimingHeader strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--workbench-text, #151515);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.workbenchTimingEyebrow {
+  color: var(--workbench-muted, #8a8a84);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+}
+
+.workbenchTimingValues {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.workbenchTimingValues > div {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.7fr) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.workbenchTimingValues span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--workbench-muted, #8a8a84);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workbenchTimingValues i {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.workbenchTimingRunDot,
+.workbenchTimingRunBar {
+  background: #17855b;
+}
+
+.workbenchTimingWaitDot,
+.workbenchTimingWaitBar {
+  background: #f59e0b;
+}
+
+.workbenchTimingValues strong {
+  color: var(--workbench-text, #151515);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 780;
+}
+
+.workbenchTimingValues small {
+  color: var(--workbench-muted, #8a8a84);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.workbenchTimingTrack {
+  display: flex;
+  height: 8px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e9ebe5;
+}
+
+.workbenchTimingTrack span {
+  min-width: 0;
+  transition: width 180ms ease-out;
+}
+
+.workbenchTimingHint {
+  margin-top: 8px;
+  color: var(--workbench-muted, #8a8a84);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .workbenchTimingValues {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .workbenchTokenMetric {
   border: 1px solid var(--workbench-line, #e3e3df);
   border-radius: 11px;
@@ -1115,6 +1225,7 @@
 :global(.dark) .workbenchBackButton,
 :global(.dark) .workbenchPreviewCard,
 :global(.dark) .workbenchMetric,
+:global(.dark) .workbenchTimingLedger,
 :global(.dark) .workbenchTokenMetric,
 :global(.dark) .workbenchEmptyHint {
   border-color: var(--workbench-line);
@@ -1137,6 +1248,7 @@
 :global(.dark) .workbenchSelectedRunCard,
 :global(.dark) .workbenchBackButton,
 :global(.dark) .workbenchPreviewCard,
+:global(.dark) .workbenchTimingLedger,
 :global(.dark) .workbenchPreviewPanel {
   background: var(--workbench-paper);
 }

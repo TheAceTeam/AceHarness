@@ -574,7 +574,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
     }
   };
 
-  const handleImportWorkflowZip = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+  const handleImportWorkflowFile = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     setArchiveImporting(true);
@@ -1121,10 +1121,10 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
             variant="outline"
             onClick={() => archiveInputRef.current?.click()}
             disabled={archiveImporting}
-            title="导入 workflow ZIP"
+            title="导入 workflow ZIP 或 YAML"
           >
             <Upload className={`h-4 w-4 xl:mr-2 ${archiveImporting ? 'animate-bounce' : ''}`} />
-            <span className="hidden xl:inline">{archiveImporting ? '导入中...' : '导入 ZIP'}</span>
+            <span className="hidden xl:inline">{archiveImporting ? '导入中...' : '导入'}</span>
           </Button>
           <Button
             size="sm"
@@ -1166,9 +1166,9 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
       <input
         ref={archiveInputRef}
         type="file"
-        accept=".zip"
+        accept=".zip,.yaml,.yml,application/zip,application/x-yaml,text/yaml"
         className="hidden"
-        onChange={handleImportWorkflowZip}
+        onChange={handleImportWorkflowFile}
       />
       {/* Header */}
       {!isDashboardShell ? (
