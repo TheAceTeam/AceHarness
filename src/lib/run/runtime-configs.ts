@@ -1,6 +1,6 @@
-import { cp, mkdir, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname, relative, resolve } from 'path';
+import { resolve } from 'path';
 import {
   getInstallConfigPath,
   getInstallConfigsDir,
@@ -8,6 +8,7 @@ import {
   getWorkspaceConfigPath,
   getWorkspaceConfigsDir,
 } from '@/lib/core/app-paths';
+import { seedBundledDirectoryOnce } from '@/lib/core/preset-seeding';
 
 const DELETED_MARKER = '.deleted.json';
 
@@ -43,49 +44,11 @@ export async function unmarkConfigDeleted(configsDir: string, relativePath: stri
   await saveDeletedSet(configsDir, deleted);
 }
 
-async function copyMissingRecursive(src: string, dst: string, deletedSet: Set<string>, baseDir: string): Promise<void> {
-  const srcStat = await stat(src);
-  if (srcStat.isDirectory()) {
-    await mkdir(dst, { recursive: true });
-    const entries = await readdir(src, { withFileTypes: true });
-    for (const entry of entries) {
-      await copyMissingRecursive(resolve(src, entry.name), resolve(dst, entry.name), deletedSet, baseDir);
-    }
-    return;
-  }
-
-  const rel = relative(baseDir, dst);
-  if (deletedSet.has(rel)) return;
-
-  if (existsSync(dst)) return;
-  await mkdir(dirname(dst), { recursive: true });
-  await cp(src, dst, { force: false });
-}
-
 export async function ensureRuntimeConfigsSeeded(): Promise<void> {
   if (seedPromise) return seedPromise;
 
   seedPromise = (async () => {
-    const runtimeConfigsDir = getWorkspaceConfigsDir();
-    const installConfigsDir = getInstallConfigsDir();
-
-    if (!existsSync(runtimeConfigsDir)) {
-      await mkdir(dirname(runtimeConfigsDir), { recursive: true });
-      await cp(installConfigsDir, runtimeConfigsDir, { recursive: true, force: false });
-      return;
-    }
-
-    const deletedSet = await loadDeletedSet(runtimeConfigsDir);
-
-    // Remove tombstoned files that still exist on disk
-    for (const rel of deletedSet) {
-      const fullPath = resolve(runtimeConfigsDir, rel);
-      if (existsSync(fullPath)) {
-        try { await unlink(fullPath); } catch { /* ignore */ }
-      }
-    }
-
-    await copyMissingRecursive(installConfigsDir, runtimeConfigsDir, deletedSet, runtimeConfigsDir);
+    await seedBundledDirectoryOnce(getInstallConfigsDir(), getWorkspaceConfigsDir());
   })().finally(() => {
     seedPromise = null;
   });
