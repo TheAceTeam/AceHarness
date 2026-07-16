@@ -69,6 +69,15 @@ function isYamlFilename(filename: string): boolean {
   return /\.ya?ml$/i.test(filename);
 }
 
+function isIgnoredArchiveMetadataPath(input: string): boolean {
+  const segments = String(input || '').replace(/\\/g, '/').split('/').filter(Boolean);
+  return segments.some((segment) => (
+    segment === '__MACOSX'
+    || segment === '.DS_Store'
+    || segment.startsWith('._')
+  ));
+}
+
 function normalizeArchiveWorkflowPath(input: unknown): string {
   const normalized = String(input || '')
     .replace(/\\/g, '/')
@@ -178,6 +187,7 @@ async function readArchiveCandidatesFromZip(
   for (const entry of directory.files || []) {
     if (entry.type !== 'File') continue;
     const rawPath = String(entry.path || '');
+    if (isIgnoredArchiveMetadataPath(rawPath)) continue;
     if (!isYamlFilename(rawPath)) continue;
     const normalizedRawPath = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
     if (normalizedRawPath.startsWith('spec-coding/')) {
@@ -200,25 +210,53 @@ async function readArchiveCandidatesFromZip(
     seen.add(filename);
 
     const content = (await entry.buffer()).toString('utf-8');
-    let parsed: any;
-    try {
-      parsed = parse(content);
-    } catch (error: any) {
-      throw Object.assign(new Error(`工作流 YAML 解析失败: ${filename}`), { status: 400, cause: error });
-    }
-    const validation = validateWorkflowDraft(parsed, { mode: 'portable' });
-    if (!validation.ok || !validation.normalized) {
-      throw Object.assign(new Error(`工作流校验失败: ${filename}`), {
-        status: 400,
-        details: formatValidationIssuesForResponse(validation),
-      });
-    }
-
-    const audit = auditAndSanitizeImportedWorkflow(filename, validation.normalized, availableAgents, availableSkills);
-    candidates.push({ filename, normalizedConfig: validation.normalized, audit });
+    candidates.push(parseWorkflowImportCandidate(filename, content, availableAgents, availableSkills));
   }
 
   return { workflows: candidates, specSessions };
+}
+
+function parseWorkflowImportCandidate(
+  filename: string,
+  content: string,
+  availableAgents: Set<string>,
+  availableSkills: Set<string>,
+): WorkflowImportCandidate {
+  let parsed: any;
+  try {
+    parsed = parse(content);
+  } catch (error: any) {
+    throw Object.assign(new Error(`工作流 YAML 解析失败: ${filename}`), { status: 400, cause: error });
+  }
+  const validation = validateWorkflowDraft(parsed, { mode: 'portable' });
+  if (!validation.ok || !validation.normalized) {
+    throw Object.assign(new Error(`工作流校验失败: ${filename}`), {
+      status: 400,
+      details: formatValidationIssuesForResponse(validation),
+    });
+  }
+  const audit = auditAndSanitizeImportedWorkflow(filename, validation.normalized, availableAgents, availableSkills);
+  return { filename, normalizedConfig: validation.normalized, audit };
+}
+
+async function readImportCandidates(
+  file: File,
+  availableAgents: Set<string>,
+  availableSkills: Set<string>,
+): Promise<{ workflows: WorkflowImportCandidate[]; specSessions: SpecCodingImportCandidate[] }> {
+  const filename = String(file.name || '').trim();
+  if (/\.zip$/i.test(filename)) {
+    return readArchiveCandidatesFromZip(file, availableAgents, availableSkills);
+  }
+  if (isYamlFilename(filename)) {
+    const normalizedFilename = normalizeArchiveWorkflowPath(filename);
+    const content = await file.text();
+    return {
+      workflows: [parseWorkflowImportCandidate(normalizedFilename, content, availableAgents, availableSkills)],
+      specSessions: [],
+    };
+  }
+  throw Object.assign(new Error('请上传 .zip、.yaml 或 .yml 文件'), { status: 400 });
 }
 
 async function collectExportWorkflowFiles(
@@ -525,7 +563,7 @@ export async function POST(request: Request) {
 
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) {
-      return jsonError('请上传 ZIP 文件', 400);
+      return jsonError('请上传工作流 ZIP 或 YAML 文件', 400);
     }
 
     const formData = await request.formData();
@@ -533,8 +571,8 @@ export async function POST(request: Request) {
     if (!file) {
       return jsonError('未找到上传文件', 400);
     }
-    if (!/\.zip$/i.test(file.name || '')) {
-      return jsonError('请上传 .zip 文件', 400);
+    if (!/\.(?:zip|ya?ml)$/i.test(file.name || '')) {
+      return jsonError('请上传 .zip、.yaml 或 .yml 文件', 400);
     }
 
     const configsDir = await getRuntimeConfigsDirPath();
@@ -542,9 +580,9 @@ export async function POST(request: Request) {
       listRuntimeAgentNames(),
       listRuntimeSkillNames(),
     ]);
-    const { workflows: candidates, specSessions } = await readArchiveCandidatesFromZip(file, availableAgents, availableSkills);
+    const { workflows: candidates, specSessions } = await readImportCandidates(file, availableAgents, availableSkills);
     if (candidates.length === 0) {
-      return jsonError('ZIP 中未找到 workflow YAML', 400);
+      return jsonError('导入文件中未找到 workflow YAML', 400);
     }
     validateImportedWorkflowDependencyClosure(candidates);
 

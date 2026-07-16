@@ -95,6 +95,7 @@ import { RobotLogo } from '@/components/brand/RobotLogo';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import WorkflowSupervisorAgoraPanel from '@/components/workflow/WorkflowSupervisorAgoraPanel';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
+import { calculateWorkflowRunTiming } from '@/lib/workflow/run-timing';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
 import { getStreamingAceProcessReadyContent, mergeAceProcessChunkItems, mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
@@ -4608,18 +4609,20 @@ export default function WorkbenchPage({
     || runDetail?.summary?.endTime
     || selectedRun?.endTime
     || (!actionIsRunning ? (runDetail?.updatedAt || selectedRun?.updatedAt || null) : null);
-  const runElapsedMs = useMemo(() => {
-    const startMs = runStartedAtForOverview ? new Date(runStartedAtForOverview).getTime() : NaN;
-    if (Number.isNaN(startMs)) return 0;
-    const endMs = actionIsRunning
-      ? runClockNow
-      : runEndedAtForOverview
-        ? new Date(runEndedAtForOverview).getTime()
-        : runClockNow;
-    if (Number.isNaN(endMs)) return 0;
-    return Math.max(0, endMs - startMs);
-  }, [actionIsRunning, runClockNow, runEndedAtForOverview, runStartedAtForOverview]);
-  const runElapsedLabel = formatRunDuration(runElapsedMs);
+  const runTiming = useMemo(() => calculateWorkflowRunTiming({
+    startTime: runStartedAtForOverview,
+    endTime: actionIsRunning ? null : runEndedAtForOverview,
+    nowMs: runClockNow,
+    accumulatedWaitMs: runAccumulatedWaitMs,
+    waitStartedAt: runWaitStartedAt,
+  }), [
+    actionIsRunning,
+    runAccumulatedWaitMs,
+    runClockNow,
+    runEndedAtForOverview,
+    runStartedAtForOverview,
+    runWaitStartedAt,
+  ]);
   const runTransitionTimeline = useMemo(() => {
     const records = Array.isArray(smStateHistory) ? smStateHistory : [];
     return records.map((item: any, index: number) => {
@@ -5609,6 +5612,8 @@ export default function WorkbenchPage({
       stateHistory: Array.isArray((status as any).stateHistory) ? (status as any).stateHistory.length : null,
       humanQuestions: Array.isArray((status as any).humanQuestions) ? (status as any).humanQuestions.length : null,
       pendingHumanQuestionId: (status as any).pendingHumanQuestion?.id || null,
+      accumulatedWaitMs: (status as any).accumulatedWaitMs ?? null,
+      waitStartedAt: (status as any).waitStartedAt || null,
     });
     if (appliedStatusCacheSignatureRef.current === signature) return;
     appliedStatusCacheSignatureRef.current = signature;
@@ -11893,33 +11898,61 @@ export default function WorkbenchPage({
     const pendingQuestionText = pendingHumanQuestion
       ? String((pendingHumanQuestion as any).question || pendingHumanQuestion.message || '').trim()
       : '';
+    const title = pendingHumanQuestion
+      ? (pendingHumanQuestion.title || '等待人工输入')
+      : '确认工作流下一步';
     const summary = pendingHumanQuestion
-      ? (pendingHumanQuestion.title || pendingQuestionText || '等待人工输入')
+      ? (pendingQuestionText || pendingHumanQuestion.supervisorAdvice || '请查看审批选项并给出决定。')
       : humanApprovalData?.result?.summary || humanApprovalData?.supervisorAdvice || '当前工作流等待人工确认后继续推进。';
     const route = humanApprovalData
       ? `${formatStateName(humanApprovalData.currentState)} -> ${formatStateName(humanApprovalData.nextState)}`
       : formatWorkflowLocation(currentPhase, currentStep, '等待处理');
+    const suggestedAction = pendingHumanQuestion?.suggestedNextState
+      || humanApprovalData?.nextState
+      || null;
+    const answerOptions = pendingHumanQuestion
+      ? (pendingHumanQuestion.answerSchema.options?.map((option) => option.label)
+        || pendingHumanQuestion.availableStates
+        || [])
+      : humanApprovalData?.availableStates || [];
     return (
-      <div className="shrink-0 border-b border-amber-300/60 bg-amber-50 px-5 py-3 text-amber-950 dark:border-amber-400/25 dark:bg-amber-500/10 dark:text-amber-50">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="material-symbols-outlined mt-0.5 text-amber-600 dark:text-amber-200" style={{ fontSize: 20 }}>priority_high</span>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
-                <span>待{label}</span>
+      <div className="shrink-0 border-b border-orange-300 bg-orange-50 px-5 py-4 text-orange-950 shadow-[inset_4px_0_0_#f97316] dark:border-orange-400/25 dark:bg-orange-500/10 dark:text-orange-50">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <span className="material-symbols-outlined mt-0.5 rounded-full bg-orange-600 p-1 text-white" style={{ fontSize: 19 }}>approval</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-extrabold">工作流已暂停，等待{label}</span>
                 <StatusPill tone="warning" className="py-0.5 text-[10px]">{route}</StatusPill>
+                <span className="text-[11px] font-semibold text-orange-700 dark:text-orange-200">
+                  累计等待 {formatRunDuration(runTiming.waitMs)}
+                </span>
               </div>
-              <div className="mt-1 line-clamp-2 text-xs leading-5 text-amber-800 dark:text-amber-100/85">
-                {summary}
+              <div className="mt-2 grid gap-x-5 gap-y-2 text-xs leading-5 md:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.8fr)]">
+                <div className="min-w-0">
+                  <div className="font-bold text-orange-950 dark:text-orange-50">审批事项：{title}</div>
+                  <div className="mt-0.5 whitespace-pre-wrap text-orange-800 dark:text-orange-100/85">{summary}</div>
+                </div>
+                <div className="min-w-0 border-orange-200 md:border-l md:pl-5 dark:border-orange-400/20">
+                  <div className="font-bold text-orange-950 dark:text-orange-50">需要决定</div>
+                  <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
+                    {answerOptions.length > 0 ? answerOptions.slice(0, 4).join(' / ') : '确认是否继续执行'}
+                  </div>
+                  {suggestedAction ? (
+                    <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">Supervisor 推荐：{suggestedAction}</div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" className="h-8 border-amber-400/60 bg-background/90 text-xs" onClick={() => openRunDetailSection('agora')}>
-              <span className="material-symbols-outlined mr-1 text-sm">forum</span>
-              去对话处理
-            </Button>
-            <Button type="button" size="sm" variant="outline" className="h-8 border-amber-400/60 bg-background/90 text-xs" onClick={() => openRunDetailSection('state')}>
+            {pendingHumanQuestion ? (
+              <Button type="button" size="sm" className="h-9 bg-orange-600 px-3 text-xs font-bold text-white hover:bg-orange-700" onClick={() => openRunDetailSection('agora')}>
+                <span className="material-symbols-outlined mr-1 text-sm">fact_check</span>
+                查看并审批
+              </Button>
+            ) : null}
+            <Button type="button" size="sm" variant="outline" className="h-9 border-orange-400/60 bg-background/90 text-xs" onClick={() => openRunDetailSection('state')}>
               <span className="material-symbols-outlined mr-1 text-sm">hub</span>
               查看状态图
             </Button>
@@ -12495,11 +12528,36 @@ export default function WorkbenchPage({
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
           <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>状态</span><strong>{formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}</strong></div>
           <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
-          <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>运行时长</span><strong>{runElapsedLabel}</strong></div>
           <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>已完成</span><strong>{completedSteps.length}</strong></div>
-          <div className={`${styles.workbenchMetric} lg:col-span-4`}><span>转移次数</span><strong>{smTransitionCount}</strong></div>
+          <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>转移次数</span><strong>{smTransitionCount}</strong></div>
+          <div className={`${styles.workbenchTimingLedger} lg:col-span-12`}>
+            <div className={styles.workbenchTimingHeader}>
+              <div>
+                <span className={styles.workbenchTimingEyebrow}>时间账本</span>
+                <strong>总历时 {formatRunDuration(runTiming.totalMs)}</strong>
+              </div>
+              {runTiming.isWaiting ? <StatusPill tone="warning">当前正在等待</StatusPill> : null}
+            </div>
+            <div className={styles.workbenchTimingValues}>
+              <div>
+                <span><i className={styles.workbenchTimingRunDot} />实际运行</span>
+                <strong>{formatRunDuration(runTiming.executionMs)}</strong>
+                <small>{Math.round(runTiming.executionRatio * 100)}%</small>
+              </div>
+              <div>
+                <span><i className={styles.workbenchTimingWaitDot} />等待耗时</span>
+                <strong>{formatRunDuration(runTiming.waitMs)}</strong>
+                <small>{Math.round(runTiming.waitRatio * 100)}%</small>
+              </div>
+            </div>
+            <div className={styles.workbenchTimingTrack} aria-label={`实际运行 ${Math.round(runTiming.executionRatio * 100)}%，等待 ${Math.round(runTiming.waitRatio * 100)}%`}>
+              <span className={styles.workbenchTimingRunBar} style={{ width: `${runTiming.executionRatio * 100}%` }} />
+              <span className={styles.workbenchTimingWaitBar} style={{ width: `${runTiming.waitRatio * 100}%` }} />
+            </div>
+            <div className={styles.workbenchTimingHint}>实际运行 = 总历时 − 人工审查、暂停及恢复前等待</div>
+          </div>
           <div className={`${styles.workbenchMetric} lg:col-span-4`}><span>变更</span><strong>{workspaceChangeCount}</strong></div>
-          <div className={`${styles.workbenchTokenMetric} ${styles.workbenchTokenMetricGridItem} lg:col-span-4`}>
+          <div className={`${styles.workbenchTokenMetric} ${styles.workbenchTokenMetricGridItem} lg:col-span-8`}>
             <div className={styles.workbenchTokenMetricHeader}>
               <span>Token 消耗</span>
               <strong>{formatTokenCount(totalTokenUsage.totalTokens)}</strong>
