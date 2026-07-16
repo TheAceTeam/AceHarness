@@ -1,0 +1,490 @@
+workflow:
+  name: requirement-to-code-v1
+  description: 通用 AR 到代码工作流：依次完成需求澄清、实现设计、DT 设计与代码实现，以评审和执行证据驱动自动修订。
+  mode: state-machine
+  states:
+    - name: 需求澄清
+      description: 澄清已有 AR 的目标、场景、边界、验收与质量属性，形成可靠的设计输入。
+      type: normal
+      requireHumanApproval: false
+      enableSpecRevisionOnComplete: false
+      steps:
+        - name: AR 澄清
+          agent: csi-ar-clarifier
+          task: |-
+            ## 目标
+
+            澄清本次 AR，形成经过用户确认的需求澄清产物。
+
+            ## 正式输入
+
+            - `raw_ar`: `context.requirements`
+            - `project_root`: `context.projectRoot`
+            - `run_id`: ACEHarness `runId`
+            - `ar_id`: AR 中的显式 ID；缺省时使用 `runId`
+            - 已有澄清产物和最近人工回答（若存在）
+            - `specs/<AR-ID>/design/clarification-review.md`（澄清修订时）
+            - `specs/<AR-ID>/design/design-review.md`（设计回流时）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/design/clarification.md`
+          role: defender
+          enableReviewPanel: false
+        - name: 澄清评审
+          agent: csi-ar-clarity-judge
+          task: |-
+            ## 目标
+
+            独立评审需求澄清产物，裁决其是否可以进入实现设计。
+
+            ## 正式输入
+
+            - `raw_ar`: `context.requirements`
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/clarification.md`
+            - `specs/<AR-ID>/design/design-review.md`（设计回流时）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/design/clarification-review.md`
+          role: judge
+          enableReviewPanel: false
+      transitions:
+        - to: 实现设计
+          condition: { verdict: pass }
+          priority: 10
+          label: AR 澄清完成
+        - to: 实现设计
+          condition: { verdict: conditional_pass }
+          priority: 20
+          label: AR 具备带假设设计条件
+        - to: 需求澄清
+          condition: { verdict: fail }
+          priority: 30
+          label: 补充 AR 澄清
+      isInitial: true
+      isFinal: false
+      maxSelfTransitions: 20
+
+    - name: 实现设计
+      description: 形成 design、plan 和 task，经过统一方案挑战与设计评审后进入 DT 设计。
+      type: normal
+      requireHumanApproval: false
+      enableSpecRevisionOnComplete: false
+      steps:
+        - name: 需求设计
+          agent: csi-design-author
+          task: |-
+            ## 目标
+
+            基于已确认需求和当前代码仓生成或修订系统设计。
+
+            ## 正式输入
+
+            - `raw_ar`: `context.requirements`
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/clarification.md`
+            - `specs/<AR-ID>/design/clarification-review.md`
+            - 已有 `design.md`、`design-challenge.md` 和 `design-review.md`（修订轮次）
+            - `specs/<AR-ID>/dt/dt-quality-review.md`（DT 回流时）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/design/design.md`
+          role: defender
+          enableReviewPanel: false
+        - name: 实施规划与任务拆解
+          agent: csi-sdd-planner
+          task: |-
+            ## 目标
+
+            把设计目标、围栏和当前代码事实转换为实施计划与任务清单。
+
+            ## 正式输入
+
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/design.md`
+            - 已有 `plan.md`、`task.md`、`design-challenge.md` 和 `design-review.md`（修订轮次）
+            - `specs/<AR-ID>/dt/dt-quality-review.md`（DT 回流时）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+          role: defender
+          enableReviewPanel: false
+        - name: 方案挑战
+          agent: csi-sdd-challenger
+          task: |-
+            ## 目标
+
+            对 design、plan 和 task 做统一对抗检查，记录有证据的反例、风险、遗漏依赖和可测性问题。
+
+            ## 正式输入
+
+            - `raw_ar`: `context.requirements`
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/clarification.md`
+            - `specs/<AR-ID>/design/clarification-review.md`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - 已有 `design-challenge.md` 和 `design-review.md`（修订轮次）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/design/design-challenge.md`
+          role: attacker
+          enableReviewPanel: false
+        - name: 设计评审
+          agent: csi-sdd-judge
+          task: |-
+            ## 目标
+
+            独立评审 design、plan、task 和挑战结果，裁决完整 SDD 是否可以进入 DT 设计。
+
+            ## 正式输入
+
+            - `raw_ar`: `context.requirements`
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/clarification.md`
+            - `specs/<AR-ID>/design/clarification-review.md`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/design/design-challenge.md`
+            - `specs/<AR-ID>/dt/dt-quality-review.md`（DT 回流时）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/design/design-review.md`
+          role: judge
+          enableReviewPanel: false
+      transitions:
+        - to: DT设计
+          condition: { verdict: pass }
+          priority: 10
+          label: SDD 通过
+        - to: 实现设计
+          condition: { verdict: conditional_pass }
+          priority: 20
+          label: SDD 自动修订
+        - to: 需求澄清
+          condition: { verdict: fail }
+          priority: 30
+          label: SDD 发现需求根因
+      isInitial: false
+      isFinal: false
+      maxSelfTransitions: 10
+
+    - name: DT设计
+      description: 基于已通过评审的完整 SDD 生成 DT 用例和真实测试代码，执行实现前基线并统一评审测试资产。
+      type: normal
+      requireHumanApproval: false
+      enableSpecRevisionOnComplete: false
+      steps:
+        - name: DT 用例生成
+          agent: csi-dt-case-author
+          task: |-
+            ## 目标
+
+            把已通过评审的完整 SDD 转换为可落地、可判定的 DT 测试设计。
+
+            ## 正式输入
+
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/design/design-review.md`
+            - 已有 `dt-cases.md` 和 `dt-quality-review.md`（修订轮次）
+            - `specs/<AR-ID>/implementation/implementation-review.md`（实施回流时）
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`（实施回流时）
+            - `specs/<AR-ID>/implementation/code-review.md`（实施回流时）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/dt/dt-cases.md`
+          role: defender
+          enableReviewPanel: false
+        - name: DT 代码生成
+          agent: csi-dt-code-writer
+          task: |-
+            ## 目标
+
+            把 DT Case 转换为项目中的真实测试代码，并执行实现前定向基线。
+
+            ## 正式输入
+
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/design/design-review.md`
+            - `specs/<AR-ID>/dt/dt-cases.md`
+            - 已有 `dt-test-code-summary.md`、`dt-baseline-report.md` 和 `dt-quality-review.md`（修订轮次）
+            - `specs/<AR-ID>/implementation/implementation-review.md`（实施回流时）
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`（实施回流时）
+            - `specs/<AR-ID>/implementation/code-review.md`（实施回流时）
+
+            ## 正式输出
+
+            - 项目测试目录中的真实测试代码和已设计的最低测试能力
+            - `specs/<AR-ID>/dt/dt-test-code-summary.md`
+            - `specs/<AR-ID>/dt/dt-baseline-report.md`
+            - `specs/<AR-ID>/implementation/implementation-review.md`（实施回流时）
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`（实施回流时）
+            - `specs/<AR-ID>/implementation/code-review.md`（实施回流时）
+          role: defender
+          enableReviewPanel: false
+        - name: DT 质量评审
+          agent: csi-dt-quality-judge
+          task: |-
+            ## 目标
+
+            独立评审 DT 用例、测试代码和实现前基线，裁决其是否足以约束代码实现。
+
+            ## 正式输入
+
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/design/design-review.md`
+            - `specs/<AR-ID>/dt/dt-cases.md`
+            - `specs/<AR-ID>/dt/dt-test-code-summary.md`
+            - `specs/<AR-ID>/dt/dt-baseline-report.md`
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/dt/dt-quality-review.md`
+          role: judge
+          enableReviewPanel: false
+      transitions:
+        - to: 代码实现
+          condition: { verdict: pass }
+          priority: 10
+          label: DT 资产通过
+        - to: DT设计
+          condition: { verdict: conditional_pass }
+          priority: 20
+          label: DT 资产自动修订
+        - to: 实现设计
+          condition: { verdict: fail }
+          priority: 30
+          label: DT 发现上游设计根因
+      isInitial: false
+      isFinal: false
+      maxSelfTransitions: 5
+
+    - name: 代码实现
+      description: 按 SDD 与 DT 基线完成编码，实现后执行同一 DT 集合，并完成代码审查和实施评审。
+      type: normal
+      requireHumanApproval: false
+      enableSpecRevisionOnComplete: false
+      steps:
+        - name: 编码实现
+          agent: csi-implementer
+          task: |-
+            ## 目标
+
+            按 design、plan、task 和已通过的 DT 资产完成本次 AR 的生产实现。
+
+            ## 正式输入
+
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/design/design-review.md`
+            - `specs/<AR-ID>/dt/dt-cases.md`
+            - `specs/<AR-ID>/dt/dt-test-code-summary.md`
+            - `specs/<AR-ID>/dt/dt-baseline-report.md`
+            - `specs/<AR-ID>/dt/dt-quality-review.md`
+            - 已有 `implementation-summary.md`、`dt-test-report-post.md`、`code-review.md` 和 `implementation-review.md`（修订轮次）
+
+            ## 正式输出
+
+            - task 定义范围内的生产代码、配置和必要文档
+            - `specs/<AR-ID>/implementation/implementation-summary.md`
+          role: defender
+          enableReviewPanel: false
+        - name: DT 执行
+          agent: csi-dt-runner
+          task: |-
+            ## 目标
+
+            实现后复跑基线中的 DT 集合和必要相关回归，形成 Green 验证证据。
+
+            ## 正式输入
+
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/dt/dt-test-code-summary.md`
+            - `specs/<AR-ID>/dt/dt-baseline-report.md`
+            - `specs/<AR-ID>/dt/dt-quality-review.md`
+            - `specs/<AR-ID>/implementation/implementation-summary.md`
+            - 已有 `dt-test-report-post.md`（修订轮次）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`
+          role: defender
+          enableReviewPanel: false
+        - name: 代码审查
+          agent: csi-code-reviewer
+          task: |-
+            ## 目标
+
+            基于真实 diff 审查实现正确性、变更边界、可维护性、安全性和 DT 完整性。
+
+            ## 正式输入
+
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/dt/dt-quality-review.md`
+            - `specs/<AR-ID>/implementation/implementation-summary.md`
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`
+            - 已有 `code-review.md`（修订轮次）
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/implementation/code-review.md`
+          role: attacker
+          enableReviewPanel: false
+        - name: 实施评审
+          agent: csi-implementation-judge
+          task: |-
+            ## 目标
+
+            独立核验 AR、SDD、DT、代码变更和 Green 证据的端到端闭环，裁决工作流是否可以完成。
+
+            ## 正式输入
+
+            - `raw_ar`: `context.requirements`
+            - `project_root`: `context.projectRoot`
+            - `specs/<AR-ID>/design/clarification.md`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/design/design-review.md`
+            - `specs/<AR-ID>/dt/dt-cases.md`
+            - `specs/<AR-ID>/dt/dt-test-code-summary.md`
+            - `specs/<AR-ID>/dt/dt-baseline-report.md`
+            - `specs/<AR-ID>/dt/dt-quality-review.md`
+            - `specs/<AR-ID>/implementation/implementation-summary.md`
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`
+            - `specs/<AR-ID>/implementation/code-review.md`
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/implementation/implementation-review.md`
+          role: judge
+          enableReviewPanel: false
+      transitions:
+        - to: 完成
+          condition: { verdict: pass }
+          priority: 10
+          label: 实施闭环通过
+        - to: 代码实现
+          condition: { verdict: conditional_pass }
+          priority: 20
+          label: 实现问题自动修订
+        - to: DT设计
+          condition: { verdict: fail }
+          priority: 30
+          label: 实施发现 DT 或上游根因
+      isInitial: false
+      isFinal: false
+      maxSelfTransitions: 5
+
+    - name: 完成
+      description: 生成开发者可复核的代码变更报告，确认实施评审已经通过，并以只读步骤结果完成本次工作流。
+      type: normal
+      requireHumanApproval: false
+      enableSpecRevisionOnComplete: false
+      steps:
+        - name: 代码变更报告
+          agent: csi-code-change-reporter
+          task: |-
+            ## 目标
+
+            基于已通过实施评审的最终证据，生成开发者可复核的代码变更报告。
+
+            ## 正式输入
+
+            - `raw_ar`: `context.requirements`
+            - `project_root`: `context.projectRoot`
+            - `run_id`: ACEHarness `runId`
+            - `specs/<AR-ID>/design/clarification.md`
+            - `specs/<AR-ID>/design/design.md`
+            - `specs/<AR-ID>/design/plan.md`
+            - `specs/<AR-ID>/design/task.md`
+            - `specs/<AR-ID>/design/design-review.md`
+            - `specs/<AR-ID>/dt/dt-cases.md`
+            - `specs/<AR-ID>/dt/dt-test-code-summary.md`
+            - `specs/<AR-ID>/dt/dt-baseline-report.md`
+            - `specs/<AR-ID>/dt/dt-quality-review.md`
+            - `specs/<AR-ID>/implementation/implementation-summary.md`
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`
+            - `specs/<AR-ID>/implementation/code-review.md`
+            - `specs/<AR-ID>/implementation/implementation-review.md`
+            - 项目实际文件状态、代码 diff 和验证命令输出
+
+            ## 正式输出
+
+            - `specs/<AR-ID>/implementation/code-change-report.md`
+            - ACEHarness 标准 JSON：报告 `status: ready` 时返回 `{"verdict":"pass","summary":"<报告摘要>"}`；报告 `status: blocked` 或文件无法写入/读取时返回 `{"verdict":"fail","summary":"<阻塞原因>"}`
+
+            报告必须先写入并重新读取确认。证据缺口写入报告的待复核项，不把缺失证据表述为已通过；实施评审、实施后 DT 或代码审查证据缺失/冲突时将报告标记为 `blocked`。
+
+        - name: 完成确认
+          agent: csi-workflow-completer
+          task: |-
+            ## 目标
+
+            确认实施评审已通过，并返回简洁的工作流完成摘要。
+
+            ## 正式输入
+
+            - `specs/<AR-ID>/implementation/implementation-review.md`
+            - `specs/<AR-ID>/implementation/dt-test-report-post.md`
+            - `specs/<AR-ID>/implementation/code-review.md`
+            - `specs/<AR-ID>/implementation/code-change-report.md`
+
+            ## 正式输出
+
+            - ACEHarness 标准 JSON：`{"verdict":"pass","summary":"<完成摘要>"}`；已有产物保持原样
+          role: judge
+          enableReviewPanel: false
+      transitions: []
+      isInitial: false
+      isFinal: true
+      maxSelfTransitions: 1
+
+  maxTransitions: 50
+  supervisor:
+    enabled: true
+    agent: default-supervisor
+    stageReviewEnabled: false
+    checkpointAdviceEnabled: false
+    scoringEnabled: false
+    experienceEnabled: false
+  humanHelp:
+    enabled: true
+    supervisorReviewEnabled: false
+    blockUntilAnswered: true
+    defaultSelectionMode: single
+
+context:
+  projectRoot: "{project_root}"
+  workspaceMode: in-place
+  requirements: |-
+    请在运行前替换为本次 AR；保留 AR 原文、AR-ID 和验收约束。
+  timeoutMinutes: 180
+  executionPolicy:
+    autoCompactOnStepChange: false
+    agentOverrides: {}
+  skills: []
+  mcpServers: []
