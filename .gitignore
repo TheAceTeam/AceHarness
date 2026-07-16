@@ -72,6 +72,7 @@ __pycache__/
 
 # Temp files
 .tmp/
+.worktrees/
 
 # Runtime uploaded assets
 /public/uploads/
