@@ -671,6 +671,74 @@ describe('runtime adapters', () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  test('acpx runtime client forwards profile MCP servers to acpx runtime options and keys runtime cache by MCP config', async () => {
+    const createdOptions: AcpRuntimeOptions[] = [];
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+      sessionKey: input.sessionKey,
+      backend: 'acpx',
+      runtimeSessionName: input.sessionKey,
+    }));
+    const client = createAcpxRuntimeClient({
+      importRuntime: async () => ({
+        createAcpRuntime(runtimeOptions) {
+          createdOptions.push(runtimeOptions);
+          return {
+            ensureSession,
+            startTurn: vi.fn((): AcpRuntimeTurn => ({
+              requestId: 'request-1',
+              events: eventStream([]),
+              result: Promise.resolve({ status: 'completed' }),
+              cancel: vi.fn(async () => undefined),
+              closeStream: vi.fn(async () => undefined),
+            })),
+            cancel: vi.fn(async () => undefined),
+            close: vi.fn(async () => undefined),
+          } satisfies AcpRuntime;
+        },
+        createAgentRegistry: () => ({
+          resolve: (agentName: string) => agentName,
+          list: () => [],
+        }),
+        createRuntimeStore: () => ({
+          load: vi.fn(async () => undefined),
+          save: vi.fn(async () => undefined),
+        }),
+      }),
+    });
+    const first = createSessionInput('runtime-session-mcp-1', 'codeagent', 'acpx');
+    first.profileSnapshot.mcpServers = [{
+      name: 'filesystem',
+      type: 'stdio',
+      command: 'npx -y @modelcontextprotocol/server-filesystem C:\\tmp',
+      env: { FOO: 'bar' },
+    }];
+    const second = createSessionInput('runtime-session-mcp-2', 'codeagent', 'acpx');
+    second.profileSnapshot.mcpServers = [{
+      name: 'git',
+      type: 'stdio',
+      command: 'npx -y mcp-git',
+    }];
+
+    await client.ensureSession?.({ session: first, command: resolveAcpxCommand('codeagent') });
+    await client.ensureSession?.({ session: first, command: resolveAcpxCommand('codeagent') });
+    await client.ensureSession?.({ session: second, command: resolveAcpxCommand('codeagent') });
+
+    expect(createdOptions).toHaveLength(2);
+    expect(createdOptions[0]?.mcpServers).toEqual([{
+      name: 'filesystem',
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:\\tmp'],
+      env: [{ name: 'FOO', value: 'bar' }],
+    }]);
+    expect(createdOptions[1]?.mcpServers).toEqual([{
+      name: 'git',
+      command: 'npx',
+      args: ['-y', 'mcp-git'],
+      env: [],
+    }]);
+    expect(ensureSession).toHaveBeenCalledTimes(3);
+  });
+
   test('acpx runtime client construction path executes ensureSession, startTurn, cancel, status, and close', async () => {
     const calls: string[] = [];
     const getStatus = vi.fn(async () => ({

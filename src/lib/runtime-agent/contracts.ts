@@ -283,6 +283,7 @@ export interface OpenRuntimeSessionInput {
   cwd: string;
   kind: RuntimeSessionKind;
   runtimeProfileId?: string;
+  mcpServers?: unknown[];
   ownerUserId?: string;
   title?: string;
 }

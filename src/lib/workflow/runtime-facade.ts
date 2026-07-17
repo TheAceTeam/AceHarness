@@ -453,7 +453,6 @@ function buildRuntimeTurnInput(options: WorkflowRuntimeOptions): string {
   return [
     options.systemPrompt ? `<system>\n${options.systemPrompt}\n</system>` : '',
     options.allowedTools?.length ? `<allowed_tools>${options.allowedTools.join(', ')}</allowed_tools>` : '',
-    options.mcpServers?.length ? `<mcp_servers>${JSON.stringify(options.mcpServers)}</mcp_servers>` : '',
     options.rawPrompt ? options.prompt : `<user>\n${options.prompt}\n</user>`,
   ].filter(Boolean).join('\n\n');
 }

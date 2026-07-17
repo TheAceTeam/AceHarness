@@ -812,7 +812,7 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
 }
 
 function createProfileSnapshot(
-  input: Pick<OpenRuntimeSessionInput, 'agentId' | 'cwd' | 'runtimeProfileId' | 'modelRouteId'> & { kind?: string },
+  input: Pick<OpenRuntimeSessionInput, 'agentId' | 'cwd' | 'runtimeProfileId' | 'modelRouteId' | 'mcpServers'> & { kind?: string },
   modelRoute: ResolvedModelRoute,
 ): RuntimeProfileSnapshot {
   const definition = getBuiltinAgentDefinition(input.agentId);
@@ -826,7 +826,7 @@ function createProfileSnapshot(
     permissionPolicyId: defaultPermissionPolicy,
     interruptPolicy: 'queue',
     skills: definition ? [{ agentId: definition.id, tier: definition.tier }] : [],
-    mcpServers: [],
+    mcpServers: input.mcpServers || [],
   };
 }
 

@@ -107,6 +107,32 @@ describe('runtime orchestrator', () => {
     }
   });
 
+  test('openSession persists MCP servers in the profile snapshot passed to adapters', async () => {
+    const { db, orchestrator, adapter } = makeHarness();
+    try {
+      const mcpServers = [{
+        name: 'filesystem',
+        type: 'stdio',
+        command: 'npx -y @modelcontextprotocol/server-filesystem C:\\tmp',
+      }];
+      const session = await orchestrator.openSession({
+        agentId: 'codex',
+        kind: 'chat',
+        cwd: process.cwd(),
+        modelRouteId: 'route-codex',
+        mcpServers,
+      });
+
+      expect(adapter.createSessionInputs[0]?.profileSnapshot.mcpServers).toEqual(mcpServers);
+      const snapshot = db.prepare('SELECT mcp_servers_json, snapshot_json FROM runtime_session_snapshots WHERE session_id = ?')
+        .get(session.runtimeSessionId) as { mcp_servers_json: string; snapshot_json: string };
+      expect(JSON.parse(snapshot.mcp_servers_json)).toEqual(mcpServers);
+      expect(JSON.parse(snapshot.snapshot_json).mcpServers).toEqual(mcpServers);
+    } finally {
+      db.close();
+    }
+  });
+
   test('runTurn claims the requested turn, persists normalized events, and completes the turn', async () => {
     const { db, orchestrator } = makeHarness();
     try {
@@ -690,9 +716,11 @@ describe('runtime orchestrator', () => {
 });
 
 class FakeRuntimeAdapter implements RuntimeAdapter {
+  readonly createSessionInputs: AdapterSessionInput[] = [];
   readonly runTurnInputs: AdapterTurnInput[] = [];
 
   async createOrLoadSession(input: AdapterSessionInput): Promise<RuntimeBinding> {
+    this.createSessionInputs.push(input);
     const now = new Date().toISOString();
     return {
       id: `${input.runtimeSessionId}:fake:1`,

@@ -14,6 +14,7 @@ import { writeAcpxDebugTrace } from '@/lib/runtime-agent/acpx-debug-trace';
 import type {
   CostUsage,
   RuntimeEvent,
+  RuntimeProfileSnapshot,
   TokenUsage,
 } from '@/lib/runtime-agent/contracts';
 
@@ -342,6 +343,7 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
           cwd: options.workingDirectory,
           kind: 'chat',
           modelRouteId,
+          mcpServers: options.mcpServers,
           ownerUserId: options.userId,
           title: options.step || 'Chat',
         });
@@ -388,6 +390,7 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
         requestId,
         input: buildRuntimeTurnInput(options),
         interruptPolicy: 'cancel-and-send',
+        profileSnapshot: createRuntimeProfileSnapshot(this.agentId, options, modelRouteId || session.modelRouteId || `route-${this.agentId}`),
         metadata: {
           chatFacade: true,
           step: options.step,
@@ -542,10 +545,31 @@ function buildRuntimeTurnInput(options: ChatRuntimeEngineOptions): string {
   const parts = [
     options.systemPrompt ? `<system>\n${options.systemPrompt}\n</system>` : '',
     options.allowedTools?.length ? `<allowed_tools>${options.allowedTools.join(', ')}</allowed_tools>` : '',
-    options.mcpServers?.length ? `<mcp_servers>${JSON.stringify(options.mcpServers)}</mcp_servers>` : '',
     options.rawPrompt ? options.prompt : `<user>\n${options.prompt}\n</user>`,
   ];
   return parts.filter(Boolean).join('\n\n');
+}
+
+function createRuntimeProfileSnapshot(agentId: string, options: ChatRuntimeEngineOptions, modelRouteId: string): RuntimeProfileSnapshot {
+  return {
+    agentId,
+    modelRouteId,
+    cwd: options.workingDirectory,
+    systemPromptHash: 'sha256:chat-runtime',
+    skillsRevision: 'chat-runtime',
+    mcpRevision: 'chat-runtime',
+    permissionPolicyId: 'unrestricted',
+    interruptPolicy: 'cancel-and-send',
+    skills: [],
+    mcpServers: options.mcpServers || [],
+    env: Object.entries(options.env || {}).map(([key, value]) => ({
+      key,
+      value,
+      source: 'turn-override' as const,
+      secret: false,
+      readiness: 'ready' as const,
+    })),
+  };
 }
 
 function normalizeRuntimeEvent(event: RuntimeEvent): RuntimeEvent {

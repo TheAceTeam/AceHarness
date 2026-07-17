@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { toAcpMcpServers } from '@/lib/mcp/registry';
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -13,6 +14,7 @@ import type {
   AdapterTurnInput,
   RuntimePermissionPolicyId,
   RuntimeBinding,
+  RuntimeProfileSnapshot,
 } from '../contracts';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
 import { formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, shouldSkipOpencodeSafeCheck, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
@@ -31,19 +33,26 @@ export interface AcpxRuntimeModule {
 }
 
 type AcpxPermissionConfig = Pick<AcpRuntimeOptions, 'permissionMode' | 'nonInteractivePermissions'>;
+type AcpxMcpServers = Array<{
+  name: string;
+  command: string;
+  args: string[];
+  env: Array<{ name: string; value: string }>;
+}>;
 
 export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions = {}): AcpxRuntimeClient {
   const runtimePromises = new Map<string, Promise<AcpRuntime>>();
   const runtimeKeyBySessionKey = new Map<string, string>();
   const activeTurns = new Map<string, AcpRuntimeTurn>();
 
-  async function getRuntime(permissionPolicyId?: RuntimePermissionPolicyId): Promise<AcpRuntime> {
+  async function getRuntime(profileSnapshot?: RuntimeProfileSnapshot): Promise<AcpRuntime> {
     if (options.runtime) return options.runtime;
-    const permissionConfig = resolveAcpxPermissionConfig(permissionPolicyId);
-    const cacheKey = runtimeCacheKey(permissionConfig);
+    const permissionConfig = resolveAcpxPermissionConfig(profileSnapshot?.permissionPolicyId);
+    const mcpServers = resolveRuntimeMcpServers(profileSnapshot);
+    const cacheKey = runtimeCacheKey(permissionConfig, mcpServers);
     let runtimePromise = runtimePromises.get(cacheKey);
     if (!runtimePromise) {
-      runtimePromise = createRuntime(options, permissionConfig);
+      runtimePromise = createRuntime(options, permissionConfig, mcpServers);
       runtimePromises.set(cacheKey, runtimePromise);
     }
     return runtimePromise;
@@ -51,8 +60,8 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
 
   return {
     async ensureSession(input) {
-      const runtime = await getRuntime(input.session.profileSnapshot.permissionPolicyId);
       const session = input.session;
+      const runtime = await getRuntime(session.profileSnapshot);
       applyProcessEnvForAgent(session.profileSnapshot.agentId);
       const handle = await runtime.ensureSession({
         sessionKey: session.runtimeSessionId,
@@ -68,13 +77,20 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
           env: resolveEnv(session),
         },
       });
-      runtimeKeyBySessionKey.set(handle.sessionKey, runtimeCacheKey(resolveAcpxPermissionConfig(session.profileSnapshot.permissionPolicyId)));
+      runtimeKeyBySessionKey.set(
+        handle.sessionKey,
+        runtimeCacheKey(resolveAcpxPermissionConfig(session.profileSnapshot.permissionPolicyId), resolveRuntimeMcpServers(session.profileSnapshot)),
+      );
       return handle;
     },
 
     async *runTurn(binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<AcpRuntimeEvent> {
-      const runtime = await getRuntime(input.profileSnapshot.permissionPolicyId);
+      const runtime = await getRuntime(input.profileSnapshot);
       const handle = requireAcpHandle(binding);
+      runtimeKeyBySessionKey.set(
+        handle.sessionKey,
+        runtimeCacheKey(resolveAcpxPermissionConfig(input.profileSnapshot.permissionPolicyId), resolveRuntimeMcpServers(input.profileSnapshot)),
+      );
       const beforeUsage = await readCumulativeUsage(runtime, handle);
       const seenToolCalls = new Map<string, AcpRuntimeEvent>();
       const completedToolCalls = new Set<string>();
@@ -287,7 +303,11 @@ function normalizePersistedToolOutputValue(value: unknown): unknown {
   return value;
 }
 
-async function createRuntime(options: CreateAcpxRuntimeClientOptions, permissionConfig: AcpxPermissionConfig): Promise<AcpRuntime> {
+async function createRuntime(
+  options: CreateAcpxRuntimeClientOptions,
+  permissionConfig: AcpxPermissionConfig,
+  mcpServers: AcpxMcpServers,
+): Promise<AcpRuntime> {
   const module = await (options.importRuntime?.() ?? import('acpx/runtime'));
   return module.createAcpRuntime({
     cwd: options.cwd ?? process.cwd(),
@@ -297,6 +317,7 @@ async function createRuntime(options: CreateAcpxRuntimeClientOptions, permission
     agentRegistry: module.createAgentRegistry({
       overrides: getAcpxAgentRegistryOverrides(),
     }),
+    ...(mcpServers.length > 0 ? { mcpServers: mcpServers as AcpRuntimeOptions['mcpServers'] } : {}),
     ...permissionConfig,
   });
 }
@@ -317,8 +338,27 @@ function resolveAcpxPermissionConfig(permissionPolicyId: RuntimePermissionPolicy
   }
 }
 
-function runtimeCacheKey(permissionConfig: AcpxPermissionConfig): string {
-  return `${permissionConfig.permissionMode}:${permissionConfig.nonInteractivePermissions ?? ''}`;
+function runtimeCacheKey(permissionConfig: AcpxPermissionConfig, mcpServers: AcpxMcpServers = []): string {
+  return `${permissionConfig.permissionMode}:${permissionConfig.nonInteractivePermissions ?? ''}:${stableJson(mcpServers)}`;
+}
+
+function resolveRuntimeMcpServers(profileSnapshot?: RuntimeProfileSnapshot): AcpxMcpServers {
+  const servers = Array.isArray(profileSnapshot?.mcpServers) ? profileSnapshot.mcpServers : [];
+  return toAcpMcpServers(servers as any);
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, entry]) => [key, sortJsonValue(entry)]),
+  );
 }
 
 function resolveAcpModelName(providerModel: string, configOptions?: Record<string, unknown>): string {
