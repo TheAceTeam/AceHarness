@@ -110,6 +110,15 @@ const RUNTIME_AVAILABILITY_ENGINE_IDS = [
   'cursor',
   'trae',
   'cangjie-magic',
+  'pi',
+  'openclaw',
+  'gemini',
+  'copilot',
+  'kilocode',
+  'kimi',
+  'mux',
+  'qoder',
+  'qwen',
 ] as const;
 
 export function useModelsQuery() {
