@@ -122,6 +122,8 @@ export type WorkflowStepLogRow = {
   sessionId?: string | null;
   childRunId?: string;
   childStatus?: string;
+  outputRef?: string;
+  outputBytes?: number;
   outputPreview?: string;
   errorPreview?: string;
   payload?: Record<string, unknown>;
@@ -891,6 +893,8 @@ export function syncWorkflowStepLogsToDb(runId: string, logs: Array<Record<strin
       sessionId: stringValue(log.sessionId) ?? null,
       childRunId: stringValue(log.childRunId),
       childStatus: stringValue(log.childStatus),
+      outputRef: stringValue(log.outputRef),
+      outputBytes: numberValue(log.outputBytes),
       outputPreview: previewText(log.output),
       errorPreview: previewText(log.error),
       payload: asRecord(log),

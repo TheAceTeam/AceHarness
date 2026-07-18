@@ -1839,8 +1839,12 @@ export const runsApi = {
     return response.json();
   },
 
-  async getStepOutput(id: string, stepName: string): Promise<{ stepName: string; content: string }> {
-    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/outputs?step=${encodeURIComponent(stepName)}`);
+  async getStepOutput(id: string, stepName: string, options: { stepLogId?: string; outputRef?: string } = {}): Promise<{ stepName: string; content: string }> {
+    const search = new URLSearchParams();
+    if (stepName) search.set('step', stepName);
+    if (options.stepLogId) search.set('stepLogId', options.stepLogId);
+    if (options.outputRef) search.set('outputRef', options.outputRef);
+    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/outputs?${search.toString()}`);
     if (!response.ok) throw new Error('获取步骤输出失败');
     return response.json();
   },

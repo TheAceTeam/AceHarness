@@ -70,7 +70,7 @@ interface AgentPanelProps {
   runStatusReason?: string | null;
   currentStepName?: string | null;
   onSelectPersistedStep?: (stepName: string) => void;
-  onViewPersistedStepOutput?: (log: PersistedStepLog) => void;
+  onOpenPersistedStep?: (log: PersistedStepLog) => void;
   systemPrompt?: string;
   iterationPrompt?: string;
   /** When true, hide agent header card and prompt sections to avoid duplication with step config */
@@ -89,7 +89,7 @@ export default function AgentPanel({
   runStatusReason,
   currentStepName,
   onSelectPersistedStep,
-  onViewPersistedStepOutput,
+  onOpenPersistedStep,
   systemPrompt,
   iterationPrompt,
   compact = false,
@@ -254,7 +254,13 @@ export default function AgentPanel({
               <div className="mb-2 rounded-md border bg-muted/40 p-2.5">
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-xs font-medium">{log.stepName}</div>
+                    <button
+                      type="button"
+                      className="block max-w-full truncate text-left text-xs font-medium text-foreground underline-offset-4 hover:text-primary hover:underline"
+                      onClick={() => onOpenPersistedStep?.(log)}
+                    >
+                      {log.stepName}
+                    </button>
                     <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
                       <span>
                       {new Date(log.timestamp).toLocaleString('zh-CN')}
@@ -262,21 +268,9 @@ export default function AgentPanel({
                       {stepTokens > 0 ? <span>Token 消耗 {formatTokens(stepTokens)}</span> : null}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={log.status === 'failed' ? 'destructive' : 'outline'} className="shrink-0 whitespace-nowrap text-[10px]">
-                      {log.status === 'failed' ? '失败' : '完成'}
-                    </Badge>
-                    {onViewPersistedStepOutput ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-2 text-[10px]"
-                        onClick={() => onViewPersistedStepOutput(log)}
-                      >
-                        查看记录
-                      </Button>
-                    ) : null}
-                  </div>
+                  <Badge variant={log.status === 'failed' ? 'destructive' : 'outline'} className="shrink-0 whitespace-nowrap text-[10px]">
+                    {log.status === 'failed' ? '失败' : '完成'}
+                  </Badge>
                 </div>
               </div>
             );

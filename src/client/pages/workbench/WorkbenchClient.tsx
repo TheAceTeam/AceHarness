@@ -1586,6 +1586,8 @@ export default function WorkbenchPage({
   const [runInspectorPanelOpen, setRunInspectorPanelOpen] = useState(false);
   const [runTimelineMode, setRunTimelineMode] = useState<'steps' | 'states'>('steps');
   const [overviewStepRecord, setOverviewStepRecord] = useState<any | null>(null);
+  const [overviewStepExternalOutput, setOverviewStepExternalOutput] = useState('');
+  const [overviewStepExternalOutputLoading, setOverviewStepExternalOutputLoading] = useState(false);
   const [designAssistantPanelOpen, setDesignAssistantPanelOpen] = useState(false);
   const [workbenchNavSection, setWorkbenchNavSection] = useState<'design' | 'preview' | 'runs'>(() => (
     initialWorkbenchSection?.startsWith('preview') ? 'preview' : initialMode === 'design' ? 'design' : 'runs'
@@ -2058,7 +2060,7 @@ export default function WorkbenchPage({
   const [memoryLayers, setMemoryLayers] = useState<WorkflowMemoryLayers | null>(null);
   const [workflowFrontendSessionId, setWorkflowFrontendSessionId] = useState<string | null>(null);
   const [workbenchConversationSessionId, setWorkbenchConversationSessionId] = useState<string | null>(null);
-  const liveStreamFeedbackRef = useRef<HTMLInputElement>(null);
+  const liveStreamFeedbackRef = useRef<HTMLTextAreaElement>(null);
   const liveFeedbackEditorRef = useRef<RichTextEditorHandle>(null);
   const [liveFeedbackDraft, setLiveFeedbackDraft] = useState('');
   const [sendingFeedback, setSendingFeedback] = useState(false);
@@ -2355,6 +2357,8 @@ export default function WorkbenchPage({
     refetchInterval: isRuntimeWorkflowStatusActive(workflowStatus) ? 2_000 : false,
   });
   const appliedStatusCacheSignatureRef = useRef<string | null>(null);
+  const workflowEventSeqByRunIdRef = useRef<Map<string, number>>(new Map());
+  const workflowEventSyncInflightRef = useRef<Map<string, Promise<void>>>(new Map());
   const dbStateHistoryRows = useWorkflowStateHistoryRows(activeRuntimeRunId);
   const dbStepLogRows = useWorkflowStepLogRows(activeRuntimeRunId);
   const dbWorkflowEventRows = useWorkflowEventRows(activeRuntimeRunId);
@@ -4679,6 +4683,8 @@ export default function WorkbenchPage({
       const meta = resolveStepMeta(rawStepName);
       const output = String(log?.output || log?.outputPreview || '').trim();
       const error = String(log?.error || log?.errorPreview || '').trim();
+      const outputRef = String(log?.outputRef || '').trim();
+      const outputBytes = typeof log?.outputBytes === 'number' && Number.isFinite(log.outputBytes) ? log.outputBytes : undefined;
       const status = String(log?.status || (error ? 'failed' : output ? 'completed' : 'unknown')).trim();
       const tokenUsage = normalizeAggregatedTokenUsage(log?.tokenUsage);
       const agentName = String(log?.agent || meta.agent || '').trim();
@@ -4698,6 +4704,8 @@ export default function WorkbenchPage({
         engineName: String(log?.engineName || '').trim(),
         modelName: String(log?.modelName || log?.model || log?.payload?.modelName || log?.payload?.model || (runtimeAgent as any)?.model || roleConfig?.model || '').trim(),
         sessionId: log?.sessionId || null,
+        outputRef,
+        outputBytes,
         output,
         error,
         payload: log,
@@ -4723,6 +4731,8 @@ export default function WorkbenchPage({
         engineName: '',
         modelName: '',
         sessionId: null,
+        outputRef: '',
+        outputBytes: undefined,
         output: '',
         error: '',
         payload: null,
@@ -4736,6 +4746,34 @@ export default function WorkbenchPage({
       return a.index - b.index;
     });
   }, [activeSteps, agentConfigs, agents, currentStep, persistedStepLogs, workflowConfig?.workflow]);
+  const openOverviewStepRecordFromLog = useCallback((log: any) => {
+    const matched = runStepTimeline.find((item) => item.id === log?.id)
+      || runStepTimeline.find((item) => item.rawStepName === log?.stepName && item.timestamp === log?.timestamp)
+      || runStepTimeline.find((item) => item.rawStepName === log?.stepName);
+    if (matched) {
+      setOverviewStepRecord(matched);
+      return;
+    }
+    setOverviewStepRecord({
+      id: String(log?.id || log?.stepName || 'step'),
+      rawStepName: String(log?.stepName || ''),
+      stepName: String(log?.stepName || '步骤'),
+      stateName: '',
+      agent: String(log?.agent || ''),
+      status: String(log?.status || 'unknown'),
+      timestamp: log?.timestamp || null,
+      durationMs: typeof log?.durationMs === 'number' ? log.durationMs : undefined,
+      tokenUsage: normalizeAggregatedTokenUsage(log?.tokenUsage),
+      engineName: String(log?.engineName || ''),
+      modelName: String(log?.modelName || log?.model || ''),
+      sessionId: log?.sessionId || null,
+      outputRef: String(log?.outputRef || ''),
+      outputBytes: typeof log?.outputBytes === 'number' ? log.outputBytes : undefined,
+      output: String(log?.output || ''),
+      error: String(log?.error || ''),
+      payload: log,
+    });
+  }, [runStepTimeline]);
   const preparingProgress = useMemo(() => {
     if (workflowStatus !== 'preparing') return null;
     const text = currentStep || '';
@@ -4783,6 +4821,7 @@ export default function WorkbenchPage({
     overviewStepCacheHitTokens,
     overviewStepTokenUsage.inputTokens + overviewStepCacheHitTokens,
   );
+  const overviewStepOutput = String(overviewStepExternalOutput || '');
   const pendingHumanQuestionKindLabel = useMemo(() => {
     if (!pendingHumanQuestion) return null;
     if (pendingHumanQuestion.source?.type === 'human-help') return '人工客服';
@@ -5361,6 +5400,130 @@ export default function WorkbenchPage({
     syncRuntimePayloadToDb(status, requestedRunId);
   }, [configFile, queryClient, resolveRuntimeRunId, syncRuntimePayloadToDb]);
 
+  const applyWorkflowEventLogRecord = useCallback((event: any) => {
+    if (!event?.type) return;
+    const payload = event.payload || event.data || {};
+    if (!shouldApplyRuntimePayload(payload)) return;
+    syncRuntimePayloadToDb({
+      type: event.type,
+      seq: event.seq,
+      timestamp: event.timestamp,
+      data: payload,
+    }, event.runId);
+
+    if (event.type === 'run.state.saved') {
+      const status = String(payload.status || '');
+      const statusIsTerminal = isTerminalWorkflowStatus(status);
+      if (status) {
+        dispatch({ type: 'SET_WORKFLOW_STATUS', payload: status });
+      }
+      if (event.runId || payload.runId) {
+        dispatch({ type: 'SET_RUN_ID', payload: String(event.runId || payload.runId) });
+      }
+      if (typeof payload.currentPhase === 'string' || typeof payload.currentState === 'string') {
+        dispatch({ type: 'SET_CURRENT_PHASE', payload: payload.currentPhase || payload.currentState || '' });
+      }
+      if (statusIsTerminal) {
+        dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+      } else if (typeof payload.currentStep === 'string') {
+        dispatch({ type: 'SET_CURRENT_STEP', payload: payload.currentStep });
+      }
+      if (Array.isArray(payload.completedSteps)) {
+        dispatch({ type: 'SET_COMPLETED_STEPS', payload: payload.completedSteps });
+      }
+      if (Array.isArray(payload.failedSteps)) {
+        dispatch({ type: 'SET_FAILED_STEPS', payload: payload.failedSteps });
+      }
+      setActiveSteps(normalizeActiveWorkflowSteps({
+        activeSteps: payload.activeSteps,
+        currentStep: payload.currentStep,
+        currentPhase: payload.currentPhase,
+        currentState: payload.currentState,
+        completedSteps: payload.completedSteps,
+        failedSteps: payload.failedSteps,
+        terminal: statusIsTerminal,
+      }));
+      setActiveConcurrencyGroups(statusIsTerminal ? [] : (Array.isArray(payload.activeConcurrencyGroups) ? payload.activeConcurrencyGroups : []));
+      if (Array.isArray(payload.stateHistory)) {
+        setSmStateHistory(payload.stateHistory);
+      }
+      if (typeof payload.transitionCount === 'number') {
+        setSmTransitionCount(payload.transitionCount);
+      }
+    }
+
+    if (event.type === 'workflow.step-start') {
+      const step = String(payload.step || '').trim();
+      if (step) {
+        dispatch({ type: 'SET_CURRENT_STEP', payload: step });
+        setActiveSteps((current) => Array.from(new Set([step, ...current].filter(Boolean))));
+      }
+    }
+
+    if (event.type === 'workflow.step-complete') {
+      const step = String(payload.step || '').trim();
+      if (step) {
+        dispatch({ type: 'ADD_COMPLETED_STEP', payload: step });
+        setActiveSteps((current) => current.filter((item) => item !== step));
+      }
+    }
+
+    if (event.type === 'workflow.transition') {
+      const from = String(payload.from || '').trim();
+      const to = String(payload.to || payload.targetState || '').trim();
+      if (to) {
+        dispatch({ type: 'SET_CURRENT_PHASE', payload: to });
+        setSmStateHistory((prev) => {
+          if (prev.some((item) => item.from === from && item.to === to && item.timestamp === payload.timestamp)) return prev;
+          return [...prev, {
+            from,
+            to,
+            reason: payload.reason || '',
+            issues: Array.isArray(payload.issues) ? payload.issues : [],
+            timestamp: payload.timestamp || event.timestamp || new Date().toISOString(),
+          }];
+        });
+      }
+    }
+  }, [dispatch, shouldApplyRuntimePayload, syncRuntimePayloadToDb]);
+
+  const syncWorkflowEventLogUntil = useCallback((runIdValue?: string | null, targetSeq?: number | null) => {
+    const resolvedRunId = String(runIdValue || '').trim();
+    if (!resolvedRunId) return;
+    const currentSeq = workflowEventSeqByRunIdRef.current.get(resolvedRunId) || 0;
+    const normalizedTargetSeq = typeof targetSeq === 'number' && Number.isFinite(targetSeq) ? Math.floor(targetSeq) : 0;
+    if (normalizedTargetSeq > 0 && currentSeq >= normalizedTargetSeq) return;
+    if (workflowEventSyncInflightRef.current.has(resolvedRunId)) return;
+
+    const promise = workflowApi.getEventLog(resolvedRunId, { afterSeq: currentSeq, limit: 500 })
+      .then(async (result) => {
+        let lastSeq = currentSeq;
+        for (const event of result.events || []) {
+          const seq = Number(event.seq || 0);
+          if (seq > lastSeq + 1) {
+            const status = await workflowApi.getStatus(configFile, resolvedRunId, { compact: true });
+            cacheWorkflowStatusPayload(status, resolvedRunId);
+            lastSeq = seq - 1;
+          }
+          applyWorkflowEventLogRecord(event);
+          lastSeq = Math.max(lastSeq, seq);
+        }
+        if (typeof result.nextSeq === 'number') {
+          lastSeq = Math.max(lastSeq, result.nextSeq);
+        }
+        workflowEventSeqByRunIdRef.current.set(resolvedRunId, lastSeq);
+        if (normalizedTargetSeq > 0 && lastSeq < normalizedTargetSeq) {
+          const status = await workflowApi.getStatus(configFile, resolvedRunId, { compact: true });
+          cacheWorkflowStatusPayload(status, resolvedRunId);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        workflowEventSyncInflightRef.current.delete(resolvedRunId);
+      });
+    workflowEventSyncInflightRef.current.set(resolvedRunId, promise);
+  }, [applyWorkflowEventLogRecord, cacheWorkflowStatusPayload, configFile]);
+
   const mergeLiveRunStatus = useCallback((status: any, requestedRunId?: string) => {
     if (!status) return;
     const resolvedRunId = resolveRuntimeRunId(status, requestedRunId) || requestedRunId;
@@ -5394,6 +5557,11 @@ export default function WorkbenchPage({
     if (!status?.status) return;
     if (!shouldApplyRuntimePayload(status)) return;
     syncRuntimePayloadToDb(status, requestedRunId);
+    const statusRunId = resolveRuntimeRunId(status, requestedRunId);
+    const statusEventSeq = Number((status as any).eventSeq || 0);
+    if (statusRunId && statusEventSeq > 0) {
+      syncWorkflowEventLogUntil(statusRunId, statusEventSeq);
+    }
     mergeLiveRunStatus(status, requestedRunId);
       const smStatus = status as typeof status & {
         mode?: 'state-machine' | 'phase-based';
@@ -5861,6 +6029,8 @@ export default function WorkbenchPage({
       sessionId: (row.payload as any)?.sessionId || row.sessionId,
       childRunId: (row.payload as any)?.childRunId || row.childRunId,
       childStatus: (row.payload as any)?.childStatus || row.childStatus,
+      outputRef: (row.payload as any)?.outputRef || row.outputRef,
+      outputBytes: (row.payload as any)?.outputBytes || row.outputBytes,
       output: (row.payload as any)?.output || row.outputPreview || '',
       error: (row.payload as any)?.error || row.errorPreview || '',
     }));
@@ -6036,6 +6206,11 @@ export default function WorkbenchPage({
   const applyWorkflowStatusSnapshot = useCallback((snapshot: any) => {
     if (!snapshot) return;
     syncRuntimePayloadToDb(snapshot);
+    const snapshotRunId = resolveRuntimeRunId(snapshot);
+    const snapshotEventSeq = Number(snapshot.eventSeq || 0);
+    if (snapshotRunId && snapshotEventSeq > 0) {
+      syncWorkflowEventLogUntil(snapshotRunId, snapshotEventSeq);
+    }
     if (typeof snapshot.status === 'string' && snapshot.status) {
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: snapshot.status });
       setRunStatusReason(snapshot.statusReason || null);
@@ -6160,7 +6335,7 @@ export default function WorkbenchPage({
     if (snapshot.pendingHumanQuestion !== undefined) {
       setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
     }
-  }, [dispatch, setPendingHumanQuestionIfChanged, specCodingDisabled, syncRuntimePayloadToDb]);
+  }, [dispatch, resolveRuntimeRunId, setPendingHumanQuestionIfChanged, specCodingDisabled, syncRuntimePayloadToDb, syncWorkflowEventLogUntil]);
 
   const clearHumanApprovalData = useCallback(() => {
     humanApprovalSignatureRef.current = null;
@@ -6515,10 +6690,11 @@ export default function WorkbenchPage({
           syncRuntimePayloadToDb(event, requestedRunId);
         }
         cacheWorkflowStatusPayload(status, requestedRunId);
+        applyWorkflowStatusSnapshot(status);
       },
     );
     return () => eventSource.close();
-  }, [viewMode, viewingHistoryRun, configFile, initialRunId, runId, selectedRun?.id, cacheWorkflowStatusPayload]);
+  }, [viewMode, viewingHistoryRun, configFile, initialRunId, runId, selectedRun?.id, applyWorkflowStatusSnapshot, cacheWorkflowStatusPayload, syncRuntimePayloadToDb]);
 
   useEffect(() => {
     if (isDesignMode && workflowConfig && !hasUnsavedDesignConfigChangesRef.current) {
@@ -8166,13 +8342,15 @@ export default function WorkbenchPage({
   const openPersistedStepRecord = (log: {
     id: string;
     stepName: string;
+    rawStepName?: string;
     status: 'completed' | 'failed';
-    output: string;
-    error: string;
+    output?: string;
+    error?: string;
   }) => {
-    const resultKey = log.id || log.stepName;
+    const resultKey = log.id || log.rawStepName || log.stepName;
     const fileName = Object.entries(stepIdMap).find(([, id]) => id === resultKey)?.[0];
-    openRunRecordDocument({ stepName: log.stepName, filename: fileName });
+    openRunRecordDocument({ stepName: log.rawStepName || log.stepName, filename: fileName });
+    setOverviewStepRecord(null);
   };
 
   // Chunk separator used in persisted stream files
@@ -8602,6 +8780,40 @@ export default function WorkbenchPage({
     selectedLiveStreamSource.stepName,
     selectedRun?.id,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const record = overviewStepRecord;
+    const rid = runId || selectedRun?.id || '';
+    const stepName = String(record?.rawStepName || record?.stepName || '').trim();
+    setOverviewStepExternalOutput('');
+    if (!record || !rid || !stepName) {
+      setOverviewStepExternalOutputLoading(false);
+      return;
+    }
+    setOverviewStepExternalOutputLoading(true);
+    void streamApi.getStreamContent(rid, stepName)
+      .then((content) => {
+        if (cancelled) return;
+        const chunks = normalizeLiveStreamChunks(content
+          ? (() => {
+              const parts = content.split(CHUNK_BOUNDARY_REGEX);
+              const trailing = parts.pop() || '';
+              return [...parts.filter(Boolean), ...(trailing ? [trailing] : [])];
+            })()
+          : []);
+        setOverviewStepExternalOutput(chunks.join('\n\n'));
+      })
+      .catch(() => {
+        if (!cancelled) setOverviewStepExternalOutput('');
+      })
+      .finally(() => {
+        if (!cancelled) setOverviewStepExternalOutputLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizeLiveStreamChunks, overviewStepRecord, runId, selectedRun?.id]);
 
   useEffect(() => {
     const parallelActiveSteps = normalizeActiveWorkflowSteps({
@@ -12606,7 +12818,7 @@ export default function WorkbenchPage({
             {runTimelineMode === 'steps' ? (
               runStepTimeline.length > 0 ? (
                 runStepTimeline.map((item) => {
-                  const hasDetails = Boolean(item.output || item.error || item.payload);
+                  const hasDetails = Boolean(item.output || item.outputRef || item.outputBytes || item.error || item.payload);
                   const statusLabel = item.status === 'completed'
                     ? '完成'
                     : item.status === 'failed'
@@ -12928,53 +13140,47 @@ export default function WorkbenchPage({
                             {overviewStepRecord.error}
                           </pre>
                         </div>
-                      ) : overviewStepRecord.output ? (() => {
-                        const chunks = splitStreamChunks(overviewStepRecord.output);
-                        const TODO_MARKER = '<!-- todo-list-marker -->';
-                        let lastTodoIndex = -1;
-                        for (let index = chunks.length - 1; index >= 0; index--) {
-                          if (chunks[index].includes(TODO_MARKER)) {
-                            lastTodoIndex = index;
-                            break;
-                          }
-                        }
-                        const visibleChunks = chunks.filter((chunk, index) => {
-                          if (chunk.includes(TODO_MARKER) && index !== lastTodoIndex) return false;
-                          const stripped = chunk.replace(/<!--.*?-->/gs, '').trim();
-                          return stripped.length > 1;
-                        });
-                        return (
-                          <div>
-                            <div className="mb-2 flex items-center justify-between gap-2">
-                              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AI 输出</div>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs"
-                                onClick={() => openPersistedStepRecord({
-                                  id: overviewStepRecord.id,
-                                  stepName: overviewStepRecord.rawStepName || overviewStepRecord.stepName,
-                                  status: overviewStepRecord.status,
-                                  output: overviewStepRecord.output,
-                                  error: overviewStepRecord.error,
-                                })}
-                              >
-                                查看记录
-                              </Button>
-                            </div>
-                            <div className={`${styles.markdownContent} max-h-[65vh] overflow-auto rounded-lg border bg-background p-4 text-sm leading-relaxed`}>
-                              {visibleChunks.length > 0 ? visibleChunks.map((chunk, index) => (
-                                <div key={index} className={index < visibleChunks.length - 1 ? 'mb-4 border-b border-border/60 pb-4' : ''}>
-                                  <AceAwareMarkdown content={prepareChunkForDisplay(chunk)} />
-                                </div>
-                              )) : <AceAwareMarkdown content={prepareChunkForDisplay(overviewStepRecord.output)} />}
-                            </div>
+                      ) : (
+                        <div>
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">详细对话过程</div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 shrink-0 gap-1.5 text-xs"
+                              onClick={() => openPersistedStepRecord({
+                                id: overviewStepRecord.id,
+                                stepName: overviewStepRecord.stepName,
+                                rawStepName: overviewStepRecord.rawStepName,
+                                status: overviewStepRecord.status,
+                                output: overviewStepRecord.output,
+                                error: overviewStepRecord.error,
+                              })}
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>description</span>
+                              查看工作总结
+                            </Button>
                           </div>
-                        );
-                      })() : (
-                        <div className={styles.workbenchEmptyHint}>
-                          这个步骤还没有记录到 AI 输出。
+                          {overviewStepExternalOutputLoading && !overviewStepOutput ? (
+                            <div className={styles.workbenchEmptyHint}>
+                              <div className="flex items-center justify-center gap-2">
+                                <ClipLoader size={14} />
+                                <span>正在加载详细对话过程...</span>
+                              </div>
+                            </div>
+                          ) : overviewStepOutput ? (
+                            <div className={`${styles.markdownContent} max-h-[65vh] overflow-auto rounded-lg border bg-background p-4 text-sm leading-relaxed`}>
+                              <AceAwareMarkdown content={prepareChunkForDisplay(overviewStepOutput)} />
+                            </div>
+                          ) : (
+                            <div className={styles.workbenchEmptyHint}>
+                              这个步骤还没有记录到详细对话过程。
+                            </div>
+                          )}
+                          <div className="mt-2 text-[11px] text-muted-foreground">
+                            工作总结会在独立抽屉中展示重点速览、下载和保存入口。
+                          </div>
                         </div>
                       )}
                     </>
@@ -13071,7 +13277,7 @@ export default function WorkbenchPage({
                 runStatusReason={runStatusReason}
                 currentStepName={currentStep || null}
                 onSelectPersistedStep={selectStepByLogName}
-                onViewPersistedStepOutput={openPersistedStepRecord}
+                onOpenPersistedStep={openOverviewStepRecordFromLog}
                 systemPrompt={selectedAgentRoleConfig?.systemPrompt}
                 iterationPrompt={selectedAgentRoleConfig?.iterationPrompt}
                 compact={false} />
@@ -13929,21 +14135,32 @@ export default function WorkbenchPage({
                 </div>
               )}
             </div>
-            <div className="p-3 border-t flex gap-2">
-              <Input
-                ref={liveStreamFeedbackRef}
-                defaultValue=""
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLiveFeedback(); } }}
-                placeholder="输入反馈意见..."
-                className="flex-1"
-                disabled={sendingFeedback}
-              />
-              <Button size="sm" onClick={() => sendLiveFeedback()} disabled={sendingFeedback} title="发送反馈（等待当前执行完成后处理）">
-                <span className="material-symbols-outlined text-sm">send</span>
-              </Button>
-              <Button size="sm" variant="destructive" onClick={() => sendLiveFeedback(true)} disabled={sendingFeedback} title="打断当前执行，立即处理反馈">
-                <span className="material-symbols-outlined text-sm">bolt</span>
-              </Button>
+            <div className="border-t p-3">
+              <div className="flex gap-2">
+                <Textarea
+                  ref={liveStreamFeedbackRef}
+                  defaultValue=""
+                  onKeyDown={(event) => {
+                    const nativeEvent = event.nativeEvent as KeyboardEvent;
+                    const isComposing = nativeEvent.isComposing || event.keyCode === 229;
+                    if (event.key === 'Enter' && !event.shiftKey && !isComposing) {
+                      event.preventDefault();
+                      void sendLiveFeedback();
+                    }
+                  }}
+                  placeholder="输入反馈意见..."
+                  rows={2}
+                  className="min-h-[44px] flex-1 resize-none"
+                  disabled={sendingFeedback}
+                />
+                <Button size="sm" onClick={() => sendLiveFeedback()} disabled={sendingFeedback} title="发送反馈（等待当前执行完成后处理）">
+                  <span className="material-symbols-outlined text-sm">send</span>
+                </Button>
+                <Button size="sm" variant="destructive" onClick={() => sendLiveFeedback(true)} disabled={sendingFeedback} title="打断当前执行，立即处理反馈">
+                  <span className="material-symbols-outlined text-sm">bolt</span>
+                </Button>
+              </div>
+              <div className="mt-1 px-1 text-[10px] text-muted-foreground">Shift+Enter 换行</div>
             </div>
           </div>
         </div>

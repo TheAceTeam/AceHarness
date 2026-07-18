@@ -1126,13 +1126,13 @@ export function EditorPanel({
   }, [htmlPreviewUrl, toast])
 
   const openMarkdownPreviewWindow = React.useCallback(() => {
-    const opened = openReactPreviewWindow("Markdown 预览", (
-      <div className="h-full overflow-auto bg-background px-8 py-6">
-        <Markdown>{markdownPreviewContent}</Markdown>
-      </div>
-    ))
+    if (!workspacePath || !filePath) return
+    const routeParams = new URLSearchParams()
+    routeParams.set("workspace", workspacePath)
+    routeParams.set("file", filePath)
+    const opened = window.open(`/workspace/markdown-preview?${routeParams.toString()}`, "_blank", "noopener,noreferrer")
     if (!opened) toast("error", "浏览器阻止了新窗口")
-  }, [markdownPreviewContent, toast])
+  }, [filePath, toast, workspacePath])
 
   const openNdjsonPreviewWindow = React.useCallback(() => {
     const opened = openReactPreviewWindow("NDJSON 表格预览", (

@@ -28,6 +28,7 @@ import { Route as ApiDocsRouteImport } from './routes/api-docs'
 import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as WorkspaceMarkdownPreviewRouteImport } from './routes/workspace.markdown-preview'
 import { Route as WorkbenchConfigRouteImport } from './routes/workbench.$config'
 import { Route as LoginResetRouteImport } from './routes/login.reset'
 import { Route as KnowledgeLibraryRouteImport } from './routes/knowledge.library'
@@ -319,6 +320,12 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WorkspaceMarkdownPreviewRoute =
+  WorkspaceMarkdownPreviewRouteImport.update({
+    id: '/workspace/markdown-preview',
+    path: '/workspace/markdown-preview',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const WorkbenchConfigRoute = WorkbenchConfigRouteImport.update({
   id: '/workbench/$config',
   path: '/workbench/$config',
@@ -1382,6 +1389,7 @@ export interface FileRoutesByFullPath {
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
+  '/workspace/markdown-preview': typeof WorkspaceMarkdownPreviewRoute
   '/api/agents/$name': typeof ApiAgentsNameRouteWithChildren
   '/api/agents/ai-draft': typeof ApiAgentsAiDraftRoute
   '/api/agents/archive': typeof ApiAgentsArchiveRoute
@@ -1598,6 +1606,7 @@ export interface FileRoutesByTo {
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
+  '/workspace/markdown-preview': typeof WorkspaceMarkdownPreviewRoute
   '/api/agents/$name': typeof ApiAgentsNameRouteWithChildren
   '/api/agents/ai-draft': typeof ApiAgentsAiDraftRoute
   '/api/agents/archive': typeof ApiAgentsArchiveRoute
@@ -1815,6 +1824,7 @@ export interface FileRoutesById {
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
+  '/workspace/markdown-preview': typeof WorkspaceMarkdownPreviewRoute
   '/api/agents/$name': typeof ApiAgentsNameRouteWithChildren
   '/api/agents/ai-draft': typeof ApiAgentsAiDraftRoute
   '/api/agents/archive': typeof ApiAgentsArchiveRoute
@@ -2033,6 +2043,7 @@ export interface FileRouteTypes {
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
+    | '/workspace/markdown-preview'
     | '/api/agents/$name'
     | '/api/agents/ai-draft'
     | '/api/agents/archive'
@@ -2249,6 +2260,7 @@ export interface FileRouteTypes {
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
+    | '/workspace/markdown-preview'
     | '/api/agents/$name'
     | '/api/agents/ai-draft'
     | '/api/agents/archive'
@@ -2465,6 +2477,7 @@ export interface FileRouteTypes {
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
+    | '/workspace/markdown-preview'
     | '/api/agents/$name'
     | '/api/agents/ai-draft'
     | '/api/agents/archive'
@@ -2678,6 +2691,7 @@ export interface RootRouteChildren {
   ApiSystemSettingsRoute: typeof ApiSystemSettingsRoute
   ApiUsersRoute: typeof ApiUsersRouteWithChildren
   WorkbenchConfigRoute: typeof WorkbenchConfigRoute
+  WorkspaceMarkdownPreviewRoute: typeof WorkspaceMarkdownPreviewRoute
   ApiAgoraGuestsRoute: typeof ApiAgoraGuestsRouteWithChildren
   ApiAgoraWorkspaceRoute: typeof ApiAgoraWorkspaceRoute
   ApiAuthEmailRoute: typeof ApiAuthEmailRoute
@@ -2904,6 +2918,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workspace/markdown-preview': {
+      id: '/workspace/markdown-preview'
+      path: '/workspace/markdown-preview'
+      fullPath: '/workspace/markdown-preview'
+      preLoaderRoute: typeof WorkspaceMarkdownPreviewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/workbench/$config': {
@@ -4902,6 +4923,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSystemSettingsRoute: ApiSystemSettingsRoute,
   ApiUsersRoute: ApiUsersRouteWithChildren,
   WorkbenchConfigRoute: WorkbenchConfigRoute,
+  WorkspaceMarkdownPreviewRoute: WorkspaceMarkdownPreviewRoute,
   ApiAgoraGuestsRoute: ApiAgoraGuestsRouteWithChildren,
   ApiAgoraWorkspaceRoute: ApiAgoraWorkspaceRoute,
   ApiAuthEmailRoute: ApiAuthEmailRoute,

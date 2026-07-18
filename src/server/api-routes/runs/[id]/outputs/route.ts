@@ -13,8 +13,30 @@ export async function GET(
 ) {
   const runId = (await params).id;
   const stepName = requestUrl(request).searchParams.get('step');
+  const stepLogId = requestUrl(request).searchParams.get('stepLogId');
+  const outputRef = requestUrl(request).searchParams.get('outputRef');
 
   try {
+    if (stepLogId || outputRef) {
+      const state = await loadRunState(runId, { hydrateLargeOutputs: false });
+      const log = state?.stepLogs?.find((item) => {
+        if (stepLogId && item.id === stepLogId) return true;
+        return outputRef && item.outputRef === outputRef;
+      });
+      const ref = log?.outputRef || outputRef || '';
+      const runRoot = resolve(RUNS_DIR, runId);
+      const outputPath = resolve(runRoot, ref);
+      if (!ref || ref.includes('..') || (outputPath !== runRoot && !outputPath.startsWith(`${runRoot}\\`) && !outputPath.startsWith(`${runRoot}/`))) {
+        return jsonOk({ error: '未找到该步骤的输出' }, { status: 404 });
+      }
+      try {
+        const content = await readFile(outputPath, 'utf-8');
+        return jsonOk({ stepName: log?.stepName || stepName || '', content });
+      } catch {
+        return jsonOk({ error: '未找到该步骤的输出' }, { status: 404 });
+      }
+    }
+
     if (stepName) {
       // Return content of a specific step's output
       const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');

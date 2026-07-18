@@ -18,7 +18,8 @@ import {
   listMemoryEntries,
   type MemoryEntry,
 } from '@/lib/workflow/memory-store';
-import { compactWorkflowStatusForLive } from '@/lib/workflow/live-status';
+import { compactWorkflowStatusDeltaForLive, compactWorkflowStatusForLive } from '@/lib/workflow/live-status';
+import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -523,7 +524,22 @@ function createWorkflowStatusStream(request: Request, configFile?: string | null
           });
           if (!force && signature === lastSignature) return;
           lastSignature = signature;
-          send({ type: 'status', reason, data: status });
+          const runId = typeof status?.runId === 'string' ? status.runId : '';
+          const eventSnapshot = runId
+            ? await getWorkflowEventStore().getSnapshot(runId).catch(() => null)
+            : null;
+          const data = force
+            ? {
+                ...status,
+                eventSeq: eventSnapshot?.seq ?? undefined,
+                eventSnapshotUpdatedAt: eventSnapshot?.updatedAt ?? undefined,
+              }
+            : {
+                ...compactWorkflowStatusDeltaForLive(status, status?.currentConfigFile || configFile),
+                eventSeq: eventSnapshot?.seq ?? undefined,
+                eventSnapshotUpdatedAt: eventSnapshot?.updatedAt ?? undefined,
+              };
+          send({ type: 'status', reason, data });
         } catch (error: any) {
           send({ type: 'error', reason, error: error?.message || '获取状态失败' });
         }
