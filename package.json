@@ -234,6 +234,7 @@
     "public",
     "skills",
     "configs",
+    "templates",
     "messages",
     "packages/napi-cj",
     "native/aceharness-cj-engine/artifacts"
