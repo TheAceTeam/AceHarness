@@ -15,6 +15,14 @@ export interface ConfigMeta {
   createdAt: number;
   specCodingEnabled?: boolean;
   specCodingSkipped?: boolean;
+  templateRef?: {
+    source: 'builtin' | 'local';
+    id: string;
+    version: string;
+    digest: string;
+    instantiatedAt: number;
+    parameterKeys: string[];
+  };
 }
 
 type MetadataMap = Record<string, ConfigMeta>;

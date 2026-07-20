@@ -1,0 +1,67 @@
+workflow:
+  name: 通用红蓝评审
+  description: 通过红蓝对抗完成方案、执行和验收
+  mode: state-machine
+  maxTransitions: 30
+  supervisor:
+    enabled: true
+    agent: default-supervisor
+    stageReviewEnabled: true
+    checkpointAdviceEnabled: true
+    scoringEnabled: true
+    experienceEnabled: true
+  states:
+    - name: 方案
+      description: 明确目标、方案和验收标准
+      isInitial: true
+      isFinal: false
+      maxSelfTransitions: 3
+      position: { x: 80, y: 180 }
+      steps:
+        - { name: 方案设计, agent: architect, role: defender, task: 基于需求形成可执行方案、范围和验收标准 }
+        - { name: 方案挑战, agent: design-breaker, role: attacker, task: 从边界、风险和遗漏角度挑战方案 }
+        - { name: 方案裁决, agent: design-judge, role: judge, task: 综合方案和挑战意见，给出 verdict 与后续要求 }
+      transitions:
+        - { to: 执行, condition: { verdict: pass }, priority: 10, label: 方案通过 }
+        - { to: 方案, condition: { verdict: conditional_pass }, priority: 20, label: 补充方案 }
+        - { to: 方案, condition: { verdict: fail }, priority: 30, label: 重做方案 }
+    - name: 执行
+      description: 按方案完成主体工作
+      isInitial: false
+      isFinal: false
+      maxSelfTransitions: 3
+      position: { x: 380, y: 180 }
+      steps:
+        - { name: 任务执行, agent: developer, role: defender, task: 按已通过方案实施并记录关键决策和产物 }
+        - { name: 结果挑战, agent: code-hunter, role: attacker, task: 检查实现偏差、质量风险和未覆盖场景 }
+        - { name: 执行裁决, agent: code-judge, role: judge, task: 评估执行结果与挑战意见，给出 verdict }
+      transitions:
+        - { to: 验收, condition: { verdict: pass }, priority: 10, label: 执行通过 }
+        - { to: 执行, condition: { verdict: conditional_pass }, priority: 20, label: 补充执行 }
+        - { to: 方案, condition: { verdict: fail }, priority: 30, label: 返回方案 }
+    - name: 验收
+      description: 验证需求满足度和交付质量
+      isInitial: false
+      isFinal: false
+      maxSelfTransitions: 3
+      position: { x: 680, y: 180 }
+      steps:
+        - { name: 验收验证, agent: tester, role: defender, task: 对照需求和验收标准执行验证并记录证据 }
+        - { name: 边界攻击, agent: stress-tester, role: attacker, task: 覆盖边界、异常和压力场景，寻找遗漏 }
+        - { name: 验收裁决, agent: code-judge, role: judge, task: 基于验证证据和问题严重度给出 verdict }
+      transitions:
+        - { to: 完成, condition: { verdict: pass }, priority: 10, label: 验收通过 }
+        - { to: 执行, condition: { verdict: conditional_pass }, priority: 20, label: 返回修正 }
+        - { to: 方案, condition: { verdict: fail }, priority: 30, label: 重新规划 }
+    - name: 完成
+      description: 汇总成果和遗留事项
+      isInitial: false
+      isFinal: true
+      position: { x: 980, y: 180 }
+      steps:
+        - { name: 交付汇总, agent: documentation-writer, role: defender, task: 汇总最终产物、验证证据、已知限制和后续事项 }
+      transitions: []
+context:
+  projectRoot: ""
+  workspaceMode: in-place
+  requirements: ""

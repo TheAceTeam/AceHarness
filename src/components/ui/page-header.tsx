@@ -30,7 +30,7 @@ function PageHeader({
   return (
     <header
       className={cn(
-        "flex min-w-0 items-start justify-between gap-4 border-b border-border bg-card px-6 py-4",
+        "flex min-w-0 flex-col items-start justify-between gap-3 border-b border-border bg-card px-4 py-3 sm:flex-row sm:gap-4 sm:px-6 sm:py-4",
         className
       )}
       {...props}
@@ -57,7 +57,7 @@ function PageHeader({
           {children}
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
         {secondaryActions}
         {overflowActions}
         {primaryAction}

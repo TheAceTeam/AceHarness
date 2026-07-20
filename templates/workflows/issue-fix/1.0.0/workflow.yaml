@@ -1,0 +1,77 @@
+workflow:
+  name: 缺陷定位与修复
+  description: 完成问题复现、根因分析、修复和回归验证
+  mode: state-machine
+  maxTransitions: 30
+  supervisor:
+    enabled: true
+    agent: default-supervisor
+    stageReviewEnabled: true
+    checkpointAdviceEnabled: true
+    scoringEnabled: true
+    experienceEnabled: true
+  states:
+    - name: 复现
+      description: 建立稳定、最小且可观测的复现场景
+      isInitial: true
+      isFinal: false
+      position: { x: 60, y: 180 }
+      steps:
+        - { name: 构造复现, agent: issue-reproducer, role: defender, task: 根据问题描述构造稳定复现并记录环境与现象 }
+        - { name: 复现挑战, agent: fix-breaker, role: attacker, task: 检查复现是否最小、稳定并排除环境噪声 }
+        - { name: 复现裁决, agent: fix-judge, role: judge, task: 评估复现证据，给出 verdict }
+      transitions:
+        - { to: 定位, condition: { verdict: pass }, priority: 10, label: 复现确认 }
+        - { to: 复现, condition: { verdict: conditional_pass }, priority: 20, label: 补充证据 }
+        - { to: 复现, condition: { verdict: fail }, priority: 30, label: 重建复现 }
+    - name: 定位
+      description: 收敛根因并评估影响范围
+      isInitial: false
+      isFinal: false
+      position: { x: 330, y: 180 }
+      steps:
+        - { name: 根因分析, agent: fix-hunter, role: defender, task: 基于复现定位根因、触发条件和影响范围 }
+        - { name: 根因挑战, agent: fix-breaker, role: attacker, task: 提出替代解释并检查证据链缺口 }
+        - { name: 定位裁决, agent: fix-judge, role: judge, task: 判断根因是否充分，给出 verdict }
+      transitions:
+        - { to: 修复, condition: { verdict: pass }, priority: 10, label: 根因确认 }
+        - { to: 定位, condition: { verdict: conditional_pass }, priority: 20, label: 补充分析 }
+        - { to: 复现, condition: { verdict: fail }, priority: 30, label: 返回复现 }
+    - name: 修复
+      description: 实施最小修复并完成代码评审
+      isInitial: false
+      isFinal: false
+      position: { x: 600, y: 180 }
+      steps:
+        - { name: 实施修复, agent: fix-developer, role: defender, task: 针对已确认根因实施聚焦修复并补充测试 }
+        - { name: 修复审查, agent: fix-reviewer, role: attacker, task: 检查回归风险、兼容性和测试覆盖 }
+        - { name: 修复裁决, agent: fix-judge, role: judge, task: 综合实现与审查结果，给出 verdict }
+      transitions:
+        - { to: 验证, condition: { verdict: pass }, priority: 10, label: 修复通过 }
+        - { to: 修复, condition: { verdict: conditional_pass }, priority: 20, label: 继续修正 }
+        - { to: 定位, condition: { verdict: fail }, priority: 30, label: 根因复核 }
+    - name: 验证
+      description: 执行复现关闭、回归和边界验证
+      isInitial: false
+      isFinal: false
+      position: { x: 870, y: 180 }
+      steps:
+        - { name: 回归验证, agent: tester, role: defender, task: 验证原问题关闭并执行相关回归测试 }
+        - { name: 边界攻击, agent: stress-tester, role: attacker, task: 覆盖异常、边界和压力场景，寻找回归 }
+        - { name: 验证裁决, agent: fix-judge, role: judge, task: 基于测试证据和残余风险给出 verdict }
+      transitions:
+        - { to: 完成, condition: { verdict: pass }, priority: 10, label: 验证通过 }
+        - { to: 修复, condition: { verdict: conditional_pass }, priority: 20, label: 返回修复 }
+        - { to: 定位, condition: { verdict: fail }, priority: 30, label: 重新定位 }
+    - name: 完成
+      description: 记录根因、修复和验证结论
+      isInitial: false
+      isFinal: true
+      position: { x: 1140, y: 180 }
+      steps:
+        - { name: 闭环记录, agent: documentation-writer, role: defender, task: 汇总根因、修复内容、验证证据和预防措施 }
+      transitions: []
+context:
+  projectRoot: ""
+  workspaceMode: in-place
+  requirements: ""

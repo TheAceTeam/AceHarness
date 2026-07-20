@@ -32,6 +32,7 @@ import { Route as WorkspaceMarkdownPreviewRouteImport } from './routes/workspace
 import { Route as WorkbenchConfigRouteImport } from './routes/workbench.$config'
 import { Route as LoginResetRouteImport } from './routes/login.reset'
 import { Route as KnowledgeLibraryRouteImport } from './routes/knowledge.library'
+import { Route as ApiWorkflowTemplatesRouteImport } from './routes/api.workflow-templates'
 import { Route as ApiUsersRouteImport } from './routes/api.users'
 import { Route as ApiSystemSettingsRouteImport } from './routes/api.system-settings'
 import { Route as ApiSkillsRouteImport } from './routes/api.skills'
@@ -82,6 +83,7 @@ import { Route as ApiWorkflowEventLogRouteImport } from './routes/api.workflow.e
 import { Route as ApiWorkflowContextRouteImport } from './routes/api.workflow.context'
 import { Route as ApiWorkflowAuditLogRouteImport } from './routes/api.workflow.audit-log'
 import { Route as ApiWorkflowApproveRouteImport } from './routes/api.workflow.approve'
+import { Route as ApiWorkflowTemplatesInstantiateRouteImport } from './routes/api.workflow-templates.instantiate'
 import { Route as ApiWerewolfHistoryRouteImport } from './routes/api.werewolf.history'
 import { Route as ApiUsersShareableRouteImport } from './routes/api.users.shareable'
 import { Route as ApiUsersIdRouteImport } from './routes/api.users.$id'
@@ -341,6 +343,11 @@ const KnowledgeLibraryRoute = KnowledgeLibraryRouteImport.update({
   path: '/library',
   getParentRoute: () => KnowledgeRoute,
 } as any)
+const ApiWorkflowTemplatesRoute = ApiWorkflowTemplatesRouteImport.update({
+  id: '/api/workflow-templates',
+  path: '/api/workflow-templates',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiUsersRoute = ApiUsersRouteImport.update({
   id: '/api/users',
   path: '/api/users',
@@ -598,6 +605,12 @@ const ApiWorkflowApproveRoute = ApiWorkflowApproveRouteImport.update({
   path: '/api/workflow/approve',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiWorkflowTemplatesInstantiateRoute =
+  ApiWorkflowTemplatesInstantiateRouteImport.update({
+    id: '/instantiate',
+    path: '/instantiate',
+    getParentRoute: () => ApiWorkflowTemplatesRoute,
+  } as any)
 const ApiWerewolfHistoryRoute = ApiWerewolfHistoryRouteImport.update({
   id: '/api/werewolf/history',
   path: '/api/werewolf/history',
@@ -1386,6 +1399,7 @@ export interface FileRoutesByFullPath {
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
   '/api/users': typeof ApiUsersRouteWithChildren
+  '/api/workflow-templates': typeof ApiWorkflowTemplatesRouteWithChildren
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
@@ -1460,6 +1474,7 @@ export interface FileRoutesByFullPath {
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
   '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
+  '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
   '/api/workflow/context': typeof ApiWorkflowContextRoute
@@ -1603,6 +1618,7 @@ export interface FileRoutesByTo {
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
   '/api/users': typeof ApiUsersRouteWithChildren
+  '/api/workflow-templates': typeof ApiWorkflowTemplatesRouteWithChildren
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
@@ -1677,6 +1693,7 @@ export interface FileRoutesByTo {
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
   '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
+  '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
   '/api/workflow/context': typeof ApiWorkflowContextRoute
@@ -1821,6 +1838,7 @@ export interface FileRoutesById {
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
   '/api/users': typeof ApiUsersRouteWithChildren
+  '/api/workflow-templates': typeof ApiWorkflowTemplatesRouteWithChildren
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
@@ -1895,6 +1913,7 @@ export interface FileRoutesById {
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
   '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
+  '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
   '/api/workflow/context': typeof ApiWorkflowContextRoute
@@ -2040,6 +2059,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/system-settings'
     | '/api/users'
+    | '/api/workflow-templates'
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
@@ -2114,6 +2134,7 @@ export interface FileRouteTypes {
     | '/api/users/$id'
     | '/api/users/shareable'
     | '/api/werewolf/history'
+    | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
     | '/api/workflow/context'
@@ -2257,6 +2278,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/system-settings'
     | '/api/users'
+    | '/api/workflow-templates'
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
@@ -2331,6 +2353,7 @@ export interface FileRouteTypes {
     | '/api/users/$id'
     | '/api/users/shareable'
     | '/api/werewolf/history'
+    | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
     | '/api/workflow/context'
@@ -2474,6 +2497,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/system-settings'
     | '/api/users'
+    | '/api/workflow-templates'
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
@@ -2548,6 +2572,7 @@ export interface FileRouteTypes {
     | '/api/users/$id'
     | '/api/users/shareable'
     | '/api/werewolf/history'
+    | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
     | '/api/workflow/context'
@@ -2690,6 +2715,7 @@ export interface RootRouteChildren {
   ApiSkillsRoute: typeof ApiSkillsRoute
   ApiSystemSettingsRoute: typeof ApiSystemSettingsRoute
   ApiUsersRoute: typeof ApiUsersRouteWithChildren
+  ApiWorkflowTemplatesRoute: typeof ApiWorkflowTemplatesRouteWithChildren
   WorkbenchConfigRoute: typeof WorkbenchConfigRoute
   WorkspaceMarkdownPreviewRoute: typeof WorkspaceMarkdownPreviewRoute
   ApiAgoraGuestsRoute: typeof ApiAgoraGuestsRouteWithChildren
@@ -2947,6 +2973,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/knowledge/library'
       preLoaderRoute: typeof KnowledgeLibraryRouteImport
       parentRoute: typeof KnowledgeRoute
+    }
+    '/api/workflow-templates': {
+      id: '/api/workflow-templates'
+      path: '/api/workflow-templates'
+      fullPath: '/api/workflow-templates'
+      preLoaderRoute: typeof ApiWorkflowTemplatesRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/users': {
       id: '/api/users'
@@ -3297,6 +3330,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/workflow/approve'
       preLoaderRoute: typeof ApiWorkflowApproveRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow-templates/instantiate': {
+      id: '/api/workflow-templates/instantiate'
+      path: '/instantiate'
+      fullPath: '/api/workflow-templates/instantiate'
+      preLoaderRoute: typeof ApiWorkflowTemplatesInstantiateRouteImport
+      parentRoute: typeof ApiWorkflowTemplatesRoute
     }
     '/api/werewolf/history': {
       id: '/api/werewolf/history'
@@ -4643,6 +4683,17 @@ const ApiUsersRouteWithChildren = ApiUsersRoute._addFileChildren(
   ApiUsersRouteChildren,
 )
 
+interface ApiWorkflowTemplatesRouteChildren {
+  ApiWorkflowTemplatesInstantiateRoute: typeof ApiWorkflowTemplatesInstantiateRoute
+}
+
+const ApiWorkflowTemplatesRouteChildren: ApiWorkflowTemplatesRouteChildren = {
+  ApiWorkflowTemplatesInstantiateRoute: ApiWorkflowTemplatesInstantiateRoute,
+}
+
+const ApiWorkflowTemplatesRouteWithChildren =
+  ApiWorkflowTemplatesRoute._addFileChildren(ApiWorkflowTemplatesRouteChildren)
+
 interface ApiAgoraGuestsRouteChildren {
   ApiAgoraGuestsIdRoute: typeof ApiAgoraGuestsIdRoute
 }
@@ -4922,6 +4973,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSkillsRoute: ApiSkillsRoute,
   ApiSystemSettingsRoute: ApiSystemSettingsRoute,
   ApiUsersRoute: ApiUsersRouteWithChildren,
+  ApiWorkflowTemplatesRoute: ApiWorkflowTemplatesRouteWithChildren,
   WorkbenchConfigRoute: WorkbenchConfigRoute,
   WorkspaceMarkdownPreviewRoute: WorkspaceMarkdownPreviewRoute,
   ApiAgoraGuestsRoute: ApiAgoraGuestsRouteWithChildren,
