@@ -1,5 +1,8 @@
 # Workflow template packages
 
+For UI usage, versioning guidance, storage locations, and troubleshooting, see the
+[workflow template user guide](../../docs/workflow-templates.md).
+
 ACEHarness discovers versioned workflow template packages from two roots:
 
 - Built in: `<install-root>/templates/workflows`

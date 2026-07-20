@@ -241,6 +241,7 @@ ACEHarness 现已支持把工作流运行时对话、人工检查点和多 Agent
 
 ## 文档
 
+- [工作流模板用户指南](./docs/workflow-templates.md)：将现有工作流另存为模板，以及通过内置、个人或团队模板创建工作流
 - [工作流案例](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/workflow-cases.md)：四个真实/复盘案例的完整细节
 - [ACP Code Agent 集成检查清单](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/acp-code-agent-integration-checklist.md)：ACP Code Agent 接入与验证参考
 - [一人公司模式功能介绍](./docs/one-person-company-mode.md)：基于 `/office` 的个人 AI 团队、组织草案、工位协作和记忆模式说明
