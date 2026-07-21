@@ -7119,7 +7119,13 @@ try {
         }
 
         if (conclusions.length > 0) {
-          parts.push(`\n# 前置步骤结论\n以下是之前步骤的产出，请参考：\n`);
+          const outputsDirPath = `${join(getWorkspaceRunsDir(), this.currentRunId, 'outputs')}/`;
+          parts.push(
+            `\n# 前置步骤结论\n` +
+            `以下是之前步骤产出的结论摘要（已截断，仅供快速参考）。优先依据这些摘要推进；` +
+            `如需完整内容，可读取 outputs 目录：\n\`${outputsDirPath}\`\n` +
+            `该目录含各步骤带时间戳前缀的完整"步骤成果详细总结"，按需读取对应文件即可，不必默认全读。\n`
+          );
           parts.push(conclusions.join('\n\n'));
         }
       } catch { /* non-critical */ }
