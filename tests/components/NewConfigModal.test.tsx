@@ -535,7 +535,9 @@ describe('NewConfigModal backend draft isolation', () => {
     fireEvent.click(screen.getByRole('button', { name: /查看模板/ }));
     expect(await screen.findByText('流程结构')).toBeTruthy();
     expect(screen.getByText('设计方案')).toBeTruthy();
-    expect(screen.getAllByRole('link', { name: /developer/ })[0].getAttribute('href')).toBe('/agents?agent=developer');
+    const developerLink = screen.getAllByRole('link', { name: /developer/ })[0];
+    expect(developerLink.getAttribute('href')).toBe('/agents?agent=developer');
+    expect(developerLink.getAttribute('target')).toBe('_blank');
 
     fireEvent.click(screen.getByRole('button', { name: /使用模板/ }));
     expect(await screen.findByText('从模板新建工作流')).toBeTruthy();

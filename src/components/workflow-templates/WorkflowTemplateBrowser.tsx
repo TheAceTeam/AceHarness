@@ -117,11 +117,6 @@ function formatParameterDefault(parameter: WorkflowTemplateParameter) {
   return String(parameter.default);
 }
 
-function formatParameterBind(bind: string) {
-  const segments = bind.split('/').filter(Boolean);
-  return segments.length ? segments.join(' / ') : bind;
-}
-
 function getStepSummary(step: WorkflowTemplateStep) {
   const summary = String(step.task || step.description || '').trim();
   return summary || '未填写任务描述';
@@ -241,7 +236,7 @@ function WorkflowTemplateDetailPanel({
         )}
         asChild
       >
-        <Link href={href} title={`查看 Agent：${agent}`}>
+        <Link href={href} target="_blank" rel="noreferrer" title={`在新窗口查看 Agent：${agent}`}>
           <span className="min-w-0 truncate">{agent}</span>
           <ExternalLink className="ml-1 h-3 w-3 shrink-0" />
         </Link>
@@ -287,7 +282,7 @@ function WorkflowTemplateDetailPanel({
     </>
   );
 
-  const structurePanel = embedded ? (
+  const structurePanel = (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
         <h4 className="text-sm font-medium">流程结构</h4>
@@ -354,28 +349,12 @@ function WorkflowTemplateDetailPanel({
         ) : null}
       </div>
     </div>
-  ) : (
-    <div>
-      <h4 className="mb-2 text-sm font-medium">流程结构</h4>
-      <div className="border">
-        {nodes.map((node, index) => (
-          <div key={`${node.name}-${index}`} className="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">{index + 1}</div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{node.name}</div>
-              <div className="truncate text-xs text-muted-foreground">{node.stepCount} 个步骤{node.final ? ' · 终止状态' : ''}</div>
-            </div>
-            {index < nodes.length - 1 ? <ArrowRight className="h-4 w-4 text-muted-foreground" /> : null}
-          </div>
-        ))}
-      </div>
-    </div>
   );
 
   const parameterPanel = (
     <div>
       <div className="flex items-center justify-between gap-3">
-        <h4 className="text-sm font-medium">参数</h4>
+        <h4 className="text-sm font-medium">创建时需要填写</h4>
         <span className="text-xs text-muted-foreground">{parameters.length} 项</span>
       </div>
       <div className="mt-2 space-y-2">
@@ -386,26 +365,33 @@ function WorkflowTemplateDetailPanel({
               <div className="flex min-w-0 items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium leading-5 text-foreground">{parameter.label}</div>
-                  <div className="mt-0.5 truncate text-xs text-muted-foreground">{formatParameterBind(parameter.bind)}</div>
+                  {parameter.description ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{parameter.description}</p> : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap justify-end gap-1">
                   <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{PARAMETER_TYPE_LABELS[parameter.type]}</Badge>
                   {parameter.required ? <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">必填</Badge> : null}
                 </div>
               </div>
-              {parameter.description ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{parameter.description}</p> : null}
+              {parameter.type === 'enum' && parameter.options?.length ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {parameter.options.slice(0, 4).map((option) => (
+                    <Badge key={option.value} variant="outline" className="h-5 px-1.5 text-[10px]">{option.label}</Badge>
+                  ))}
+                  {parameter.options.length > 4 ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">+{parameter.options.length - 4}</Badge> : null}
+                </div>
+              ) : null}
               {defaultValue !== null ? <div className="mt-1.5 text-xs text-muted-foreground">默认：{defaultValue}</div> : null}
             </div>
           );
         }) : (
-          <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">无需填写参数</div>
+          <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">创建时无需额外填写</div>
         )}
       </div>
     </div>
   );
 
   const dependencyPanel = (
-    <div className={cn(embedded ? 'grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]' : 'space-y-4 border-l pl-4')}>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
       {parameterPanel}
       <div>
         <div className="flex items-center justify-between gap-3">
@@ -433,7 +419,7 @@ function WorkflowTemplateDetailPanel({
   return (
     <div className={cn('space-y-5', embedded && 'rounded-lg border bg-background p-4')}>
       {embedded ? <div>{header}</div> : <DialogHeader>{header}</DialogHeader>}
-      <div className={embedded ? 'space-y-5' : 'grid gap-6 md:grid-cols-[minmax(0,1fr)_220px]'}>
+      <div className="space-y-5">
         {structurePanel}
         {dependencyPanel}
       </div>
@@ -700,7 +686,7 @@ export default function WorkflowTemplateBrowser({
     <div className="flex min-h-56 flex-col justify-center rounded-lg border border-dashed bg-muted/20 p-6 text-sm text-muted-foreground">
       <LayoutTemplate className="mb-3 h-8 w-8 text-muted-foreground/60" />
       <div className="font-medium text-foreground">选择一个模板</div>
-      <div className="mt-1 leading-5">查看流程结构、参数和 Agent 依赖后再创建独立工作流配置。</div>
+      <div className="mt-1 leading-5">查看流程结构、创建输入和 Agent 依赖后再创建独立工作流配置。</div>
     </div>
   );
 
@@ -767,7 +753,7 @@ export default function WorkflowTemplateBrowser({
       {!embedded ? (
         <>
           <Dialog open={Boolean(selectedIdentity)} onOpenChange={(open) => { if (!open) setSelectedIdentity(null); }}>
-            <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
+            <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-4xl">
               {detailQuery.isError ? (
                 <>
                   <DialogHeader className="sr-only">
