@@ -83,10 +83,10 @@ function sourceBadge(template: WorkflowTemplateSummary) {
 }
 
 const PARAMETER_TYPE_LABELS: Record<WorkflowTemplateParameter['type'], string> = {
-  string: '短文本',
-  text: '长文本',
-  directory: '目录',
-  enum: '选项',
+  string: '单行文本',
+  text: '多行文本',
+  directory: '路径选择',
+  enum: '下拉选择',
   boolean: '开关',
   number: '数字',
 };
@@ -113,8 +113,26 @@ function getWorkflowNodes(template: WorkflowTemplateDetail): WorkflowTemplateNod
 
 function formatParameterDefault(parameter: WorkflowTemplateParameter) {
   if (parameter.default === undefined || parameter.default === '') return null;
+  if (parameter.type === 'enum') {
+    const matchedOption = parameter.options?.find((option) => option.value === parameter.default);
+    if (matchedOption) return matchedOption.label;
+  }
   if (parameter.type === 'boolean') return parameter.default ? '是' : '否';
   return String(parameter.default);
+}
+
+function parameterMetaItem(label: string, value: string, emphasis = false) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-[11px] leading-none',
+        emphasis && 'border-primary/25 bg-primary/5',
+      )}
+    >
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium text-foreground">{value}</span>
+    </span>
+  );
 }
 
 function getStepSummary(step: WorkflowTemplateStep) {
@@ -362,25 +380,31 @@ function WorkflowTemplateDetailPanel({
           const defaultValue = formatParameterDefault(parameter);
           return (
             <div key={parameter.id} className="rounded-md border bg-muted/10 px-3 py-2.5">
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium leading-5 text-foreground">{parameter.label}</div>
-                  {parameter.description ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{parameter.description}</p> : null}
-                </div>
-                <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                  <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{PARAMETER_TYPE_LABELS[parameter.type]}</Badge>
-                  {parameter.required ? <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">必填</Badge> : null}
-                </div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium leading-5 text-foreground">{parameter.label}</div>
+                {parameter.description ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{parameter.description}</p> : null}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {parameterMetaItem('类型', PARAMETER_TYPE_LABELS[parameter.type])}
+                {parameterMetaItem('要求', parameter.required ? '必填' : '选填', parameter.required)}
               </div>
               {parameter.type === 'enum' && parameter.options?.length ? (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {parameter.options.slice(0, 4).map((option) => (
-                    <Badge key={option.value} variant="outline" className="h-5 px-1.5 text-[10px]">{option.label}</Badge>
-                  ))}
-                  {parameter.options.length > 4 ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">+{parameter.options.length - 4}</Badge> : null}
+                <div className="mt-2 flex min-w-0 items-start gap-2 text-xs">
+                  <span className="shrink-0 leading-6 text-muted-foreground">可选值</span>
+                  <div className="flex min-w-0 flex-wrap gap-1">
+                    {parameter.options.slice(0, 4).map((option) => (
+                      <span key={option.value} className="rounded-md bg-muted px-2 py-1 text-[11px] leading-none text-foreground">{option.label}</span>
+                    ))}
+                    {parameter.options.length > 4 ? <span className="rounded-md bg-muted px-2 py-1 text-[11px] leading-none text-muted-foreground">+{parameter.options.length - 4}</span> : null}
+                  </div>
                 </div>
               ) : null}
-              {defaultValue !== null ? <div className="mt-1.5 text-xs text-muted-foreground">默认：{defaultValue}</div> : null}
+              {defaultValue !== null ? (
+                <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span>默认值</span>
+                  <span className="font-medium text-foreground">{defaultValue}</span>
+                </div>
+              ) : null}
             </div>
           );
         }) : (
