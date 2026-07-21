@@ -357,13 +357,20 @@ function normalizeWorkflowVerdict(value: unknown): 'pass' | 'conditional_pass' |
 }
 
 export function compactStepConclusion(raw: string): string {
+  const MAX_CONCLUSION_CHARS = 4000;
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
-  if (tagged) return tagged;
+  if (tagged) {
+    // 结论是"结果/裁决"前置结构，超长时保留开头。缺失此上限会导致
+    // agent 把整篇文档塞进 <step-conclusion> 时按原样落盘（曾出现 117KB/134KB 结论文件）。
+    return tagged.length > MAX_CONCLUSION_CHARS
+      ? tagged.slice(0, MAX_CONCLUSION_CHARS).trim() + '\n...(结论过长已截断)'
+      : tagged;
+  }
 
   const text = stripNonAiStreamArtifacts(raw).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
-  return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
+  return tail.length > MAX_CONCLUSION_CHARS ? tail.slice(-MAX_CONCLUSION_CHARS).trim() : tail;
 }
 
 function createEmptySpecRevisionTally(): Record<WorkflowSpecRevisionVoteChoice, number> {
