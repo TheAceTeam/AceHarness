@@ -75,6 +75,7 @@ import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { cn } from '@/lib/core/utils';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { useCreateConfigMutation, useValidateConfigMutation } from '@/client/query/workflow-mutations';
+import WorkflowTemplateBrowser from '@/components/workflow-templates/WorkflowTemplateBrowser';
 
 const MonacoEditor = dynamic(
   async () => {
@@ -683,6 +684,8 @@ type ReferenceWorkflowSummary = {
   description?: string;
   mode?: 'phase-based' | 'state-machine';
 };
+
+type WorkflowCreationSource = 'custom' | 'template';
 
 type WorkflowCreationRecommendations = {
   referenceWorkflow: null | {
@@ -1498,7 +1501,7 @@ function PlanningContextSnapshot({
     { label: '文件名', value: filename || '自动生成' },
     { label: '工作目录', value: workingDirectory || '未选择' },
     { label: '运行方式', value: workspaceMode === 'isolated-copy' ? '隔离副本' : '原地执行' },
-    { label: '工作流模板', value: referenceWorkflow || '无' },
+    { label: '参考工作流', value: referenceWorkflow || '无' },
   ];
   const requirementText = clipContextText(requirements || description, 260);
   const clarificationSummary = [
@@ -1653,7 +1656,7 @@ function buildCreationRecommendationsPrompt(recommendations: WorkflowCreationRec
   if (recommendations.referenceWorkflow) {
     sections.push([
       '**编排参考骨架**',
-      `- 工作流模板: ${recommendations.referenceWorkflow.name || recommendations.referenceWorkflow.filename}`,
+      `- 参考工作流: ${recommendations.referenceWorkflow.name || recommendations.referenceWorkflow.filename}`,
       `- 模式: ${recommendations.referenceWorkflow.mode === 'state-machine' ? '状态机' : '阶段式'}`,
       recommendations.referenceWorkflow.agents.length
         ? `- 可优先复用的角色: ${recommendations.referenceWorkflow.agents.join('、')}`
@@ -1910,7 +1913,7 @@ function CreationStageStepper({ currentStep }: { currentStep: 1 | 2 | 3 | 4 }) {
     {
       step: 1 as const,
       title: '需求澄清',
-      description: '确认目标、约束、工作目录与工作流模板',
+      description: '确认目标、约束、工作目录与参考工作流',
     },
     {
       step: 2 as const,
@@ -2625,6 +2628,7 @@ export default function NewConfigModal({
   const { resolvedTheme } = useTheme();
   const validateConfigMutation = useValidateConfigMutation();
   const createConfigMutation = useCreateConfigMutation();
+  const [creationSource, setCreationSource] = useState<WorkflowCreationSource>('custom');
   const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>(initialMode || 'phase-based');
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
   const [formStep, setFormStep] = useState<1 | 2 | 3 | 4 | 5>(1);
@@ -2828,6 +2832,7 @@ export default function NewConfigModal({
     modalWasOpenRef.current = true;
     draftBootstrapStartedRef.current = false;
     draftSessionCreatedInCurrentOpenRef.current = false;
+    setCreationSource('custom');
     if (!resumeCreationSessionId) {
       setPreviewSession(null);
       setPreviewConfigValidation(null);
@@ -3390,6 +3395,14 @@ export default function NewConfigModal({
     setPreviewConfigValidation(null);
     stageSessionsRef.current = {} as Record<CreationStageKey, any>;
   }, [interruptPlanningRun]);
+
+  const handleTemplateInstantiated = useCallback((filename: string) => {
+    resetAll();
+    reset();
+    setCreationSource('custom');
+    onSuccess(filename);
+    onClose();
+  }, [onClose, onSuccess, reset, resetAll]);
 
   // When engine or model changes during workflow creation, restart the AI conversation
   const handleAiEngineChange = (engine: string) => {
@@ -4385,9 +4398,9 @@ export default function NewConfigModal({
     const reqs = values.requirements || values.description || '';
     const referenceContext = values.referenceWorkflow && referenceConfig
       ? [
-          `工作流模板：${values.referenceWorkflow}`,
-          '模板摘要：优先参考它体现出的流程骨架、关键检查点和 Agent 协作安排。',
-          '模板 YAML：',
+          `参考工作流：${values.referenceWorkflow}`,
+          '参考工作流摘要：优先参考它体现出的流程骨架、关键检查点和 Agent 协作安排。',
+          '参考工作流 YAML：',
           '```yaml',
           truncateForPrompt(referenceConfig.raw, 4000),
           '```',
@@ -5229,9 +5242,9 @@ export default function NewConfigModal({
 
     const referenceContext = values.referenceWorkflow && referenceConfig
       ? [
-          `工作流模板：${values.referenceWorkflow}`,
-          '优先参考模板体现出的状态/阶段顺序、关键检查点、Agent 协作和失败处理；当前需求明确冲突时再调整。',
-          '模板 YAML：',
+          `参考工作流：${values.referenceWorkflow}`,
+          '优先参考工作流体现出的状态/阶段顺序、关键检查点、Agent 协作和失败处理；当前需求明确冲突时再调整。',
+          '参考工作流 YAML：',
           '```yaml',
           truncateForPrompt(referenceConfig.raw, 8000),
           '```',
@@ -6667,7 +6680,7 @@ export default function NewConfigModal({
                 ) : null}
                 <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                   <div>配置文件：{previewSession.filename}</div>
-                  <div>工作流模板：{previewSession.referenceWorkflow || '无'}</div>
+                  <div>参考工作流：{previewSession.referenceWorkflow || '无'}</div>
                   <div>工作目录：{previewSession.workingDirectory}</div>
                   <div>工作区模式：{previewSession.workspaceMode}</div>
                   <div>计划节点数：{specCoding.phases?.length || 0}</div>
@@ -6837,7 +6850,7 @@ export default function NewConfigModal({
                     <div>文件名：{previewSession.filename}</div>
                     <div>工作流名：{previewSession.workflowName}</div>
                     <div>工作目录：{previewSession.workingDirectory}</div>
-                    <div>工作流模板：{previewSession.referenceWorkflow || '无'}</div>
+                    <div>参考工作流：{previewSession.referenceWorkflow || '无'}</div>
                   </div>
                   <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
                     <div>结构类型：{draftMode === 'state-machine' ? '状态机 workflow' : '阶段式 workflow'}</div>
@@ -7365,7 +7378,21 @@ export default function NewConfigModal({
             </Button>
           </div>
         </div>
-        <form id="new-config-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="flex-1 overflow-auto px-6 space-y-6">
+        <Tabs
+          value={creationSource}
+          onValueChange={(value) => setCreationSource(value === 'template' ? 'template' : 'custom')}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <div className="px-6 pb-3">
+            <TabsList className="grid w-full grid-cols-2 sm:w-[320px]">
+              <TabsTrigger value="custom">自定义新建</TabsTrigger>
+              <TabsTrigger value="template">模板库</TabsTrigger>
+            </TabsList>
+          </div>
+          <TabsContent value="custom" className="m-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
+            {creationSource === 'custom' ? (
+              <>
+                <form id="new-config-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="flex-1 overflow-auto px-6 space-y-6">
           {useSpecPlanningFlow && !hideAiGuided ? (
             <>
               <CreationStageStepper currentStep={1} />
@@ -7522,7 +7549,7 @@ export default function NewConfigModal({
 
           {showReferenceWorkflowOptions ? (
             <div className="space-y-2">
-              <Label htmlFor="referenceWorkflow">工作流模板（可选）</Label>
+              <Label htmlFor="referenceWorkflow">参考已有工作流（可选）</Label>
               <Select
                 value={referenceWorkflowValue || '__none__'}
                 onValueChange={(value) => {
@@ -7530,13 +7557,13 @@ export default function NewConfigModal({
                 }}
               >
                 <SelectTrigger id="referenceWorkflow">
-                  <SelectValue placeholder={referenceLoading ? '加载工作流模板中...' : '选择一个同类型工作流模板'} />
+                  <SelectValue placeholder={referenceLoading ? '加载参考工作流中...' : '选择一个同类型参考工作流'} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">不使用工作流模板</SelectItem>
+                  <SelectItem value="__none__">不使用参考工作流</SelectItem>
                   {filteredReferenceWorkflows.length === 0 && !referenceLoading ? (
                     <SelectItem value="__empty__" disabled>
-                      暂无同类型工作流模板
+                      暂无同类型参考工作流
                     </SelectItem>
                   ) : null}
                   {filteredReferenceWorkflows.map((workflow) => (
@@ -7547,18 +7574,18 @@ export default function NewConfigModal({
                 </SelectContent>
               </Select>
               {referenceConfigLoading ? (
-                <p className="text-xs text-muted-foreground">正在读取工作流模板结构...</p>
+                <p className="text-xs text-muted-foreground">正在读取参考工作流结构...</p>
               ) : effectiveReferenceWorkflowValue && referenceConfig ? (
-                <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                  <div className="font-medium text-foreground">
-                    {referenceWorkflowValue ? '已选择工作流模板' : '未选择工作流模板'}
-                  </div>
-                  <div>文件：{effectiveReferenceWorkflowValue}</div>
-                  <div>模式：{referenceConfig.config?.workflow?.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
-                  <div>
-                    说明：会尽量继承模板的流程结构、关键节点和 Agent 安排，只更新当前需求与任务说明。
-                  </div>
-                </div>
+	                <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+	                  <div className="font-medium text-foreground">
+	                    {referenceWorkflowValue ? '已选择参考工作流' : '未选择参考工作流'}
+	                  </div>
+	                  <div>文件：{effectiveReferenceWorkflowValue}</div>
+	                  <div>模式：{referenceConfig.config?.workflow?.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
+	                  <div>
+	                    说明：会尽量继承参考工作流的流程结构、关键节点和 Agent 安排，只更新当前需求与任务说明。
+	                  </div>
+	                </div>
               ) : null}
               <p className="text-xs text-muted-foreground">
                 只能选择同类型工作流；阶段式参考阶段式，状态机参考状态机。
@@ -7573,30 +7600,30 @@ export default function NewConfigModal({
                 </div>
                 {effectiveCreationRecommendations.referenceWorkflow ? (
                   <div className="rounded-lg border bg-background/80 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">工作流模板骨架</div>
+                    <div className="font-medium text-foreground">历史工作流骨架</div>
                     <div>{effectiveCreationRecommendations.referenceWorkflow.name || effectiveCreationRecommendations.referenceWorkflow.filename}</div>
                     <div>模式：{effectiveCreationRecommendations.referenceWorkflow.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
-                    {effectiveCreationRecommendations.referenceWorkflow.supervisorAgent ? (
-                      <div>指挥官：{effectiveCreationRecommendations.referenceWorkflow.supervisorAgent}</div>
-                    ) : null}
-                    {effectiveCreationRecommendations.referenceWorkflow.agents.length ? (
-                      <div>候选角色：{effectiveCreationRecommendations.referenceWorkflow.agents.join('、')}</div>
-                    ) : null}
+	                    {effectiveCreationRecommendations.referenceWorkflow.supervisorAgent ? (
+	                      <div>指挥官：{effectiveCreationRecommendations.referenceWorkflow.supervisorAgent}</div>
+	                    ) : null}
+	                    {effectiveCreationRecommendations.referenceWorkflow.agents.length ? (
+	                      <div>候选角色：{effectiveCreationRecommendations.referenceWorkflow.agents.join('、')}</div>
+	                    ) : null}
                   </div>
                 ) : null}
                 {effectiveCreationRecommendations.recommendedAgents.length || effectiveCreationRecommendations.recommendedSupervisorAgent ? (
                   <div className="rounded-lg border bg-background/80 p-3 text-xs text-muted-foreground space-y-1">
                     <div className="font-medium text-foreground">自动编排决策</div>
                     <div>指挥官：{effectiveCreationRecommendations.recommendedSupervisorAgent || 'default-supervisor'}</div>
-                    {effectiveCreationRecommendations.recommendedAgents.length ? (
-                      <div>默认角色编队：{effectiveCreationRecommendations.recommendedAgents.join('、')}</div>
-                    ) : (
-                      <div>默认角色编队：将回退到基础角色骨架。</div>
-                    )}
-                    <div>SpecCoding 预览和 workflow 草案会使用这组可用 Agent 编队。</div>
-                  </div>
-                ) : null}
-              </div>
+	                    {effectiveCreationRecommendations.recommendedAgents.length ? (
+	                      <div>默认角色编队：{effectiveCreationRecommendations.recommendedAgents.join('、')}</div>
+	                    ) : (
+	                      <div>默认角色编队：将回退到基础角色骨架。</div>
+	                    )}
+	                    <div>SpecCoding 预览和 workflow 草案会使用这组可用 Agent 编队。</div>
+	                  </div>
+	                ) : null}
+	              </div>
               ) : null}
             </div>
           ) : null}
@@ -7723,26 +7750,38 @@ export default function NewConfigModal({
               {...register('description')}
             />
           </div>
-        </form>
+                </form>
 
-        <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
-          <Button type="button" variant="destructive" onClick={handleClose}>
-            取消
-          </Button>
-          <Button
-            type="button"
-            onClick={handleNextStep}
-            disabled={isSubmitting || isGeneratingPlan}
-          >
-            {workflowMode === 'ai-guided'
-              ? specPlanningEnabled
-                ? (isGeneratingPlan ? '生成计划中...' : '下一步')
-                : (isGeneratingPlan ? '生成草案中...' : '直接进入编排')
-              : workflowMode === 'state-machine' && !specPlanningEnabled
-                ? (isSubmitting ? '创建中...' : '创建')
-                : (isSubmitting ? '创建中...' : '创建')}
-          </Button>
-        </div>
+                <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
+                  <Button type="button" variant="destructive" onClick={handleClose}>
+                    取消
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleNextStep}
+                    disabled={isSubmitting || isGeneratingPlan}
+                  >
+                    {workflowMode === 'ai-guided'
+                      ? specPlanningEnabled
+                        ? (isGeneratingPlan ? '生成计划中...' : '下一步')
+                        : (isGeneratingPlan ? '生成草案中...' : '直接进入编排')
+                      : workflowMode === 'state-machine' && !specPlanningEnabled
+                        ? (isSubmitting ? '创建中...' : '创建')
+                        : (isSubmitting ? '创建中...' : '创建')}
+                  </Button>
+                </div>
+              </>
+            ) : null}
+          </TabsContent>
+          <TabsContent value="template" className="m-0 min-h-0 flex-1 overflow-auto px-6 pb-6 data-[state=inactive]:hidden">
+            {creationSource === 'template' ? (
+              <WorkflowTemplateBrowser
+                variant="embedded"
+                onInstantiated={handleTemplateInstantiated}
+              />
+            ) : null}
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

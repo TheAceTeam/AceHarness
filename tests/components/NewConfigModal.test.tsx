@@ -152,12 +152,26 @@ vi.mock('@/components/ui/select', () => ({
   SelectValue: ({ placeholder }: any) => <span>{placeholder}</span>,
 }));
 
-vi.mock('@/components/ui/tabs', () => ({
-  Tabs: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  TabsContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  TabsList: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  TabsTrigger: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
-}));
+vi.mock('@/components/ui/tabs', () => {
+  const TabsContext = React.createContext<{ value?: string; onValueChange?: (value: string) => void }>({});
+  return {
+    Tabs: ({ value, onValueChange, children }: { value?: string; onValueChange?: (value: string) => void; children: React.ReactNode }) => (
+      <TabsContext.Provider value={{ value, onValueChange }}>
+        <div>{children}</div>
+      </TabsContext.Provider>
+    ),
+    TabsContent: ({ value, children }: { value?: string; children: React.ReactNode }) => {
+      const context = React.useContext(TabsContext);
+      if (value && context.value && value !== context.value) return null;
+      return <div>{children}</div>;
+    },
+    TabsList: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    TabsTrigger: ({ value, children }: { value?: string; children: React.ReactNode }) => {
+      const context = React.useContext(TabsContext);
+      return <button type="button" onClick={() => value && context.onValueChange?.(value)}>{children}</button>;
+    },
+  };
+});
 
 vi.mock('@/components/ui/avatar', () => ({
   Avatar: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -193,7 +207,9 @@ function createJsonResponse(data: any, ok = true, status = 200): Response {
   return {
     ok,
     status,
+    headers: new Headers({ 'Content-Type': 'application/json' }),
     json: async () => data,
+    text: async () => JSON.stringify(data),
   } as Response;
 }
 
@@ -404,6 +420,134 @@ describe('NewConfigModal backend draft isolation', () => {
     expect(screen.getByDisplayValue('恢复中的工作流')).toBeTruthy();
     expect(screen.getByDisplayValue('resume-workflow.yaml')).toBeTruthy();
     expect((screen.getByLabelText('使用历史经验') as HTMLInputElement).checked).toBe(false);
+  });
+
+  test('creates workflow from template library entry inside the new config modal', async () => {
+    const templateSummary = {
+      source: 'builtin',
+      id: 'software-delivery',
+      version: '1.0.0',
+      name: '软件交付',
+      description: '完成设计、实现、测试和交付整理',
+      category: '软件研发',
+      tags: ['研发'],
+      featured: true,
+      mode: 'phase-based',
+      digest: 'a'.repeat(64),
+      versions: ['1.0.0'],
+      visibility: 'builtin',
+      editable: false,
+      stateCount: 0,
+      phaseCount: 2,
+      stepCount: 2,
+      parameterCount: 1,
+      preCommandCount: 0,
+      dependencies: {
+        agents: ['default-supervisor', 'developer'],
+        skills: [],
+        mcpServers: [],
+        subworkflows: [],
+      },
+    };
+    const templateDetail = {
+      ...templateSummary,
+      manifest: {
+        apiVersion: 'aceharness.io/v1alpha1',
+        kind: 'WorkflowTemplate',
+        metadata: {
+          id: templateSummary.id,
+          version: templateSummary.version,
+          name: templateSummary.name,
+          description: templateSummary.description,
+          category: templateSummary.category,
+          tags: ['研发'],
+          featured: true,
+        },
+        spec: {
+          entrypoint: 'workflow.yaml',
+          mode: 'phase-based',
+          compatibility: { aceharness: '^1.0.0' },
+          parameters: [
+            { id: 'workflowName', label: '工作流名称', type: 'string', bind: '/workflow/name', required: true, default: '软件交付' },
+          ],
+          dependencies: templateSummary.dependencies,
+        },
+      },
+      workflow: {
+        workflow: {
+          name: '软件交付',
+          supervisor: { enabled: true, agent: 'default-supervisor' },
+          phases: [
+            { name: '设计', steps: [{ name: '设计方案', agent: 'developer', task: 'design' }] },
+            { name: '实现', steps: [{ name: '编码实现', agent: 'developer', task: 'implement' }] },
+          ],
+        },
+        context: { projectRoot: '', workspaceMode: 'in-place' },
+      },
+    };
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/workflow-templates' && method === 'GET') {
+        return createJsonResponse({ templates: [templateSummary], categories: ['软件研发'], issues: [] });
+      }
+      if (url.startsWith('/api/workflow-templates?source=') && method === 'GET') {
+        return createJsonResponse({ template: templateDetail });
+      }
+      if (url === '/api/agents' && method === 'GET') {
+        return createJsonResponse({
+          agents: [
+            { name: 'default-supervisor', team: 'black-gold', roleType: 'supervisor', engineModels: {}, activeEngine: '' },
+            { name: 'developer', team: 'red', roleType: 'normal', engineModels: {}, activeEngine: '' },
+          ],
+        });
+      }
+      if (url === '/api/workflow-templates/instantiate' && method === 'POST') {
+        return createJsonResponse({
+          success: true,
+          filename: 'modal-template.yaml',
+          templateRef: { source: 'builtin', id: templateSummary.id, version: templateSummary.version, digest: templateSummary.digest },
+        }, true, 201);
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderNewConfigModal(
+      <NewConfigModal
+        isOpen
+        onClose={onClose}
+        onSuccess={onSuccess}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '模板库' }));
+    expect(await screen.findByText('软件交付')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /查看模板/ }));
+    expect(await screen.findByText('流程结构')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /使用模板/ }));
+    expect(await screen.findByText('从模板新建工作流')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('配置文件名'), { target: { value: 'modal-template.yaml' } });
+    fireEvent.change(screen.getByLabelText(/工作流名称/), { target: { value: '弹窗模板实例' } });
+    fireEvent.click(screen.getByRole('button', { name: /创建工作流/ }));
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith('modal-template.yaml'));
+    expect(onClose).toHaveBeenCalled();
+    const instantiateCall = fetchCalls.find((call) => call.url === '/api/workflow-templates/instantiate');
+    expect(instantiateCall?.body).toMatchObject({
+      filename: 'modal-template.yaml',
+      values: { workflowName: '弹窗模板实例' },
+    });
   });
 
   test('sends historical experience preference and hides historical recommendation details when disabled', async () => {
