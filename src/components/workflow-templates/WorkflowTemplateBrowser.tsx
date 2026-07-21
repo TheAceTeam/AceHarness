@@ -5,6 +5,9 @@ import {
   AlertTriangle,
   ArrowRight,
   Boxes,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
   GitBranch,
   Layers3,
   LayoutTemplate,
@@ -16,6 +19,7 @@ import {
   Users,
   WandSparkles,
 } from 'lucide-react';
+import Link from '@/lib/navigation/client';
 import { useAgentsQuery } from '@/client/query/agents';
 import {
   useInstantiateWorkflowTemplateMutation,
@@ -44,6 +48,19 @@ import { cn } from '@/lib/core/utils';
 import type { WorkflowTemplateDetail, WorkflowTemplateParameter, WorkflowTemplateSummary } from '@/lib/workflow-template/types';
 
 type TemplateIdentity = Pick<WorkflowTemplateSummary, 'source' | 'id' | 'version'>;
+type WorkflowTemplateStep = {
+  name?: string;
+  agent?: string;
+  task?: string;
+  description?: string;
+};
+type WorkflowTemplateNode = {
+  name: string;
+  description?: string;
+  stepCount: number;
+  final: boolean;
+  steps: WorkflowTemplateStep[];
+};
 
 export interface WorkflowTemplateBrowserProps {
   onInstantiated: (filename: string) => void;
@@ -65,12 +82,22 @@ function sourceBadge(template: WorkflowTemplateSummary) {
   return <Badge variant="outline"><Lock className="mr-1 h-3 w-3" />个人</Badge>;
 }
 
-function getWorkflowNodes(template: WorkflowTemplateDetail) {
+const PARAMETER_TYPE_LABELS: Record<WorkflowTemplateParameter['type'], string> = {
+  string: '短文本',
+  text: '长文本',
+  directory: '目录',
+  enum: '选项',
+  boolean: '开关',
+  number: '数字',
+};
+
+function getWorkflowNodes(template: WorkflowTemplateDetail): WorkflowTemplateNode[] {
   const workflow = template.workflow?.workflow as Record<string, any> | undefined;
   if (Array.isArray(workflow?.states)) {
     return workflow.states.map((state: any) => ({
       name: state.name,
       description: state.description,
+      steps: Array.isArray(state.steps) ? state.steps : [],
       stepCount: Array.isArray(state.steps) ? state.steps.length : 0,
       final: state.isFinal === true,
     }));
@@ -78,9 +105,26 @@ function getWorkflowNodes(template: WorkflowTemplateDetail) {
   return (Array.isArray(workflow?.phases) ? workflow.phases : []).map((phase: any) => ({
     name: phase.name,
     description: phase.description,
+    steps: Array.isArray(phase.steps) ? phase.steps : [],
     stepCount: Array.isArray(phase.steps) ? phase.steps.length : 0,
     final: false,
   }));
+}
+
+function formatParameterDefault(parameter: WorkflowTemplateParameter) {
+  if (parameter.default === undefined || parameter.default === '') return null;
+  if (parameter.type === 'boolean') return parameter.default ? '是' : '否';
+  return String(parameter.default);
+}
+
+function formatParameterBind(bind: string) {
+  const segments = bind.split('/').filter(Boolean);
+  return segments.length ? segments.join(' / ') : bind;
+}
+
+function getStepSummary(step: WorkflowTemplateStep) {
+  const summary = String(step.task || step.description || '').trim();
+  return summary || '未填写任务描述';
 }
 
 function initializeValues(template: WorkflowTemplateDetail): Record<string, string | number | boolean> {
@@ -165,6 +209,46 @@ function WorkflowTemplateDetailPanel({
   onClose: () => void;
   onVersionChange: (version: string) => void;
 }) {
+  const nodes = useMemo(() => getWorkflowNodes(template), [template]);
+  const parameters = template.manifest.spec.parameters;
+  const availableAgentsQuery = useAgentsQuery();
+  const availableAgentNames = useMemo(() => (
+    new Set((availableAgentsQuery.data?.agents || []).map((agent) => agent.name))
+  ), [availableAgentsQuery.data?.agents]);
+  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setExpandedNodes(nodes.length > 0 ? { '0': true } : {});
+  }, [nodes]);
+
+  const toggleNode = (key: string) => {
+    setExpandedNodes((current) => ({ ...current, [key]: !current[key] }));
+  };
+
+  const agentLink = (agent: string, compact = false) => {
+    const known = availableAgentNames.has(agent);
+    const loadingAgents = availableAgentsQuery.isLoading || availableAgentsQuery.isFetching;
+    const href = `/agents?agent=${encodeURIComponent(agent)}`;
+    return (
+      <Button
+        key={agent}
+        size="sm"
+        variant="outline"
+        className={cn(
+          'h-7 max-w-full rounded-full px-2 text-xs',
+          !known && !loadingAgents && 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200',
+          compact && 'h-6 px-1.5',
+        )}
+        asChild
+      >
+        <Link href={href} title={`查看 Agent：${agent}`}>
+          <span className="min-w-0 truncate">{agent}</span>
+          <ExternalLink className="ml-1 h-3 w-3 shrink-0" />
+        </Link>
+      </Button>
+    );
+  };
+
   const header = (
     <>
       <div className="flex flex-wrap items-center gap-2">
@@ -203,25 +287,71 @@ function WorkflowTemplateDetailPanel({
     </>
   );
 
-  const nodes = getWorkflowNodes(template);
-
   const structurePanel = embedded ? (
     <div className="space-y-2">
-      <h4 className="text-sm font-medium">流程结构</h4>
-      <div className="rounded-md border bg-muted/10">
-        {nodes.map((node, index) => (
-          <div key={`${node.name}-${index}`} className="flex gap-3 border-b px-3 py-3 last:border-b-0">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-              {index + 1}
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-sm font-medium">流程结构</h4>
+        <span className="text-xs text-muted-foreground">
+          {nodes.length} 个{template.mode === 'state-machine' ? '状态' : '阶段'} · {template.stepCount} 个步骤
+        </span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {nodes.map((node, index) => {
+          const nodeKey = String(index);
+          const expanded = expandedNodes[nodeKey] === true;
+          return (
+            <div key={`${node.name}-${index}`} className="overflow-hidden rounded-md border bg-card">
+              <button
+                type="button"
+                className="flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/45"
+                onClick={() => toggleNode(nodeKey)}
+                aria-expanded={expanded}
+              >
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                  {index + 1}
+                </div>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm font-medium leading-5 text-foreground">{node.name}</span>
+                    {node.final ? <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">终止</Badge> : null}
+                  </div>
+                  <div className="line-clamp-2 text-xs leading-5 text-muted-foreground">
+                    {node.description || `${node.stepCount} 个步骤`}
+                  </div>
+                </div>
+                {expanded ? (
+                  <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+                )}
+              </button>
+              {expanded ? (
+                <div className="space-y-2 border-t bg-muted/20 px-3 py-3">
+                  {node.steps.length > 0 ? node.steps.map((step, stepIndex) => (
+                    <div key={`${node.name}-${step.name || stepIndex}`} className="rounded-md border bg-background px-2.5 py-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-medium leading-5 text-foreground">
+                            {step.name || `步骤 ${stepIndex + 1}`}
+                          </div>
+                          <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">{getStepSummary(step)}</p>
+                        </div>
+                        {step.agent ? <div className="max-w-[48%] shrink-0">{agentLink(step.agent, true)}</div> : null}
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">暂无步骤</div>
+                  )}
+                </div>
+              ) : null}
             </div>
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="text-sm font-medium leading-5 text-foreground">{node.name}</div>
-              <div className="text-xs leading-5 text-muted-foreground">
-                {node.description || `${node.stepCount} 个步骤${node.final ? ' · 终止状态' : ''}`}
-              </div>
-            </div>
+          );
+        })}
+        {nodes.length === 0 ? (
+          <div className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground sm:col-span-2">
+            暂无流程节点
           </div>
-        ))}
+        ) : null}
       </div>
     </div>
   ) : (
@@ -242,17 +372,54 @@ function WorkflowTemplateDetailPanel({
     </div>
   );
 
-  const dependencyPanel = (
-    <div className={cn(embedded ? 'grid gap-4 sm:grid-cols-2' : 'space-y-4 border-l pl-4')}>
-      <div>
+  const parameterPanel = (
+    <div>
+      <div className="flex items-center justify-between gap-3">
         <h4 className="text-sm font-medium">参数</h4>
-        <div className="mt-1 text-sm text-muted-foreground">{template.parameterCount} 项</div>
+        <span className="text-xs text-muted-foreground">{parameters.length} 项</span>
       </div>
+      <div className="mt-2 space-y-2">
+        {parameters.length > 0 ? parameters.map((parameter) => {
+          const defaultValue = formatParameterDefault(parameter);
+          return (
+            <div key={parameter.id} className="rounded-md border bg-muted/10 px-3 py-2.5">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium leading-5 text-foreground">{parameter.label}</div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">{formatParameterBind(parameter.bind)}</div>
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                  <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{PARAMETER_TYPE_LABELS[parameter.type]}</Badge>
+                  {parameter.required ? <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">必填</Badge> : null}
+                </div>
+              </div>
+              {parameter.description ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{parameter.description}</p> : null}
+              {defaultValue !== null ? <div className="mt-1.5 text-xs text-muted-foreground">默认：{defaultValue}</div> : null}
+            </div>
+          );
+        }) : (
+          <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">无需填写参数</div>
+        )}
+      </div>
+    </div>
+  );
+
+  const dependencyPanel = (
+    <div className={cn(embedded ? 'grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]' : 'space-y-4 border-l pl-4')}>
+      {parameterPanel}
       <div>
-        <h4 className="text-sm font-medium">Agent 依赖</h4>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {template.dependencies.agents.map((agent) => <Badge key={agent} variant="outline">{agent}</Badge>)}
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="text-sm font-medium">Agent 依赖</h4>
+          <span className="text-xs text-muted-foreground">{template.dependencies.agents.length} 个</span>
         </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {template.dependencies.agents.length > 0 ? template.dependencies.agents.map((agent) => agentLink(agent)) : (
+            <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">无 Agent 依赖</div>
+          )}
+        </div>
+        {template.dependencies.agents.some((agent) => !availableAgentNames.has(agent)) && !availableAgentsQuery.isLoading ? (
+          <div className="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-400">浅黄色项表示当前环境未找到同名 Agent。</div>
+        ) : null}
       </div>
       {template.preCommandCount > 0 ? (
         <div className="flex gap-2 text-xs text-amber-700 dark:text-amber-400 sm:col-span-2">
