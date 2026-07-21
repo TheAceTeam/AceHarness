@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import { withIsolatedAceHome, withTempWorkspace } from './helpers/module-helpers';
@@ -125,6 +125,10 @@ describe('workflow templates', () => {
         };
         await writeFile(sourcePath, stringify(source), 'utf8');
 
+        const nestedSourceFilename = 'team/企业授信审查.yaml';
+        await mkdir(path.join(aceHome, 'configs', 'team'), { recursive: true });
+        await writeFile(path.join(aceHome, 'configs', nestedSourceFilename), stringify(source), 'utf8');
+
         vi.resetModules();
         const { POST: saveTemplate, GET: listTemplates } = await import('@/server/api-routes/workflow-templates/route');
         const templateInput = {
@@ -154,6 +158,16 @@ describe('workflow templates', () => {
           json: { ...templateInput, version: '1.1.0' },
         }));
         expect(nextVersion.status).toBe(201);
+
+        const nestedSource = await saveTemplate(makeRequest('/api/workflow-templates', {
+          token: owner.token,
+          json: {
+            ...templateInput,
+            sourceFilename: nestedSourceFilename,
+            id: 'nested-source-workflow-template',
+          },
+        }));
+        expect(nestedSource.status).toBe(201);
 
         const templateWorkflowPath = path.join(
           aceHome,
