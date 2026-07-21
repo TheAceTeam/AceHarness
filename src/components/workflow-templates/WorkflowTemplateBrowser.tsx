@@ -203,43 +203,72 @@ function WorkflowTemplateDetailPanel({
     </>
   );
 
+  const nodes = getWorkflowNodes(template);
+
+  const structurePanel = embedded ? (
+    <div className="space-y-2">
+      <h4 className="text-sm font-medium">流程结构</h4>
+      <div className="rounded-md border bg-muted/10">
+        {nodes.map((node, index) => (
+          <div key={`${node.name}-${index}`} className="flex gap-3 border-b px-3 py-3 last:border-b-0">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              {index + 1}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="text-sm font-medium leading-5 text-foreground">{node.name}</div>
+              <div className="text-xs leading-5 text-muted-foreground">
+                {node.description || `${node.stepCount} 个步骤${node.final ? ' · 终止状态' : ''}`}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : (
+    <div>
+      <h4 className="mb-2 text-sm font-medium">流程结构</h4>
+      <div className="border">
+        {nodes.map((node, index) => (
+          <div key={`${node.name}-${index}`} className="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">{index + 1}</div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium">{node.name}</div>
+              <div className="truncate text-xs text-muted-foreground">{node.stepCount} 个步骤{node.final ? ' · 终止状态' : ''}</div>
+            </div>
+            {index < nodes.length - 1 ? <ArrowRight className="h-4 w-4 text-muted-foreground" /> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const dependencyPanel = (
+    <div className={cn(embedded ? 'grid gap-4 sm:grid-cols-2' : 'space-y-4 border-l pl-4')}>
+      <div>
+        <h4 className="text-sm font-medium">参数</h4>
+        <div className="mt-1 text-sm text-muted-foreground">{template.parameterCount} 项</div>
+      </div>
+      <div>
+        <h4 className="text-sm font-medium">Agent 依赖</h4>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {template.dependencies.agents.map((agent) => <Badge key={agent} variant="outline">{agent}</Badge>)}
+        </div>
+      </div>
+      {template.preCommandCount > 0 ? (
+        <div className="flex gap-2 text-xs text-amber-700 dark:text-amber-400 sm:col-span-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          包含 {template.preCommandCount} 条预命令
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className={cn('space-y-5', embedded && 'rounded-lg border bg-background p-4')}>
       {embedded ? <div>{header}</div> : <DialogHeader>{header}</DialogHeader>}
-      <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_220px]">
-        <div>
-          <h4 className="mb-2 text-sm font-medium">流程结构</h4>
-          <div className="border">
-            {getWorkflowNodes(template).map((node, index, nodes) => (
-              <div key={`${node.name}-${index}`} className="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
-                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">{index + 1}</div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{node.name}</div>
-                  <div className="truncate text-xs text-muted-foreground">{node.stepCount} 个步骤{node.final ? ' · 终止状态' : ''}</div>
-                </div>
-                {index < nodes.length - 1 ? <ArrowRight className="h-4 w-4 text-muted-foreground" /> : null}
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="space-y-4 border-l pl-4">
-          <div>
-            <h4 className="text-sm font-medium">参数</h4>
-            <div className="mt-1 text-sm text-muted-foreground">{template.parameterCount} 项</div>
-          </div>
-          <div>
-            <h4 className="text-sm font-medium">Agent 依赖</h4>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {template.dependencies.agents.map((agent) => <Badge key={agent} variant="outline">{agent}</Badge>)}
-            </div>
-          </div>
-          {template.preCommandCount > 0 ? (
-            <div className="flex gap-2 text-xs text-amber-700 dark:text-amber-400">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              包含 {template.preCommandCount} 条预命令
-            </div>
-          ) : null}
-        </div>
+      <div className={embedded ? 'space-y-5' : 'grid gap-6 md:grid-cols-[minmax(0,1fr)_220px]'}>
+        {structurePanel}
+        {dependencyPanel}
       </div>
       {embedded ? (
         <div className="flex justify-end gap-2 border-t pt-4">{actions}</div>
@@ -404,6 +433,7 @@ export default function WorkflowTemplateBrowser({
   const templates = templatesQuery.data?.templates || [];
   const selectedTemplate = detailQuery.data?.template;
   const embedded = variant === 'embedded';
+  const hasActiveTemplatePane = Boolean(selectedIdentity || instantiateTemplate);
 
   const handleTemplateInstantiated = (filename: string) => {
     setInstantiateTemplate(null);
@@ -441,7 +471,10 @@ export default function WorkflowTemplateBrowser({
       embedded ? 'md:grid-cols-2 lg:grid-cols-1' : 'md:grid-cols-2 xl:grid-cols-3',
     )}>
       {templates.map((template) => (
-        <article key={`${template.source}:${template.id}`} className="flex min-h-[238px] flex-col border bg-card p-4">
+        <article
+          key={`${template.source}:${template.id}`}
+          className={cn('flex flex-col border bg-card p-4', embedded ? 'min-h-[198px]' : 'min-h-[238px]')}
+        >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -554,9 +587,11 @@ export default function WorkflowTemplateBrowser({
       ) : null}
 
       {embedded ? (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
           <div className="min-w-0">{listContent}</div>
-          <aside className="min-w-0">{embeddedDetail}</aside>
+          <aside className={cn('min-w-0', hasActiveTemplatePane ? 'order-first xl:order-none' : 'order-last xl:order-none')}>
+            {embeddedDetail}
+          </aside>
         </div>
       ) : (
         listContent

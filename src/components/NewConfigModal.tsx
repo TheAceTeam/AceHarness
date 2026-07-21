@@ -2798,7 +2798,9 @@ export default function NewConfigModal({
   const recommendedSupervisorAgent = effectiveCreationRecommendations?.recommendedSupervisorAgent || 'default-supervisor';
   const creationDialogClassName = creationFullscreen
     ? 'flex h-screen max-h-none w-screen max-w-none flex-col p-0 sm:rounded-none'
-    : 'max-w-4xl flex flex-col p-0 max-h-[90vh]';
+    : creationSource === 'template'
+      ? 'flex max-h-[92vh] w-[96vw] max-w-[1200px] flex-col p-0'
+      : 'max-w-4xl flex flex-col p-0 max-h-[90vh]';
   const creationStageDialogClassName = creationFullscreen
     ? creationDialogClassName
     : 'flex h-[92vh] max-h-[92vh] w-[96vw] max-w-[1600px] flex-col p-0';
