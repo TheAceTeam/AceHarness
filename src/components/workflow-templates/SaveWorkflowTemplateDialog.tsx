@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Loader2, PackagePlus } from 'lucide-react';
+import { ApiError } from '@/client/query/query-client';
 import { useSaveWorkflowTemplateMutation } from '@/client/query/workflow-templates';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -32,6 +33,45 @@ function defaultTemplateId(filename: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'workflow-template';
+}
+
+const TEMPLATE_SAVE_FIELD_LABELS: Record<string, string> = {
+  sourceFilename: '源工作流文件',
+  id: '模板 ID',
+  version: '版本',
+  name: '模板名称',
+  description: '描述',
+  category: '分类',
+  tags: '标签',
+  visibility: '可见性',
+};
+
+function formatTemplateSaveIssue(issue: unknown): string {
+  if (!issue || typeof issue !== 'object') return '';
+  const rawPath = (issue as { path?: unknown }).path;
+  const message = (issue as { message?: unknown }).message;
+  if (typeof message !== 'string' || !message.trim()) return '';
+  if (!Array.isArray(rawPath) || rawPath.length === 0) return message;
+  const [field, ...restPath] = rawPath.map((part) => String(part));
+  const label = TEMPLATE_SAVE_FIELD_LABELS[field] || field;
+  const suffix = restPath.length > 0 ? ` ${restPath.join('.')}` : '';
+  return `${label}${suffix}：${message}`;
+}
+
+function formatTemplateSaveError(error: unknown): string {
+  const payload = error instanceof ApiError
+    ? error.details
+    : error && typeof error === 'object' && 'details' in error
+      ? (error as { details?: unknown }).details
+      : undefined;
+  const issues = payload && typeof payload === 'object' && Array.isArray((payload as { details?: unknown }).details)
+    ? (payload as { details: unknown[] }).details
+    : [];
+  const issueMessages = issues.map(formatTemplateSaveIssue).filter(Boolean);
+  if (issueMessages.length > 0) {
+    return issueMessages.slice(0, 3).join('；');
+  }
+  return error instanceof Error ? error.message : '保存模板失败';
 }
 
 export default function SaveWorkflowTemplateDialog({
@@ -81,7 +121,7 @@ export default function SaveWorkflowTemplateDialog({
       onOpenChange(false);
       onSaved();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : '保存模板失败');
+      setError(formatTemplateSaveError(submitError));
     }
   };
 

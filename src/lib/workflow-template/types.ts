@@ -15,6 +15,18 @@ const templateVersionSchema = z.string()
   .max(64)
   .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, '模板版本必须使用语义化版本，例如 1.0.0');
 
+const workflowConfigFilenameSchema = z.string()
+  .min(1, '源工作流文件不能为空')
+  .max(240, '源工作流文件名过长')
+  .refine((value) => !/^(?:[A-Za-z]:[\\/]|[\\/])/.test(value.trim()), '源工作流文件必须是相对路径')
+  .transform((value) => value.trim().replace(/\\/g, '/').split('/').filter(Boolean).join('/'))
+  .refine((value) => /\.ya?ml$/i.test(value), '源工作流文件必须以 .yaml 或 .yml 结尾')
+  .refine((value) => !value.includes('\0'), '源工作流文件名包含非法字符')
+  .refine((value) => {
+    const segments = value.split('/');
+    return segments.length > 0 && segments.every((segment) => segment !== '.' && segment !== '..');
+  }, '源工作流文件名不能包含 . 或 .. 路径段');
+
 export const workflowTemplateIdentitySchema = z.object({
   source: workflowTemplateSourceSchema,
   id: templateIdSchema,
@@ -97,7 +109,7 @@ export const workflowTemplateManifestSchema = z.object({
 });
 
 export const saveWorkflowTemplateInputSchema = z.object({
-  sourceFilename: z.string().regex(/^[a-zA-Z0-9_-]+\.ya?ml$/),
+  sourceFilename: workflowConfigFilenameSchema,
   id: templateIdSchema,
   version: templateVersionSchema,
   name: z.string().min(1).max(100),
