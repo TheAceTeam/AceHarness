@@ -7110,9 +7110,10 @@ try {
           const stateOutputs = Object.entries(outputs)
             .filter(([key]) => key.startsWith(`${prevState}-`));
           for (const [stepKey, content] of stateOutputs) {
-            // Truncate to last 2000 chars to avoid prompt bloat
+            // 结论按"结果/裁决"前置的结构书写，超长时保留开头，
+            // 与 compactStepConclusion 的截断方向一致；完整内容见 outputs 目录。
             const truncated = content.length > 2000
-              ? '...(截断)\n' + content.slice(-2000)
+              ? content.slice(0, 2000) + '\n...(已截断，全文见 outputs 目录)'
               : content;
             conclusions.push(`## ${stepKey}\n${truncated}`);
           }
