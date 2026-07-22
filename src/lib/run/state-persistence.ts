@@ -7,6 +7,7 @@ import type { SpecCodingDocument, StepTaskBindingSnapshot, StepTaskBindingValida
 import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/summary-cache';
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
+import type { WorkflowTaskInput } from '@/lib/workflow/task-input';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 const streamPersistedLengths = new Map<string, number>();
@@ -487,6 +488,7 @@ export interface PersistedRunState {
   humanAnswersContext?: HumanAnswerContext[];
   globalContext?: string;
   phaseContexts?: Record<string, string>;
+  taskInput?: WorkflowTaskInput;
 
   // State machine specific fields
   mode?: 'state-machine' | 'phase-based';

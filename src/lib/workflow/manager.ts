@@ -83,6 +83,13 @@ import {
   ensureMemoryV2FreshStart,
   type MemoryV2CutoverStatus,
 } from '@/lib/memory-v2-cutover/feature-flag';
+import {
+  formatWorkflowTaskInputForPrompt,
+  getWorkflowTaskInputTitle,
+  hasWorkflowTaskInput,
+  normalizeWorkflowTaskInput,
+  type WorkflowTaskInput,
+} from '@/lib/workflow/task-input';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
 export function resolveAgentEngineSelection(roleConfig: any, workflowContext?: any): { engine: string; model: string } {
@@ -236,6 +243,7 @@ function promptContentKey(value: string | null | undefined): string {
 type AgentPromptMemo = {
   roadmapKey?: string;
   requirementsKey?: string;
+  taskInputKey?: string;
   globalContextKey?: string;
   phaseContextKeys: Record<string, string>;
   skillRulesShown?: boolean;
@@ -281,6 +289,8 @@ export class WorkflowManager extends EventEmitter {
   private globalContext: string = '';
   /** Per-phase context injected into steps of that phase */
   private phaseContexts: Map<string, string> = new Map();
+  /** Per-run task input injected into all steps without mutating the workflow template */
+  private taskInput: WorkflowTaskInput = {};
   /** Cached workspace skills discovered from projectRoot/<engine-config>/skills/ */
   private workspaceSkills: string = '';
   /** Cached workspace skill names for deduplication */
@@ -1274,6 +1284,7 @@ try {
         pendingCheckpoint: this.pendingCheckpoint || undefined,
         globalContext: this.globalContext || undefined,
         phaseContexts: this.phaseContexts.size > 0 ? Object.fromEntries(this.phaseContexts) : undefined,
+        taskInput: hasWorkflowTaskInput(this.taskInput) ? this.taskInput : undefined,
         workingDirectory: this.getWorkingDirectory() || undefined,
         workspaceGit: this.workflowGit || undefined,
         attachedAgentSessions,
@@ -1470,7 +1481,7 @@ try {
     configFile: string,
     requirementsOrChecks?: string | PersistedQualityCheck[],
     maybePreflightChecks?: PersistedQualityCheck[],
-    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string>; workingDirectory?: string },
+    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string>; taskInput?: WorkflowTaskInput; workingDirectory?: string },
     requestedRunId?: string,
   ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
@@ -1506,6 +1517,7 @@ try {
     this.workspaceSkills = '';
     this.workflowMcpServers = [];
     this.phaseContexts = new Map(Object.entries(initialContexts?.phaseContexts || {}));
+    this.taskInput = normalizeWorkflowTaskInput(initialContexts?.taskInput);
     this.isolatedDir = null;
     this.currentProjectRoot = null;
     this.workflowGit = null;
@@ -1541,6 +1553,8 @@ try {
         await createRun({
           id: runId, configFile, configName: configFile, startTime: this.runStartTime,
           endTime: null, status: 'preparing', currentPhase: null,
+          taskTitle: getWorkflowTaskInputTitle(this.taskInput) || undefined,
+          taskIssueUrl: this.taskInput.issueUrl,
           totalSteps, completedSteps: 0,
         });
       } catch { /* non-critical */ }
@@ -3121,6 +3135,15 @@ try {
       }
     }
 
+    const taskInputPrompt = formatWorkflowTaskInputForPrompt(this.taskInput);
+    if (taskInputPrompt) {
+      const taskInputKey = promptContentKey(taskInputPrompt);
+      if (memo.taskInputKey !== taskInputKey) {
+        prompt += taskInputPrompt;
+        memo.taskInputKey = taskInputKey;
+      }
+    }
+
     // Inject global context
     if (this.globalContext) {
       const globalContextKey = promptContentKey(this.globalContext);
@@ -3681,6 +3704,7 @@ try {
     this.globalContext = runState.globalContext || '';
     this.workflowMcpServers = [];
     this.phaseContexts = new Map(Object.entries(runState.phaseContexts || {}));
+    this.taskInput = normalizeWorkflowTaskInput(runState.taskInput);
     this.isolatedDir = runState.workingDirectory || null;
     this.currentProjectRoot = runState.workingDirectory || workflowConfig.context.projectRoot || null;
     if (runState.workingDirectory) {
@@ -4064,6 +4088,7 @@ try {
       qualityChecks: this.qualityChecks,
       workflow: this.currentWorkflow,
       iterationStates: Object.fromEntries(this.iterationStates),
+      taskInput: hasWorkflowTaskInput(this.taskInput) ? this.taskInput : undefined,
       workingDirectory: this.getWorkingDirectory(),
       workspaceGit: this.workflowGit || undefined,
       workflowFrontendSessionId: this._frontendSessionId || null,
