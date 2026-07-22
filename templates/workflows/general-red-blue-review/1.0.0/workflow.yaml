@@ -65,3 +65,17 @@ context:
   projectRoot: ""
   workspaceMode: in-place
   requirements: ""
+  taskInput:
+    fields:
+      - id: title
+        label: 评审对象
+        type: text
+        placeholder: "例如：某方案、某 PR、某交付物"
+      - id: description
+        label: 评审材料
+        type: textarea
+        placeholder: 粘贴方案、链接、背景、风险点或重点关注问题
+      - id: acceptanceCriteria
+        label: 评审目标
+        type: textarea
+        placeholder: 说明希望形成的结论、检查重点或输出格式

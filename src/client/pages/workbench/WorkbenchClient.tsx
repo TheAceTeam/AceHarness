@@ -118,9 +118,15 @@ import {
   type WorkflowPatchPayload,
 } from '@/lib/workflow/design-ai-optimization';
 import {
+  attachWorkflowTaskInputFieldLabels,
+  DEFAULT_WORKFLOW_TASK_INPUT_FIELDS,
+  getWorkflowTaskInputFieldValue,
   getWorkflowTaskInputTitle,
   hasWorkflowTaskInput,
   normalizeWorkflowTaskInput,
+  resolveWorkflowTaskInputFields,
+  setWorkflowTaskInputFieldValue,
+  type WorkflowTaskInputFieldDefinition,
   type WorkflowTaskInput,
 } from '@/lib/workflow/task-input';
 import {
@@ -674,6 +680,7 @@ type ContextWorkspaceDialogProps = {
   phaseDrafts: Record<string, string>;
   taskInputDraft?: WorkflowTaskInput;
   taskInputEditable?: boolean;
+  taskInputFields?: WorkflowTaskInputFieldDefinition[];
   workingDirectoryDraft?: string;
   workingDirectoryEditable?: boolean;
   footerText: string;
@@ -1200,6 +1207,9 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     props.startContextTargets.find((name) => (props.phaseDrafts[name] || '').trim()) || ''
   ));
   const previewCommands = props.preflightPreview?.commands || [];
+  const taskInputFields = props.taskInputFields?.length ? props.taskInputFields : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
+  const shortTaskInputFields = taskInputFields.filter((field) => field.type !== 'textarea');
+  const longTaskInputFields = taskInputFields.filter((field) => field.type === 'textarea');
 
   useEffect(() => {
     setLocalGlobalDraft(props.globalDraft);
@@ -1222,16 +1232,60 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     setLocalWorkingDirectory(props.workingDirectoryDraft || '');
   }, [props.workingDirectoryDraft]);
 
-  const updateTaskInput = (field: keyof WorkflowTaskInput, value: string) => {
-    setLocalTaskInput((current) => ({ ...current, [field]: value }));
+  const updateTaskInputField = (fieldId: string, value: string) => {
+    setLocalTaskInput((current) => setWorkflowTaskInputFieldValue(current, fieldId, value));
   };
+  const missingRequiredTaskFields = props.taskInputEditable
+    ? taskInputFields.filter((field) => field.required && !getWorkflowTaskInputFieldValue(localTaskInput, field.id).trim())
+    : [];
+  const taskInputInvalid = missingRequiredTaskFields.length > 0;
 
   const buildContexts = (): WorkflowStartContexts => ({
     globalContext: localGlobalDraft,
     phaseContexts: localPhaseDrafts,
-    taskInput: props.taskInputEditable ? normalizeWorkflowTaskInput(localTaskInput) : undefined,
+    taskInput: props.taskInputEditable
+      ? attachWorkflowTaskInputFieldLabels(localTaskInput, taskInputFields)
+      : undefined,
     workingDirectory: localWorkingDirectory.trim() || undefined,
   });
+
+  const renderTaskInputField = (field: WorkflowTaskInputFieldDefinition) => {
+    const value = getWorkflowTaskInputFieldValue(localTaskInput, field.id);
+    const label = (
+      <div className="flex min-h-5 items-center justify-between gap-2">
+        <Label className="min-w-0 truncate text-xs text-muted-foreground">{field.label}</Label>
+        <Badge variant="outline" className="shrink-0 text-[10px]">
+          {field.required ? '必填' : '选填'}
+        </Badge>
+      </div>
+    );
+    return (
+      <div key={`task-input-${field.id}`} className="space-y-1.5">
+        {label}
+        {field.type === 'textarea' ? (
+          <Textarea
+            value={value}
+            onChange={(event) => updateTaskInputField(field.id, event.target.value)}
+            placeholder={field.placeholder || `填写${field.label}`}
+            rows={field.id === 'description' ? 4 : 2}
+            className="min-h-[88px] resize-y text-sm leading-6"
+            disabled={props.actionBusy}
+          />
+        ) : (
+          <Input
+            type={field.type === 'url' ? 'url' : 'text'}
+            value={value}
+            onChange={(event) => updateTaskInputField(field.id, event.target.value)}
+            placeholder={field.placeholder || `填写${field.label}`}
+            disabled={props.actionBusy}
+          />
+        )}
+        {field.description ? (
+          <div className="text-xs leading-5 text-muted-foreground">{field.description}</div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div className="flex max-h-[88vh] w-[960px] max-w-full flex-col overflow-hidden rounded-lg border border-border bg-background shadow-sm">
@@ -1251,63 +1305,21 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
             <div>
               <Label className="text-sm font-medium">本次任务</Label>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                每次启动单独填写，写入当前 run。
+                每次启动单独填写，写入当前 run；默认均为选填。
               </p>
             </div>
             <div className="min-w-0 space-y-3">
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">任务标题</Label>
-                  <Input
-                    value={localTaskInput.title || ''}
-                    onChange={(event) => updateTaskInput('title', event.target.value)}
-                    placeholder="例如：修复 Issue #1234 的编译失败"
-                    disabled={props.actionBusy}
-                  />
+              {shortTaskInputFields.length ? (
+                <div className="grid gap-3 md:grid-cols-2">
+                  {shortTaskInputFields.map(renderTaskInputField)}
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Issue / 需求链接</Label>
-                  <Input
-                    value={localTaskInput.issueUrl || ''}
-                    onChange={(event) => updateTaskInput('issueUrl', event.target.value)}
-                    placeholder="粘贴本次 issue、需求或任务链接"
-                    disabled={props.actionBusy}
-                  />
+              ) : null}
+              {longTaskInputFields.map(renderTaskInputField)}
+              {taskInputInvalid ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive">
+                  请补齐必填项：{missingRequiredTaskFields.map((field) => field.label).join('、')}
                 </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">任务描述</Label>
-                <Textarea
-                  value={localTaskInput.description || ''}
-                  onChange={(event) => updateTaskInput('description', event.target.value)}
-                  placeholder="粘贴本次 issue 内容、复现步骤、期望行为或关键约束"
-                  rows={4}
-                  className="min-h-[104px] resize-y text-sm leading-6"
-                  disabled={props.actionBusy}
-                />
-              </div>
-              <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">目标分支</Label>
-                  <Input
-                    value={localTaskInput.targetBranch || ''}
-                    onChange={(event) => updateTaskInput('targetBranch', event.target.value)}
-                    placeholder="例如：dev"
-                    disabled={props.actionBusy}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">验收标准</Label>
-                  <Textarea
-                    value={localTaskInput.acceptanceCriteria || ''}
-                    onChange={(event) => updateTaskInput('acceptanceCriteria', event.target.value)}
-                    placeholder="例如：测试通过、PR 已创建、修复说明清楚"
-                    rows={2}
-                    className="min-h-[72px] resize-y text-sm leading-6"
-                    disabled={props.actionBusy}
-                  />
-                </div>
-              </div>
+              ) : null}
             </div>
           </section>
         ) : null}
@@ -1450,14 +1462,14 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               <Button
                 variant="secondary"
                 onClick={() => props.onSkipPreflight?.(buildContexts())}
-                disabled={props.actionBusy}
+                disabled={props.actionBusy || taskInputInvalid}
               >
                 跳过检查启动
               </Button>
             ) : null}
             <Button
               onClick={() => props.onConfirm(buildContexts())}
-              disabled={props.actionDisabled}
+              disabled={props.actionDisabled || taskInputInvalid}
             >
               {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
             </Button>
@@ -2421,6 +2433,10 @@ export default function WorkbenchPage({
       || editingConfig?.context?.specCoding
       || runtimeSpecAvailable
       || specArtifactSnapshots.length > 0
+  );
+  const workflowTaskInputFields = useMemo(
+    () => resolveWorkflowTaskInputFields((workflowConfig?.context as any)?.taskInput),
+    [workflowConfig?.context]
   );
   useEffect(() => {
     if (designTab !== 'spec' || specDesignEnabled) return;
@@ -15292,6 +15308,7 @@ export default function WorkbenchPage({
               phaseDrafts={startPhaseContextDrafts}
               taskInputDraft={startTaskInputDraft}
               taskInputEditable
+              taskInputFields={workflowTaskInputFields}
               workingDirectoryDraft={startWorkingDirectoryDraft}
               workingDirectoryEditable
               footerText={pendingStartRequest.preflightPreview?.commands?.length

@@ -75,3 +75,25 @@ context:
   projectRoot: ""
   workspaceMode: in-place
   requirements: ""
+  taskInput:
+    fields:
+      - id: title
+        label: 问题标题
+        type: text
+        placeholder: "例如：Issue #1234 编译失败"
+      - id: issueUrl
+        label: 问题单 / 需求链接
+        type: url
+        placeholder: 粘贴本次问题单、需求或任务链接
+      - id: description
+        label: 问题描述
+        type: textarea
+        placeholder: 粘贴问题现象、复现步骤、期望行为和关键约束
+      - id: targetBranch
+        label: 目标分支
+        type: text
+        placeholder: "例如：dev"
+      - id: acceptanceCriteria
+        label: 修复验收标准
+        type: textarea
+        placeholder: "例如：原问题关闭、回归通过、修复说明清楚"

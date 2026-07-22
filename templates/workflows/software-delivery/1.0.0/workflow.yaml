@@ -33,3 +33,17 @@ context:
   projectRoot: ""
   workspaceMode: in-place
   requirements: ""
+  taskInput:
+    fields:
+      - id: title
+        label: 交付任务
+        type: text
+        placeholder: 例如：完成权限配置能力交付
+      - id: description
+        label: 需求与输入
+        type: textarea
+        placeholder: 说明本次交付目标、业务背景、范围和约束
+      - id: acceptanceCriteria
+        label: 交付期望
+        type: textarea
+        placeholder: 说明期望产物、验收方式和交付边界

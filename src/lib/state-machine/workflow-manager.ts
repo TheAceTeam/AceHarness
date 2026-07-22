@@ -138,6 +138,7 @@ import {
   getWorkflowTaskInputTitle,
   hasWorkflowTaskInput,
   normalizeWorkflowTaskInput,
+  resolveWorkflowTaskInputFields,
   type WorkflowTaskInput,
 } from '@/lib/workflow/task-input';
 
@@ -6816,7 +6817,10 @@ try {
       parts.push(`\n# 需求说明\n${requirements}`);
     }
 
-    const taskInputPrompt = formatWorkflowTaskInputForPrompt(this.taskInput).trimEnd();
+    const taskInputPrompt = formatWorkflowTaskInputForPrompt(
+      this.taskInput,
+      resolveWorkflowTaskInputFields((config.context as any)?.taskInput),
+    ).trimEnd();
     if (taskInputPrompt) {
       const taskInputKey = promptContentKey(taskInputPrompt);
       if (memo.taskInputKey !== taskInputKey) {

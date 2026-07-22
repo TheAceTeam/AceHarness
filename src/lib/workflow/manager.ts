@@ -70,6 +70,7 @@ import {
   getWorkflowTaskInputTitle,
   hasWorkflowTaskInput,
   normalizeWorkflowTaskInput,
+  resolveWorkflowTaskInputFields,
   type WorkflowTaskInput,
 } from '@/lib/workflow/task-input';
 
@@ -2851,7 +2852,10 @@ try {
       }
     }
 
-    const taskInputPrompt = formatWorkflowTaskInputForPrompt(this.taskInput);
+    const taskInputPrompt = formatWorkflowTaskInputForPrompt(
+      this.taskInput,
+      resolveWorkflowTaskInputFields((workflowConfig.context as any)?.taskInput),
+    );
     if (taskInputPrompt) {
       const taskInputKey = promptContentKey(taskInputPrompt);
       if (memo.taskInputKey !== taskInputKey) {
