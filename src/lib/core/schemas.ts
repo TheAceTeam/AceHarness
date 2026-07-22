@@ -350,11 +350,25 @@ export const capabilitySkillsSchema = z.object({
   sqlite: sqliteCapabilitySkillSchema.optional(),
 }).optional();
 
+export const workflowTaskInputFieldSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  type: z.enum(['text', 'textarea', 'url']).default('text').optional(),
+  required: z.boolean().default(false).optional(),
+  placeholder: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export const workflowTaskInputConfigSchema = z.object({
+  fields: z.array(workflowTaskInputFieldSchema).default([]).optional(),
+}).optional();
+
 // 上下文配置 Schema
 export const contextConfigSchema = z.object({
   projectRoot: z.string().optional(),
   workspaceMode: z.enum(['isolated-copy', 'in-place']).optional(),
   requirements: z.string().optional(),
+  taskInput: workflowTaskInputConfigSchema,
   codebase: z.string().optional(),
   timeoutMinutes: z.number().min(1).optional(),
   segmentDelayMs: z.number().int().min(0).max(30000).optional(),
@@ -401,6 +415,8 @@ export type WorkflowAgentExecutionOverride = z.infer<typeof workflowAgentExecuti
 export type WorkflowExecutionPolicy = z.infer<typeof workflowExecutionPolicySchema>;
 export type CapabilitySkillsConfig = z.infer<typeof capabilitySkillsSchema>;
 export type SqliteCapabilityDatabase = z.infer<typeof sqliteCapabilityDatabaseSchema>;
+export type WorkflowTaskInputFieldConfig = z.infer<typeof workflowTaskInputFieldSchema>;
+export type WorkflowTaskInputConfig = z.infer<typeof workflowTaskInputConfigSchema>;
 export type ContextConfig = z.infer<typeof contextConfigSchema>;
 export type WorkflowConfig = z.infer<typeof workflowConfigSchema>;
 
