@@ -118,6 +118,12 @@ import {
   type WorkflowPatchPayload,
 } from '@/lib/workflow/design-ai-optimization';
 import {
+  getWorkflowTaskInputTitle,
+  hasWorkflowTaskInput,
+  normalizeWorkflowTaskInput,
+  type WorkflowTaskInput,
+} from '@/lib/workflow/task-input';
+import {
   buildWorkflowDesignConfigForSave,
   hasWorkflowDesignDraftChanges,
   type WorkflowDesignDraftState,
@@ -656,6 +662,7 @@ type WorkflowStartRequest = {
 type WorkflowStartContexts = {
   globalContext: string;
   phaseContexts: Record<string, string>;
+  taskInput?: WorkflowTaskInput;
   workingDirectory?: string;
 };
 
@@ -665,6 +672,8 @@ type ContextWorkspaceDialogProps = {
   modeLabel: string;
   globalDraft: string;
   phaseDrafts: Record<string, string>;
+  taskInputDraft?: WorkflowTaskInput;
+  taskInputEditable?: boolean;
   workingDirectoryDraft?: string;
   workingDirectoryEditable?: boolean;
   footerText: string;
@@ -1185,6 +1194,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const startupFlowEnabled = (props.preflightPreview?.commands?.length || 0) > 0;
   const [localGlobalDraft, setLocalGlobalDraft] = useState(props.globalDraft);
   const [localPhaseDrafts, setLocalPhaseDrafts] = useState<Record<string, string>>(props.phaseDrafts);
+  const [localTaskInput, setLocalTaskInput] = useState<WorkflowTaskInput>(() => normalizeWorkflowTaskInput(props.taskInputDraft));
   const [localWorkingDirectory, setLocalWorkingDirectory] = useState(props.workingDirectoryDraft || '');
   const [expandedTarget, setExpandedTarget] = useState(() => (
     props.startContextTargets.find((name) => (props.phaseDrafts[name] || '').trim()) || ''
@@ -1205,11 +1215,26 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   }, [props.phaseDrafts, props.startContextTargets]);
 
   useEffect(() => {
+    setLocalTaskInput(normalizeWorkflowTaskInput(props.taskInputDraft));
+  }, [props.taskInputDraft]);
+
+  useEffect(() => {
     setLocalWorkingDirectory(props.workingDirectoryDraft || '');
   }, [props.workingDirectoryDraft]);
 
+  const updateTaskInput = (field: keyof WorkflowTaskInput, value: string) => {
+    setLocalTaskInput((current) => ({ ...current, [field]: value }));
+  };
+
+  const buildContexts = (): WorkflowStartContexts => ({
+    globalContext: localGlobalDraft,
+    phaseContexts: localPhaseDrafts,
+    taskInput: props.taskInputEditable ? normalizeWorkflowTaskInput(localTaskInput) : undefined,
+    workingDirectory: localWorkingDirectory.trim() || undefined,
+  });
+
   return (
-    <div className="flex max-h-[88vh] w-[840px] max-w-full flex-col overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+    <div className="flex max-h-[88vh] w-[960px] max-w-full flex-col overflow-hidden rounded-lg border border-border bg-background shadow-sm">
       <div className="shrink-0 border-b border-border px-5 py-4 sm:px-6">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -1221,6 +1246,72 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 sm:px-6">
+        {props.taskInputEditable ? (
+          <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
+            <div>
+              <Label className="text-sm font-medium">本次任务</Label>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                每次启动单独填写，写入当前 run。
+              </p>
+            </div>
+            <div className="min-w-0 space-y-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">任务标题</Label>
+                  <Input
+                    value={localTaskInput.title || ''}
+                    onChange={(event) => updateTaskInput('title', event.target.value)}
+                    placeholder="例如：修复 Issue #1234 的编译失败"
+                    disabled={props.actionBusy}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Issue / 需求链接</Label>
+                  <Input
+                    value={localTaskInput.issueUrl || ''}
+                    onChange={(event) => updateTaskInput('issueUrl', event.target.value)}
+                    placeholder="粘贴本次 issue、需求或任务链接"
+                    disabled={props.actionBusy}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">任务描述</Label>
+                <Textarea
+                  value={localTaskInput.description || ''}
+                  onChange={(event) => updateTaskInput('description', event.target.value)}
+                  placeholder="粘贴本次 issue 内容、复现步骤、期望行为或关键约束"
+                  rows={4}
+                  className="min-h-[104px] resize-y text-sm leading-6"
+                  disabled={props.actionBusy}
+                />
+              </div>
+              <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">目标分支</Label>
+                  <Input
+                    value={localTaskInput.targetBranch || ''}
+                    onChange={(event) => updateTaskInput('targetBranch', event.target.value)}
+                    placeholder="例如：dev"
+                    disabled={props.actionBusy}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">验收标准</Label>
+                  <Textarea
+                    value={localTaskInput.acceptanceCriteria || ''}
+                    onChange={(event) => updateTaskInput('acceptanceCriteria', event.target.value)}
+                    placeholder="例如：测试通过、PR 已创建、修复说明清楚"
+                    rows={2}
+                    className="min-h-[72px] resize-y text-sm leading-6"
+                    disabled={props.actionBusy}
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
         <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
           <div>
             <Label className="text-sm font-medium">{props.workingDirectoryEditable ? '本次运行工作目录' : '当前运行工作目录'}</Label>
@@ -1358,22 +1449,14 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
             {startupFlowEnabled && props.onSkipPreflight ? (
               <Button
                 variant="secondary"
-                onClick={() => props.onSkipPreflight?.({
-                  globalContext: localGlobalDraft,
-                  phaseContexts: localPhaseDrafts,
-                  workingDirectory: localWorkingDirectory.trim() || undefined,
-                })}
+                onClick={() => props.onSkipPreflight?.(buildContexts())}
                 disabled={props.actionBusy}
               >
                 跳过检查启动
               </Button>
             ) : null}
             <Button
-              onClick={() => props.onConfirm({
-                globalContext: localGlobalDraft,
-                phaseContexts: localPhaseDrafts,
-                workingDirectory: localWorkingDirectory.trim() || undefined,
-              })}
+              onClick={() => props.onConfirm(buildContexts())}
               disabled={props.actionDisabled}
             >
               {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
@@ -2203,6 +2286,7 @@ export default function WorkbenchPage({
   const autoStartHandledRef = useRef(false);
   const [startGlobalContextDraft, setStartGlobalContextDraft] = useState('');
   const [startPhaseContextDrafts, setStartPhaseContextDrafts] = useState<Record<string, string>>({});
+  const [startTaskInputDraft, setStartTaskInputDraft] = useState<WorkflowTaskInput>({});
   const [startWorkingDirectoryDraft, setStartWorkingDirectoryDraft] = useState('');
   const [startupCancelRequested, setStartupCancelRequested] = useState(false);
   const startupCancelRequestedRef = useRef(false);
@@ -4574,6 +4658,17 @@ export default function WorkbenchPage({
     ? (detailRunStatus || selectedRunStatus || runtimeWorkflowStatus)
     : selectedRunStatus;
   const actionIsRunning = actionWorkflowStatus === 'running' || actionWorkflowStatus === 'preparing' || (!actionWorkflowStatus && isRunning);
+  const runtimeTaskInput = useMemo(() => {
+    const fromStatus = normalizeWorkflowTaskInput((statusCompactQuery.data as any)?.taskInput);
+    if (hasWorkflowTaskInput(fromStatus)) return fromStatus;
+    const fromDetail = normalizeWorkflowTaskInput(runDetail?.taskInput);
+    if (hasWorkflowTaskInput(fromDetail)) return fromDetail;
+    return normalizeWorkflowTaskInput({
+      title: selectedRun?.taskTitle,
+      issueUrl: selectedRun?.taskIssueUrl,
+    });
+  }, [runDetail?.taskInput, selectedRun?.taskIssueUrl, selectedRun?.taskTitle, statusCompactQuery.data]);
+  const runtimeTaskTitle = getWorkflowTaskInputTitle(runtimeTaskInput);
   const canStartWorkflow = isRunMode && Boolean(workflowConfig) && !starting && !startRequesting && !isRunning;
   const canStopWorkflow = isRunMode && !stopping && actionIsRunning;
   const canResumeWorkflow = isRunMode
@@ -5528,6 +5623,7 @@ export default function WorkbenchPage({
     if (!status) return;
     const resolvedRunId = resolveRuntimeRunId(status, requestedRunId) || requestedRunId;
     if (!resolvedRunId) return;
+    const taskInput = normalizeWorkflowTaskInput(status.taskInput);
     const patch = {
       id: resolvedRunId,
       runId: resolvedRunId,
@@ -5544,6 +5640,9 @@ export default function WorkbenchPage({
       activeConcurrencyGroups: Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : undefined,
       completedSteps: Array.isArray(status.completedSteps) ? status.completedSteps.length : undefined,
       transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : undefined,
+      taskInput: hasWorkflowTaskInput(taskInput) ? taskInput : undefined,
+      taskTitle: getWorkflowTaskInputTitle(taskInput) || undefined,
+      taskIssueUrl: taskInput.issueUrl,
     };
     setHistoryRuns((prev) => prev.map((item) => item.id === resolvedRunId ? { ...item, ...patch } : item));
     setSelectedRun((prev: any) => prev?.id === resolvedRunId ? { ...prev, ...patch } : prev);
@@ -7278,6 +7377,7 @@ export default function WorkbenchPage({
     });
     setStartGlobalContextDraft(globalContext || '');
     setStartPhaseContextDrafts(nextPhaseDrafts);
+    setStartTaskInputDraft({});
     setStartWorkingDirectoryDraft(fallbackWorkingDirectory);
     setShowStartWorkflowDialog(true);
     try {
@@ -7378,6 +7478,7 @@ export default function WorkbenchPage({
           .filter(([, value]) => value.trim().length > 0)
       );
       const normalizedGlobalContext = initialContexts?.globalContext || '';
+      const normalizedTaskInput = normalizeWorkflowTaskInput(initialContexts?.taskInput);
       dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: normalizedGlobalContext });
       dispatch({ type: 'SET_PHASE_CONTEXTS', payload: normalizedPhaseContexts });
       if (normalizedWorkingDirectory) {
@@ -7483,6 +7584,7 @@ export default function WorkbenchPage({
         initialContexts: {
           globalContext: normalizedGlobalContext,
           phaseContexts: normalizedPhaseContexts,
+          taskInput: normalizedTaskInput,
           workingDirectory: normalizedWorkingDirectory || undefined,
         },
       });
@@ -7560,6 +7662,7 @@ export default function WorkbenchPage({
     setPendingStartRequest(null);
     setStartGlobalContextDraft(contexts.globalContext);
     setStartPhaseContextDrafts(contexts.phaseContexts);
+    setStartTaskInputDraft(normalizeWorkflowTaskInput(contexts.taskInput));
     setStartWorkingDirectoryDraft(contexts.workingDirectory || '');
     void startWorkflow(request.mode, {
       skipPreflight: request.skipPreflight || preflightMode === 'skip',
@@ -12507,6 +12610,9 @@ export default function WorkbenchPage({
                         <StatusPill tone={getWorkflowStatusTone(item.status)}>{formatWorkflowStatusLabel(item.status)}</StatusPill>
                       </div>
                       <div className="mt-2 truncate text-sm font-semibold text-foreground">{workflowConfig?.workflow?.name || configFile}</div>
+                      {item.taskTitle ? (
+                        <div className="mt-1 line-clamp-2 text-xs leading-5 text-foreground">{item.taskTitle}</div>
+                      ) : null}
                       <div className="mt-1 truncate text-xs text-muted-foreground">
                         {item.currentPhase || item.currentState || '运行摘要'} · {item.startTime ? new Date(item.startTime).toLocaleString('zh-CN') : '当前会话'}
                       </div>
@@ -12737,6 +12843,37 @@ export default function WorkbenchPage({
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           汇总当前运行状态、当前位置和关键执行数据。状态图和工作区通过左侧运行记录子菜单进入。
         </p>
+        {hasWorkflowTaskInput(runtimeTaskInput) ? (
+          <div className="mt-5 space-y-3 rounded-md border border-border bg-muted/20 px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-muted-foreground">本次任务</div>
+                <div className="mt-1 break-words text-sm font-semibold text-foreground">
+                  {runtimeTaskTitle || '未命名任务'}
+                </div>
+              </div>
+              {runtimeTaskInput.issueUrl ? (
+                <a
+                  href={runtimeTaskInput.issueUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="shrink-0 text-xs font-medium text-primary hover:underline"
+                >
+                  打开链接
+                </a>
+              ) : null}
+            </div>
+            {runtimeTaskInput.description ? (
+              <p className="line-clamp-3 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+                {runtimeTaskInput.description}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {runtimeTaskInput.targetBranch ? <Badge variant="outline">目标分支：{runtimeTaskInput.targetBranch}</Badge> : null}
+              {runtimeTaskInput.acceptanceCriteria ? <Badge variant="outline">已填写验收标准</Badge> : null}
+            </div>
+          </div>
+        ) : null}
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
           <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>状态</span><strong>{formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}</strong></div>
           <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
@@ -15153,6 +15290,8 @@ export default function WorkbenchPage({
               }
               globalDraft={startGlobalContextDraft}
               phaseDrafts={startPhaseContextDrafts}
+              taskInputDraft={startTaskInputDraft}
+              taskInputEditable
               workingDirectoryDraft={startWorkingDirectoryDraft}
               workingDirectoryEditable
               footerText={pendingStartRequest.preflightPreview?.commands?.length

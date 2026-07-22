@@ -133,6 +133,13 @@ import {
   normalizeWorkflowConfigRef,
   readWorkflowConfigSnapshot,
 } from '@/lib/workflow/subworkflow-config';
+import {
+  formatWorkflowTaskInputForPrompt,
+  getWorkflowTaskInputTitle,
+  hasWorkflowTaskInput,
+  normalizeWorkflowTaskInput,
+  type WorkflowTaskInput,
+} from '@/lib/workflow/task-input';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -299,6 +306,7 @@ function promptContentKey(value: string | null | undefined): string {
 
 type AgentPromptMemo = {
   roadmapKey?: string;
+  taskInputKey?: string;
   globalContextKey?: string;
   stateHistoryKey?: string;
   stateContextKeys: Record<string, string>;
@@ -697,6 +705,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   } | null = null;
   private globalContext: string = '';
   private stateContexts: Map<string, string> = new Map();
+  private taskInput: WorkflowTaskInput = {};
   private workspaceSkillsCache: string = '';
   private workspaceSkillsCacheProjectRoot: string = '';
   private workspaceSkillNames: Set<string> = new Set();
@@ -1307,6 +1316,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       waitStartedAt: this.waitStartedAt,
       globalContext: this.globalContext,
       phaseContexts: Object.fromEntries(this.stateContexts),
+      taskInput: hasWorkflowTaskInput(this.taskInput) ? this.taskInput : undefined,
       supervisorFlow: this.supervisorFlow,
       agentFlow: this.agentFlow,
       stepLogs: this.stepLogs,
@@ -1490,7 +1500,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     configFile: string,
     requirementsOrChecks?: string | PersistedQualityCheck[],
     maybePreflightChecks?: PersistedQualityCheck[],
-    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string>; workingDirectory?: string },
+    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string>; taskInput?: WorkflowTaskInput; workingDirectory?: string },
     requestedRunId?: string,
   ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
@@ -1572,6 +1582,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.liveFeedback = [];
       this.globalContext = initialContexts?.globalContext || '';
       this.stateContexts = new Map(Object.entries(initialContexts?.phaseContexts || {}));
+      this.taskInput = normalizeWorkflowTaskInput(initialContexts?.taskInput);
 
       this.parentRunId = typeof (this as any)._parentRunId === 'string' ? (this as any)._parentRunId : null;
       this.parentConfigFile = typeof (this as any)._parentConfigFile === 'string' ? (this as any)._parentConfigFile : null;
@@ -1714,6 +1725,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         endTime: null,
         status: 'preparing',
         currentPhase: null,
+        taskTitle: getWorkflowTaskInputTitle(this.taskInput) || undefined,
+        taskIssueUrl: this.taskInput.issueUrl,
         totalSteps,
         completedSteps: 0,
       });
@@ -2985,6 +2998,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         requirements: this.currentRequirements,
         globalContext: this.globalContext,
         phaseContexts: Object.fromEntries(this.stateContexts),
+        taskInput: hasWorkflowTaskInput(this.taskInput) ? this.taskInput : undefined,
         supervisorFlow: this.supervisorFlow,
         agentFlow: this.agentFlow as any,
         // 只在真正等待人工审批时才写入 pendingCheckpoint；已完成/失败/停止时清除
@@ -5585,7 +5599,7 @@ try {
     state: StateMachineState,
     childConfigFile: string,
     extraContext?: string,
-  ): { globalContext?: string; phaseContexts?: Record<string, string> } {
+  ): { globalContext?: string; phaseContexts?: Record<string, string>; taskInput?: WorkflowTaskInput } {
     const inputs = this.getSubworkflowInputs(step);
     const parentBlocks: string[] = [];
     if ((inputs.globalContext || inputs.context || 'inherit') !== 'none' && this.globalContext.trim()) {
@@ -5613,6 +5627,7 @@ try {
     return {
       globalContext: parentBlocks.filter(Boolean).join('\n\n'),
       phaseContexts,
+      taskInput: hasWorkflowTaskInput(this.taskInput) ? this.taskInput : undefined,
     };
   }
 
@@ -6799,6 +6814,15 @@ try {
 
     if (requirements) {
       parts.push(`\n# 需求说明\n${requirements}`);
+    }
+
+    const taskInputPrompt = formatWorkflowTaskInputForPrompt(this.taskInput).trimEnd();
+    if (taskInputPrompt) {
+      const taskInputKey = promptContentKey(taskInputPrompt);
+      if (memo.taskInputKey !== taskInputKey) {
+        parts.push(`\n${taskInputPrompt}`);
+        memo.taskInputKey = taskInputKey;
+      }
     }
 
     if (this.currentRunSpecCoding) {
@@ -8343,6 +8367,7 @@ try {
     this.waitStartedAt = null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
+    this.taskInput = normalizeWorkflowTaskInput(runState.taskInput);
     this.isolatedDir = runState.workingDirectory || null;
     this.currentProjectRoot = runState.workingDirectory || null;
     this.workflowGit = runState.workspaceGit || null;
