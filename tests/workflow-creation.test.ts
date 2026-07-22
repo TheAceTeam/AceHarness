@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildDashboardSystemPrompt } from '../src/lib/chat/system-prompt';
+import {
+  buildDashboardConversationSystemPrompt,
+  buildDashboardSystemPrompt,
+} from '../src/lib/chat/system-prompt';
 import {
   SPEC_TASK_KIND,
   WORKFLOW_STATE_OUTLINE_KIND,
@@ -30,6 +33,20 @@ describe('Workflow creation pipeline', () => {
     expect(systemPrompt.match(/当前工作目录:/g)).toHaveLength(1);
     expect(systemPrompt.match(/AI 运行目录/g)).toHaveLength(1);
     expect(systemPrompt.match(/Skills 运行目录/g)).toHaveLength(1);
+  });
+
+  it('builds a regular engineering prompt without creation-assistant handoff rules', async () => {
+    const systemPrompt = await buildDashboardConversationSystemPrompt([], {
+      personalDir: '/personal/work',
+      workingDirectory: '/current/work',
+    });
+
+    expect(systemPrompt).toContain('ACEHarness 工程对话助手');
+    expect(systemPrompt).toContain('未启用 workflow / Agent 创建助手模式');
+    expect(systemPrompt).toContain('不要使用 `aceharness-workflow-creator` Skill');
+    expect(systemPrompt).not.toContain('你是 ACEHarness 工作流助手');
+    expect(systemPrompt).not.toContain('必须通过输出 `home_sidebar`');
+    expect(systemPrompt).toContain('当前工作目录: /current/work');
   });
 
   it('extracts and applies the current workflow item protocol', () => {

@@ -16,6 +16,7 @@ vi.mock('@/lib/chat/settings', () => ({
 
 vi.mock('@/lib/chat/system-prompt', () => ({
   buildDashboardSystemPrompt: vi.fn().mockResolvedValue('dashboard prompt'),
+  buildDashboardConversationSystemPrompt: vi.fn().mockResolvedValue('conversation prompt'),
 }));
 
 vi.mock('@/lib/core/app-paths', () => ({
@@ -24,6 +25,7 @@ vi.mock('@/lib/core/app-paths', () => ({
   getWorkspaceRoot: vi.fn().mockReturnValue('/workspace'),
   getInstallPath: vi.fn().mockReturnValue('/install'),
   getWorkspaceCacheFile: vi.fn().mockReturnValue('/workspace-cache'),
+  getWorkspaceAgentConfigDir: vi.fn().mockReturnValue('.engine'),
   getWorkspaceSkillPath: vi.fn().mockReturnValue('/workspace/skills/demo'),
   getWorkspaceSkillsDir: vi.fn().mockReturnValue('/workspace/skills'),
 }));
@@ -96,6 +98,45 @@ describe('chat-request-options', () => {
     expect(result.systemPrompt).toContain('当前启用的 Skills: aceharness-chat-card');
     expect(result.systemPrompt).toContain('API 查询结果');
     expect(result.systemPrompt).toContain('"kind":"card"');
+  });
+
+  test('conversation mode excludes workflow creator and builds the engineering chat prompt', async () => {
+    const { buildChatRequestContext } = await import('@/lib/chat/request-options');
+    const {
+      buildDashboardConversationSystemPrompt,
+      buildDashboardSystemPrompt,
+    } = await import('@/lib/chat/system-prompt');
+
+    const result = await buildChatRequestContext({
+      mode: 'dashboard',
+      creationAssistantEnabled: false,
+      requestedSkills: ['aceharness-chat-card', 'aceharness-workflow-creator'],
+    });
+
+    expect(buildDashboardSystemPrompt).not.toHaveBeenCalled();
+    expect(buildDashboardConversationSystemPrompt).toHaveBeenCalledWith(
+      ['aceharness-chat-card'],
+      { personalDir: undefined, workingDirectory: '/persisted/workdir' },
+    );
+    expect(result.creationAssistantEnabled).toBe(false);
+    expect(result.enabledSkills).toEqual(['aceharness-chat-card']);
+    expect(result.runtimeSkillNames).toEqual(['aceharness-chat-card']);
+    expect(result.systemPrompt).toContain('conversation prompt');
+  });
+
+  test('resume conversation mode appends an explicit non-creation reminder', async () => {
+    const { buildChatRequestContext } = await import('@/lib/chat/request-options');
+
+    const result = await buildChatRequestContext({
+      mode: 'dashboard',
+      sessionId: 'session-1',
+      creationAssistantEnabled: false,
+      requestedSkills: ['aceharness-workflow-creator'],
+    });
+
+    expect(result.runtimeSkillNames).toEqual([]);
+    expect(result.systemPrompt).toContain('普通工程对话模式');
+    expect(result.systemPrompt).toContain('不要使用 aceharness-workflow-creator');
   });
 
   test('links only selected runtime skills and keeps aceharness skills eligible', async () => {

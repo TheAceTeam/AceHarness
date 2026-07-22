@@ -54,6 +54,7 @@ import { getAgoraTopicExtensionActions } from '@/lib/agora/extensions';
 import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
 import {
   isWorkflowSidebarHint,
+  resolveCreationAssistantEnabled,
   type CollaborationChatroomParticipant,
 } from '@/lib/core/home-sidebar-state';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
@@ -3379,15 +3380,17 @@ function SessionItem({
     || session.sessionWorkbenchState?.collaborationRoom?.topic
     || '';
   const isWorkflowAgoraTopic = Boolean(session.workflowBinding && session.sessionWorkbenchState?.collaborationRoom?.chatroom);
+  const creationAssistantEnabled = resolveCreationAssistantEnabled(session);
+  const modeBadge = creationAssistantEnabled
+    ? { label: '创建', tone: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' }
+    : { label: '对话', tone: 'bg-muted text-muted-foreground' };
   const statusBadge = deleteDisabled
     ? { label: '运行中', tone: 'bg-primary/10 text-primary' }
     : isWorkflowAgoraTopic
     ? { label: '协作议题', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
     : session.workflowBinding
       ? { label: '运行', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
-    : session.creationSession
-      ? { label: '创建', tone: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' }
-      : session.sessionWorkbenchState?.collaborationRoom
+    : session.sessionWorkbenchState?.collaborationRoom
         ? { label: '议场', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
       : session.agentBinding
         ? { label: 'Agent', tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' }
@@ -3497,6 +3500,9 @@ function SessionItem({
               加载中
             </span>
           ) : null}
+          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${modeBadge.tone}`}>
+            {modeBadge.label}
+          </span>
           {statusBadge ? (
             <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${statusBadge.tone}`}>
               {statusBadge.label}

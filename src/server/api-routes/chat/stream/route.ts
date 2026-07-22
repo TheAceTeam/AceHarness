@@ -33,6 +33,7 @@ import {
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
+import { isCreationAssistantSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
 import { writeAcpxDebugTrace, type AcpxDebugTraceStage } from '@/lib/runtime-agent/acpx-debug-trace';
 
@@ -146,6 +147,7 @@ function buildInitialLiveSessionSnapshot(input: {
   userMessageId?: string;
   assistantMessageId?: string;
   skipUserMessage?: boolean;
+  creationAssistantEnabled?: boolean;
 }): PersistedChatSession {
   const now = Date.now();
   const visibleUserMessage = String(input.displayMessage || input.message || '').trim();
@@ -182,7 +184,12 @@ function buildInitialLiveSessionSnapshot(input: {
     workflowBinding: existing?.workflowBinding,
     creationSession: existing?.creationSession,
     agentBinding: existing?.agentBinding,
-    sessionWorkbenchState: existing?.sessionWorkbenchState,
+    sessionWorkbenchState: typeof input.creationAssistantEnabled === 'boolean'
+      ? {
+          ...(existing?.sessionWorkbenchState || {}),
+          creationAssistantEnabled: input.creationAssistantEnabled,
+        }
+      : existing?.sessionWorkbenchState,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     messages: nextMessages,
@@ -241,6 +248,7 @@ export async function POST(request: Request) {
       extraSystemPrompt,
       skills,
       mcpServers,
+      creationAssistantEnabled: requestedCreationAssistantEnabled,
     } = body;
     if (!message?.trim()) {
       return jsonError('消息不能为空', 400);
@@ -251,7 +259,13 @@ export async function POST(request: Request) {
     const useModel = model || '';
 
     const isResume = !!sessionId;
-    const { systemPrompt, runtimeSkillNames, enabledMcpServers, runtimeDatabaseEnv } = await buildChatRequestContext({
+    const {
+      systemPrompt,
+      runtimeSkillNames,
+      enabledMcpServers,
+      runtimeDatabaseEnv,
+      creationAssistantEnabled,
+    } = await buildChatRequestContext({
       mode,
       sessionId,
       frontendSessionId,
@@ -259,6 +273,9 @@ export async function POST(request: Request) {
       extraSystemPrompt,
       requestedSkills: skills as RequestedSkillsInput,
       requestedMcpServers: mcpServers as RequestedMcpServersInput,
+      creationAssistantEnabled: typeof requestedCreationAssistantEnabled === 'boolean'
+        ? requestedCreationAssistantEnabled
+        : undefined,
       personalDir: auth.personalDir,
     });
 
@@ -293,6 +310,7 @@ export async function POST(request: Request) {
           userMessageId: typeof userMessageId === 'string' ? userMessageId : undefined,
           assistantMessageId: typeof assistantMessageId === 'string' ? assistantMessageId : undefined,
           skipUserMessage: Boolean(skipUserMessage),
+          creationAssistantEnabled,
         })
       : null;
     const liveAssistantMessageId = typeof assistantMessageId === 'string' && assistantMessageId.trim()
@@ -588,7 +606,11 @@ export async function POST(request: Request) {
             }
 
             const parsed = parseActions(fullRawContent);
-            const latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+            const candidateSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+            const latestSidebarHint: HomeSidebarHint | undefined = !creationAssistantEnabled
+              && isCreationAssistantSidebarHint(candidateSidebarHint)
+              ? undefined
+              : candidateSidebarHint;
             const actionStates = parsed.actions.map((action) => ({
               id: genId(),
               action,

@@ -186,6 +186,9 @@ export async function POST(request: Request) {
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
       requestedSkills: body?.skills as RequestedSkillsInput,
       requestedMcpServers: body?.mcpServers as RequestedMcpServersInput,
+      creationAssistantEnabled: typeof body?.creationAssistantEnabled === 'boolean'
+        ? body.creationAssistantEnabled
+        : undefined,
       personalDir: user.personalDir,
     });
     await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot(), runtimeSkillNames);

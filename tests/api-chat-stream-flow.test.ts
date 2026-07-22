@@ -60,6 +60,7 @@ vi.mock('@/lib/chat/settings', () => ({
 
 vi.mock('@/lib/chat/system-prompt', () => ({
   buildDashboardSystemPrompt: vi.fn().mockResolvedValue('system prompt'),
+  buildDashboardConversationSystemPrompt: vi.fn().mockResolvedValue('conversation prompt'),
 }));
 
 vi.mock('@/lib/auth/middleware', () => ({
@@ -150,6 +151,29 @@ describe('chat stream flow', () => {
     expect(response.status).toBe(200);
     const json = await responseJson(response);
     expect(json.chatId).toMatch(/^chat-/);
+  });
+
+  test('POST selects the regular conversation prompt when creation assistant is disabled', async () => {
+    const engine = new MockEngine({ success: true, output: 'Hello!' });
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
+    const {
+      buildDashboardConversationSystemPrompt,
+      buildDashboardSystemPrompt,
+    } = await import('@/lib/chat/system-prompt');
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
+
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
+    const response = await POST(makeRequest('/api/chat/stream', {
+      json: {
+        message: 'Review this project',
+        mode: 'dashboard',
+        creationAssistantEnabled: false,
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(buildDashboardConversationSystemPrompt).toHaveBeenCalled();
+    expect(buildDashboardSystemPrompt).not.toHaveBeenCalled();
   });
 
   test('POST registers scoped streams separately from the visible frontend session', async () => {
@@ -253,7 +277,7 @@ describe('chat stream flow', () => {
     }));
     const { chatId } = await responseJson(createResponse);
 
-    (getEngineStream as any).mockReturnValueOnce({
+    (getEngineStream as any).mockReturnValue({
       chatId,
       runtimeSessionId: 'runtime-session-replay',
       streamContent: REAL_OPENCODE_CONNECTED_REPLAY.replayDelta,

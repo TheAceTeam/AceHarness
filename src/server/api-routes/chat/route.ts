@@ -61,6 +61,7 @@ export async function POST(request: Request) {
       extraSystemPrompt,
       skills,
       mcpServers,
+      creationAssistantEnabled,
     } = body;
 
     if (!message?.trim()) {
@@ -76,6 +77,9 @@ export async function POST(request: Request) {
       extraSystemPrompt,
       requestedSkills: skills as RequestedSkillsInput,
       requestedMcpServers: mcpServers as RequestedMcpServersInput,
+      creationAssistantEnabled: typeof creationAssistantEnabled === 'boolean'
+        ? creationAssistantEnabled
+        : undefined,
       personalDir: auth?.personalDir,
     });
 

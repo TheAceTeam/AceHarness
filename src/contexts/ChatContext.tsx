@@ -4,7 +4,12 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions, normalizeAssistantDisplay } from '@/lib/chat/actions';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import { extractLastChatPreview } from '@/lib/chat/message-preview';
-import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
+import {
+  isCreationAssistantSidebarHint,
+  resolveCreationAssistantEnabled,
+  type HomeSidebarHint,
+  type SessionWorkbenchState,
+} from '@/lib/core/home-sidebar-state';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
@@ -29,6 +34,15 @@ function normalizeRuntimeSessionId(value: unknown): string | undefined {
 
 function readRuntimeSessionIdFromPayload(value: any): string | undefined {
   return normalizeRuntimeSessionId(value?.runtimeSessionId) || normalizeRuntimeSessionId(value?.sessionId);
+}
+
+function resolveLatestHomeSidebarHint(
+  sidebarHints: HomeSidebarHint[],
+  creationAssistantEnabled: boolean,
+): HomeSidebarHint | undefined {
+  const candidate = sidebarHints[sidebarHints.length - 1];
+  if (!creationAssistantEnabled && isCreationAssistantSidebarHint(candidate)) return undefined;
+  return candidate;
 }
 
 function normalizeChatSession(session: ChatSession | null | undefined): ChatSession | null {
@@ -808,6 +822,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Re-parse messages with unparsed action/card blocks in content
   const reparseSession = useCallback((s: ChatSession): ChatSession => {
+    const creationAssistantEnabled = resolveCreationAssistantEnabled(s);
     let changed = false;
     const messages = s.messages.map(m => {
       if (m.role !== 'assistant' || !m.content) return m;
@@ -833,7 +848,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     for (const message of assistantMessages) {
       const parsed = parseActions(message.rawContent || message.content || '');
       if (parsed.sidebarHints.length > 0) {
-        latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+        latestSidebarHint = resolveLatestHomeSidebarHint(parsed.sidebarHints, creationAssistantEnabled) || null;
         break;
       }
     }
@@ -852,8 +867,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const prepareLoadedSession = useCallback((session: ChatSession | null | undefined): ChatSession | null => {
     if (!session) return null;
+    const shouldClearCreationHint = !resolveCreationAssistantEnabled(session)
+      && isCreationAssistantSidebarHint(session.sessionWorkbenchState?.homeSidebar);
     const cleaned = {
       ...session,
+      sessionWorkbenchState: shouldClearCreationHint
+        ? {
+            ...(session.sessionWorkbenchState || {}),
+            homeSidebar: null,
+          }
+        : session.sessionWorkbenchState,
       messages: session.messages.filter((message) => !(
         message.role === 'assistant'
         && !message.content
@@ -1156,7 +1179,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
-            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            const latestSidebarHint = resolveLatestHomeSidebarHint(
+              sidebarHints,
+              resolveCreationAssistantEnabled(recoveredSession),
+            );
             setActiveSession(prev => {
               if (!prev) return prev;
               return {
@@ -1806,6 +1832,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       conversationMode,
       sessionWorkbenchState: {
         ...(baseSession.sessionWorkbenchState || {}),
+        creationAssistantEnabled: resolveCreationAssistantEnabled(baseSession),
         conversationMode,
       },
     };
@@ -2060,6 +2087,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             mode: 'dashboard',
             workingDirectory: targetWorkingDirectory || undefined,
             mcpServers: mcpSettingsRef.current,
+            creationAssistantEnabled: resolveCreationAssistantEnabled(targetSessionSnapshot),
           }),
         });
         const { chatId } = await startRes.json();
@@ -2127,7 +2155,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               }, aiPrevious);
               aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
               const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(fullRawContent);
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+              const latestSidebarHint = resolveLatestHomeSidebarHint(
+                sidebarHints,
+                resolveCreationAssistantEnabled(getTargetSessionSnapshot()),
+              );
               const newActionStates: ActionState[] = newActions.map(a => ({
                 id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
               }));
@@ -2192,7 +2223,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                         }, aiPrevious);
                         aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
                         const { text: cleanText, cards: newCards, sidebarHints } = parseActions(recData.content);
-                        const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+                        const latestSidebarHint = resolveLatestHomeSidebarHint(
+                          sidebarHints,
+                          resolveCreationAssistantEnabled(getTargetSessionSnapshot()),
+                        );
                         void applyToTargetSession(s => ({
                           ...s,
                           sessionWorkbenchState: latestSidebarHint ? {
@@ -2318,6 +2352,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           workingDirectory: targetWorkingDirectory || undefined,
           skills: skillSettingsRef.current,
           mcpServers: mcpSettingsRef.current,
+          creationAssistantEnabled: resolveCreationAssistantEnabled(targetSession),
         }),
       });
       const data = await response.json().catch(() => null);
@@ -2395,6 +2430,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!previousSession) {
       return;
     }
+    const creationAssistantEnabled = resolveCreationAssistantEnabled(previousSession);
     const applyToTargetSession = (updater: (session: ChatSession) => ChatSession) => updateSessionById(targetSessionId, updater);
     const getTargetSessionSnapshot = () => getCachedSessionSnapshot(targetSessionId);
     let targetWorkingDirectory = resolveSessionWorkingDirectory(previousSession, '');
@@ -2520,7 +2556,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           ? `${result.output || result.error || '无输出'}\n\n---\n已由 Supervisor 刷新 Spec：${result.specCodingRevision.summary}`
           : (result.output || result.error || '无输出');
         const parsed = result.isError ? { text: responseContent, cards: [] as any[], sidebarHints: [] as HomeSidebarHint[] } : parseActions(responseContent);
-        const latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+        const latestSidebarHint = resolveLatestHomeSidebarHint(
+          parsed.sidebarHints,
+          creationAssistantEnabled,
+        );
 
         await applyToTargetSession((s) => ({
           ...s,
@@ -2571,6 +2610,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           mode: 'dashboard',
           workingDirectory: targetWorkingDirectory || undefined,
           mcpServers: mcpSettingsRef.current,
+          creationAssistantEnabled,
         }),
       });
       const startData = await startRes.json();
@@ -2737,7 +2777,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: cleanText, actions, cards, sidebarHints } = parseActions(fullRawContent);
-            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            const latestSidebarHint = resolveLatestHomeSidebarHint(sidebarHints, creationAssistantEnabled);
             const actionStates: ActionState[] = actions.map(a => ({
               id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
             }));
@@ -2870,7 +2910,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                       }, aiPrevious);
                       aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
                       const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(recData.content);
-                      const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+                      const latestSidebarHint = resolveLatestHomeSidebarHint(sidebarHints, creationAssistantEnabled);
                       const newActionStates: ActionState[] = newActions.map(a => ({
                         id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
                       }));
@@ -3062,7 +3102,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       if (recData.content) {
         const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(recData.content);
-        const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+        const latestSidebarHint = resolveLatestHomeSidebarHint(
+          sidebarHints,
+          resolveCreationAssistantEnabled(session),
+        );
         const newActionStates: ActionState[] = newActions.map(a => ({
           id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
         }));

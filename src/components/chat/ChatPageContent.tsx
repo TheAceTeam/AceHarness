@@ -8,12 +8,7 @@ import { FolderOpen, GitBranch, MessageSquareText, Settings2 } from 'lucide-reac
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { ChatSessionMenu } from '@/components/chat/ChatSessionMenu';
 import {
   PromptInputCommand,
   PromptInputCommandEmpty,
@@ -59,9 +54,11 @@ import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
   inferHomeSidebarTab,
+  isCreationAssistantSidebarHint,
   isWorkflowSidebarHint,
   normalizeHomeSidebarTab,
   normalizeHomeSidebarTabs,
+  resolveCreationAssistantEnabled,
   type HomeSidebarHint,
   type HomeSidebarMode,
   type HomeSidebarTab,
@@ -4966,6 +4963,23 @@ export function ChatPageContent({
     toast('success', '已创建 Fork');
     return sessionId;
   }, [activeSession, createAndActivateSession, loading, toast]);
+  const creationAssistantEnabled = resolveCreationAssistantEnabled(activeSession);
+  const creationAssistantAvailable = Boolean(
+    activeSession
+    && !activeSession.agentBinding
+    && !activeSession.workflowBinding
+    && !activeSession.sessionWorkbenchState?.collaborationRoom
+  );
+  const handleCreationAssistantChange = useCallback((enabled: boolean) => {
+    if (!creationAssistantAvailable) return;
+    setSessionWorkbenchState((prev) => ({
+      ...(prev || {}),
+      creationAssistantEnabled: enabled,
+      homeSidebar: !enabled && isCreationAssistantSidebarHint(prev?.homeSidebar)
+        ? null
+        : prev?.homeSidebar,
+    }));
+  }, [creationAssistantAvailable, setSessionWorkbenchState]);
   const chatHeaderStatus = activeAiBusy || isCurrentSessionLoading
     ? <StatusPill tone="neutral">生成中</StatusPill>
     : activeWeChatBinding
@@ -5031,19 +5045,14 @@ export function ChatPageContent({
           <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
           <span className="hidden xl:inline">保存为 Notebook</span>
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="outline" disabled={!activeSession} title="会话菜单">
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>more_horiz</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-40">
-            <DropdownMenuItem onSelect={() => { handleForkFromSessionMenu(); }} disabled={!activeSession || loading}>
-              <span className="material-symbols-outlined mr-2 text-sm">call_split</span>
-              Fork 对话
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <ChatSessionMenu
+          disabled={!activeSession}
+          creationAssistantEnabled={creationAssistantEnabled}
+          creationAssistantDisabled={!creationAssistantAvailable || loading}
+          forkDisabled={!activeSession || loading}
+          onCreationAssistantChange={handleCreationAssistantChange}
+          onFork={handleForkFromSessionMenu}
+        />
       </>
     ),
   }, [
@@ -5055,6 +5064,9 @@ export function ChatPageContent({
     activeWeChatBinding?.externalConversationId,
     activeAiBusy,
     chatTitle,
+    creationAssistantAvailable,
+    creationAssistantEnabled,
+    handleCreationAssistantChange,
     handleCreateNewConversation,
     handleForkFromSessionMenu,
     handleSaveConversationAsNotebook,
@@ -5518,19 +5530,15 @@ export function ChatPageContent({
                   <Settings2 className="mr-1.5 h-4 w-4" />
                   切换工作区
                 </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="outline" disabled={!activeSession} title="会话菜单" className="h-8 rounded-md px-2.5 text-xs">
-                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>more_horiz</span>
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-40">
-                    <DropdownMenuItem onSelect={() => { handleForkFromSessionMenu(); }} disabled={!activeSession || loading}>
-                      <span className="material-symbols-outlined mr-2 text-sm">call_split</span>
-                      Fork 对话
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <ChatSessionMenu
+                  compact
+                  disabled={!activeSession}
+                  creationAssistantEnabled={creationAssistantEnabled}
+                  creationAssistantDisabled={!creationAssistantAvailable || loading}
+                  forkDisabled={!activeSession || loading}
+                  onCreationAssistantChange={handleCreationAssistantChange}
+                  onFork={handleForkFromSessionMenu}
+                />
               </div>
               )}
             />
