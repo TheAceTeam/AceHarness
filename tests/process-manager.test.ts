@@ -1,15 +1,35 @@
-import { describe, expect, test, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+
+const { execSyncMock } = vi.hoisted(() => ({
+  execSyncMock: vi.fn(),
+}));
+
+vi.mock('child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('child_process')>();
+  return {
+    ...original,
+    execSync: execSyncMock,
+  };
+});
+
 import { processManager } from '@/lib/core/process-manager';
 
 // Each test gets a clean-ish state. The ProcessManager is a singleton,
 // so we work with it directly and clean up after each test.
 beforeEach(() => {
+  execSyncMock.mockReset();
+
   // Kill any leftover processes from previous tests
   for (const proc of processManager.getAllProcesses()) {
     if (proc.status === 'running') {
       processManager.killProcess(proc.id);
     }
   }
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('ProcessManager', () => {
@@ -131,6 +151,37 @@ describe('ProcessManager', () => {
 
   test('killProcess returns false for nonexistent process', () => {
     expect(processManager.killProcess('nonexistent')).toBe(false);
+  });
+
+  test('killAllSystem does not scan or signal machine-wide agents by default', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const result = await processManager.killAllSystem();
+
+    expect(result.pids).toEqual([]);
+    expect(execSyncMock).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  test('requested system cleanup only matches exact Claude one-shot commands', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    execSyncMock.mockReturnValue([
+      `91001 ${process.pid} Tue Jul 23 10:05:00 2026 /tmp/claude --dangerously-skip-permissions`,
+      `91002 ${process.pid} Tue Jul 23 10:05:01 2026 /tmp/claude -p probe`,
+      `91003 ${process.pid} Tue Jul 23 10:05:02 2026 /bin/zsh -lc claude -p embedded`,
+      `91004 ${process.pid} Tue Jul 23 10:05:03 2026 /tmp/claude --print=probe`,
+    ].join('\n'));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: ['/tmp/workspace'],
+    });
+
+    expect(result.pids).toEqual([91002, 91004]);
+    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(91004, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(91001, expect.anything());
+    expect(killSpy).not.toHaveBeenCalledWith(91003, expect.anything());
   });
 
   test('getProcess returns copy without childProcess', () => {

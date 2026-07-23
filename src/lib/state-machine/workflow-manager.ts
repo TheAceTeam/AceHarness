@@ -5790,11 +5790,14 @@ try {
     return step ? this.getSubworkflowRuntime(step) : {};
   }
 
-  private buildSubworkflowTrace(stepId: string, childRunId: string, childConfigFile: string) {
+  private buildSubworkflowTrace(stepId: string, childRunId: string, childConfigFile: string, callerRunId?: string | null) {
+    // Pinned alongside the caller's runId: emitting `parentRunId` from one run and `spanId`/
+    // `rootRunId` from another would make a single event payload internally contradictory.
+    const stepRunId = callerRunId !== undefined ? callerRunId : this.currentRunId;
     return {
-      rootRunId: this.rootRunId || this.currentRunId,
-      traceId: this.rootRunId || this.currentRunId || childRunId,
-      spanId: `${this.currentRunId || 'parent'}:${stepId}`,
+      rootRunId: this.rootRunId || stepRunId,
+      traceId: this.rootRunId || stepRunId || childRunId,
+      spanId: `${stepRunId || 'parent'}:${stepId}`,
       parentSpanId: this.parentStepId ? `${this.parentRunId || 'parent'}:${this.parentStepId}` : undefined,
       workflowPath: [
         ...this.nestingPath.map((item) => `${item.configFile}${item.stepName ? `#${item.stepName}` : ''}`),
@@ -5844,6 +5847,16 @@ try {
     if (!this.currentRunId) {
       throw new Error('子工作流执行失败：父工作流 runId 不存在');
     }
+    // Pinned like the other step paths. This one needs it most: the awaits below include starting a
+    // child workflow and an unbounded wait for a human answer, so it straddles run boundaries more
+    // readily than any other. Note the null-check above narrows the field to `string`, and TS keeps
+    // that narrowing across awaits — so the compiler cannot flag a stale read here.
+    //
+    // Deliberate side effect: `ensureSubworkflowSnapshot` compares this against the live field and
+    // throws when they differ. Across a run boundary that turns its self-healing path into a
+    // fail-fast, which is what we want — a dead run's subworkflow must not be re-snapshotted under
+    // whichever run happens to be current.
+    const stepRunId = this.currentRunId;
     const childConfigFile = normalizeWorkflowConfigRef(getSubworkflowConfigFile(step));
     if (!childConfigFile) {
       throw new Error(`子工作流步骤 "${state.name}/${step.name}" 未配置 workflow`);
@@ -5858,8 +5871,8 @@ try {
     const activeExisting = this.findActiveSubworkflowForStep(step, state, childConfigFile);
     await this.assertSubworkflowRunLimits(step, state, childConfigFile, activeExisting);
     const childRunId = activeExisting?.runId || `run-${formatTimestamp()}-${randomUUID().slice(0, 8)}`;
-    const rootRunId = this.rootRunId || this.currentRunId;
-    const trace = this.buildSubworkflowTrace(stepId, childRunId, childConfigFile);
+    const rootRunId = this.rootRunId || stepRunId;
+    const trace = this.buildSubworkflowTrace(stepId, childRunId, childConfigFile, stepRunId);
     const attempt = activeExisting?.attempt || this.getNextSubworkflowAttempt(step.name, state.name);
     const startedAt = new Date().toISOString();
     const beforeSnapshotId = await this.recordStepGitBefore({
@@ -5917,7 +5930,7 @@ try {
       ...trace,
     });
     this.emit('subworkflow-start', {
-      parentRunId: this.currentRunId,
+      parentRunId: stepRunId,
       runId: childRunId,
       state: state.name,
       step: step.name,
@@ -5936,7 +5949,7 @@ try {
 
     try {
       const { workflowRegistry } = await import('@/lib/workflow/registry');
-      const managerKey = `child:${this.currentRunId}:${activeExisting?.parentStepId || stepId}`;
+      const managerKey = `child:${stepRunId}:${activeExisting?.parentStepId || stepId}`;
       const childManager = await workflowRegistry.getManagerForRun({
         configFile: childConfigFile,
         managerKey,
@@ -5961,7 +5974,7 @@ try {
           },
         });
         this.emit('subworkflow-status', {
-          parentRunId: this.currentRunId,
+          parentRunId: stepRunId,
           runId: childRunId,
           state: state.name,
           step: step.name,
@@ -5982,7 +5995,7 @@ try {
         }
         updateChildRefStatus('waiting-human', payload);
         this.emit('subworkflow-waiting-human', {
-          parentRunId: this.currentRunId,
+          parentRunId: stepRunId,
           runId: childRunId,
           state: state.name,
           step: step.name,
@@ -6010,7 +6023,7 @@ try {
       (childManager as any)._userPersonalDir = this._userPersonalDir;
       (childManager as any)._frontendSessionId = this._frontendSessionId;
       (childManager as any)._creationSessionId = this._creationSessionId;
-      (childManager as any)._parentRunId = this.currentRunId;
+      (childManager as any)._parentRunId = stepRunId;
       (childManager as any)._parentConfigFile = this.currentConfigFile;
       (childManager as any)._parentStateName = state.name;
       (childManager as any)._parentStepId = stepId;
@@ -6052,7 +6065,7 @@ try {
 
       if (activeExisting && (childStatus?.status === 'running' || childStatus?.status === 'preparing')) {
         this.emit('subworkflow-status', {
-          parentRunId: this.currentRunId,
+          parentRunId: stepRunId,
           runId: childRunId,
           state: state.name,
           step: step.name,
@@ -6122,7 +6135,7 @@ try {
         },
       });
       this.emit('subworkflow-waiting-human', {
-        parentRunId: this.currentRunId,
+        parentRunId: stepRunId,
         runId: childRunId,
         state: state.name,
         step: step.name,
@@ -6246,7 +6259,7 @@ try {
       },
     });
 
-    await saveProcessOutput(this.currentRunId, stepKey, finalSummary || output).catch(() => {});
+    await saveProcessOutput(stepRunId, stepKey, finalSummary || output).catch(() => {});
     await this.persistState();
 
     if (completed) {
@@ -6268,7 +6281,7 @@ try {
         durationMs: childDurationMs,
       });
       this.emit('subworkflow-complete', {
-        parentRunId: this.currentRunId,
+        parentRunId: stepRunId,
         runId: childRunId,
         state: state.name,
         step: step.name,
@@ -6298,7 +6311,7 @@ try {
       ? 'subworkflow-stopped'
       : 'subworkflow-failed';
     this.emit(subworkflowTerminalEvent, {
-      parentRunId: this.currentRunId,
+      parentRunId: stepRunId,
       runId: childRunId,
       state: state.name,
       step: step.name,
@@ -6320,6 +6333,12 @@ try {
     extraContext?: string
   ): Promise<string> {
     const stepStartGeneration = this.runtimeGeneration;
+    // Pinned for the same reason as in `runAgentStep`: `stop()` only sets a flag and cancels the
+    // engine, so an in-flight step still resolves and writes its output afterwards. Reading the
+    // mutable field then would file this step's output under whichever run is current by that
+    // point — and with stream writes already pinned, the two halves of one step would split
+    // across two run directories, which is worse than the original bug.
+    const stepRunId = this.currentRunId;
     const runtimeAgentName = getStepRuntimeAgentName(step);
     this.assertValidStepRuntimeAgent(step, state, runtimeAgentName);
     const agent = this.agents.find(a => a.name === runtimeAgentName);
@@ -6390,10 +6409,10 @@ try {
       }
 
       // Build context (now async)
-      const context = await this.buildStepContext(step, state, config, requirements, extraContext);
+      const context = await this.buildStepContext(step, state, config, requirements, extraContext, stepRunId);
 
       // Execute step (reuse existing process manager logic)
-      let stepResult = await this.runAgentStep(step, context, config, stepId);
+      let stepResult = await this.runAgentStep(step, context, config, stepId, stepRunId);
       let output = stepResult.output;
       if (isEngineLevelFailure(output)) {
         throw new Error(output.trim() || '引擎返回致命错误输出');
@@ -6404,7 +6423,7 @@ try {
           message: `步骤 "${state.name}/${step.name}" 缺少严格最终裁决 JSON，正在请求 Agent 补交。`,
         });
         const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
-        const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
+        const repairResult = await this.runAgentStep(step, repairContext, config, stepId, stepRunId);
         output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
         stepResult = {
           ...stepResult,
@@ -6507,9 +6526,9 @@ try {
       });
 
       // Save output to file system
-      if (this.currentRunId) {
+      if (stepRunId) {
         const stepFileName = stepKey;
-        await saveProcessOutput(this.currentRunId, stepFileName, conclusion || output).catch(() => {});
+        await saveProcessOutput(stepRunId, stepFileName, conclusion || output).catch(() => {});
       }
 
       if (step.channelIds?.length) {
@@ -6593,8 +6612,8 @@ try {
       });
 
       // Save error output
-      if (this.currentRunId) {
-        await saveProcessOutput(this.currentRunId, stepKey, `ERROR: ${errorMsg}`).catch(() => {});
+      if (stepRunId) {
+        await saveProcessOutput(stepRunId, stepKey, `ERROR: ${errorMsg}`).catch(() => {});
       }
 
       throw error;
@@ -6781,8 +6800,15 @@ try {
     state: StateMachineState,
     config: StateMachineWorkflowConfig,
     requirements?: string,
-    extraContext?: string
+    extraContext?: string,
+    /**
+     * Pinned by the caller. This decides the outputs directory the agent is *told* to write into,
+     * so if it drifted from the runId the system writes with, one step's own output and the
+     * agent's would land in two different run directories.
+     */
+    callerRunId?: string | null
   ): Promise<string> {
+    const stepRunId = callerRunId !== undefined ? callerRunId : this.currentRunId;
     const parts: string[] = [];
     const runtimeAgentName = getStepRuntimeAgentName(step);
     const memo = this.getAgentPromptMemo(runtimeAgentName || step.agent || 'default');
@@ -6963,8 +6989,8 @@ try {
       : '- 当前步骤完成了什么；不要输出 pass / conditional_pass / fail 流程裁决。';
 
     // Add system-managed step conclusion protocol for every step.
-    if (this.currentRunId) {
-      const outputPath = `${join(getWorkspaceRunsDir(), this.currentRunId, 'outputs')}/`;
+    if (stepRunId) {
+      const outputPath = `${join(getWorkspaceRunsDir(), stepRunId, 'outputs')}/`;
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const summaryFileName = `${ts}-${state.name}-${step.name}.md`;
       parts.push([
@@ -6985,7 +7011,7 @@ try {
       parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
-    if (this.currentRunId) {
+    if (stepRunId) {
       parts.push([
         '\n# 步骤结论归档协议',
         conclusionScope,
@@ -7104,7 +7130,7 @@ try {
         requirements: config.context?.requirements,
         projectRoot: this.getWorkingDirectory() || config.context?.projectRoot,
         limit: 3,
-        excludeRunId: this.currentRunId || undefined,
+        excludeRunId: stepRunId || undefined,
       }).catch(() => []);
       const block = buildWorkflowExperiencePromptBlock(experiences, '历史经验记忆');
       if (block) {
@@ -7113,9 +7139,9 @@ try {
     }
 
     // Add previous steps' conclusions from the last 2 completed states
-    if (this.currentRunId && this.stateHistory.length > 0) {
+    if (stepRunId && this.stateHistory.length > 0) {
       try {
-        const outputs = await loadStepOutputs(this.currentRunId);
+        const outputs = await loadStepOutputs(stepRunId);
         // Find the last 2 states before current
         const previousStates: string[] = [];
         for (let i = this.stateHistory.length - 1; i >= 0 && previousStates.length < 2; i--) {
@@ -7153,8 +7179,8 @@ try {
 
     // Replace template variables
     let result = parts.join('\n');
-    if (this.currentRunId) {
-      result = result.replace(/\{runId\}/g, this.currentRunId);
+    if (stepRunId) {
+      result = result.replace(/\{runId\}/g, stepRunId);
     }
     return result;
   }
@@ -7288,7 +7314,9 @@ try {
     step: WorkflowStep,
     context: string,
     config: StateMachineWorkflowConfig,
-    stepId?: string
+    stepId?: string,
+    /** Pinned by the caller so every write from one step lands in the same run — see below. */
+    callerRunId?: string | null
   ): Promise<{ output: string; lastRoundOutput: string; costUsd: number; durationMs: number; sessionId?: string; tokenUsage: TokenUsage }> {
     // Find agent config for system prompt and model
     const roleConfig = this.agentConfigs.find(r => r.name === step.agent)
@@ -7338,6 +7366,18 @@ try {
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
     const streamStepName = this.currentState ? `${this.currentState}-${step.name}` : step.name;
 
+    // Pin this step's runId for its whole lifetime. `this.currentRunId` is mutable and a manager
+    // instance is reused across runs of the same config (the registry caches by config file), so
+    // reading it later is wrong for any step whose agent outlives its run — cancellation is
+    // cooperative, and an agent stuck in a long tool call keeps streaming after the run has been
+    // marked stopped. Late output would then be filed under whichever run happens to be current.
+    // Observed 2026-07-21: a stopped run's transcript landed in the next run's streams/ directory.
+    // Everything downstream of this step (stream writes, process logs) uses it. It comes from the
+    // caller when available so that a single step cannot end up with two different pins — the
+    // verdict-repair call below re-enters this method after a full agent round, and reading the
+    // field again there could file the repair's output under a different run than the first half.
+    const stepRunId = callerRunId !== undefined ? callerRunId : this.currentRunId;
+
     // Track process
     this.upsertCurrentProcess({
       pid: Date.now(),
@@ -7356,17 +7396,17 @@ try {
     };
 
     const flushProcessStream = (content?: string | null) => {
-      if (!this.currentRunId || !content || content.length < currentProcessStreamLength) return;
+      if (!stepRunId || !content || content.length < currentProcessStreamLength) return;
       const delta = content.slice(currentProcessStreamLength);
       if (!delta) return;
       currentProcessStreamLength = content.length;
       appendStreamPreview(delta);
-      appendStreamContent(this.currentRunId, streamStepName, delta).catch(() => {});
+      appendStreamContent(stepRunId, streamStepName, delta).catch(() => {});
     };
 
     const appendFeedbackMarker = (feedbackPrompt: string) => {
-      if (!this.currentRunId) return;
-      appendFeedbackToStream(this.currentRunId, streamStepName, feedbackPrompt).catch(() => {});
+      if (!stepRunId) return;
+      appendFeedbackToStream(stepRunId, streamStepName, feedbackPrompt).catch(() => {});
     };
 
     // Set up periodic stream content flushing to disk (so frontend can read it)
@@ -7375,7 +7415,7 @@ try {
     let watchdogTriggeredForProcess = '';
     let trailingFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const flushLatestProcessStream = () => {
-      if (!this.currentRunId) return;
+      if (!stepRunId) return;
       const proc = processManager.getProcess(currentProcessId);
       const content = proc?.streamContent || '';
       if (!content) return;
@@ -7399,12 +7439,12 @@ try {
         lastStreamAt = now;
         watchdogTriggeredForProcess = '';
       }
-      if (this.currentRunId && now - lastFlush > 2000) {
+      if (stepRunId && now - lastFlush > 2000) {
         lastFlush = now;
         if (content) {
           flushProcessStream(content);
         }
-      } else if (this.currentRunId && content) {
+      } else if (stepRunId && content) {
         scheduleTrailingFlush(2000 - (now - lastFlush));
       }
       if (
@@ -7450,7 +7490,10 @@ try {
           {
             workingDirectory,
             timeoutMs,
-            runId: this.currentRunId || undefined,
+            // Same pinning as the stream writes: this flows into the registered process's runId,
+            // which decides which run directory its logs land in. Reading the mutable field here
+            // would misfile them on a retry that straddles a run boundary.
+            runId: stepRunId || undefined,
             stepId,
             resumeSessionId: currentSessionId,
             appendSystemPrompt: !!currentSessionId,
@@ -7487,8 +7530,8 @@ try {
           if (proc?.streamContent) {
             flushProcessStream(proc.streamContent);
           }
-          if (this.currentRunId) {
-            appendStreamContent(this.currentRunId, streamStepName, '\n\n<!-- chunk-boundary -->\n\n').catch(() => {});
+          if (stepRunId) {
+            appendStreamContent(stepRunId, streamStepName, '\n\n<!-- chunk-boundary -->\n\n').catch(() => {});
           }
           return {
             output: accumulatedOutput || '(强制跳转，步骤未完成)',
