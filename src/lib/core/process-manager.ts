@@ -253,6 +253,24 @@ export interface ProcessInfo {
   prompt?: string;
   systemPrompt?: string;
 }
+
+type RegisteredProcessScope = 'none' | 'matching-runs' | 'all';
+
+type KillAllSystemOptions = {
+  sweepAgentProcesses?: boolean;
+  workspacePaths?: string[];
+  runIds?: string[];
+  registeredProcessScope?: RegisteredProcessScope;
+};
+
+type KillAllSystemResult = {
+  killed: number;
+  pids: number[];
+  agentRootsMatched?: number;
+  registeredKilled: number;
+  registeredProcessIds: string[];
+};
+
 class ProcessManager extends EventEmitter {
   private processes: Map<string, ProcessInfo> = new Map();
   private activeStreams: Map<string, string> = new Map();
@@ -369,6 +387,11 @@ class ProcessManager extends EventEmitter {
   }
 
   /**
+   * @param options.runIds Registered processes are only killed when their `runId` matches this
+   *   set. This is the normal path for stopping one workflow run.
+   * @param options.registeredProcessScope `all` is reserved for the explicit global process
+   *   management API. The default is `none`, so cleanup callers never widen into unrelated runs
+   *   by accident.
    * @param options.sweepAgentProcesses Also terminate ACP agent process trees. Off by default:
    *   this method is reached from config edits and run deletions too (via `WorkflowManager.stop`),
    *   and those must not take down agents belonging to unrelated live runs. Only an explicit
@@ -378,18 +401,27 @@ class ProcessManager extends EventEmitter {
    *   stopping specific runs must always pass their workspaces.
    */
   async killAllSystem(
-    options: { sweepAgentProcesses?: boolean; workspacePaths?: string[] } = {}
-  ): Promise<{ killed: number; pids: number[]; agentRootsMatched?: number }> {
+    options: KillAllSystemOptions = {}
+  ): Promise<KillAllSystemResult> {
+    const runIdSet = new Set((options.runIds || []).filter(Boolean));
+    const registeredProcessScope: RegisteredProcessScope = options.registeredProcessScope
+      || (runIdSet.size > 0 ? 'matching-runs' : 'none');
+    const registeredProcessIds: string[] = [];
+
     for (const [, proc] of this.processes) {
-      if (proc.status === 'running') {
-        proc.status = 'killed';
-        proc.endTime = new Date();
-        if (proc.childProcess) {
-          try { proc.childProcess.kill('SIGTERM'); } catch {}
-        }
-        if ((proc as any)._cancelFn) {
-          try { (proc as any)._cancelFn(); } catch {}
-        }
+      if (proc.status !== 'running') continue;
+      const shouldKillRegisteredProcess = registeredProcessScope === 'all'
+        || (registeredProcessScope === 'matching-runs' && !!proc.runId && runIdSet.has(proc.runId));
+      if (!shouldKillRegisteredProcess) continue;
+
+      proc.status = 'killed';
+      proc.endTime = new Date();
+      registeredProcessIds.push(proc.id);
+      if (proc.childProcess) {
+        try { proc.childProcess.kill('SIGTERM'); } catch {}
+      }
+      if ((proc as any)._cancelFn) {
+        try { (proc as any)._cancelFn(); } catch {}
       }
     }
     // Also kill agent processes that outlived their run.
@@ -465,7 +497,13 @@ class ProcessManager extends EventEmitter {
     }
     // Counts processes signalled, not confirmed dead — SIGKILL escalation is still pending at this
     // point, and a just-killed child reads as alive until the parent reaps it.
-    return { killed: signalled.length, pids: signalled, agentRootsMatched };
+    return {
+      killed: signalled.length,
+      pids: signalled,
+      agentRootsMatched,
+      registeredKilled: registeredProcessIds.length,
+      registeredProcessIds,
+    };
   }
 
   reset(): void {

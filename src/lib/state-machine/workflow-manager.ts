@@ -1543,6 +1543,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentSpecRootDir = null;
       this.workflowGit = null;
       this.workflowMcpServers = [];
+      this.promptMemos.clear();
       this.stepTaskBindingsByStepKey.clear();
       this.stepTaskBindingsSnapshot = [];
       this.bindingValidation = undefined;

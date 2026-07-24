@@ -1293,6 +1293,7 @@ try {
     this.waitStartedAt = null;
     this.currentRunId = null;
     this.agentSessionIds.clear();
+    this.promptMemos.clear();
     this.liveFeedback = [];
     this.globalContext = initialContexts?.globalContext || '';
     this.workspaceSkills = '';
@@ -3334,8 +3335,8 @@ try {
         this.emit('log', `引擎取消失败: ${error}`);
       }
     }
-    // Kill managed processes + orphan system claude processes
-    await processManager.killAllSystem();
+    // Kill only registered processes that belong to this run.
+    await processManager.killAllSystem({ runIds: this.currentRunId ? [this.currentRunId] : [] });
     // Small delay to let close events fire
     await new Promise(r => setTimeout(r, 500));
     // Ensure status is still stopped (not overwritten by async handlers)
