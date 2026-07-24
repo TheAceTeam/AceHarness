@@ -78,8 +78,10 @@ export async function POST(request: Request) {
     // stopping one run never touches agents of another. `hydrateLargeOutputs: false` because only
     // one string is needed and hydrating a large run state costs hundreds of ms on this path.
     const sweepWorkspacePaths = new Set<string>();
+    const sweepRunIds = new Set<string>();
     const addSweepWorkspace = async (id: string | undefined) => {
       if (!id) return;
+      sweepRunIds.add(id);
       const path = (await loadRunState(id, { hydrateLargeOutputs: false }))?.workingDirectory;
       if (path) sweepWorkspacePaths.add(path);
     };
@@ -136,13 +138,23 @@ export async function POST(request: Request) {
       }
     }
 
+    const candidateRuns = runId
+      ? []
+      : (configFile ? await listRunsByConfig(configFile) : await listRuns());
+    for (const run of candidateRuns) {
+      if (run.status !== 'running' && run.status !== 'preparing') continue;
+      if (touchedRunIds.has(run.id)) continue;
+      await addSweepWorkspace(run.id);
+    }
+
     // Fail closed: sweep only the workspaces we resolved. A stop that cannot resolve any — including
     // a stop-all with no live managers — must not widen into a machine-wide sweep that takes down
     // agents of unrelated runs.
     const workspacePaths = Array.from(sweepWorkspacePaths);
+    const runIds = Array.from(sweepRunIds);
     const sweepAgentProcesses = workspacePaths.length > 0;
-    const { killed, pids, agentRootsMatched } = await runTimedStep(steps, 'process-cleanup', '清理残留进程',
-      () => processManager.killAllSystem({ sweepAgentProcesses, workspacePaths }));
+    const { killed, pids, agentRootsMatched, registeredKilled } = await runTimedStep(steps, 'process-cleanup', '清理残留进程',
+      () => processManager.killAllSystem({ sweepAgentProcesses, workspacePaths, runIds }));
     if (!sweepAgentProcesses) {
       steps.push({
         id: 'agent-sweep-scope',
@@ -160,9 +172,6 @@ export async function POST(request: Request) {
 
     // Fallback: if there is no active manager but run records are still marked
     // as running/preparing, force them to stopped so History view is consistent.
-    const candidateRuns = configFile
-      ? await listRunsByConfig(configFile)
-      : await listRuns();
     for (const run of candidateRuns) {
       if (run.status !== 'running' && run.status !== 'preparing') continue;
       if (touchedRunIds.has(run.id)) continue;
@@ -171,17 +180,19 @@ export async function POST(request: Request) {
     }
 
     const success = cleanupErrors.length === 0 && steps.every((step) => step.status !== 'failed');
+    const totalKilled = killed + registeredKilled;
 
     return jsonOk({
       success,
       message: success
-        ? (killed > 0 ? `工作流已停止，清理了 ${killed} 个残留进程` : '工作流已停止')
+        ? (totalKilled > 0 ? `工作流已停止，清理了 ${totalKilled} 个残留进程` : '工作流已停止')
         : `工作流停止存在异常: ${cleanupErrors.join('; ') || '未知错误'}`,
       runIds: Array.from(touchedRunIds),
       steps,
       cleanupErrors,
       killed,
       pids,
+      registeredKilled,
       managerStopResult,
     });
   } catch (error: any) {

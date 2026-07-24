@@ -155,12 +155,69 @@ describe('ProcessManager', () => {
 
   test('killAllSystem does not scan or signal machine-wide agents by default', async () => {
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const proc = processManager.registerExternalProcess('kill-all-default-run', 'dev', 'step', 'run-default');
+    const childKill = vi.fn();
+    const cancelFn = vi.fn();
+    (proc as any).childProcess = { kill: childKill };
+    (proc as any)._cancelFn = cancelFn;
 
     const result = await processManager.killAllSystem();
 
     expect(result.pids).toEqual([]);
+    expect(result.registeredKilled).toBe(0);
+    expect(processManager.getProcess('kill-all-default-run')!.status).toBe('running');
+    expect(childKill).not.toHaveBeenCalled();
+    expect(cancelFn).not.toHaveBeenCalled();
     expect(execSyncMock).not.toHaveBeenCalled();
     expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  test('killAllSystem only cancels registered processes for matching run ids', async () => {
+    const runA = processManager.registerExternalProcess('kill-all-run-a', 'dev', 'step', 'run-a');
+    const runB = processManager.registerExternalProcess('kill-all-run-b', 'dev', 'step', 'run-b');
+    const unscoped = processManager.registerExternalProcess('kill-all-unscoped', 'dev', 'step');
+    const runAChildKill = vi.fn();
+    const runBChildKill = vi.fn();
+    const unscopedChildKill = vi.fn();
+    const runACancel = vi.fn();
+    const runBCancel = vi.fn();
+    const unscopedCancel = vi.fn();
+    (runA as any).childProcess = { kill: runAChildKill };
+    (runB as any).childProcess = { kill: runBChildKill };
+    (unscoped as any).childProcess = { kill: unscopedChildKill };
+    (runA as any)._cancelFn = runACancel;
+    (runB as any)._cancelFn = runBCancel;
+    (unscoped as any)._cancelFn = unscopedCancel;
+
+    const result = await processManager.killAllSystem({ runIds: ['run-a'] });
+
+    expect(result.pids).toEqual([]);
+    expect(result.registeredKilled).toBe(1);
+    expect(result.registeredProcessIds).toEqual(['kill-all-run-a']);
+    expect(processManager.getProcess('kill-all-run-a')!.status).toBe('killed');
+    expect(processManager.getProcess('kill-all-run-b')!.status).toBe('running');
+    expect(processManager.getProcess('kill-all-unscoped')!.status).toBe('running');
+    expect(runAChildKill).toHaveBeenCalledWith('SIGTERM');
+    expect(runACancel).toHaveBeenCalledOnce();
+    expect(runBChildKill).not.toHaveBeenCalled();
+    expect(runBCancel).not.toHaveBeenCalled();
+    expect(unscopedChildKill).not.toHaveBeenCalled();
+    expect(unscopedCancel).not.toHaveBeenCalled();
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  test('killAllSystem supports explicit global registered-process cleanup', async () => {
+    processManager.registerExternalProcess('kill-all-global-run', 'dev', 'step', 'run-global');
+    processManager.registerExternalProcess('kill-all-global-unscoped', 'dev', 'step');
+
+    const result = await processManager.killAllSystem({ registeredProcessScope: 'all' });
+
+    expect(result.pids).toEqual([]);
+    expect(result.registeredKilled).toBe(2);
+    expect(result.registeredProcessIds).toEqual(['kill-all-global-run', 'kill-all-global-unscoped']);
+    expect(processManager.getProcess('kill-all-global-run')!.status).toBe('killed');
+    expect(processManager.getProcess('kill-all-global-unscoped')!.status).toBe('killed');
+    expect(execSyncMock).not.toHaveBeenCalled();
   });
 
   test('requested system cleanup only matches exact Claude one-shot commands', async () => {
