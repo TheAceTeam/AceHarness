@@ -1,0 +1,50 @@
+name: Sync from GitCode
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [gitcode-sync]
+  schedule:
+    # Avoid the top of the hour, where scheduled workflows are commonly delayed.
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gitcode-to-github-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_REPOSITORY: https://gitcode.com/Cangjie-SIG/ACEHarness.git
+      MIRROR_TOKEN: ${{ secrets.GITHUB_MIRROR_TOKEN || github.token }}
+    steps:
+      - name: Mirror branches and tags from GitCode
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MIRROR_TOKEN:-}" ]]; then
+            echo "No GitHub write token is available. Configure GITHUB_MIRROR_TOKEN."
+            exit 1
+          fi
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          git clone --mirror "$SOURCE_REPOSITORY" "$workdir/source.git"
+          cd "$workdir/source.git"
+          git remote add github "https://x-access-token:${MIRROR_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # The explicit refspecs keep GitHub's internal refs untouched while
+          # making branches and tags an exact, force-updated mirror of GitCode.
+          git push --prune github \
+            '+refs/heads/*:refs/heads/*' \
+            '+refs/tags/*:refs/tags/*'
+
+          git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags | LC_ALL=C sort > "$workdir/source-refs"
+          git ls-remote --refs github | awk '$2 ~ /^refs\/(heads|tags)\// { print $1 " " $2 }' | LC_ALL=C sort > "$workdir/github-refs"
+          diff -u "$workdir/source-refs" "$workdir/github-refs"

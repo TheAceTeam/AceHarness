@@ -1,0 +1,32 @@
+stages:
+  - mirror
+
+# This job runs only after GitCode's protected default branch changes. Keeping
+# the token out of feature-branch pipelines prevents untrusted branch code from
+# reading GitHub write credentials.
+mirror_gitcode_to_github:
+  stage: mirror
+  image: alpine/git:2.47.2
+  resource_group: github-mirror
+  variables:
+    GIT_STRATEGY: none
+    MIRROR_SOURCE_URL: "https://gitcode.com/Cangjie-SIG/ACEHarness.git"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - |
+      set -eu
+
+      if [ -z "${GITHUB_MIRROR_TOKEN:-}" ]; then
+        echo "GITHUB_MIRROR_TOKEN must be configured as a protected, masked CI variable."
+        exit 1
+      fi
+
+      workdir="$(mktemp -d)"
+      trap 'rm -rf "$workdir"' EXIT
+      git clone --mirror "$MIRROR_SOURCE_URL" "$workdir/source.git"
+      cd "$workdir/source.git"
+      git remote add github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/TheAceTeam/AceHarness.git"
+      git push --prune github \
+        '+refs/heads/*:refs/heads/*' \
+        '+refs/tags/*:refs/tags/*'
