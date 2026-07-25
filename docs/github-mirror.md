@@ -23,7 +23,8 @@ settings are not Git refs and are not mirrored.
 
 1. Create a dedicated GitHub machine account or GitHub App for this mirror.
    Grant it write access to `TheAceTeam/AceHarness`. Its fine-grained token
-   needs `Contents: Read and write` for this repository.
+   needs `Contents: Read and write` for this repository. Grant workflow write
+   permission as well, because the initial mirror updates `.github/workflows`.
 2. Add the token as a masked, protected GitCode CI/CD variable named
    `GITHUB_MIRROR_TOKEN`. It must be available to the protected `main` branch.
 3. Add the same token to GitHub Actions secrets as `GITHUB_MIRROR_TOKEN`.
