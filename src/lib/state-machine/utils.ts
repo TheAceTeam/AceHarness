@@ -25,8 +25,14 @@ export function stripJsonFence(text: string): string {
 }
 
 export function compactStepConclusion(raw: string): string {
+  const MAX_CONCLUSION_CHARS = 4000;
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
-  if (tagged) return tagged;
+  if (tagged) {
+    // 与 state-machine/workflow-manager.ts 内的同名实现保持一致：超长保留开头。
+    return tagged.length > MAX_CONCLUSION_CHARS
+      ? tagged.slice(0, MAX_CONCLUSION_CHARS).trim() + '\n...(结论过长已截断)'
+      : tagged;
+  }
 
   const text = stripNonAiStreamArtifacts(raw).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);

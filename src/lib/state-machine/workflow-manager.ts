@@ -357,13 +357,20 @@ function normalizeWorkflowVerdict(value: unknown): 'pass' | 'conditional_pass' |
 }
 
 export function compactStepConclusion(raw: string): string {
+  const MAX_CONCLUSION_CHARS = 4000;
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
-  if (tagged) return tagged;
+  if (tagged) {
+    // 结论是"结果/裁决"前置结构，超长时保留开头。缺失此上限会导致
+    // agent 把整篇文档塞进 <step-conclusion> 时按原样落盘（曾出现 117KB/134KB 结论文件）。
+    return tagged.length > MAX_CONCLUSION_CHARS
+      ? tagged.slice(0, MAX_CONCLUSION_CHARS).trim() + '\n...(结论过长已截断)'
+      : tagged;
+  }
 
   const text = stripNonAiStreamArtifacts(raw).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
-  return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
+  return tail.length > MAX_CONCLUSION_CHARS ? tail.slice(-MAX_CONCLUSION_CHARS).trim() : tail;
 }
 
 function createEmptySpecRevisionTally(): Record<WorkflowSpecRevisionVoteChoice, number> {
@@ -7103,16 +7110,23 @@ try {
           const stateOutputs = Object.entries(outputs)
             .filter(([key]) => key.startsWith(`${prevState}-`));
           for (const [stepKey, content] of stateOutputs) {
-            // Truncate to last 2000 chars to avoid prompt bloat
+            // 结论按"结果/裁决"前置的结构书写，超长时保留开头，
+            // 与 compactStepConclusion 的截断方向一致；完整内容见 outputs 目录。
             const truncated = content.length > 2000
-              ? '...(截断)\n' + content.slice(-2000)
+              ? content.slice(0, 2000) + '\n...(已截断，全文见 outputs 目录)'
               : content;
             conclusions.push(`## ${stepKey}\n${truncated}`);
           }
         }
 
         if (conclusions.length > 0) {
-          parts.push(`\n# 前置步骤结论\n以下是之前步骤的产出，请参考：\n`);
+          const outputsDirPath = `${join(getWorkspaceRunsDir(), this.currentRunId, 'outputs')}/`;
+          parts.push(
+            `\n# 前置步骤结论\n` +
+            `以下是之前步骤产出的结论摘要（已截断，仅供快速参考）。优先依据这些摘要推进；` +
+            `如需完整内容，可读取 outputs 目录：\n\`${outputsDirPath}\`\n` +
+            `该目录含各步骤带时间戳前缀的完整"步骤成果详细总结"，按需读取对应文件即可，不必默认全读。\n`
+          );
           parts.push(conclusions.join('\n\n'));
         }
       } catch { /* non-critical */ }
