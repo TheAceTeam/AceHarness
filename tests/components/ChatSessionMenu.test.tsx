@@ -19,7 +19,7 @@ describe('ChatSessionMenu', () => {
     );
 
     await user.click(screen.getByRole('button', { name: '会话菜单' }));
-    const toggle = (await screen.findByText('创建助手')).closest('[role="menuitemcheckbox"]') as HTMLElement;
+    const toggle = (await screen.findByText('新对话创建助手')).closest('[role="menuitemcheckbox"]') as HTMLElement;
     expect(toggle.getAttribute('aria-checked')).toBe('true');
     await user.click(toggle);
     expect(onCreationAssistantChange).toHaveBeenCalledWith(false);
@@ -28,7 +28,7 @@ describe('ChatSessionMenu', () => {
     expect(onFork).toHaveBeenCalledTimes(1);
   });
 
-  test('disables creation mode for sessions with dedicated prompts', async () => {
+  test('disables the creation-assistant default when unavailable', async () => {
     const user = userEvent.setup();
 
     render(
@@ -41,7 +41,7 @@ describe('ChatSessionMenu', () => {
     );
 
     await user.click(screen.getByRole('button', { name: '会话菜单' }));
-    const toggle = (await screen.findByText('创建助手')).closest('[role="menuitemcheckbox"]');
+    const toggle = (await screen.findByText('新对话创建助手')).closest('[role="menuitemcheckbox"]');
     expect(toggle?.hasAttribute('data-disabled')).toBe(true);
   });
 });

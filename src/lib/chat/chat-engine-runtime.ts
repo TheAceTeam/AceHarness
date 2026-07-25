@@ -42,6 +42,23 @@ export interface ChatRuntimeEngineOptions {
   rawPrompt?: boolean;
 }
 
+/**
+ * Optional provider capability. Engines must implement this explicitly before
+ * a caller may advertise server-dispatched native tools to a model. Ordinary
+ * Runtime/ACP tool events are observational and do not satisfy this contract.
+ */
+export interface ChatRuntimeNativeToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface ChatRuntimeNativeToolCallbacks {
+  nativeTools: readonly ChatRuntimeNativeToolDefinition[];
+  dispatchNativeTool: (name: unknown, argumentsValue: unknown) => unknown | Promise<unknown>;
+  beforeTaskStart?: () => void | Promise<void>;
+}
+
 export interface ChatRuntimeTokenUsage {
   input_tokens: number;
   output_tokens: number;
@@ -86,6 +103,14 @@ export type RuntimeToolState = {
 
 export interface ChatRuntimeEngine {
   execute(options: ChatRuntimeEngineOptions): Promise<ChatRuntimeResult>;
+  /**
+   * Intentionally optional: RuntimeBackedChatEngine has no provider callback
+   * channel today and therefore must use a structured text fallback.
+   */
+  executeWithNativeTools?(
+    options: ChatRuntimeEngineOptions,
+    callbacks: ChatRuntimeNativeToolCallbacks,
+  ): Promise<ChatRuntimeResult>;
   compactContext?(options: {
     sessionId: string;
     prompt: string;

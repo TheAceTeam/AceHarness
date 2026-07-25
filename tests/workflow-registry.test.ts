@@ -31,8 +31,10 @@ vi.mock('@/lib/state-machine/workflow-manager', () => ({
     removeAllListeners() {}
     forceTransition() {}
     forceJumpToState() {}
+    forceJumpToStateInBackground() {}
     setQueuedApprovalAction() {}
     resume() {}
+    resumeInBackground() {}
     getHumanQuestions() { return []; }
     createHumanQuestion() {}
     answerHumanQuestion() {}
@@ -156,6 +158,29 @@ describe('workflow registry', () => {
       state: '实现',
       groupId: 'branch-a',
       passed: true,
+      __configFile: 'demo.yaml',
+    });
+  });
+
+  test('forwards state-machine log events so recovery errors reach the event stream', async () => {
+    const { readFile } = await import('fs/promises');
+    (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');
+
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    const manager = await workflowRegistry.getManager('demo.yaml');
+    const received = new Promise<any>((resolve) => {
+      workflowRegistry.once('log', resolve);
+    });
+
+    (manager as any).emitForTest('log', {
+      runId: 'run-recovery-1',
+      level: 'error',
+      message: '工作流恢复失败: 模型 API 不可用',
+    });
+
+    await expect(received).resolves.toMatchObject({
+      runId: 'run-recovery-1',
+      level: 'error',
       __configFile: 'demo.yaml',
     });
   });

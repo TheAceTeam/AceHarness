@@ -58,23 +58,30 @@ export async function POST(request: Request) {
       }
     }
 
+    let queuedForceTransition: { targetState: string; instruction?: string } | null = null;
     if (action === 'force-transition' && isStateMachineManagerLike(manager) && targetState) {
       const pendingQuestion = manager.getPendingHumanQuestion();
       if (pendingQuestion?.answerSchema?.type === 'approval-transition') {
         await manager.answerHumanQuestion(pendingQuestion.id, { selectedState: targetState, instruction });
       } else {
         manager.setQueuedApprovalAction('approve');
-        setTimeout(() => {
-          manager.forceTransition(targetState, instruction);
-        }, 500);
+        queuedForceTransition = { targetState, instruction };
       }
     }
 
-    manager.resume(runId).catch(() => {});
+    if (isStateMachineManagerLike(manager)) {
+      await manager.resumeInBackground(runId);
+      if (queuedForceTransition) {
+        manager.forceTransition(queuedForceTransition.targetState, queuedForceTransition.instruction);
+      }
+    } else {
+      // Phase workflows keep their existing asynchronous resume path.
+      void manager.resume(runId).catch(() => {});
+    }
 
     return jsonOk({
       success: true,
-      message: `正在恢复运行: ${runId}`,
+      message: `已恢复运行: ${runId}`,
     });
   } catch (error: any) {
     return jsonOk(

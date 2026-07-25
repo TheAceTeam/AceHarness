@@ -159,7 +159,6 @@ export const queryKeys = {
   schedules: () => ['schedules'] as const,
   users: () => ['users'] as const,
   agents: () => ['agents'] as const,
-  agentMemory: (name: string, maxChars: number) => ['agents', name, 'memory', maxChars] as const,
   models: () => ['models'] as const,
   runtime: runtimeKeys,
   engines: () => ['engines'] as const,
@@ -174,5 +173,16 @@ export const queryKeys = {
     detail: (knowledgeBaseId: string, params: Record<string, unknown>) =>
       ['rag', 'detail', knowledgeBaseId, params] as const,
     search: (params: Record<string, unknown>) => ['rag', 'search', params] as const,
+  },
+  memoryV2: {
+    root: () => ['memory-v2'] as const,
+    governance: (params: Record<string, unknown>) => ['memory-v2', 'governance', params] as const,
+    governanceDetail: (memoryId: string, detailVersion: number, params: Record<string, unknown>) =>
+      ['memory-v2', 'governance', 'details', memoryId, detailVersion, params] as const,
+    diagnostics: () => ['memory-v2', 'diagnostics'] as const,
+    workflowHandoffs: (runId: string, params: Record<string, unknown>) =>
+      ['memory-v2', 'workflows', runId, 'handoffs', params] as const,
+    workflowHandoffDetail: (runId: string, handoffId: string, detailVersion: number, params: Record<string, unknown>) =>
+      ['memory-v2', 'workflows', runId, 'handoffs', handoffId, 'details', detailVersion, params] as const,
   },
 };

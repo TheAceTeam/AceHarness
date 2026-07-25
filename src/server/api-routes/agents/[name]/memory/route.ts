@@ -1,110 +1,17 @@
-import { errorMessage, jsonError, jsonOk, readJsonBody, requestUrl } from '@/server/api-route-runtime/request-utils';
-import {
-  clearMemoryEntries,
-  getMemoryBucket,
-  replaceMemoryEntries,
-} from '@/lib/workflow/memory-store';
-import { resolveAgentRoleMemory } from '@/lib/agent/memory-resolver';
+import { requireAuth } from '@/lib/auth/middleware';
+import { recordMemoryV2CutoverEvent } from '@/lib/memory-v2-cutover/telemetry';
+import { jsonError } from '@/server/api-route-runtime/request-utils';
 
-function clampMaxChars(value: unknown): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 5000;
-  return Math.max(0, Math.min(50000, Math.floor(parsed)));
+const RETIRED_MESSAGE = 'The legacy Agent-memory API is retired. Memory V2 does not import, expose, edit, or clear legacy memory.';
+
+async function retiredLegacyMemoryRoute(request: Request): Promise<Response> {
+  const user = await requireAuth(request);
+  if (user instanceof Response) return user;
+  recordMemoryV2CutoverEvent('legacyRouteRetirements');
+  return jsonError(RETIRED_MESSAGE, 410);
 }
 
-async function buildResponse(agentName: string, maxChars = 5000) {
-  const bucket = await getMemoryBucket({ scope: 'role', key: agentName });
-  const snapshot = await resolveAgentRoleMemory({
-    agentName,
-    maxChars,
-    runtimeEnabled: true,
-  });
-  const fullContent = bucket.entries.map((entry) => entry.content.trim()).filter(Boolean).join('\n\n');
-  return {
-    agentName,
-    storageScope: 'role',
-    storageKey: agentName,
-    entries: bucket.entries,
-    baseMemory: fullContent,
-    mergedContent: snapshot.mergedContent,
-    charCount: fullContent.length,
-    maxChars: snapshot.maxChars,
-    overLimit: fullContent.length > snapshot.maxChars,
-    updatedAt: bucket.updatedAt,
-  };
-}
-
-export async function GET(
-  request: Request,
-  { params }: { params: { name: string } | Promise<{ name: string }> }
-) {
-  try {
-    const name = decodeURIComponent((await params).name);
-    const maxChars = clampMaxChars(requestUrl(request).searchParams.get('maxChars'));
-    return jsonOk(await buildResponse(name, maxChars));
-  } catch (error: any) {
-    return jsonError('读取 Agent 记忆失败', 500, errorMessage(error));
-  }
-}
-
-export async function PUT(
-  request: Request,
-  { params }: { params: { name: string } | Promise<{ name: string }> }
-) {
-  try {
-    const name = decodeURIComponent((await params).name);
-    const body = await readJsonBody<Record<string, any>>(request, {});
-    const maxChars = clampMaxChars(body?.maxChars);
-    const baseMemory = typeof body?.baseMemory === 'string'
-      ? body.baseMemory
-      : typeof body?.content === 'string'
-        ? body.content
-        : '';
-    const normalizedContent = baseMemory.trim();
-    if (normalizedContent.length > maxChars) {
-      return jsonOk(
-        { error: `Agent 基础记忆不能超过 ${maxChars} 个字符`, charCount: normalizedContent.length, maxChars },
-        { status: 400 }
-      );
-    }
-
-    if (!normalizedContent) {
-      await clearMemoryEntries({ scope: 'role', key: name });
-      return jsonOk({ success: true, ...(await buildResponse(name, maxChars)) });
-    }
-
-    await replaceMemoryEntries({
-      scope: 'role',
-      key: name,
-      entries: [{
-        id: `role-${name}-base`,
-        kind: 'base',
-        title: '基础长期记忆',
-        content: normalizedContent,
-        source: 'manual',
-        agent: name,
-        tags: ['base-memory'],
-      }],
-    });
-
-    return jsonOk({ success: true, ...(await buildResponse(name, maxChars)) });
-  } catch (error: any) {
-    return jsonError('保存 Agent 记忆失败', 500, errorMessage(error));
-  }
-}
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { name: string } | Promise<{ name: string }> }
-) {
-  try {
-    const name = decodeURIComponent((await params).name);
-    const maxChars = clampMaxChars(requestUrl(request).searchParams.get('maxChars'));
-    await clearMemoryEntries({ scope: 'role', key: name });
-    return jsonOk({ success: true, ...(await buildResponse(name, maxChars)) });
-  } catch (error: any) {
-    return jsonError('清空 Agent 记忆失败', 500, errorMessage(error));
-  }
-}
-
-export const POST = PUT;
+export const GET = retiredLegacyMemoryRoute;
+export const POST = retiredLegacyMemoryRoute;
+export const PUT = retiredLegacyMemoryRoute;
+export const DELETE = retiredLegacyMemoryRoute;

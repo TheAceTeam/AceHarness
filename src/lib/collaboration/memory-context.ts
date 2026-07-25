@@ -1,68 +1,125 @@
-import { readFile } from 'fs/promises';
-import { parse } from 'yaml';
-import { resolveAgentMemoryContext, resolveAgentRoleMemory, type AgentMemorySnapshot } from '@/lib/agent/memory-resolver';
-import { roleConfigSchema } from '@/lib/core/schemas';
+import { loadChatSession } from '@/lib/chat/persistence';
+import {
+  buildMemoryV2ConsumerManifest,
+  readMemoryV2ConsumerDetail,
+  type MemoryV2ConsumerIdentity,
+  type MemoryV2ConsumerManifestResult,
+} from '@/lib/memory-v2-cutover/consumer-context';
 import { getCollaborationRoom, type CollaborationRoomRecord } from '@/lib/collaboration/rooms';
-import { getRuntimeAgentConfigPath } from '@/lib/run/runtime-configs';
 
 export interface CollaborationParticipantMemoryContext {
   roomId: string;
   agentName: string;
   participantAgentNames: string[];
-  sessionId?: string;
+  sessionId: string;
+  runId?: string;
+  workflowId?: string;
   promptBlock: string;
-  roleMemory: AgentMemorySnapshot;
+  manifest: MemoryV2ConsumerManifestResult['manifest'];
+  memoryV2: MemoryV2ConsumerManifestResult['status'];
+  skippedReason?: string;
 }
 
-async function resolveRoleMemoryBudget(agentName: string): Promise<number | undefined> {
-  try {
-    const filepath = await getRuntimeAgentConfigPath(agentName);
-    const parsed = parse(await readFile(filepath, 'utf-8'));
-    const result = roleConfigSchema.safeParse(parsed);
-    return result.success ? result.data.workspaceProfile?.memory?.baseBudget : undefined;
-  } catch {
-    return undefined;
-  }
+type CollaborationMemoryIdentity = MemoryV2ConsumerIdentity & {
+  room: CollaborationRoomRecord;
+  sessionId: string;
+  runId?: string;
+  workflowId?: string;
+};
+
+function clean(value: unknown): string | undefined {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized || undefined;
 }
 
 function assertRoomParticipant(room: CollaborationRoomRecord, agentName: string): void {
   if (room.participantAgentNames.includes(agentName)) return;
-  throw new Error('该 Agent 不在协作房间中');
+  throw new Error('The requested Agent is not a collaboration room participant');
+}
+
+function assertRoomOwner(room: CollaborationRoomRecord, ownerUserId: string): void {
+  if (!room.createdBy || room.createdBy === ownerUserId) return;
+  throw new Error('The authenticated user does not own this collaboration room');
+}
+
+async function resolveCollaborationMemoryIdentity(input: {
+  roomId: string;
+  agentName: string;
+  ownerUserId: string;
+}): Promise<CollaborationMemoryIdentity> {
+  const roomId = clean(input.roomId);
+  const agentName = clean(input.agentName);
+  const ownerUserId = clean(input.ownerUserId);
+  if (!roomId) throw new Error('Missing collaboration room ID');
+  if (!agentName) throw new Error('Missing collaboration Agent name');
+  if (!ownerUserId) throw new Error('Missing authenticated user');
+
+  const room = await getCollaborationRoom(roomId);
+  if (!room) throw new Error('Collaboration room was not found');
+  assertRoomOwner(room, ownerUserId);
+  assertRoomParticipant(room, agentName);
+
+  const sessionId = room.sessionId || room.id;
+  const session = room.sessionId
+    ? await loadChatSession(room.sessionId).catch(() => null)
+    : null;
+  if (session?.createdBy && session.createdBy !== ownerUserId) {
+    throw new Error('The authenticated user does not own this collaboration session');
+  }
+  const workflowBinding = session?.workflowBinding;
+  const runId = clean(workflowBinding?.runId);
+  const workflowId = clean(workflowBinding?.configFile);
+
+  return {
+    room,
+    ownerUserId,
+    sessionId,
+    runId,
+    workflowId,
+    agentId: agentName,
+  };
 }
 
 export async function resolveCollaborationParticipantMemoryContext(input: {
   roomId: string;
   agentName: string;
-  workingDirectory?: string;
+  ownerUserId: string;
 }): Promise<CollaborationParticipantMemoryContext> {
-  const roomId = String(input.roomId || '').trim();
-  const agentName = String(input.agentName || '').trim();
-  if (!roomId) throw new Error('缺少房间 ID');
-  if (!agentName) throw new Error('缺少 Agent 名称');
-
-  const room = await getCollaborationRoom(roomId);
-  if (!room) throw new Error('房间不存在');
-  assertRoomParticipant(room, agentName);
-
-  const maxRoleMemoryChars = await resolveRoleMemoryBudget(agentName);
-  const roleMemory = await resolveAgentRoleMemory({
-    agentName,
-    maxChars: maxRoleMemoryChars,
-  });
-  const promptBlock = await resolveAgentMemoryContext({
-    agentName,
-    mode: 'standalone-chat',
-    workingDirectory: input.workingDirectory,
-    sessionId: room.sessionId || room.id,
-    maxRoleMemoryChars,
+  const identity = await resolveCollaborationMemoryIdentity(input);
+  const memoryV2 = await buildMemoryV2ConsumerManifest({
+    ...identity,
+    trigger: 'conversation-turn',
   });
 
   return {
-    roomId: room.id,
-    agentName,
-    participantAgentNames: [...room.participantAgentNames],
-    sessionId: room.sessionId,
-    promptBlock,
-    roleMemory,
+    roomId: identity.room.id,
+    agentName: identity.agentId || input.agentName,
+    participantAgentNames: [...identity.room.participantAgentNames],
+    sessionId: identity.sessionId,
+    runId: identity.runId,
+    workflowId: identity.workflowId,
+    promptBlock: memoryV2.promptBlock,
+    manifest: memoryV2.manifest,
+    memoryV2: memoryV2.status,
+    skippedReason: memoryV2.skippedReason,
   };
+}
+
+export async function readCollaborationParticipantMemoryDetail(input: {
+  roomId: string;
+  agentName: string;
+  ownerUserId: string;
+  memoryId: string;
+  detailVersion: number;
+  cursor?: string;
+  maxChars?: number;
+}): ReturnType<typeof readMemoryV2ConsumerDetail> {
+  const identity = await resolveCollaborationMemoryIdentity(input);
+  return readMemoryV2ConsumerDetail({
+    ...identity,
+    memoryId: input.memoryId,
+    detailVersion: input.detailVersion,
+    cursor: input.cursor,
+    maxChars: input.maxChars,
+  });
 }

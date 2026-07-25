@@ -67,6 +67,7 @@ describe('collaboration room store', () => {
       vi.resetModules();
       vi.doMock('@/lib/core/app-paths', () => ({
         getWorkspaceDataFile: (...segments: string[]) => path.join(dataDir, ...segments),
+        getWorkspaceRoot: () => dir,
       }));
       vi.doMock('@/lib/run/runtime-configs', () => ({
         getRuntimeAgentConfigPath: async (name: string) => path.join(agentsDir, `${name}.yaml`),
@@ -136,7 +137,7 @@ describe('collaboration room store', () => {
     });
   });
 
-  test('resolves collaboration participant memory through the shared memory resolver', async () => {
+  test('does not fall back to legacy role memory for a collaboration participant', async () => {
     await withTempDir('aceharness-collaboration-memory-', async (dir) => {
       const dataDir = path.join(dir, 'data');
       const agentsDir = path.join(dir, 'agents');
@@ -178,13 +179,18 @@ describe('collaboration room store', () => {
 
       const { room } = await getOrCreateDirectRoom({ agentName: 'alice', spaceType: 'office' });
       await ensureCollaborationRoomChatSession({ roomId: room.id });
-      const context = await resolveCollaborationParticipantMemoryContext({ roomId: room.id, agentName: 'alice' });
+      const context = await resolveCollaborationParticipantMemoryContext({
+        roomId: room.id,
+        agentName: 'alice',
+        ownerUserId: 'test-user',
+      });
 
-      expect(context.roleMemory.runtimeEnabled).toBe(true);
-      expect(context.roleMemory.maxChars).toBe(200);
-      expect(context.promptBlock).toContain('Alice 喜欢先给出结论');
-      await expect(resolveCollaborationParticipantMemoryContext({ roomId: room.id, agentName: 'missing' }))
-        .rejects.toThrow('该 Agent 不在协作房间中');
+      expect(context.promptBlock).not.toContain('Alice 喜欢先给出结论');
+      await expect(resolveCollaborationParticipantMemoryContext({
+        roomId: room.id,
+        agentName: 'missing',
+        ownerUserId: 'test-user',
+      })).rejects.toThrow('The requested Agent is not a collaboration room participant');
     });
   });
 });

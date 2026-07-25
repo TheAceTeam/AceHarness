@@ -4,20 +4,12 @@ import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState } from '@/lib/run/state-persistence';
 import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/spec/coding-store';
-import {
-  findRelevantWorkflowExperiences,
-  listWorkflowExperiences,
-  loadWorkflowFinalReview,
-} from '@/lib/workflow/experience-store';
+import { loadWorkflowFinalReview } from '@/lib/workflow/experience-store';
 import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getConfigMeta } from '@/lib/config/metadata';
 import { getSpecRootDir } from '@/lib/spec/persistence';
 import { resolve } from 'path';
 import type { SpecCodingDocument } from '@/lib/core/schemas';
-import {
-  listMemoryEntries,
-  type MemoryEntry,
-} from '@/lib/workflow/memory-store';
 import { compactWorkflowStatusDeltaForLive, compactWorkflowStatusForLive } from '@/lib/workflow/live-status';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
@@ -126,18 +118,6 @@ async function loadWorkflowRuntimeMeta(configFile: string): Promise<{
   }
 }
 
-function compactMemory(entries: MemoryEntry[]) {
-  return entries.map((entry) => ({
-    id: entry.id,
-    title: entry.title,
-    kind: entry.kind,
-    content: entry.content,
-    source: entry.source,
-    createdAt: entry.createdAt,
-    tags: entry.tags || [],
-  }));
-}
-
 function buildSpecCodingPayload(specCoding: SpecCodingDocument, source: 'run' | 'creation') {
   return {
     specCodingSummary: {
@@ -201,17 +181,6 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
     : status?.creationSessionId
       ? await loadCreationSession(status.creationSessionId).catch(() => null)
       : await loadLatestCreationSessionByFilename(configFile).catch(() => null);
-  const historicalExperiences = configFile
-    ? await listWorkflowExperiences({ configFile, limit: 5 }).catch(() => [])
-    : [];
-  const recalledExperiences = await findRelevantWorkflowExperiences({
-    configFile,
-    workflowName: runtimeMeta.workflowName,
-    requirements: runtimeMeta.requirements,
-    projectRoot: status?.workingDirectory || runtimeMeta.projectRoot,
-    excludeRunId: status?.runId || undefined,
-    limit: 5,
-  }).catch(() => []);
   const runSpecCoding = specCodingDisabled ? null : (status?.runSpecCoding || null);
   const creationSpecCoding = specCodingDisabled ? null : (creationSession?.specCoding || null);
   const displaySpecCoding = runSpecCoding || creationSpecCoding || null;
@@ -225,29 +194,6 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
   const sourceOfTruth = displaySpecCoding
     ? await buildWorkflowStructureMapping(configFile, displaySpecCoding)
     : null;
-  const supervisorName = status?.supervisorAgent || finalReview?.supervisorAgent || 'default-supervisor';
-  const workflowMemories = await listMemoryEntries({
-    scope: 'workflow',
-    key: configFile,
-    limit: 4,
-  }).catch(() => []);
-  const projectMemories = await listMemoryEntries({
-    scope: 'project',
-    key: status?.workingDirectory || runtimeMeta.projectRoot || configFile,
-    limit: 4,
-  }).catch(() => []);
-  const roleMemories = await listMemoryEntries({
-    scope: 'role',
-    key: supervisorName,
-    limit: 4,
-  }).catch(() => []);
-  const chatMemories = status?.supervisorSessionId
-    ? await listMemoryEntries({
-        scope: 'chat',
-        key: `${supervisorName}:${status.supervisorSessionId}`,
-        limit: 4,
-      }).catch(() => [])
-    : [];
 
   return {
     ...status,
@@ -268,70 +214,6 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
     sourceOfTruth,
     finalReview,
     qualityChecks: status?.qualityChecks || [],
-    memoryLayers: {
-      schema: {
-        scopes: ['role', 'project', 'workflow', 'chat'],
-        rules: [
-          'role: Agent 长期记忆，可跨 run 复用',
-          'project: 当前工程共享经验，不跨项目扩散',
-          'workflow: 当前配置/运行相关设计与复盘',
-          'chat: 单次会话补充记忆，只在本会话复用',
-        ],
-      },
-      runtime: {
-        specCodingSummary: runSpecCoding
-          ? {
-              id: runSpecCoding.id,
-              version: runSpecCoding.version,
-              summary: runSpecCoding.summary,
-              progressSummary: runSpecCoding.progress?.summary,
-            }
-          : null,
-        qualityChecks: status?.qualityChecks || [],
-      },
-      review: finalReview
-        ? {
-            summary: finalReview.summary,
-            nextFocus: finalReview.nextFocus,
-            experience: finalReview.experience,
-            generatedAt: finalReview.generatedAt,
-          }
-        : null,
-      history: historicalExperiences
-        .filter((item) => item.runId !== status?.runId)
-        .map((item) => ({
-          runId: item.runId,
-          status: item.status,
-          summary: item.summary,
-          nextFocus: item.nextFocus,
-          experience: item.experience,
-          generatedAt: item.generatedAt,
-        })),
-      role: {
-        agent: supervisorName,
-        memories: compactMemory(roleMemories),
-      },
-      project: {
-        key: status?.workingDirectory || runtimeMeta.projectRoot || configFile,
-        memories: compactMemory(projectMemories),
-      },
-      workflow: {
-        key: configFile,
-        memories: compactMemory(workflowMemories),
-      },
-      chat: {
-        sessionId: status?.supervisorSessionId || null,
-        memories: compactMemory(chatMemories),
-      },
-      recalledExperiences: recalledExperiences.map((item) => ({
-        runId: item.runId,
-        status: item.status,
-        summary: item.summary,
-        nextFocus: item.nextFocus,
-        experience: item.experience,
-        generatedAt: item.generatedAt,
-      })),
-    },
   };
 }
 
@@ -438,6 +320,7 @@ function createWorkflowStatusStream(request: Request, configFile?: string | null
   let timer: ReturnType<typeof setInterval> | null = null;
   const eventTypes = [
     'status', 'phase', 'step', 'result', 'checkpoint', 'agents',
+    'log',
     'iteration', 'iteration-complete', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled', 'context-updated',
     'route-decision', 'state-change', 'step-start', 'step-complete',
@@ -477,6 +360,7 @@ function createWorkflowStatusStream(request: Request, configFile?: string | null
           const status: any = await resolveWorkflowLiveStatusPayload(configFile, requestedRunId);
           const signature = JSON.stringify({
             status: status?.status,
+            statusReason: status?.statusReason,
             runId: status?.runId,
             currentPhase: status?.currentPhase,
             currentState: status?.currentState,

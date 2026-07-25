@@ -36,6 +36,11 @@ import { loadChatSession, saveChatSession, type PersistedChatSession, type Persi
 import { isCreationAssistantSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
 import { writeAcpxDebugTrace, type AcpxDebugTraceStage } from '@/lib/runtime-agent/acpx-debug-trace';
+import {
+  buildMemoryV2RecoverySource,
+  prepareHomepageChatMemoryV2,
+} from '@/lib/memory-v2-cutover/homepage-chat';
+import { AiMemoryV2EngineAdapter } from '@/lib/agent/ai-memory-engine-adapter';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 1200;
@@ -237,7 +242,8 @@ export async function POST(request: Request) {
       displayMessage,
       model,
       engine: perChatEngine,
-      sessionId,
+      sessionId: requestedSessionId,
+      runtimeSessionId,
       frontendSessionId,
       skipUserMessage,
       userMessageId,
@@ -254,9 +260,16 @@ export async function POST(request: Request) {
       return jsonError('消息不能为空', 400);
     }
 
+    const sessionId = typeof runtimeSessionId === 'string' && runtimeSessionId.trim()
+      ? runtimeSessionId.trim()
+      : (typeof requestedSessionId === 'string' ? requestedSessionId.trim() : '');
+
     const chatId = `chat-${Date.now()}`;
     const streamPrepT0 = Date.now();
     const useModel = model || '';
+    const engineRuntimeDirectory = typeof workingDirectory === 'string' && workingDirectory.trim()
+      ? workingDirectory.trim()
+      : getWorkspaceRoot();
 
     const isResume = !!sessionId;
     const {
@@ -278,14 +291,10 @@ export async function POST(request: Request) {
         : undefined,
       personalDir: auth.personalDir,
     });
-
     let validRuntimeSessionId: string | undefined = undefined;
     if (isResume) {
       validRuntimeSessionId = sessionId;
     }
-    const engineRuntimeDirectory = typeof workingDirectory === 'string' && workingDirectory.trim()
-      ? workingDirectory.trim()
-      : getWorkspaceRoot();
     const configuredEngine = await resolveRequestedChatRuntimeEngineType(perChatEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, configuredEngine);
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
@@ -316,6 +325,24 @@ export async function POST(request: Request) {
     const liveAssistantMessageId = typeof assistantMessageId === 'string' && assistantMessageId.trim()
       ? assistantMessageId.trim()
       : baseLiveSession?.messages.at(-1)?.id;
+    if (baseLiveSession) {
+      // A newly created homepage session must be persisted before V2 derives
+      // its continuity/authorization from the frontend session ID.
+      await saveChatSession(baseLiveSession);
+    }
+    const preparedMemoryV2 = await prepareHomepageChatMemoryV2({
+      ownerUserId: auth.id,
+      frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
+      message,
+    });
+    const memoryEngine = engine
+      ? new AiMemoryV2EngineAdapter(
+          engine,
+          (options) => options.step === 'chat',
+          preparedMemoryV2.plan,
+          preparedMemoryV2.memoryV2,
+        )
+      : null;
 
     if (isChatRuntimeTimingDebug()) {
       console.log(
@@ -324,7 +351,7 @@ export async function POST(request: Request) {
     }
 
     // Ensure engine config dir + skills symlink exists in working directory
-    if (engine) {
+    if (memoryEngine) {
       await ensureEngineRuntimeSkillsAvailable(configuredEngine, engineRuntimeDirectory, runtimeSkillNames);
     }
 
@@ -335,7 +362,7 @@ export async function POST(request: Request) {
     }
 
     // Non-Claude engines: stream through Engine wrapper events
-    if (engine) {
+    if (memoryEngine) {
       registerEngineStream(chatId, streamRecoveryKey, configuredEngine, useModel);
       writeChatStreamDebugTrace({
         stage: 'chat.stream.registered',
@@ -492,10 +519,10 @@ export async function POST(request: Request) {
         }
       };
 
-      engine.on('stream', onEngineStream);
+      memoryEngine.on('stream', onEngineStream);
 
       const startedAt = Date.now();
-      const execPromise = executeChatRuntimeWithContextRecovery(engine, {
+      const execPromise = executeChatRuntimeWithContextRecovery(memoryEngine, {
         agent: 'chat',
         step: 'chat',
         prompt: engineCommand.prompt,
@@ -509,6 +536,10 @@ export async function POST(request: Request) {
         rawPrompt: engineCommand.rawPrompt,
         env: runtimeDatabaseEnv,
       }, {
+        buildCompactSource: () => buildMemoryV2RecoverySource({
+          promptBlock: memoryEngine.getLatestMemoryV2PromptBlock(),
+          currentRequest: engineCommand.prompt,
+        }),
         onContextReset: () => {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
         },
@@ -678,7 +709,8 @@ export async function POST(request: Request) {
         }
         throw error;
       }).finally(() => {
-        engine.off('stream', onEngineStream);
+        memoryEngine.off('stream', onEngineStream);
+        memoryEngine.releaseMemoryV2();
       });
 
       const entry = {
@@ -687,7 +719,7 @@ export async function POST(request: Request) {
         chatId,
         cancel: () => {
           setEngineStreamStatus(chatId, 'killed');
-          engine.cancel();
+          memoryEngine.cancel();
         },
       };
       activeChats.set(chatId, entry);

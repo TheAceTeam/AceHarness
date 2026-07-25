@@ -3,8 +3,6 @@ import { resolve } from 'path';
 import { parse } from 'yaml';
 import { requireAuth } from '@/lib/auth/middleware';
 import { getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
-import { findRelevantWorkflowExperiences } from '@/lib/workflow/experience-store';
-import { listAgentRelationships } from '@/lib/agent/relationship-store';
 import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
 import { buildRecommendedAgents } from '@/lib/config/recommendations';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
@@ -113,24 +111,10 @@ export async function POST(request: Request) {
 
   try {
     const body = await readJsonBody<Record<string, any>>(request, {});
-    const workflowName = String(body?.workflowName || '').trim();
-    const requirements = String(body?.requirements || '').trim();
-    const workingDirectory = String(body?.workingDirectory || '').trim();
     const referenceWorkflow = String(body?.referenceWorkflow || '').trim();
     const workflowMode = normalizeRequestedWorkflowMode(String(body?.workflowMode || '').trim());
-    const useHistoricalExperience = body?.useHistoricalExperience !== false;
 
     const explicitReferenceWorkflow = referenceWorkflow || undefined;
-
-    const relatedExperiences = useHistoricalExperience
-      ? await findRelevantWorkflowExperiences({
-          workflowName: workflowName || undefined,
-          requirements: requirements || undefined,
-          projectRoot: workingDirectory || undefined,
-          configFile: referenceWorkflow || undefined,
-          limit: 4,
-        }).catch(() => [])
-      : [];
 
     let inferredReferenceWorkflow: string | undefined;
     let referenceConfig: any | null = null;
@@ -140,42 +124,16 @@ export async function POST(request: Request) {
         inferredReferenceWorkflow = explicitReferenceWorkflow;
         referenceConfig = explicitConfig;
       }
-    } else if (useHistoricalExperience) {
-      for (const entry of relatedExperiences) {
-        const candidate = typeof entry.configFile === 'string' ? entry.configFile.trim() : '';
-        if (!candidate) continue;
-        const candidateConfig = await loadReferenceWorkflowConfig(candidate);
-        if (candidateConfig && getWorkflowMode(candidateConfig) === workflowMode) {
-          inferredReferenceWorkflow = candidate;
-          referenceConfig = candidateConfig;
-          break;
-        }
-      }
     }
     const availableAgents = await listAvailableAgents();
 
     const referenceAgents = referenceConfig ? collectWorkflowAgents(referenceConfig).slice(0, 8) : [];
-    const relationshipHints = (await Promise.all(
-      referenceAgents.map(async (agentName) => {
-        const relations = await listAgentRelationships(agentName, 4).catch(() => []);
-        return relations
-          .filter((item) => referenceAgents.includes(item.counterpart))
-          .slice(0, 2)
-          .map((item) => ({
-            agent: agentName,
-            counterpart: item.counterpart,
-            synergyScore: item.synergyScore,
-            strengths: item.strengths.slice(0, 2),
-            lastConfigFile: item.lastConfigFile,
-          }));
-      })
-    )).flat();
     const recommendedAgents = availableAgents.allNames.size > 0 && availableAgents.stepNames.size === 0
       ? []
       : buildRecommendedAgents({
           availableAgents: availableAgents.stepNames,
           referenceAgents,
-          relationshipHints,
+          relationshipHints: [],
         });
     const recommendedSupervisorAgent = (() => {
       const supervisorAgent = collectReferenceSupervisorAgent(referenceConfig);
@@ -189,14 +147,7 @@ export async function POST(request: Request) {
 
     return jsonOk({
       recommendations: {
-        experiences: relatedExperiences.map((entry) => ({
-          runId: entry.runId,
-          workflowName: entry.workflowName,
-          configFile: entry.configFile,
-          summary: entry.summary,
-          experience: entry.experience.slice(0, 2),
-          nextFocus: entry.nextFocus.slice(0, 1),
-        })),
+        experiences: [],
         referenceWorkflow: inferredReferenceWorkflow && referenceConfig ? {
           filename: inferredReferenceWorkflow,
           name: referenceConfig?.workflow?.name,
@@ -204,14 +155,14 @@ export async function POST(request: Request) {
           mode: getWorkflowMode(referenceConfig),
           agents: referenceAgents,
           supervisorAgent: collectReferenceSupervisorAgent(referenceConfig),
-          source: explicitReferenceWorkflow ? 'manual' : 'recommended-experience',
-          autoApply: !explicitReferenceWorkflow,
+          source: 'manual',
+          autoApply: false,
         } : null,
         recommendedAgents,
         recommendedSupervisorAgent,
         availableStepAgents: [...availableAgents.stepNames],
         availableSupervisorAgents: [...availableAgents.supervisorNames],
-        relationshipHints: relationshipHints.slice(0, 8),
+        relationshipHints: [],
       },
     });
   } catch (error: any) {

@@ -61,7 +61,10 @@ export async function POST(
       agentName: name,
       message: String(body?.message || ''),
       mode: body?.mode === 'workflow-chat' ? 'workflow-chat' : 'standalone-chat',
-      sessionId: typeof body?.sessionId === 'string' ? body.sessionId : null,
+      sessionId: typeof body?.runtimeSessionId === 'string'
+        ? body.runtimeSessionId
+        : (typeof body?.sessionId === 'string' ? body.sessionId : null),
+      frontendSessionId: typeof body?.frontendSessionId === 'string' ? body.frontendSessionId : null,
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
       workflowContext: body?.workflowContext && typeof body.workflowContext === 'object'
         ? body.workflowContext as Record<string, any>

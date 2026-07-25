@@ -1,144 +1,124 @@
-import { loadSystemSettings, normalizeAgentMemorySettings, type SystemSettings } from '@/lib/config/system-settings';
+import type {
+  MemoryManifestQuery,
+  MemoryRequestContext,
+} from '@/lib/memory-v2';
+import type {
+  AiMemoryManifestItemView,
+  AiMemoryManifestService,
+} from '@/lib/agent/ai-memory-prompt';
 import {
-  buildMemoryPromptBlock,
-  listMemoryEntries,
-  type MemoryEntry,
-} from '@/lib/workflow/memory-store';
-import {
-  buildWorkflowExperiencePromptBlock,
-  findRelevantWorkflowExperiences,
-} from '@/lib/workflow/experience-store';
+  buildAiMemoryPromptManifest,
+} from '@/lib/agent/ai-memory-prompt';
+import type { AiMemoryContinuityIdentity } from '@/lib/agent/ai-memory-session';
+import { applyAiMemoryContinuity } from '@/lib/agent/ai-memory-session';
 
 export type AgentMemoryResolverMode = 'standalone-chat' | 'workflow-chat';
 
+/**
+ * Task 4 consumers supply this from authenticated server state. The resolver
+ * does not construct authorization context from names, paths, or runtime IDs.
+ */
+export interface AgentMemoryResolverV2Context {
+  memoryService: AiMemoryManifestService;
+  requestContext: MemoryRequestContext;
+  continuity: AiMemoryContinuityIdentity;
+  trigger?: MemoryManifestQuery['trigger'];
+  queryText?: string;
+  targetStepAttemptId?: string;
+  maxManifestChars?: number;
+}
+
 export interface AgentMemorySnapshot {
   runtimeEnabled: boolean;
-  entries: MemoryEntry[];
+  entries: AiMemoryManifestItemView[];
   mergedContent: string;
   charCount: number;
   maxChars: number;
   overLimit: boolean;
   promptBlock: string;
+  requiredReadPreflight: 'ready' | 'unavailable';
 }
 
-function clampMemoryBudget(value: unknown): number {
+function clampManifestBudget(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 5000;
-  return Math.max(0, Math.min(50000, Math.floor(parsed)));
+  return Math.max(1, Math.min(50000, Math.floor(parsed)));
 }
 
-function truncateByBudget(text: string, maxChars: number): string {
-  if (maxChars <= 0) return '';
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, Math.max(0, maxChars - 18)).trimEnd()}\n...（已截断）`;
+function emptySnapshot(maxChars: number, runtimeEnabled: boolean): AgentMemorySnapshot {
+  return {
+    runtimeEnabled,
+    entries: [],
+    mergedContent: '',
+    charCount: 0,
+    maxChars,
+    overLimit: false,
+    promptBlock: '',
+    requiredReadPreflight: 'unavailable',
+  };
 }
 
+function resolveManifest(
+  v2: AgentMemoryResolverV2Context,
+  fallbackTrigger: MemoryManifestQuery['trigger'],
+  fallbackMaxChars: number,
+) {
+  const context = applyAiMemoryContinuity(v2.requestContext, v2.continuity);
+  return buildAiMemoryPromptManifest({
+    memoryService: v2.memoryService,
+    context,
+    trigger: v2.trigger ?? fallbackTrigger,
+    ...(v2.queryText ? { queryText: v2.queryText } : {}),
+    ...(v2.targetStepAttemptId ? { targetStepAttemptId: v2.targetStepAttemptId } : {}),
+    maxManifestChars: v2.maxManifestChars ?? fallbackMaxChars,
+  });
+}
+
+/**
+ * Compatibility entry point for callers being migrated by Task 4. It never
+ * reads role, project, workflow, chat, YAML, or process-local legacy memory.
+ */
 export async function resolveAgentRoleMemory(input: {
   agentName: string;
   maxChars?: number;
   runtimeEnabled?: boolean;
+  v2?: AgentMemoryResolverV2Context;
 }): Promise<AgentMemorySnapshot> {
-  const systemSettings = await loadSystemSettings().catch((): SystemSettings => ({}));
-  const settings = normalizeAgentMemorySettings(systemSettings.agentMemory);
-  const runtimeEnabled = input.runtimeEnabled ?? settings.runtimeEnabled;
-  const maxChars = clampMemoryBudget(input.maxChars);
-  const entries = runtimeEnabled
-    ? await listMemoryEntries({ scope: 'role', key: input.agentName, limit: 60 }).catch(() => [])
-    : [];
-  const mergedContent = truncateByBudget(
-    entries.map((entry) => entry.content.trim()).filter(Boolean).join('\n\n'),
-    maxChars,
-  );
-  const promptBlock = mergedContent
-    ? [
-      '<agent-memory>',
-      '以下是该 Agent 的基础长期记忆，仅用于保持长期偏好、经验和已知背景。',
-      mergedContent,
-      '</agent-memory>',
-    ].join('\n')
-    : '';
-
+  const maxChars = clampManifestBudget(input.maxChars);
+  const runtimeEnabled = input.runtimeEnabled ?? Boolean(input.v2);
+  if (!runtimeEnabled || !input.v2) return emptySnapshot(maxChars, runtimeEnabled);
+  const manifest = resolveManifest(input.v2, 'conversation-turn', maxChars);
+  const entries = [...manifest.requiredReadItems, ...manifest.items];
   return {
-    runtimeEnabled,
+    runtimeEnabled: true,
     entries,
-    mergedContent,
-    charCount: mergedContent.length,
+    // This historical field now carries an index-only prompt block. It never
+    // contains a memory detail body.
+    mergedContent: manifest.promptBlock,
+    charCount: manifest.promptSerializedChars,
     maxChars,
-    overLimit: entries.map((entry) => entry.content.trim()).filter(Boolean).join('\n\n').length > maxChars,
-    promptBlock,
+    overLimit: manifest.omittedCount > 0,
+    promptBlock: manifest.promptBlock,
+    requiredReadPreflight: manifest.requiredReadPreflight,
   };
 }
 
 export async function resolveAgentMemoryContext(input: {
   agentName: string;
   mode: AgentMemoryResolverMode;
-  workflowContext?: Record<string, any> | null;
+  workflowContext?: Record<string, unknown> | null;
   workingDirectory?: string;
+  /** Deprecated engine-session input. It is deliberately never used for V2. */
   sessionId?: string;
   maxRoleMemoryChars?: number;
+  v2?: AgentMemoryResolverV2Context;
 }): Promise<string> {
-  const systemSettings = await loadSystemSettings().catch((): SystemSettings => ({}));
-  const settings = normalizeAgentMemorySettings(systemSettings.agentMemory);
-  if (!settings.runtimeEnabled) return '';
-
-  const sections: string[] = [];
-  const roleMemory = await resolveAgentRoleMemory({
-    agentName: input.agentName,
-    maxChars: input.maxRoleMemoryChars,
-    runtimeEnabled: true,
-  });
-  if (roleMemory.promptBlock) sections.push(roleMemory.promptBlock);
-
-  if (input.mode === 'workflow-chat' && input.workflowContext?.configFile) {
-    const workflowMemories = await listMemoryEntries({
-      scope: 'workflow',
-      key: String(input.workflowContext.configFile),
-      limit: 3,
-    }).catch(() => []);
-    const workflowBlock = buildMemoryPromptBlock('当前工作流记忆', workflowMemories, { maxItems: 3 });
-    if (workflowBlock) sections.push(workflowBlock);
-
-    const relatedExperiences = await findRelevantWorkflowExperiences({
-      configFile: String(input.workflowContext.configFile || ''),
-      workflowName: String(input.workflowContext.workflowName || ''),
-      requirements: String(input.workflowContext.requirements || ''),
-      projectRoot: input.workingDirectory,
-      agentName: input.agentName,
-      excludeRunId: typeof input.workflowContext.runId === 'string' ? input.workflowContext.runId : undefined,
-      limit: 2,
-    }).catch(() => []);
-    const experienceBlock = buildWorkflowExperiencePromptBlock(relatedExperiences, '相关历史经验');
-    if (experienceBlock) sections.push(experienceBlock);
-  }
-
-  if (input.workingDirectory) {
-    const projectMemories = await listMemoryEntries({
-      scope: 'project',
-      key: input.workingDirectory,
-      limit: 3,
-    }).catch(() => []);
-    const projectBlock = buildMemoryPromptBlock('项目级共享记忆', projectMemories, { maxItems: 3 });
-    if (projectBlock) sections.push(projectBlock);
-  }
-
-  if (input.sessionId) {
-    const chatMemories = await listMemoryEntries({
-      scope: 'chat',
-      key: `${input.agentName}:${input.sessionId}`,
-      limit: 4,
-    }).catch(() => []);
-    const chatBlock = buildMemoryPromptBlock('当前会话补充记忆', chatMemories, { maxItems: 4 });
-    if (chatBlock) sections.push(chatBlock);
-  }
-
-  if (sections.length === 0) return '';
-
-  return [
-    '## 多层记忆注入规则',
-    '- 角色长期记忆：可跨 run 沉淀这个 Agent 的稳定协作偏好与复盘结果。',
-    '- 项目级共享记忆：仅代表当前工程的长期经验，不可误用到其他工程。',
-    '- 工作流记忆：只适用于当前 workflow/run 的设计与执行上下文。',
-    '- 会话补充记忆：只适用于当前 chat session，不要把它提升为长期事实，除非用户再次确认。',
-    ...sections,
-  ].join('\n\n');
+  const maxChars = clampManifestBudget(input.maxRoleMemoryChars);
+  if (!input.v2) return '';
+  const manifest = resolveManifest(
+    input.v2,
+    input.mode === 'workflow-chat' ? 'step-start' : 'conversation-turn',
+    maxChars,
+  );
+  return manifest.promptBlock;
 }

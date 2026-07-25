@@ -52,12 +52,6 @@ type WorkflowSummary = {
 };
 
 type AgentDraftRecommendations = {
-  experiences: Array<{
-    runId: string;
-    workflowName?: string;
-    configFile: string;
-    summary: string;
-  }>;
   referenceWorkflow: null | {
     filename: string;
     name?: string;
@@ -67,12 +61,6 @@ type AgentDraftRecommendations = {
     phases: string[];
     states: string[];
   };
-  relationshipHints: Array<{
-    agent: string;
-    counterpart: string;
-    synergyScore: number;
-    strengths: string[];
-  }>;
 };
 
 type DraftValidation = {
@@ -1581,51 +1569,20 @@ export default function AIAgentCreatorModal({
                   </div>
                 ) : null}
 
-                {!isReviseMode && recommendations ? (
+                {!isReviseMode && recommendations?.referenceWorkflow ? (
                   <div className="rounded-[24px] border border-border/70 bg-card/70 p-4">
-                    <div className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Recommendation Chain</div>
+                    <div className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Reference Workflow</div>
                     <div className="mt-3 space-y-3 text-xs leading-6 text-muted-foreground">
-                      {recommendations.referenceWorkflow ? (
-                        <div className="rounded-2xl border bg-muted/30 p-3">
-                          <div className="font-medium text-foreground">参考工作流</div>
-                          <div>{recommendations.referenceWorkflow.name || recommendations.referenceWorkflow.filename}</div>
-                          {recommendations.referenceWorkflow.description ? (
-                            <div>{recommendations.referenceWorkflow.description}</div>
-                          ) : null}
-                          {recommendations.referenceWorkflow.agents.length ? (
-                            <div>已有角色：{recommendations.referenceWorkflow.agents.join('、')}</div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {recommendations.relationshipHints.length ? (
-                        <div className="rounded-2xl border bg-muted/30 p-3">
-                          <div className="font-medium text-foreground">协作关系提示</div>
-                          <div className="mt-2 space-y-2">
-                            {recommendations.relationshipHints.slice(0, 3).map((item) => (
-                              <div key={`${item.agent}-${item.counterpart}`} className="rounded-xl border px-3 py-2">
-                                <div>{item.agent} × {item.counterpart}</div>
-                                <div>协作倾向 {item.synergyScore >= 0 ? '+' : ''}{item.synergyScore}</div>
-                                {item.strengths.length ? (
-                                  <div>强项：{item.strengths.join('、')}</div>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      {recommendations.experiences.length ? (
-                        <div className="rounded-2xl border bg-muted/30 p-3">
-                          <div className="font-medium text-foreground">历史经验</div>
-                          <div className="mt-2 space-y-2">
-                            {recommendations.experiences.map((item) => (
-                              <div key={item.runId} className="rounded-xl border px-3 py-2">
-                                <div>{item.workflowName || item.configFile}</div>
-                                <div>{item.summary}</div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
+                      <div className="rounded-2xl border bg-muted/30 p-3">
+                        <div className="font-medium text-foreground">参考工作流</div>
+                        <div>{recommendations.referenceWorkflow.name || recommendations.referenceWorkflow.filename}</div>
+                        {recommendations.referenceWorkflow.description ? (
+                          <div>{recommendations.referenceWorkflow.description}</div>
+                        ) : null}
+                        {recommendations.referenceWorkflow.agents.length ? (
+                          <div>已有角色：{recommendations.referenceWorkflow.agents.join('、')}</div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 ) : null}

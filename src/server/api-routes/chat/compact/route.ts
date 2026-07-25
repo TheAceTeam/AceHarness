@@ -7,13 +7,20 @@ import {
   type RequestedSkillsInput,
 } from '@/lib/chat/request-options';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
-import { prepareAgentChat } from '@/lib/agent/chat-service';
+import {
+  buildAgentChatMemoryV2RecoverySource,
+  prepareAgentChat,
+} from '@/lib/agent/chat-service';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 import {
   compactChatRuntimeContextManually,
   createChatRuntimeEngine,
   resolveRequestedChatRuntimeEngineType,
 } from '@/lib/chat/chat-engine-runtime';
+import {
+  buildMemoryV2RecoverySource,
+  resolveHomepageChatMemoryV2,
+} from '@/lib/memory-v2-cutover/homepage-chat';
 
 const COMPACT_TIMEOUT_MS = 20 * 60 * 1000;
 const COMPACT_SESSION_SEED = [
@@ -26,40 +33,6 @@ function isOwner(session: any, userId: string): boolean {
   if (!session) return false;
   if (!session.createdBy) return true;
   return session.createdBy === userId;
-}
-
-function formatMessageForCompact(message: any, index: number): string {
-  const role = message?.role === 'assistant' ? 'assistant' : message?.role === 'error' ? 'error' : 'user';
-  const content = String(message?.rawContent || message?.content || '').trim();
-  if (!content) return '';
-  const meta = [
-    `#${index + 1}`,
-    role,
-    message?.engine ? `engine=${message.engine}` : '',
-    message?.model ? `model=${message.model}` : '',
-    message?.timestamp ? `timestamp=${new Date(message.timestamp).toISOString()}` : '',
-  ].filter(Boolean).join(' ');
-  return `<message ${meta}>\n${content}\n</message>`;
-}
-
-function buildCompactSource(session: any, workingDirectory?: string): string {
-  const messages = Array.isArray(session?.messages) ? session.messages : [];
-  return [
-    '# Chat Session Transcript',
-    '',
-    `Frontend session ID: ${session?.id || ''}`,
-    `Title: ${session?.title || ''}`,
-    `Engine: ${session?.engine || ''}`,
-    `Model: ${session?.model || ''}`,
-    workingDirectory ? `Working directory: ${workingDirectory}` : '',
-    session?.agentBinding ? `Agent binding: ${JSON.stringify(session.agentBinding)}` : '',
-    session?.workflowBinding ? `Workflow binding: ${JSON.stringify(session.workflowBinding)}` : '',
-    session?.creationSession ? `Creation binding: ${JSON.stringify(session.creationSession)}` : '',
-    '',
-    '# Messages',
-    '',
-    messages.map(formatMessageForCompact).filter(Boolean).join('\n\n'),
-  ].filter((part) => part !== '').join('\n');
 }
 
 async function withTimeout<T>(promise: Promise<T>, onTimeout: () => void): Promise<T> {
@@ -100,7 +73,6 @@ export async function POST(request: Request) {
       return jsonError('无权访问该会话', 403);
     }
 
-    const compactSource = buildCompactSource(session, typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined);
     const requestedRuntimeSessionId = typeof body?.runtimeSessionId === 'string' && body.runtimeSessionId.trim()
       ? body.runtimeSessionId.trim()
       : typeof body?.sessionId === 'string' && body.sessionId.trim()
@@ -116,6 +88,7 @@ export async function POST(request: Request) {
         message: COMPACT_SESSION_SEED,
         mode: workflowBinding?.supervisorAgent ? 'workflow-chat' : 'standalone-chat',
         sessionId: requestedRuntimeSessionId || workflowBinding?.supervisorSessionId || null,
+        frontendSessionId,
         workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
         workflowContext: workflowBinding?.supervisorAgent
           ? {
@@ -145,7 +118,7 @@ export async function POST(request: Request) {
         mcpServers: prepared.roleConfig.mcpServers,
         userId: prepared.userId,
       }, {
-        buildCompactSource: () => compactSource,
+        buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(prepared, COMPACT_SESSION_SEED),
         compactInstructions: 'This is a manual user-triggered /compact command. Focus on preserving enough state for future chat turns; do not invent completed work.',
       }), () => prepared.engine.cancel());
 
@@ -191,6 +164,12 @@ export async function POST(request: Request) {
         : undefined,
       personalDir: user.personalDir,
     });
+    const memoryV2 = await resolveHomepageChatMemoryV2({
+      ownerUserId: user.id,
+      frontendSessionId,
+      message: COMPACT_SESSION_SEED,
+    });
+    const v2SystemPrompt = [systemPrompt, memoryV2.promptBlock].filter(Boolean).join('\n\n');
     await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot(), runtimeSkillNames);
     const engine = await createChatRuntimeEngine(engineType);
     if (!engine) {
@@ -202,14 +181,17 @@ export async function POST(request: Request) {
       agent: 'chat',
       step: 'manual-compact',
       prompt: COMPACT_SESSION_SEED,
-      systemPrompt,
+      systemPrompt: v2SystemPrompt,
       model: useModel,
       workingDirectory: getWorkspaceRoot(),
       sessionId: requestedRuntimeSessionId,
       mcpServers: enabledMcpServers,
       userId: user.id,
     }, {
-      buildCompactSource: () => compactSource,
+      buildCompactSource: () => buildMemoryV2RecoverySource({
+        promptBlock: memoryV2.promptBlock,
+        currentRequest: COMPACT_SESSION_SEED,
+      }),
       compactInstructions: 'This is a manual user-triggered /compact command. Preserve user intent, tool/action results, files, errors, and pending tasks for future chat turns.',
     }), () => engine.cancel());
 
@@ -217,7 +199,7 @@ export async function POST(request: Request) {
       agent: 'chat',
       step: 'manual-compact-handoff',
       prompt: compacted.prompt,
-      systemPrompt,
+      systemPrompt: v2SystemPrompt,
       model: useModel,
       workingDirectory: getWorkspaceRoot(),
       allowedTools: [],
