@@ -1,9 +1,10 @@
 stages:
   - mirror
 
-# This job runs only after GitCode's protected default branch changes. Keeping
-# the token out of feature-branch pipelines prevents untrusted branch code from
-# reading GitHub write credentials.
+# This job runs only after GitCode's protected default branch changes and only
+# when its protected token is configured. Keeping the token out of feature
+# branch pipelines prevents untrusted branch code from reading GitHub write
+# credentials.
 mirror_gitcode_to_github:
   stage: mirror
   image: alpine/git:2.47.2
@@ -12,7 +13,7 @@ mirror_gitcode_to_github:
     GIT_STRATEGY: none
     MIRROR_SOURCE_URL: "https://gitcode.com/Cangjie-SIG/ACEHarness.git"
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "main" && $GITHUB_MIRROR_TOKEN'
   script:
     - |
       set -eu
