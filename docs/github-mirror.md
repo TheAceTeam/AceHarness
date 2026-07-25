@@ -6,7 +6,7 @@ read-only mirror of GitCode's branches and tags.
 ## Behavior
 
 - A merge into GitCode's `main` runs `.gitlab-ci.yml` and immediately mirrors
-  every branch and tag to GitHub when `GITHUB_MIRROR_TOKEN` is configured.
+  every branch and tag to GitHub when `MIRROR_PUSH_TOKEN` is configured.
 - The GitHub workflow at `.github/workflows/sync-from-gitcode.yml` runs every
   15 minutes and repairs drift for every branch and tag, including branches
   that predate this configuration.
@@ -26,8 +26,8 @@ settings are not Git refs and are not mirrored.
    needs `Contents: Read and write` for this repository. Grant workflow write
    permission as well, because the initial mirror updates `.github/workflows`.
 2. Add the token as a masked, protected GitCode CI/CD variable named
-   `GITHUB_MIRROR_TOKEN`. It must be available to the protected `main` branch.
-3. Add the same token to GitHub Actions secrets as `GITHUB_MIRROR_TOKEN`.
+   `MIRROR_PUSH_TOKEN`. It must be available to the protected `main` branch.
+3. Add the same token to GitHub Actions secrets as `MIRROR_PUSH_TOKEN`.
    The workflow falls back to `github.token`, but a dedicated token is required
    when a GitHub ruleset does not allow `github-actions[bot]` to force-push.
 4. In GitHub branch rulesets, prohibit direct writes for normal users and give

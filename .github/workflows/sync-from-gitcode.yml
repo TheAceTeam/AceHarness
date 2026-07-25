@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 20
     env:
       SOURCE_REPOSITORY: https://gitcode.com/Cangjie-SIG/ACEHarness.git
-      MIRROR_TOKEN: ${{ secrets.GITHUB_MIRROR_TOKEN || github.token }}
+      MIRROR_TOKEN: ${{ secrets.MIRROR_PUSH_TOKEN || github.token }}
     steps:
       - name: Mirror branches and tags from GitCode
         shell: bash
@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
 
           if [[ -z "${MIRROR_TOKEN:-}" ]]; then
-            echo "No GitHub write token is available. Configure GITHUB_MIRROR_TOKEN."
+            echo "No GitHub write token is available. Configure MIRROR_PUSH_TOKEN."
             exit 1
           fi
 
