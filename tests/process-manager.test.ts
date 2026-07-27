@@ -220,7 +220,7 @@ describe('ProcessManager', () => {
     expect(execSyncMock).not.toHaveBeenCalled();
   });
 
-  test('requested system cleanup only matches exact Claude one-shot commands', async () => {
+  test('requested system cleanup ignores command-line-only Claude processes without ACP sessions', async () => {
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
     execSyncMock.mockReturnValue([
       `91001 ${process.pid} Tue Jul 23 10:05:00 2026 /tmp/claude --dangerously-skip-permissions`,
@@ -231,14 +231,12 @@ describe('ProcessManager', () => {
 
     const result = await processManager.killAllSystem({
       sweepAgentProcesses: true,
-      workspacePaths: ['/tmp/workspace'],
+      workspacePaths: ['/tmp/aceharness-process-manager-test-no-acp-sessions'],
     });
 
-    expect(result.pids).toEqual([91002, 91004]);
-    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
-    expect(killSpy).toHaveBeenCalledWith(91004, 'SIGTERM');
-    expect(killSpy).not.toHaveBeenCalledWith(91001, expect.anything());
-    expect(killSpy).not.toHaveBeenCalledWith(91003, expect.anything());
+    expect(result.pids).toEqual([]);
+    expect(result.agentRootsMatched).toBe(0);
+    expect(killSpy).not.toHaveBeenCalled();
   });
 
   test('getProcess returns copy without childProcess', () => {

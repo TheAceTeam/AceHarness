@@ -60,17 +60,6 @@ function isDescendantOfServer(pid: number, table: Map<number, ProcessRow>): bool
   return false;
 }
 
-/**
- * One-shot `claude -p` / `claude --print` invocations spawned by the claude engine.
- *
- * Anchored twice over, because both loopholes were observed on a real machine:
- *  - `-p` must be a whole argument, or `claude --dangerously-skip-permissions` matches (the `-p`
- *    inside `-permissions`) and the sweep hits the user's own interactive sessions;
- *  - `claude` must be the command being run, not merely a substring, or the wrapper shells that
- *    an interactive session spawns for its own tool calls match on their embedded command text.
- */
-const CLAUDE_ONESHOT_COMMAND = /^\s*(?:\S*\/)?claude\s+(?:.*\s+)?(?:-p|--print)(?:[\s=]|$)/;
-
 /** Session records older than this are treated as dead without being opened. */
 const SESSION_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -429,7 +418,7 @@ class ProcessManager extends EventEmitter {
     // Engine cancellation is cooperative: an agent stuck in a long tool call (a compiler build,
     // say) keeps running — and keeps streaming — well after its run has been marked stopped. The
     // survivors then contend with the next run for resources and keep writing into its workspace.
-    // This sweep used to match `claude.*-p` only, so ACP-engine agents were never reaped at all.
+    // Agent cleanup is based on ACP session records rather than engine-specific command lines.
     //
     const signalled: number[] = [];
     // Set whenever a sweep was requested, so "asked to sweep but matched nothing" stays reportable
@@ -441,21 +430,6 @@ class ProcessManager extends EventEmitter {
       // edits, run deletion, DELETE /api/processes) would otherwise pay a synchronous `ps` for
       // nothing.
       const table = options.sweepAgentProcesses ? readProcessTable() : new Map<number, ProcessRow>();
-
-      // Legacy claude-engine one-shots. Nothing in this repo produces them any more — the claude
-      // agent is registered as an acpx agent and launches as `claude acp`, so it goes through the
-      // ACP path above. Kept only as a bounded fallback for older setups, with two honest caveats:
-      //   - it does NOT honour `workspacePaths`, so it is not scoped per run;
-      //   - the ancestry check excludes true orphans, which is what the original sweep was after —
-      //     that capability is gone, traded for not signalling the user's own `claude -p` runs.
-      if (options.sweepAgentProcesses) {
-        for (const [pid, row] of table) {
-          if (pid === process.pid) continue;
-          if (!CLAUDE_ONESHOT_COMMAND.test(row.command)) continue;
-          if (!isDescendantOfServer(pid, table)) continue;
-          try { process.kill(pid, 'SIGTERM'); signalled.push(pid); } catch { /* already gone */ }
-        }
-      }
 
       // ACP agent trees. Cancellation is cooperative, so an agent blocked in a long tool call
       // ignores SIGTERM and has to be escalated — these are identified structurally (a recorded
