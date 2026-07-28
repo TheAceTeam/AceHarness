@@ -23,7 +23,7 @@ describe('CSIHarness product identity', () => {
   test('publishes only the independent npm package and CLI command', async () => {
     const pkg = JSON.parse(await readFile(path.join(process.cwd(), 'package.json'), 'utf8'));
     expect(pkg.name).toBe('csiharness');
-    expect(pkg.version).toBe('0.1.0');
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
     expect(pkg.bin).toEqual({ csiharness: 'bin/csiharness.js' });
     expect(pkg.bin).not.toHaveProperty('ace');
   });

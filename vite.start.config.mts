@@ -74,6 +74,15 @@ export default defineConfig({
     ],
   },
   ssr: {
+    noExternal: [
+      'acpx',
+      '@agentclientprotocol/sdk',
+      '@tanstack/react-start',
+      'h3-v2',
+      'rou3',
+      'seroval',
+      'srvx',
+    ],
     external: [
       '@cangjielang/napi-cj',
       'better-sqlite3',

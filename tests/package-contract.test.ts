@@ -16,6 +16,22 @@ async function projectPathExists(relativePath: string): Promise<boolean> {
 }
 
 describe('package contract', () => {
+  test('keeps build-only packages out of the published production dependency graph', () => {
+    const productionDependencies = packageJson.dependencies ?? {};
+    const developmentDependencies = packageJson.devDependencies ?? {};
+    const bundledBuildDependencies = [
+      '@tanstack/react-start',
+      'acpx',
+      'tailwindcss-animate',
+      'vite',
+    ];
+
+    for (const dependency of bundledBuildDependencies) {
+      expect(productionDependencies).not.toHaveProperty(dependency);
+      expect(developmentDependencies).toHaveProperty(dependency);
+    }
+  });
+
   test('package exposes the intended global install entrypoints', async () => {
     expect(packageJson.name).toBe('csiharness');
     expect(packageJson.main).toBe('scripts/start-tanstack-start.mjs');

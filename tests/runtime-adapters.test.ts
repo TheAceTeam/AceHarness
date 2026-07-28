@@ -25,7 +25,8 @@ describe('runtime adapters', () => {
     // acpx@0.12.0 is installed and package.json exports real runtime and flow
     // entrypoints. This adapter remains an injectable wrapper until ACEHarness
     // wires AcpRuntime construction and session stores deliberately.
-    expect(projectPackageJson.dependencies.acpx).toBe('^0.12.0');
+    expect(projectPackageJson.devDependencies.acpx).toBe('^0.12.0');
+    expect(projectPackageJson.dependencies).not.toHaveProperty('acpx');
 
     if (!canResolve('acpx')) {
       expect(canResolve('acpx/runtime')).toBe(false);
