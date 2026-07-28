@@ -1,8 +1,13 @@
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const { execSyncMock } = vi.hoisted(() => ({
   execSyncMock: vi.fn(),
 }));
+
+const TEST_ACE_HOME = `/tmp/aceharness-process-manager-test-${process.pid}`;
+const ORIGINAL_ACE_HOME = process.env.ACE_HOME;
 
 vi.mock('child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('child_process')>();
@@ -17,6 +22,8 @@ import { processManager } from '@/lib/core/process-manager';
 // Each test gets a clean-ish state. The ProcessManager is a singleton,
 // so we work with it directly and clean up after each test.
 beforeEach(() => {
+  process.env.ACE_HOME = TEST_ACE_HOME;
+  rmSync(TEST_ACE_HOME, { recursive: true, force: true });
   execSyncMock.mockReset();
 
   // Kill any leftover processes from previous tests
@@ -28,9 +35,18 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  rmSync(TEST_ACE_HOME, { recursive: true, force: true });
+  if (ORIGINAL_ACE_HOME === undefined) delete process.env.ACE_HOME;
+  else process.env.ACE_HOME = ORIGINAL_ACE_HOME;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+function writeAcpSessionRecord(recordId: string, record: Record<string, unknown>): void {
+  const sessionsDir = join(TEST_ACE_HOME, 'data', 'acpx-runtime', 'sessions');
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify(record), 'utf-8');
+}
 
 describe('ProcessManager', () => {
   test('registerExternalProcess creates process with correct fields', () => {
@@ -232,6 +248,66 @@ describe('ProcessManager', () => {
     const result = await processManager.killAllSystem({
       sweepAgentProcesses: true,
       workspacePaths: ['/tmp/aceharness-process-manager-test-no-acp-sessions'],
+    });
+
+    expect(result.pids).toEqual([]);
+    expect(result.agentRootsMatched).toBe(0);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  test('killAllSystem only sweeps ACP records for the targeted run in a shared workspace', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const workspace = '/tmp/aceharness-process-manager-shared-workspace';
+    writeAcpSessionRecord('record-run-a', {
+      acpx_record_id: 'record-run-a',
+      pid: 91001,
+      cwd: workspace,
+      agent_started_at: 'Tue Jul 28 10:05:00 2026',
+    });
+    writeAcpSessionRecord('record-run-b', {
+      acpx_record_id: 'record-run-b',
+      pid: 92001,
+      cwd: workspace,
+      agent_started_at: 'Tue Jul 28 10:06:00 2026',
+    });
+    execSyncMock.mockReturnValue([
+      `91001 ${process.pid} Tue Jul 28 10:05:00 2026 /tmp/acpx-wrapper-a`,
+      `91002 91001 Tue Jul 28 10:05:01 2026 /tmp/agent-a`,
+      `92001 ${process.pid} Tue Jul 28 10:06:00 2026 /tmp/acpx-wrapper-b`,
+      `92002 92001 Tue Jul 28 10:06:01 2026 /tmp/agent-b`,
+    ].join('\n'));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: [workspace],
+      acpxRecordIds: ['record-run-a'],
+    });
+
+    expect(result.agentRootsMatched).toBe(1);
+    expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
+    expect(killSpy).toHaveBeenCalledWith(91001, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(92001, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(92002, 'SIGTERM');
+    vi.clearAllTimers();
+  });
+
+  test('killAllSystem does not fall back to workspace-only ACP sweep with an empty record scope', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const workspace = '/tmp/aceharness-process-manager-shared-workspace';
+    writeAcpSessionRecord('record-run-a', {
+      acpx_record_id: 'record-run-a',
+      pid: 91001,
+      cwd: workspace,
+      agent_started_at: 'Tue Jul 28 10:05:00 2026',
+    });
+    execSyncMock.mockReturnValue(`91001 ${process.pid} Tue Jul 28 10:05:00 2026 /tmp/acpx-wrapper-a`);
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: [workspace],
+      acpxRecordIds: [],
     });
 
     expect(result.pids).toEqual([]);

@@ -113,10 +113,22 @@ const PID_START_TOLERANCE_MS = 5 * 60 * 1000;
 /**
  * Recorded session pids that are still alive and still look like an agent root.
  *
- * @param workspacePaths When non-empty, only sessions working inside one of those directories
- *   qualify — so stopping one run leaves agents of unrelated concurrent runs alone.
+ * @param scope.workspacePaths When non-empty, only sessions working inside one of those
+ *   directories qualify. This is a secondary guard for a run-scoped sweep.
+ * @param scope.acpxRecordIds When provided, only these ACP records qualify. An empty list matches
+ *   nothing, so callers that stop a specific run fail closed instead of falling back to a
+ *   workspace-wide sweep.
  */
-function collectAcpAgentRoots(table: Map<number, ProcessRow>, workspacePaths: string[] = []): number[] {
+function collectAcpAgentRoots(
+  table: Map<number, ProcessRow>,
+  scope: { workspacePaths?: string[]; acpxRecordIds?: string[] } = {},
+): number[] {
+  const workspacePaths = scope.workspacePaths || [];
+  const acpxRecordScope = Array.isArray(scope.acpxRecordIds)
+    ? new Set(scope.acpxRecordIds.filter((id) => id.trim().length > 0))
+    : null;
+  if (acpxRecordScope && acpxRecordScope.size === 0) return [];
+
   const sessionsDir = getWorkspaceDataFile('acpx-runtime', 'sessions');
   if (!existsSync(sessionsDir)) return [];
   let entries: string[] = [];
@@ -137,6 +149,10 @@ function collectAcpAgentRoots(table: Map<number, ProcessRow>, workspacePaths: st
       if (statSync(path).mtimeMs < oldestUseful) continue;
       const record = JSON.parse(readFileSync(path, 'utf-8'));
       if (record?.closed === true) continue;
+      if (acpxRecordScope) {
+        const recordIds = getAcpRecordCandidateIds(record, entry);
+        if (!recordIds.some((id) => acpxRecordScope.has(id))) continue;
+      }
       const pid = record?.pid;
       if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1) continue;
       if (pid === process.pid) continue;
@@ -160,6 +176,35 @@ function collectAcpAgentRoots(table: Map<number, ProcessRow>, workspacePaths: st
     }
   }
   return Array.from(roots);
+}
+
+function getAcpRecordCandidateIds(record: any, entry: string): string[] {
+  const encodedFileId = entry.replace(/\.json$/, '');
+  const candidates = [
+    encodedFileId,
+    safeDecodeURIComponent(encodedFileId),
+    record?.acpxRecordId,
+    record?.acpx_record_id,
+    record?.recordId,
+    record?.record_id,
+    record?.sessionKey,
+    record?.session_key,
+    record?.runtimeSessionId,
+    record?.runtime_session_id,
+    record?.runtimeSessionName,
+    record?.runtime_session_name,
+    record?.acpSessionId,
+    record?.acp_session_id,
+  ];
+  return Array.from(new Set(candidates.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)));
+}
+
+function safeDecodeURIComponent(input: string): string {
+  try {
+    return decodeURIComponent(input);
+  } catch {
+    return input;
+  }
 }
 
 /** Every descendant of `roots`, roots included. */
@@ -248,6 +293,7 @@ type RegisteredProcessScope = 'none' | 'matching-runs' | 'all';
 type KillAllSystemOptions = {
   sweepAgentProcesses?: boolean;
   workspacePaths?: string[];
+  acpxRecordIds?: string[];
   runIds?: string[];
   registeredProcessScope?: RegisteredProcessScope;
 };
@@ -386,8 +432,9 @@ class ProcessManager extends EventEmitter {
    *   and those must not take down agents belonging to unrelated live runs. Only an explicit
    *   "stop this workflow" request opts in.
    * @param options.workspacePaths Restrict that sweep to agents working inside these directories.
-   *   An empty list means machine-wide, which will also kill agents of other live runs — callers
-   *   stopping specific runs must always pass their workspaces.
+   *   Stopping specific runs must pass this as the secondary directory guard.
+   * @param options.acpxRecordIds Restrict the ACP sweep to these session records. If this option is
+   *   present and empty, the sweep matches nothing.
    */
   async killAllSystem(
     options: KillAllSystemOptions = {}
@@ -436,7 +483,10 @@ class ProcessManager extends EventEmitter {
       // session pid plus its descendants) rather than by pattern, which is what makes escalation
       // safe here.
       if (options.sweepAgentProcesses) {
-        const roots = collectAcpAgentRoots(table, options.workspacePaths);
+        const roots = collectAcpAgentRoots(table, {
+          workspacePaths: options.workspacePaths,
+          acpxRecordIds: options.acpxRecordIds,
+        });
         // Surfaced so a zero-match sweep is visible: a run whose recorded workingDirectory differs
         // from the agent's actual cwd (isolated-run layouts do this) would otherwise no-op silently.
         agentRootsMatched = roots.length;
