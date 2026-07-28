@@ -136,7 +136,7 @@ export default function SetupPage() {
       return;
     }
 
-    const welcomeMessage = '\u6b22\u8fce\u4f7f\u7528 ACEHarness';
+    const welcomeMessage = '\u6b22\u8fce\u4f7f\u7528 CSIHarness';
     setTypedWelcome('');
     setShowContinue(false);
 
@@ -357,11 +357,11 @@ export default function SetupPage() {
 
                 <motion.p
                   initial={{ opacity: 0 }}
-                  animate={{ opacity: typedWelcome.length === '\u6b22\u8fce\u4f7f\u7528 ACEHarness'.length ? 1 : 0.35 }}
+                  animate={{ opacity: typedWelcome.length === '\u6b22\u8fce\u4f7f\u7528 CSIHarness'.length ? 1 : 0.35 }}
                   transition={{ duration: 0.3 }}
                   className="mt-4 text-sm text-muted-foreground"
                 >
-                  {'初始化已完成，可以进入 ACEHarness。'}
+                  {'初始化已完成，可以进入 CSIHarness。'}
                 </motion.p>
 
                 <motion.div
@@ -457,7 +457,7 @@ export default function SetupPage() {
             <RobotLogo size={48} />
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-semibold">ACEHarness 初始化</h1>
+                <h1 className="text-2xl font-semibold">CSIHarness 初始化</h1>
                 <StatusPill tone="accent">首次设置</StatusPill>
               </div>
               <p className="mt-1 text-sm text-muted-foreground">创建管理员、工作区、默认引擎和模型。</p>

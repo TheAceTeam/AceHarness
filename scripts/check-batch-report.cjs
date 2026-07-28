@@ -173,7 +173,7 @@ async function main() {
   const totalRuns = checks.length * options.runs;
   const concurrency = options.concurrency || 5;
   const totalStart = Date.now();
-  console.log(`=== ACEHarness Check Batch Report (${options.engine}/${options.driver}, ${options.model}, ${options.runs} runs) ===\n`);
+  console.log(`=== CSIHarness Check Batch Report (${options.engine}/${options.driver}, ${options.model}, ${options.runs} runs) ===\n`);
   console.log(`启动 ${totalRuns} 个任务 (${checks.length} checks × ${options.runs} runs)，并发=${concurrency}...\n`);
 
   const taskFns = [];

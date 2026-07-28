@@ -68,15 +68,15 @@ function hostForUrl(host: string): string {
 function resolveLocalOrigin(origin?: string): string {
   const explicit = String(
     origin
-    || process.env.ACE_PUBLIC_ORIGIN
-    || process.env.NEXT_PUBLIC_ACE_ORIGIN
+    || process.env.CSIHARNESS_PUBLIC_ORIGIN
+    || process.env.NEXT_PUBLIC_CSIHARNESS_ORIGIN
     || process.env.NEXT_PUBLIC_APP_ORIGIN
     || ''
   ).trim();
   if (explicit) return trimTrailingSlash(explicit);
 
-  const host = hostForUrl(String(process.env.ACE_HOST || '127.0.0.1').trim() || '127.0.0.1');
-  const port = String(process.env.PORT || process.env.ACE_PORT || '3000').trim() || '3000';
+  const host = hostForUrl(String(process.env.CSIHARNESS_HOST || '127.0.0.1').trim() || '127.0.0.1');
+  const port = String(process.env.CSIHARNESS_PORT || process.env.PORT || '3001').trim() || '3001';
   if (host.startsWith('http://') || host.startsWith('https://')) return trimTrailingSlash(host);
   return `http://${host}:${port}`;
 }
@@ -275,8 +275,8 @@ export async function startWeChatOfficialBridge(input: {
     lastEventAt: Date.now(),
   };
   bridges.set(key, runtime);
-  console.log(`[ACEHarness WeChat] bridge start account=${input.accountId} integration=${input.integrationId}`);
-  console.log(`[ACEHarness WeChat] inbound webhook => ${input.webhookUrl}`);
+  console.log(`[CSIHarness WeChat] bridge start account=${input.accountId} integration=${input.integrationId}`);
+  console.log(`[CSIHarness WeChat] inbound webhook => ${input.webhookUrl}`);
 
   void runWeChatOfficialBridge({
     integrationId: input.integrationId,
@@ -290,17 +290,17 @@ export async function startWeChatOfficialBridge(input: {
       current.lastEventAt = Date.now();
       if (event.endsWith('error')) {
         current.lastError = String(payload?.error || 'unknown error');
-        console.error(`[ACEHarness WeChat] ${event}: ${current.lastError}`);
+        console.error(`[CSIHarness WeChat] ${event}: ${current.lastError}`);
       } else if (event === 'inbound') {
         console.log(
-          `[ACEHarness WeChat] inbound ${String(payload?.conversationId || 'unknown')} <= ${String(payload?.userId || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
+          `[CSIHarness WeChat] inbound ${String(payload?.conversationId || 'unknown')} <= ${String(payload?.userId || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
         );
       } else if (event === 'outbound') {
         console.log(
-          `[ACEHarness WeChat] outbound -> ${String(payload?.to || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
+          `[CSIHarness WeChat] outbound -> ${String(payload?.to || 'unknown')}: ${String(payload?.text || '').slice(0, 120)}`
         );
       } else {
-        console.log(`[ACEHarness WeChat] ${event}`);
+        console.log(`[CSIHarness WeChat] ${event}`);
       }
     },
   }).catch((error: any) => {
@@ -309,7 +309,7 @@ export async function startWeChatOfficialBridge(input: {
     current.running = false;
     current.lastEventAt = Date.now();
     current.lastError = error?.message || '微信桥接器启动失败';
-    console.error(`[ACEHarness WeChat] bridge-crash: ${current.lastError}`);
+    console.error(`[CSIHarness WeChat] bridge-crash: ${current.lastError}`);
   });
 
   return runtime;
@@ -423,13 +423,13 @@ export async function restoreWeChatOfficialBridges(input: {
   }
 
   if (restored.length > 0) {
-    console.log(`[ACEHarness WeChat] restored ${restored.length} official bridge(s)`);
+    console.log(`[CSIHarness WeChat] restored ${restored.length} official bridge(s)`);
   }
   for (const item of skipped) {
-    console.warn(`[ACEHarness WeChat] skipped restore integration=${item.integrationId}: ${item.reason}`);
+    console.warn(`[CSIHarness WeChat] skipped restore integration=${item.integrationId}: ${item.reason}`);
   }
   for (const item of cleaned) {
-    console.warn(`[ACEHarness WeChat] removed invalid restore integration=${item.integrationId}: ${item.reason}`);
+    console.warn(`[CSIHarness WeChat] removed invalid restore integration=${item.integrationId}: ${item.reason}`);
   }
 
   return { restored, skipped, cleaned };
@@ -439,18 +439,18 @@ export function scheduleWeChatOfficialBridgeRestore(input: {
   origin?: string;
   delayMs?: number;
 } = {}): void {
-  if (process.env.ACE_WECHAT_AUTO_RESTORE === '0' || process.env.ACE_WECHAT_AUTO_RESTORE === 'false') return;
+  if (process.env.CSIHARNESS_WECHAT_AUTO_RESTORE === '0' || process.env.CSIHARNESS_WECHAT_AUTO_RESTORE === 'false') return;
   if (process.env.NEXT_PHASE === 'phase-production-build') return;
 
   const globalScope = globalThis as typeof globalThis & Record<string, boolean | undefined>;
   if (globalScope[RESTORE_GUARD_KEY]) return;
   globalScope[RESTORE_GUARD_KEY] = true;
 
-  const configuredDelay = Number(process.env.ACE_WECHAT_RESTORE_DELAY_MS || '');
+  const configuredDelay = Number(process.env.CSIHARNESS_WECHAT_RESTORE_DELAY_MS || '');
   const delayMs = input.delayMs ?? (Number.isFinite(configuredDelay) && configuredDelay >= 0 ? configuredDelay : 3000);
   const timer = setTimeout(() => {
     void restoreWeChatOfficialBridges({ origin: input.origin }).catch((error: any) => {
-      console.error('[ACEHarness WeChat] bridge restore failed:', error?.message || error);
+      console.error('[CSIHarness WeChat] bridge restore failed:', error?.message || error);
     });
   }, delayMs);
   if (typeof (timer as any)?.unref === 'function') {

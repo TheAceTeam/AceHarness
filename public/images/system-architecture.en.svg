@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1180" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness System Architecture</title>
-  <desc id="desc">Shows ACEHarness as a modular architecture from browser console, service entry, domain services, runtime execution, local data, and external integrations.</desc>
+  <title id="title">CSIHarness System Architecture</title>
+  <desc id="desc">Shows CSIHarness as a modular architecture from browser console, service entry, domain services, runtime execution, local data, and external integrations.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#07111F"/>
@@ -187,7 +187,7 @@
     <text x="112" y="1000" fill="#CBD5E1" font-size="16" font-weight="800">Runtime config, records, logs, workspace files, notebooks, skills, and channel sessions persist locally; external messages enter through the channel gateway.</text>
 
     <rect x="112" y="1028" width="92" height="32" rx="16" fill="#064E3B" stroke="#34D399"/>
-    <text x="158" y="1049" text-anchor="middle" class="dataText">ACE_HOME</text>
+    <text x="158" y="1049" text-anchor="middle" class="dataText">CSIHARNESS_HOME</text>
     <rect x="218" y="1028" width="78" height="32" rx="16" fill="#064E3B" stroke="#34D399"/>
     <text x="257" y="1049" text-anchor="middle" class="dataText">Config</text>
     <rect x="310" y="1028" width="70" height="32" rx="16" fill="#064E3B" stroke="#34D399"/>

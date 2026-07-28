@@ -10,7 +10,7 @@ const {
 const MAX_RETRIES = 5;
 const KIND = 'workflow_clarification_question';
 
-const SYSTEM_PROMPT = `你是 ACEHarness 分步创建向导。系统每轮只要求一个小点。
+const SYSTEM_PROMPT = `你是 CSIHarness 分步创建向导。系统每轮只要求一个小点。
 
 当前小点 kind=${KIND}，名称 target_outcome。
 

@@ -1,14 +1,27 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const host = process.env.ACE_HOST || '127.0.0.1';
-const port = Number(process.env.PORT || process.env.ACE_PORT || 3217);
+const host = process.env.CSIHARNESS_HOST || '127.0.0.1';
+const rawPort = process.env.CSIHARNESS_PORT || process.env.PORT || '3217';
+const port = Number(rawPort);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error(`[CSIHarness smoke] Invalid port: ${rawPort}`);
+}
 const baseUrl = (process.env.SMOKE_BASE_URL || `http://${host}:${port}`).replace(/\/+$/, '');
 const shouldStart = process.env.SMOKE_BASE_URL ? false : process.env.SMOKE_SKIP_START !== '1';
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS || 60_000);
 const startCommand = process.platform === 'win32' ? 'cmd.exe' : 'npm';
 const startArgs = process.platform === 'win32' ? ['/d', '/s', '/c', 'npm start'] : ['start'];
+const temporaryRuntimeBase = shouldStart && !process.env.CSIHARNESS_HOME
+  ? mkdtempSync(path.join(os.tmpdir(), 'csiharness-smoke-'))
+  : null;
+const runtimeHome = process.env.CSIHARNESS_HOME
+  || (temporaryRuntimeBase ? path.join(temporaryRuntimeBase, 'runtime') : '');
 const endpoints = [
+  '/',
   '/workflows',
   `/dashboard?route=${encodeURIComponent('/workbench/demo.yaml?mode=history')}`,
   '/workbench/demo.yaml?mode=history',
@@ -55,9 +68,13 @@ async function runSmoke() {
 
   for (const endpoint of endpoints) {
     const response = await fetchWithTimeout(endpointUrl(endpoint), 10_000);
+    const body = endpoint === '/' || !response.ok || response.status === 404
+      ? await response.text().catch(() => '')
+      : '';
     if (!response.ok || response.status === 404) {
-      const body = await response.text().catch(() => '');
       failures.push(`${endpoint} -> ${response.status}${body ? ` ${body.slice(0, 160)}` : ''}`);
+    } else if (endpoint === '/' && !body.includes('CSIHarness Power By ACE/AET')) {
+      failures.push(`${endpoint} -> ${response.status} missing CSIHarness product title`);
     } else {
       console.log(`[smoke] ${endpoint} -> ${response.status}`);
     }
@@ -68,14 +85,63 @@ async function runSmoke() {
   }
 }
 
+async function waitForChildExit(timeoutMs) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child?.off('close', onClose);
+      resolve(false);
+    }, timeoutMs);
+    const onClose = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once('close', onClose);
+  });
+}
+
+async function stopChildProcessTree() {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === 'win32' && child.pid) {
+    spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
+    await waitForChildExit(5_000);
+    return;
+  }
+
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, 'SIGTERM');
+  } catch {
+    child.kill('SIGTERM');
+  }
+  if (await waitForChildExit(5_000)) return;
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
+  await waitForChildExit(2_000);
+}
+
+function assertRuntimeMarker() {
+  if (!runtimeHome) return;
+  const markerPath = path.join(runtimeHome, '.csiharness-root.json');
+  const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+  if (marker.product !== 'CSIHarness' || marker.packageName !== 'csiharness') {
+    throw new Error(`Unexpected CSIHarness runtime marker: ${markerPath}`);
+  }
+}
+
 try {
   if (shouldStart) {
     child = spawn(startCommand, startArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
       env: {
         ...process.env,
-        ACE_HOST: host,
-        PORT: String(port),
+        CSIHARNESS_HOST: host,
+        CSIHARNESS_HOME: runtimeHome,
+        CSIHARNESS_PORT: String(port),
         NODE_ENV: 'production',
       },
     });
@@ -92,18 +158,16 @@ try {
     });
 
     await waitForServer();
+    assertRuntimeMarker();
   }
 
   await runSmoke();
 } finally {
-  if (child && !child.killed) {
+  if (child) {
     shuttingDown = true;
-    if (process.platform === 'win32' && child.pid) {
-      spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
-    } else {
-      child.kill('SIGTERM');
-      await delay(500);
-      if (!child.killed) child.kill('SIGKILL');
-    }
+    await stopChildProcessTree();
+  }
+  if (temporaryRuntimeBase) {
+    rmSync(temporaryRuntimeBase, { recursive: true, force: true });
   }
 }

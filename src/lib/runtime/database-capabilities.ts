@@ -221,23 +221,23 @@ export async function writeRuntimeDatabaseEnvFile(grant: RuntimeDatabaseGrant | 
 
 export function resolveRuntimeUrl(): string {
   const explicit = process.env.ACEHARNESS_RUNTIME_URL
-    || process.env.ACE_INTERNAL_BASE_URL
-    || process.env.ACE_PUBLIC_ORIGIN
+    || process.env.CSIHARNESS_INTERNAL_BASE_URL
+    || process.env.CSIHARNESS_PUBLIC_ORIGIN
     || process.env.NEXT_PUBLIC_APP_URL
-    || process.env.NEXT_PUBLIC_ACE_ORIGIN
+    || process.env.NEXT_PUBLIC_CSIHARNESS_ORIGIN
     || process.env.NEXT_PUBLIC_APP_ORIGIN;
   if (explicit?.trim()) return explicit.trim().replace(/\/+$/, '');
-  const host = process.env.ACE_HOST || process.env.HOST || '127.0.0.1';
-  const port = process.env.ACE_PORT || process.env.PORT || '3001';
+  const host = process.env.CSIHARNESS_HOST || process.env.HOST || '127.0.0.1';
+  const port = process.env.CSIHARNESS_PORT || process.env.PORT || '3001';
   return `http://${host}:${port}`;
 }
 
 export function buildDatabaseCapabilityPrompt(grant: RuntimeDatabaseGrant | null | undefined, skillsDir: string): string {
   if (!grant || (!grant.rag?.enabled && !grant.sqlite?.enabled)) return '';
   const lines: string[] = [
-    '# ACEHarness 数据库能力',
+    '# CSIHarness 数据库能力',
     '',
-    '当前运行启用了受控数据库能力。需要使用时，先阅读对应 Skill 的 SKILL.md，然后通过 Skill 内置 Python 脚本调用 ACEHarness runtime API；不要直接读写 LanceDB、SQLite 文件或 ACEHarness 内部数据库。',
+    '当前运行启用了受控数据库能力。需要使用时，先阅读对应 Skill 的 SKILL.md，然后通过 Skill 内置 Python 脚本调用 CSIHarness runtime API；不要直接读写 LanceDB、SQLite 文件或 CSIHarness 内部数据库。',
     '',
   ];
   if (grant.rag?.enabled) {

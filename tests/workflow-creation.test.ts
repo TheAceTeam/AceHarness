@@ -41,7 +41,7 @@ describe('Workflow creation pipeline', () => {
       workingDirectory: '/current/work',
     });
 
-    expect(systemPrompt).toContain('ACEHarness 工程对话助手');
+    expect(systemPrompt).toContain('CSIHarness 工程对话助手');
     expect(systemPrompt).toContain('未启用 workflow / Agent 创建助手模式');
     expect(systemPrompt).toContain('不要使用 `aceharness-workflow-creator` Skill');
     expect(systemPrompt).not.toContain('你是 ACEHarness 工作流助手');

@@ -26,10 +26,10 @@ export async function runNodejsInstrumentation() {
   try {
     if (!existsSync(configDir)) {
       mkdirSync(configDir, { recursive: true });
-      console.log(`[ACEHarness] Created ${engineConfigDir}/`);
+      console.log(`[CSIHarness] Created ${engineConfigDir}/`);
     }
   } catch (error) {
-    console.error(`[ACEHarness] Failed to setup ${engineConfigDir}:`, error);
+    console.error(`[CSIHarness] Failed to setup ${engineConfigDir}:`, error);
   }
 
   try {
@@ -37,27 +37,27 @@ export async function runNodejsInstrumentation() {
     const recoverer = new WorkflowManager();
     await recoverer.recoverFromCrash();
   } catch (error) {
-    console.error('[ACEHarness] Workflow recovery failed:', error);
+    console.error('[CSIHarness] Workflow recovery failed:', error);
   }
 
   try {
     const { ensureChannelEventBridgeRegistered } = await import('@/lib/channel/delivery');
     ensureChannelEventBridgeRegistered();
   } catch (error) {
-    console.error('[ACEHarness] Channel event bridge setup failed:', error);
+    console.error('[CSIHarness] Channel event bridge setup failed:', error);
   }
 
   try {
     const { scheduleWeChatOfficialBridgeRestore } = await import('@/lib/channel/wechat/official-service');
     scheduleWeChatOfficialBridgeRestore();
   } catch (error) {
-    console.error('[ACEHarness] WeChat bridge restore setup failed:', error);
+    console.error('[CSIHarness] WeChat bridge restore setup failed:', error);
   }
 
   try {
     const { ensureSchedulerInitialized } = await import('@/server/api-route-runtime/scheduler-runtime');
     await ensureSchedulerInitialized();
   } catch (error) {
-    console.error('[ACEHarness] Scheduler restore failed:', error);
+    console.error('[CSIHarness] Scheduler restore failed:', error);
   }
 }

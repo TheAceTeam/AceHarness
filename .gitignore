@@ -48,6 +48,7 @@ vite.config.ts
 
 .ace-outputs/
 .aceharness/
+.csiharness/
 
 /runs/
 
@@ -78,3 +79,6 @@ __pycache__/
 
 # Runtime uploaded assets
 /public/uploads/
+
+# Local integration worktrees
+.worktrees/

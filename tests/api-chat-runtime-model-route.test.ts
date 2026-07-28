@@ -25,14 +25,14 @@ vi.mock('@/lib/runtime-agent/adapters/acpx-runtime-client', () => ({
 }));
 
 describe('/api/chat runtime model route resolution', () => {
-  const previousAceHome = process.env.ACE_HOME;
+  const previousAceHome = process.env.CSIHARNESS_HOME;
   let tempRoot: string | null = null;
 
   afterEach(async () => {
     const { resetRuntimeSessionsApiServiceForTesting } = await import('@/server/runtime/runtime-sessions-api-service');
     resetRuntimeSessionsApiServiceForTesting();
-    if (previousAceHome === undefined) delete process.env.ACE_HOME;
-    else process.env.ACE_HOME = previousAceHome;
+    if (previousAceHome === undefined) delete process.env.CSIHARNESS_HOME;
+    else process.env.CSIHARNESS_HOME = previousAceHome;
     tempRoot = null;
     vi.resetModules();
     vi.clearAllMocks();
@@ -55,7 +55,7 @@ describe('/api/chat runtime model route resolution', () => {
 
   async function setupImportedCodexGpt55Low() {
     tempRoot = mkdtempSync(join(tmpdir(), 'ace-chat-runtime-'));
-    process.env.ACE_HOME = tempRoot;
+    process.env.CSIHARNESS_HOME = tempRoot;
     vi.resetModules();
 
     routeMocks.requireAuth.mockResolvedValue({

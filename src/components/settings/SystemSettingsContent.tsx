@@ -43,7 +43,7 @@ const ENGINE_ENV_DESCRIPTIONS = [
       { key: 'ANTHROPIC_BASE_URL', description: 'Claude Code 请求地址；设置后会同步写入 Claude Code base URL。' },
       { key: 'CLAUDE_CODE_BASE_URL', description: 'Claude Code base URL 兼容变量，代码会归一化为 ANTHROPIC_BASE_URL。' },
       { key: 'CLAUDE_CODE_API_BASE_URL', description: 'Claude Code API base URL 兼容变量，代码会归一化为 ANTHROPIC_BASE_URL。' },
-      { key: 'ACE_CLAUDE_CODE_EXECUTABLE', description: '指定 ACEHarness 使用的 Claude Code 可执行文件。' },
+      { key: 'ACE_CLAUDE_CODE_EXECUTABLE', description: '指定 CSIHarness 使用的 Claude Code 可执行文件。' },
       { key: 'CLAUDE_CODE_EXECUTABLE', description: 'Claude Code 可执行文件备用变量。' },
     ],
   },
@@ -951,9 +951,9 @@ export default function SystemSettingsContent() {
                   <FormField label="SMTP 用户名" control={<Input value={emailForm.smtpUsername} onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpUsername: event.target.value }))} placeholder="通常是邮箱地址" disabled={emailSaving} />} />
                   <FormField label="SMTP 密码 / 授权码" description="输入新值可覆盖已保存值。" control={<Input type="password" value={emailForm.smtpPassword} onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpPassword: event.target.value }))} placeholder={emailForm.smtpPasswordConfigured ? '已保存，输入新值可覆盖' : '请输入 SMTP 密码或授权码'} disabled={emailSaving} />} />
                   <FormField label="发件人邮箱" control={<Input value={emailForm.fromEmail} onChange={(event) => setEmailForm((prev) => ({ ...prev, fromEmail: event.target.value }))} placeholder="例如：notify@example.com" disabled={emailSaving} />} />
-                  <FormField label="发件人名称" control={<Input value={emailForm.fromName} onChange={(event) => setEmailForm((prev) => ({ ...prev, fromName: event.target.value }))} placeholder="例如：ACEHarness" disabled={emailSaving} />} />
+                  <FormField label="发件人名称" control={<Input value={emailForm.fromName} onChange={(event) => setEmailForm((prev) => ({ ...prev, fromName: event.target.value }))} placeholder="例如：CSIHarness" disabled={emailSaving} />} />
                   <FormField label="Reply-To" control={<Input value={emailForm.replyTo} onChange={(event) => setEmailForm((prev) => ({ ...prev, replyTo: event.target.value }))} placeholder="可选：回复邮箱" disabled={emailSaving} />} />
-                  <FormField label="主题前缀" control={<Input value={emailForm.subjectPrefix} onChange={(event) => setEmailForm((prev) => ({ ...prev, subjectPrefix: event.target.value }))} placeholder="可选：例如 [ACEHarness]" disabled={emailSaving} />} />
+                  <FormField label="主题前缀" control={<Input value={emailForm.subjectPrefix} onChange={(event) => setEmailForm((prev) => ({ ...prev, subjectPrefix: event.target.value }))} placeholder="可选：例如 [CSIHarness]" disabled={emailSaving} />} />
                 </div>
                 <FormField
                   label="使用 SSL / TLS"

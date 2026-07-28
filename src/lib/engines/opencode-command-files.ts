@@ -85,7 +85,7 @@ export function resolveAceHarnessOpenCodeConfigDirectories(options: DiscoverComm
   const runtimeRoot = normalizeNonEmptyString(options.runtimeRoot ?? getWorkspaceRoot());
   const candidates = [
     runtimeRoot ? path.join(runtimeRoot, '.opencode') : '',
-    home ? path.join(home, '.aceharness', '.opencode') : '',
+    home ? path.join(home, '.csiharness', '.opencode') : '',
   ].filter(Boolean);
   return uniquePaths(candidates, platform);
 }

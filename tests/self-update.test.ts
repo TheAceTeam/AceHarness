@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  ACE_PACKAGE_NAME,
+  CSI_PACKAGE_NAME,
   buildNpmPackageSpec,
   normalizeUpdateTarget,
   parseNpmVersionOutput,
@@ -14,17 +14,17 @@ describe('self update helpers', () => {
     expect(normalizeUpdateTarget(' release ')).toBe('release');
   });
 
-  test('builds scoped ACE package specs from versions and tags', () => {
-    expect(buildNpmPackageSpec(ACE_PACKAGE_NAME, '')).toBe(`${ACE_PACKAGE_NAME}@latest`);
-    expect(buildNpmPackageSpec(ACE_PACKAGE_NAME, 'beta')).toBe(`${ACE_PACKAGE_NAME}@beta`);
-    expect(buildNpmPackageSpec(ACE_PACKAGE_NAME, '1.0.0-beta.66')).toBe(`${ACE_PACKAGE_NAME}@1.0.0-beta.66`);
-    expect(buildNpmPackageSpec(ACE_PACKAGE_NAME, `${ACE_PACKAGE_NAME}@release`)).toBe(`${ACE_PACKAGE_NAME}@release`);
+  test('builds CSIHarness package specs from versions and tags', () => {
+    expect(buildNpmPackageSpec(CSI_PACKAGE_NAME, '')).toBe(`${CSI_PACKAGE_NAME}@latest`);
+    expect(buildNpmPackageSpec(CSI_PACKAGE_NAME, 'beta')).toBe(`${CSI_PACKAGE_NAME}@beta`);
+    expect(buildNpmPackageSpec(CSI_PACKAGE_NAME, '1.0.0-beta.66')).toBe(`${CSI_PACKAGE_NAME}@1.0.0-beta.66`);
+    expect(buildNpmPackageSpec(CSI_PACKAGE_NAME, `${CSI_PACKAGE_NAME}@release`)).toBe(`${CSI_PACKAGE_NAME}@release`);
   });
 
   test('rejects unrelated package specs as update targets', () => {
-    expect(() => buildNpmPackageSpec(ACE_PACKAGE_NAME, '@other/pkg@latest')).toThrow(/version or dist-tag/);
-    expect(() => buildNpmPackageSpec(ACE_PACKAGE_NAME, `${ACE_PACKAGE_NAME}@`)).toThrow(/version or dist-tag/);
-    expect(() => buildNpmPackageSpec(ACE_PACKAGE_NAME, 'bad target')).toThrow(/version or dist-tag/);
+    expect(() => buildNpmPackageSpec(CSI_PACKAGE_NAME, '@other/pkg@latest')).toThrow(/version or dist-tag/);
+    expect(() => buildNpmPackageSpec(CSI_PACKAGE_NAME, `${CSI_PACKAGE_NAME}@`)).toThrow(/version or dist-tag/);
+    expect(() => buildNpmPackageSpec(CSI_PACKAGE_NAME, 'bad target')).toThrow(/version or dist-tag/);
   });
 
   test('parses npm version output from json and plain text', () => {

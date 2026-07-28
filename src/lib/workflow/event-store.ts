@@ -244,7 +244,7 @@ let eventStore: ClosableWorkflowEventStore | null = null;
 
 export function getWorkflowEventStore(): WorkflowEventStore {
   if (eventStore) return eventStore;
-  if (process.env.ACE_WORKFLOW_EVENT_STORE === 'jsonl') {
+  if (process.env.CSIHARNESS_WORKFLOW_EVENT_STORE === 'jsonl') {
     eventStore = new JsonlWorkflowEventStore();
     return eventStore;
   }

@@ -1,10 +1,10 @@
 <div align="center">
 
 <p>
-  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png" alt="ACEHarness" width="96">
+  <img src="public/logo.png" alt="CSIHarness" width="96">
 </p>
 
-# ACE Harness (Agent Centric Engineering Harness)
+# CSIHarness Power By ACE/AET
 
 <p>
   <strong>Your team of AI</strong><br>
@@ -23,11 +23,10 @@ English | [中文](./README.md)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
 
-ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combines Spec Driven Development, state-machine workflows, Supervisor routing, adversarial iteration, multi-agent Agora rooms, Git-backed change checkpoints, layered long-term memory, Notebook knowledge capture, Skill-based extension, and model/engine diagnostics so complex development work can be planned, executed, collaborated on, reviewed, rolled back, resumed, and replayed.
+CSIHarness is a local AI Multi-Agent workbench for engineering tasks. It combines Spec Driven Development, state-machine workflows, Supervisor routing, adversarial iteration, multi-agent Agora rooms, Git-backed change checkpoints, layered long-term memory, Notebook knowledge capture, Skill-based extension, and model/engine diagnostics so complex development work can be planned, executed, collaborated on, reviewed, rolled back, resumed, and replayed.
 
 <p>
-  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png" alt="ACEHarness product overview" width="63%">
-  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png" alt="ACEHarness cover" width="35%">
+  <img src="public/images/cover.png" alt="CSIHarness cover" width="72%">
 </p>
 
 </div>
@@ -53,11 +52,11 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 
 ## Product Overview
 
-ACEHarness organizes engineering tasks around planning, execution, collaboration, knowledge, extension, and external channels. The capability map below expands the main entry points for daily work.
+CSIHarness organizes engineering tasks around planning, execution, collaboration, knowledge, extension, and external channels. The capability map below expands the main entry points for daily work.
 
 <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg" alt="ACEHarness core capability highlights">
+    <source media="(prefers-color-scheme: dark)" srcset="public/images/features-overview.en.svg">
+    <img src="public/images/features-overview.en.svg" alt="CSIHarness core capability highlights">
 </picture>
 
 ---
@@ -74,16 +73,16 @@ ACEHarness organizes engineering tasks around planning, execution, collaboration
 Get started quickly:
 
 ```bash
-npm install -g @cangjielang/aceharness
+npm install -g csiharness
 
-ace --help
-ace
+csiharness --help
+csiharness
 # ✔ Please select a language › English
-# [ACE] Welcome. First launch will initialize local runtime settings.
+# [CSI] Welcome. First launch will initialize local runtime settings.
 # ...
-# [ACE] Starting server: http://127.0.0.1:3000
-# [ACEHarness] Server ready on http://0.0.0.0:3000
-# [ACE] Open http://127.0.0.1:3000 in your browser
+# [CSI] Starting server: http://127.0.0.1:3001
+# [CSIHarness] Server ready on http://0.0.0.0:3001
+# [CSI] Open http://127.0.0.1:3001 in your browser
 ```
 
 If you are a developer:
@@ -95,37 +94,37 @@ git clone https://gitcode.com/Cangjie-SIG/ACEHarness.git && cd ACEHarness
 npm install
 
 # Local development: builds the CLI first, then starts the dev server
-ACE_HOST=0.0.0.0 ACE_PORT=3000 npm run dev
+CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3000 npm run dev
 
 # Windows PowerShell:
-# $env:ACE_HOST="0.0.0.0"
-# $env:ACE_PORT="3000"
+# $env:CSIHARNESS_HOST="0.0.0.0"
+# $env:CSIHARNESS_PORT="3000"
 # npm run dev
 
 # Production mode: build after the first clone or after updates
 npm run build
-ACE_HOST=0.0.0.0 ACE_PORT=3000 npm start
+CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3000 npm start
 ```
 
-Open `http://127.0.0.1:3000` after startup. After entering the console, use Onboarding to learn the complete usage path and module guide. In PowerShell production mode, set `$env:ACE_HOST` and `$env:ACE_PORT` before running `npm start`.
+Open `http://127.0.0.1:3001` after startup. After entering the console, use Onboarding to learn the complete usage path and module guide. In PowerShell production mode, set `$env:CSIHARNESS_HOST` and `$env:CSIHARNESS_PORT` before running `npm start`.
 
-Global ACE Service commands:
+Global CSIHarness Service commands:
 
 ```bash
-ace              # Start ACE Service
-ace start        # Start ACE Service explicitly
-ace service      # Inspect and stop managed ACE instances
-ace update       # Update to the npm latest version
-ace update beta  # Update to a specific npm tag or version, such as beta / release / 1.0.0-beta.66
+csiharness              # Start CSIHarness Service
+csiharness start        # Start CSIHarness Service explicitly
+csiharness service      # Inspect and stop managed CSIHarness instances
+csiharness update       # Update to the npm latest version
+csiharness update beta  # Update to a specific npm tag or version, such as beta / release / 1.0.0-beta.66
 ```
 
-When `ace update` finds managed ACE instances still running, interactive terminals can stop them before updating, continue without stopping them, or cancel the update. Scripts can use `ace update --stop-running` to stop running instances first, or `ace update --force` to keep installing while they run; those services use the new version after restart.
+When `csiharness update` finds managed CSIHarness instances still running, interactive terminals can stop them before updating, continue without stopping them, or cancel the update. Scripts can use `csiharness update --stop-running` to stop running instances first, or `csiharness update --force` to keep installing while they run; those services use the new version after restart.
 
 ---
 
 ## Core Mechanisms
 
-![Core mechanisms overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/core-mechanisms-overview.en.svg)
+![Core mechanisms overview](public/images/core-mechanisms-overview.en.svg)
 
 The workbench diagram above now carries the core mechanism details: Spec planning, state-machine execution, Supervisor routing, adversarial review, Agora collaboration, persistent memory, capability extension, model diagnostics, and external channels form one governed engineering loop.
 
@@ -133,7 +132,7 @@ The workbench diagram above now carries the core mechanism details: Spec plannin
 
 ## Architecture
 
-![System architecture SVG](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/system-architecture.en.svg)
+![System architecture SVG](public/images/system-architecture.en.svg)
 
 Notes:
 - The browser console contains the main pages: Home chat, workflow workbench, Agora, Notebook, Workspace, settings, and diagnostics.
@@ -144,9 +143,9 @@ Notes:
 
 ## Functional Modules
 
-![Frontend page function cloud](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.en.svg)
+![Frontend page function cloud](public/images/product-interface-overview.en.svg)
 
-The ACEHarness interface is organized around daily engineering work:
+The CSIHarness interface is organized around daily engineering work:
 
 - **Home chat**: regular AI conversations, workflow creation, Agora entry points, and WeChat ClawBot session binding.
 - **Agora**: topic-based or workflow-bound multi-agent chat for design discussion, disagreement resolution, and retrospectives.
@@ -158,15 +157,15 @@ The ACEHarness interface is organized around daily engineering work:
 
 ## Workflow Cases
 
-![Workflow cases overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workflow-cases-overview.en.svg)
+![Workflow cases overview](public/images/workflow-cases-overview.en.svg)
 
 Read the root-cause paths, execution data, and delivery results for all four cases in [Workflow Cases](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/workflow-cases.en.md).
 
 ## Configuration and Engines
 
-ACEHarness configuration is driven by the startup wizard, the engine management page, and environment variables. This repository currently supports local execution backends including `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, and `magic-cli`; the model and engine diagnostics workbench can verify connectivity, streaming events, structured output, coding, math, and reasoning behavior.
+CSIHarness configuration is driven by the startup wizard, the engine management page, and environment variables. This repository currently supports local execution backends including `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, and `magic-cli`; the model and engine diagnostics workbench can verify connectivity, streaming events, structured output, coding, math, and reasoning behavior.
 
-### ACE Service
+### CSIHarness Service
 
 `server.js` loads `.env`, `.env.local`, and the mode-specific `.env.development*` / `.env.production*` files on startup. Values already present in the shell, process manager, or startup script take precedence and are not overwritten by env files.
 
@@ -174,57 +173,57 @@ Core startup and runtime-directory variables:
 
 | Variable | Description | Default / precedence |
 |------|-------------|----------------------|
-| `ACE_HOST` | Server bind address | `127.0.0.1` |
-| `ACE_PORT` | ACEHarness service port | `3000` |
-| `PORT` | Generic service port | Higher priority than `ACE_PORT` |
+| `CSIHARNESS_HOST` | Server bind address | `127.0.0.1` |
+| `CSIHARNESS_PORT` | CSIHarness service port | `3000` |
+| `PORT` | Generic service port | Higher priority than `CSIHARNESS_PORT` |
 | `BASEURL` / `BASE_URL` | Reverse-proxy subpath or public site prefix used for application routes and static asset URLs | Empty when unset; examples: `/ace` or `https://example.com/ace` |
-| `ACE_HOME` | ACE runtime root; controls where `config/`, `data/`, `cache/`, `logs/`, and `workspace/` live | Falls back by platform when unset |
-| `APPDATA` | Windows fallback root for `ACE_HOME` | `<APPDATA>/ACEHarness` |
-| `XDG_DATA_HOME` | Linux / macOS fallback root for `ACE_HOME` | `<XDG_DATA_HOME>/aceharness` |
+| `CSIHARNESS_HOME` | CSIHarness runtime root; controls where `config/`, `data/`, `cache/`, `logs/`, and `workspace/` live | Falls back by platform when unset |
+| `APPDATA` | Windows fallback root for `CSIHARNESS_HOME` | `<APPDATA>/CSIHarness` |
+| `XDG_DATA_HOME` | Linux / macOS fallback root for `CSIHARNESS_HOME` | `<XDG_DATA_HOME>/csiharness` |
 
-When serving ACEHarness under a reverse-proxy subpath, set the same `BASEURL` during build and startup. For example, proxying external `/ace/` to local `http://127.0.0.1:3000/`:
+When serving CSIHarness under a reverse-proxy subpath, set the same `BASEURL` during build and startup. For example, proxying external `/ace/` to local `http://127.0.0.1:3001/`:
 
 ```bash
-BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm run build
-BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm start
+BASEURL=/ace CSIHARNESS_HOST=127.0.0.1 CSIHARNESS_PORT=3001 npm run build
+BASEURL=/ace CSIHARNESS_HOST=127.0.0.1 CSIHARNESS_PORT=3001 npm start
 ```
 
 Development mode:
 
 ```bash
-BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm run dev
+BASEURL=/ace CSIHARNESS_HOST=127.0.0.1 CSIHARNESS_PORT=3001 npm run dev
 ```
 
 Windows PowerShell:
 
 ```powershell
 $env:BASEURL="/ace"
-$env:ACE_HOST="127.0.0.1"
-$env:ACE_PORT="3000"
+$env:CSIHARNESS_HOST="127.0.0.1"
+$env:CSIHARNESS_PORT="3000"
 npm run dev
 ```
-| `ACE_INSTALL_ROOT` | Install root used to locate `server.js`, `configs/`, `dist/`, and other packaged files | Auto-filled to the current install directory when unset |
-| `ACE_LOCALE` | Default locale for the ACE CLI and service | Higher priority than `LANG` / `LC_ALL` |
-| `LANG` | Locale fallback variable | Used when `ACE_LOCALE` is unset |
-| `LC_ALL` | Locale fallback variable | Used when `ACE_LOCALE` and `LANG` are unset |
+| `CSIHARNESS_INSTALL_ROOT` | Install root used to locate `configs/`, `dist/`, and other packaged files | Auto-filled to the current install directory when unset |
+| `CSIHARNESS_LOCALE` | Default locale for the CSIHarness CLI and service | Higher priority than `LANG` / `LC_ALL` |
+| `LANG` | Locale fallback variable | Used when `CSIHARNESS_LOCALE` is unset |
+| `LC_ALL` | Locale fallback variable | Used when `CSIHARNESS_LOCALE` and `LANG` are unset |
 | `NODE_ENV` | Runtime mode; also affects `.env*` loading and some debug defaults | `production` for managed child services |
-| `ACE_MAX_OLD_SPACE_MB` | V8 old-space heap limit (MB) for the server process; overrides the auto value | Auto: ~60% of RAM, clamped to `4096`–`8192` |
-| `ACE_MEM_WATCHDOG` | Memory-watchdog toggle; gracefully restarts before OOM when thresholds are crossed | Enabled by default; set `0` to disable |
-| `ACE_MEM_SOFT_PCT` | Soft threshold (fraction of heap limit); graceful restart only while idle | `0.80` |
-| `ACE_MEM_HARD_PCT` | Hard threshold (fraction of heap limit); unconditional forced restart to avoid OOM | `0.92` |
-| `ACE_MANAGED` | Internal flag marking the server process as daemon-supervised so the watchdog may self-restart | Set automatically by the CLI; not for manual use |
+| `CSIHARNESS_MAX_OLD_SPACE_MB` | V8 old-space heap limit (MB) for the server process; overrides the auto value | Auto: ~60% of RAM, clamped to `4096`–`8192` |
+| `CSIHARNESS_MEM_WATCHDOG` | Memory-watchdog toggle; gracefully restarts before OOM when thresholds are crossed | Enabled by default; set `0` to disable |
+| `CSIHARNESS_MEM_SOFT_PCT` | Soft threshold (fraction of heap limit); graceful restart only while idle | `0.80` |
+| `CSIHARNESS_MEM_HARD_PCT` | Hard threshold (fraction of heap limit); unconditional forced restart to avoid OOM | `0.92` |
+| `CSIHARNESS_MANAGED` | Internal flag marking the server process as daemon-supervised so the watchdog may self-restart | Set automatically by the CLI; not for manual use |
 
 Public-origin and channel-recovery variables:
 
 | Variable | Description | Default / precedence |
 |------|-------------|----------------------|
-| `ACE_PUBLIC_ORIGIN` | Absolute public origin used for webhook URLs, callbacks, and the official WeChat bridge | Highest priority |
-| `ACE_WECHAT_AUTO_RESTORE` | Auto-restore official WeChat bridges after the service starts | Enabled by default; disable with `0` / `false` |
-| `ACE_WECHAT_RESTORE_DELAY_MS` | Delay before official WeChat bridge restore (ms) | `3000` |
+| `CSIHARNESS_PUBLIC_ORIGIN` | Absolute public origin used for webhook URLs, callbacks, and the official WeChat bridge | Highest priority |
+| `CSIHARNESS_WECHAT_AUTO_RESTORE` | Auto-restore official WeChat bridges after the service starts | Enabled by default; disable with `0` / `false` |
+| `CSIHARNESS_WECHAT_RESTORE_DELAY_MS` | Delay before official WeChat bridge restore (ms) | `3000` |
 
 ## Channel Integrations
 
-ACEHarness can bridge workflow runtime conversations, human checkpoints, and multi-agent Agora rooms to external chat platforms. Built-in provider templates include `Feishu`, `DingTalk`, `WeChat Bridge`, and `Generic Webhook`; `POST /api/channels/setup` can generate the webhook and shared secret, and external platforms or bridge services can deliver messages to `/api/channels/inbound/:integrationId`.
+CSIHarness can bridge workflow runtime conversations, human checkpoints, and multi-agent Agora rooms to external chat platforms. Built-in provider templates include `Feishu`, `DingTalk`, `WeChat Bridge`, and `Generic Webhook`; `POST /api/channels/setup` can generate the webhook and shared secret, and external platforms or bridge services can deliver messages to `/api/channels/inbound/:integrationId`.
 
 See [Channel Integrations](./docs/channel-integrations.md) for details.
 
@@ -243,7 +242,7 @@ See [Channel Integrations](./docs/channel-integrations.md) for details.
 
 | Path | Description |
 |------|-------------|
-| `bin/` | npm CLI entry; the `ace` command loads built `dist/cli.js` |
+| `bin/` | npm CLI entry; the `csiharness` command loads built `dist/cli.js` |
 | `server.js` | Custom Next.js launcher for `.env*` loading, HTTP service startup, and Notebook collaboration WebSocket |
 | `src/app/` | Next.js App Router pages and API routes |
 | `src/components/` | Frontend components for workbench, chat, Notebook, workspace, and related views |
@@ -273,13 +272,13 @@ npm run publish:beta     # Build and publish the npm package with the beta tag
 CLI commands come from `src/cli.ts`.
 
 ```bash
-ace                # Start ACEHarness
-ace start          # Start ACEHarness
-ace service        # Inspect and stop ACE services
-ace update         # Update to the npm latest version
-ace update beta    # Update to a specific npm tag or version
-ace reset --force  # Reset local ACE configuration
-ace --help         # Show help
+csiharness                # Start CSIHarness
+csiharness start          # Start CSIHarness
+csiharness service        # Inspect and stop CSIHarness services
+csiharness update         # Update to the npm latest version
+csiharness update beta    # Update to a specific npm tag or version
+csiharness reset --force  # Reset local CSIHarness configuration
+csiharness --help         # Show help
 ```
 
 ### Testing and Quality
@@ -337,4 +336,4 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ## License
 
-ACEHarness is licensed under Apache-2.0 with Runtime Library Exception. See [LICENSE](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/LICENSE).
+CSIHarness is licensed under Apache-2.0 with Runtime Library Exception. See [LICENSE](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/LICENSE).

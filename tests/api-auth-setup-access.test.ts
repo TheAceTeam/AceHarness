@@ -31,9 +31,9 @@ vi.mock('@/lib/core/runtime-platform', () => ({
 }));
 
 vi.mock('@/lib/auth/setup-access', () => ({
-  SETUP_ACCESS_COOKIE_NAME: 'ace_setup_access',
-  buildSetupAccessCookie: (grant: string) => `ace_setup_access=${grant}; HttpOnly`,
-  clearSetupAccessCookie: () => 'ace_setup_access=; Max-Age=0; HttpOnly',
+  SETUP_ACCESS_COOKIE_NAME: 'csi_setup_access',
+  buildSetupAccessCookie: (grant: string) => `csi_setup_access=${grant}; HttpOnly`,
+  clearSetupAccessCookie: () => 'csi_setup_access=; Max-Age=0; HttpOnly',
   ensureSetupVerificationCode: mocks.ensureSetupVerificationCode,
   getSetupVerificationFilePath: mocks.getSetupVerificationFilePath,
   isSetupAccessGrantValid: mocks.isSetupAccessGrantValid,
@@ -102,7 +102,7 @@ describe('/api/auth/setup access gate', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('set-cookie')).toContain('ace_setup_access=valid-grant');
+    expect(response.headers.get('set-cookie')).toContain('csi_setup_access=valid-grant');
     expect(response.headers.get('set-cookie')).toContain('HttpOnly');
   });
 
@@ -115,7 +115,7 @@ describe('/api/auth/setup access gate', () => {
       password: 'StrongPass123!',
       question: 'question',
       answer: 'answer',
-    }, 'ace_setup_access=valid-grant'));
+    }, 'csi_setup_access=valid-grant'));
 
     expect(response.status).toBe(200);
     expect(mocks.setupFirstAdmin).toHaveBeenCalledOnce();

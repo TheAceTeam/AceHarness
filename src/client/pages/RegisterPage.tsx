@@ -11,6 +11,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/brand/RobotLogo';
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { useAuthSetupStatusQuery, useRegisterUserMutation } from '@/client/query/auth';
@@ -133,7 +134,7 @@ export default function RegisterPage() {
             <div className="flex items-center gap-3">
               <RobotLogo size={42} />
               <div>
-                <h1 className="text-xl font-semibold">ACEHarness</h1>
+                <h1 className="text-xl font-semibold">{PRODUCT_DISPLAY_NAME}</h1>
                 <p className="text-xs text-muted-foreground">Registration request</p>
               </div>
             </div>

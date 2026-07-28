@@ -138,7 +138,7 @@ const ACTIVE_TAB_KEY = 'aceharness:skills:active-tab';
 const PAGE_SIZE_OPTIONS = [12, 24, 48, 96];
 
 const SOURCE_LABELS: Record<string, string> = {
-  'ace-custom': 'ACE 自定义',
+  'ace-custom': 'CSI 自定义',
   anthropics: 'Anthropics',
 };
 

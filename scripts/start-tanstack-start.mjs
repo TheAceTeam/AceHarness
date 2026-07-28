@@ -14,11 +14,15 @@ const decoding = require('lib0/decoding');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-process.env.ACE_INSTALL_ROOT = process.env.ACE_INSTALL_ROOT || root;
+process.env.CSIHARNESS_INSTALL_ROOT = process.env.CSIHARNESS_INSTALL_ROOT || root;
 process.chdir(root);
 
-const host = process.env.ACE_HOST || '127.0.0.1';
-const port = Number(process.env.PORT || process.env.ACE_PORT || 3000);
+const host = process.env.CSIHARNESS_HOST || '127.0.0.1';
+const rawPort = process.env.CSIHARNESS_PORT || process.env.PORT || '3001';
+const port = Number(rawPort);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error(`[CSIHarness] Invalid port: ${rawPort}`);
+}
 const clientDir = path.join(root, 'dist', 'client');
 const serverEntry = path.join(root, 'dist', 'server', 'server.mjs');
 const docs = new Map();
@@ -124,6 +128,21 @@ function getAppPaths() {
   return appPaths;
 }
 
+async function ensureCsiRuntimeHome() {
+  const runtimeHomePath = path.join(root, 'dist', 'lib', 'core', 'runtime-home.js');
+  if (!fs.existsSync(runtimeHomePath)) {
+    throw new Error('Missing dist/lib/core/runtime-home.js');
+  }
+  const runtimeHome = await import(pathToFileURL(runtimeHomePath).href);
+  const ensureRuntimeHomeInitialized =
+    runtimeHome.ensureRuntimeHomeInitialized
+    || runtimeHome.default?.ensureRuntimeHomeInitialized;
+  if (typeof ensureRuntimeHomeInitialized !== 'function') {
+    throw new Error('[CSIHarness] Runtime home initializer export is missing');
+  }
+  await ensureRuntimeHomeInitialized();
+}
+
 function refreshRuntimeSkillsOnStartup() {
   try {
     const runtimeSkillsPath = path.join(root, 'dist', 'lib', 'run', 'runtime-skills.js');
@@ -131,7 +150,7 @@ function refreshRuntimeSkillsOnStartup() {
     const runtimeSkills = require(runtimeSkillsPath);
     runtimeSkills.refreshBundledAceHarnessSkillsOnStartup?.();
   } catch (error) {
-    console.warn('[ACEHarness] Runtime skill startup refresh failed:', error);
+    console.warn('[CSIHarness] Runtime skill startup refresh failed:', error);
   }
 }
 
@@ -265,7 +284,7 @@ function sendNodeResponse(req, res, response, abortController) {
       });
       res.end(rewriteHtmlForBasePath(html));
     }).catch((error) => {
-      console.error('[ACEHarness] Failed to rewrite Start HTML response:', error);
+      console.error('[CSIHarness] Failed to rewrite Start HTML response:', error);
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
       }
@@ -391,7 +410,7 @@ function sendNodeResponse(req, res, response, abortController) {
         closeResponse();
         return;
       }
-      console.error('[ACEHarness] Failed to stream Start response:', error);
+      console.error('[CSIHarness] Failed to stream Start response:', error);
       if (!res.destroyed) res.destroy();
     } finally {
       releaseReader();
@@ -405,26 +424,26 @@ async function restoreScheduler() {
   try {
     const schedulerModulePath = path.join(root, 'dist', 'lib', 'core', 'scheduler.js');
     if (!fs.existsSync(schedulerModulePath)) {
-      console.warn('[ACEHarness] Scheduler restore skipped: dist/lib/core/scheduler.js not found');
+      console.warn('[CSIHarness] Scheduler restore skipped: dist/lib/core/scheduler.js not found');
       return;
     }
     const { scheduler } = await import(pathToFileURL(schedulerModulePath).href);
     if (scheduler?.init) {
       await scheduler.init();
-      console.log('[ACEHarness] Scheduler restored');
+      console.log('[CSIHarness] Scheduler restored');
     }
   } catch (error) {
-    console.error('[ACEHarness] Scheduler restore failed:', error);
+    console.error('[CSIHarness] Scheduler restore failed:', error);
   }
 }
 
 function startMemoryWatchdog() {
-  const maxMb = Number(process.env.ACE_MEMORY_WATCHDOG_MB || 0);
+  const maxMb = Number(process.env.CSIHARNESS_MEMORY_WATCHDOG_MB || 0);
   if (!Number.isFinite(maxMb) || maxMb <= 0) return;
   setInterval(() => {
     const usedMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
     if (usedMb > maxMb) {
-      console.error(`[ACEHarness] Memory watchdog limit exceeded: ${usedMb}MB > ${maxMb}MB`);
+      console.error(`[CSIHarness] Memory watchdog limit exceeded: ${usedMb}MB > ${maxMb}MB`);
       process.exit(137);
     }
   }, 30_000).unref();
@@ -434,17 +453,18 @@ loadProjectEnvFiles();
 process.env.NODE_ENV = process.env.NODE_ENV || 'production';
 const basePath = normalizeBasePath(process.env.BASEURL || process.env.BASE_URL);
 process.env.NEXT_PUBLIC_BASEURL = process.env.NEXT_PUBLIC_BASEURL || basePath;
+await ensureCsiRuntimeHome();
 refreshRuntimeSkillsOnStartup();
 
 if (!fs.existsSync(serverEntry)) {
-  console.error('[ACEHarness] 未找到 TanStack Start 服务端产物 dist/server/server.mjs。请先执行 `npm run build:start`。');
+  console.error('[CSIHarness] 未找到 TanStack Start 服务端产物 dist/server/server.mjs。请先执行 `npm run build:start`。');
   process.exit(1);
 }
 
 const startServer = await import(pathToFileURL(serverEntry).href);
 const fetchHandler = startServer.default?.fetch;
 if (typeof fetchHandler !== 'function') {
-  console.error('[ACEHarness] TanStack Start server entry does not export a fetch handler.');
+  console.error('[CSIHarness] TanStack Start server entry does not export a fetch handler.');
   process.exit(1);
 }
 
@@ -497,7 +517,7 @@ const server = http.createServer(async (req, res) => {
     req.off('aborted', abortStartRequest);
     res.off('close', abortStartRequest);
     if (abortController.signal.aborted || res.destroyed) return;
-    console.error('[ACEHarness] Start request failed:', error);
+    console.error('[CSIHarness] Start request failed:', error);
     res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'Start request failed' }));
   }
@@ -543,7 +563,7 @@ wss.on('connection', (ws, request, context) => {
         );
       }
     } catch (error) {
-      console.warn('[ACEHarness] Notebook collab message failed:', error);
+      console.warn('[CSIHarness] Notebook collab message failed:', error);
     }
   });
 
@@ -575,7 +595,7 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 server.listen(port, host, async () => {
-  console.log(`[ACEHarness] TanStack Start server ready on http://${host}:${port}${basePath || ''}`);
+  console.log(`[CSIHarness] TanStack Start server ready on http://${host}:${port}${basePath || ''}`);
   startMemoryWatchdog();
   await restoreScheduler();
 });

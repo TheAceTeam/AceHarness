@@ -84,6 +84,7 @@ import { cn } from '@/lib/core/utils';
 import { fetchRuntimeCommandMetadataCompat } from '@/client/query/engines';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { formatLegacyProductPathForDisplay, PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, storeWorkflowSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { useAgentMessageRows } from '@/client/db/collections';
 import {
@@ -177,7 +178,7 @@ const MIN_HOME_SIDEBAR_SIZE = 20;
 const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
 const CHAT_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
-const CHAT_ATTACHMENT_UPLOAD_DIR = '.aceharness/chat-attachments';
+const CHAT_ATTACHMENT_UPLOAD_DIR = '.csiharness/chat-attachments';
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 export function isChatAiBusy(input: {
   loading?: boolean;
@@ -456,7 +457,7 @@ export function buildWorkflowConversationContext(messages: Array<{ role?: string
 
 function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, baseContext: string): string {
   return [
-    '你正在 ACEHarness 的分步工作流创建向导中工作。',
+    `你正在 ${PRODUCT_DISPLAY_NAME} 的分步工作流创建向导中工作。`,
     `当前小点名称：${step.name}`,
     `当前小点类型：${step.kind}`,
     '请完成当前小点，并在回复末尾输出机器可读结果。',
@@ -5975,15 +5976,15 @@ export function ChatPageContent({
                 <span className="min-w-0 flex-1 text-sm">
                   <span className="block font-medium text-foreground">同时删除旧的系统工作目录</span>
                   <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">
-                    {chatWorkspaceCleanupConfirm?.workspacePath}
+                    {formatLegacyProductPathForDisplay(chatWorkspaceCleanupConfirm?.workspacePath || '')}
                   </span>
                 </span>
               </label>
               <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                新目录：<span className="break-all font-mono">{chatWorkspaceCleanupConfirm?.nextPath || '默认工作目录'}</span>
+                新目录：<span className="break-all font-mono">{formatLegacyProductPathForDisplay(chatWorkspaceCleanupConfirm?.nextPath || '默认工作目录')}</span>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">
-                只会删除 ACEHarness 自动创建并绑定到该会话的工作目录；用户手动选择的目录不会出现这个选项。
+                只会删除 {PRODUCT_DISPLAY_NAME} 自动创建并绑定到该会话的工作目录；用户手动选择的目录不会出现这个选项。
               </p>
             </div>
             <DialogFooter>
@@ -6184,4 +6185,3 @@ export function ChatPageContent({
     </div>
   );
 }
-

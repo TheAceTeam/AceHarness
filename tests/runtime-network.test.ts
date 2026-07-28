@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { resolveRuntimePort } from '@/lib/core/runtime-network';
 
@@ -22,5 +24,20 @@ describe('CSIHarness port selection', () => {
   test('rejects invalid environment ports instead of silently selecting another product port', () => {
     expect(() => resolveRuntimePort({ CSIHARNESS_PORT: '0' }, 4300)).toThrow(/CSIHARNESS_PORT/);
     expect(() => resolveRuntimePort({ PORT: 'abc' }, 4300)).toThrow(/PORT/);
+  });
+
+  test('production start and smoke scripts give CSIHARNESS_PORT priority over PORT', async () => {
+    const projectRoot = path.resolve(__dirname, '..');
+    for (const relativePath of [
+      'scripts/start-tanstack-start.mjs',
+      'scripts/smoke-global-npm-start.mjs',
+    ]) {
+      const source = await readFile(path.join(projectRoot, relativePath), 'utf8');
+      const csiPort = source.indexOf('process.env.CSIHARNESS_PORT');
+      const genericPort = source.indexOf('process.env.PORT', csiPort);
+      expect(csiPort, `${relativePath} must read CSIHARNESS_PORT`).toBeGreaterThanOrEqual(0);
+      expect(genericPort, `${relativePath} must use PORT only as fallback`).toBeGreaterThan(csiPort);
+      expect(source).toContain('port < 1 || port > 65535');
+    }
   });
 });

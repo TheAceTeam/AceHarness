@@ -94,8 +94,8 @@ describe('models API route', () => {
   test('POST imports models into SQLite and exports runtime YAML compatibility seed', async () => {
     await withTempDir('aceharness-test-install-', async (installRoot) => {
       await withIsolatedAceHome(async (aceHome) => {
-        const previousInstallRoot = process.env.ACE_INSTALL_ROOT;
-        process.env.ACE_INSTALL_ROOT = installRoot;
+        const previousInstallRoot = process.env.CSIHARNESS_INSTALL_ROOT;
+        process.env.CSIHARNESS_INSTALL_ROOT = installRoot;
 
         try {
           const installModelsDir = path.join(installRoot, 'configs', 'models');
@@ -154,8 +154,8 @@ describe('models API route', () => {
           expect(exported.catalog?.map((model) => model.id)).toEqual(['bundled-a']);
           expect(exported.routes).toEqual([]);
         } finally {
-          if (previousInstallRoot === undefined) delete process.env.ACE_INSTALL_ROOT;
-          else process.env.ACE_INSTALL_ROOT = previousInstallRoot;
+          if (previousInstallRoot === undefined) delete process.env.CSIHARNESS_INSTALL_ROOT;
+          else process.env.CSIHARNESS_INSTALL_ROOT = previousInstallRoot;
         }
       });
     });
@@ -164,8 +164,8 @@ describe('models API route', () => {
   test('SQLite POST replacement does not restore deleted runtime routes from old YAML', async () => {
     await withTempDir('aceharness-test-install-', async (installRoot) => {
       await withIsolatedAceHome(async (aceHome) => {
-        const previousInstallRoot = process.env.ACE_INSTALL_ROOT;
-        process.env.ACE_INSTALL_ROOT = installRoot;
+        const previousInstallRoot = process.env.CSIHARNESS_INSTALL_ROOT;
+        process.env.CSIHARNESS_INSTALL_ROOT = installRoot;
 
         try {
           const installModelsDir = path.join(installRoot, 'configs', 'models');
@@ -219,8 +219,8 @@ describe('models API route', () => {
           expect(reloadBody.models.map((model) => model.agentId)).toEqual(['opencode']);
           expect(reloadBody.models[0]?.modelRouteId).toContain('opencode__shared-model');
         } finally {
-          if (previousInstallRoot === undefined) delete process.env.ACE_INSTALL_ROOT;
-          else process.env.ACE_INSTALL_ROOT = previousInstallRoot;
+          if (previousInstallRoot === undefined) delete process.env.CSIHARNESS_INSTALL_ROOT;
+          else process.env.CSIHARNESS_INSTALL_ROOT = previousInstallRoot;
         }
       });
     });

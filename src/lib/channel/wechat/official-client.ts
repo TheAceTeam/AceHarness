@@ -459,7 +459,7 @@ async function forwardToAceHarness(options: WeChatBridgeOptions, message: WeChat
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(json?.error || `ACEHarness inbound HTTP ${response.status}`);
+    throw new Error(json?.error || `CSIHarness inbound HTTP ${response.status}`);
   }
   return json;
 }

@@ -48,11 +48,11 @@ describe('OpenCode command file fallback discovery', () => {
     );
     writeCommand(
       join(runtimeRoot, '.opencode', 'command', 'ace.md'),
-      '---\ndescription: ACEHarness runtime command\n---\nRuntime command',
+      '---\ndescription: CSIHarness runtime command\n---\nRuntime command',
     );
     writeCommand(
-      join(home, '.aceharness', '.opencode', 'command', 'ace-home.md'),
-      '---\ndescription: ACEHarness home command\n---\nHome runtime command',
+      join(home, '.csiharness', '.opencode', 'command', 'csi-home.md'),
+      '---\ndescription: CSIHarness home command\n---\nHome runtime command',
     );
     writeCommand(
       join(xdgConfig, 'opencode', 'commands', 'global.md'),
@@ -76,15 +76,15 @@ describe('OpenCode command file fallback discovery', () => {
       'parent',
       'home',
       'ace',
-      'ace-home',
+      'csi-home',
       'alias-name',
       'global',
     ]);
     expect(commands.find((command) => command.name === 'project/deploy')?.description).toBe('Deploy from project');
     expect(commands.find((command) => command.name === 'parent')?.description).toBe('Parent project command');
     expect(commands.find((command) => command.name === 'home')?.description).toBe('Home dot-opencode command');
-    expect(commands.find((command) => command.name === 'ace')?.description).toBe('ACEHarness runtime command');
-    expect(commands.find((command) => command.name === 'ace-home')?.description).toBe('ACEHarness home command');
+    expect(commands.find((command) => command.name === 'ace')?.description).toBe('CSIHarness runtime command');
+    expect(commands.find((command) => command.name === 'csi-home')?.description).toBe('CSIHarness home command');
     expect(commands.find((command) => command.name === 'global')?.description).toBe('Global command');
   });
 
@@ -123,7 +123,7 @@ describe('OpenCode command file fallback discovery', () => {
     ]);
   });
 
-  test('resolves ACEHarness runtime .opencode directory', () => {
+  test('resolves CSIHarness runtime .opencode directory', () => {
     tempRoot = mkdtempSync(join(tmpdir(), 'aceharness-opencode-runtime-'));
     const runtimeRoot = join(tempRoot, 'runtime');
 
@@ -133,7 +133,7 @@ describe('OpenCode command file fallback discovery', () => {
       platform: 'linux',
     })).toEqual([
       join(runtimeRoot, '.opencode'),
-      join(tempRoot, 'home', '.aceharness', '.opencode'),
+      join(tempRoot, 'home', '.csiharness', '.opencode'),
     ]);
   });
 

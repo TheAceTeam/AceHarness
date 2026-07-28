@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import { createRequire } from 'module';
-import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { getRepoRoot, getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
 import type {
   RagBundleInput,
@@ -80,7 +80,7 @@ const DEFAULT_SAMPLE_RAG_DOCUMENTS = [
   },
 ];
 const RAG_SCHEMA_FIELDS: RagSchemaField[] = [
-  { name: 'id', type: 'VarChar', indexed: false, description: 'ACEHarness vector row id' },
+  { name: 'id', type: 'VarChar', indexed: false, description: 'CSIHarness vector row id' },
   { name: 'knowledgeBaseId', type: 'VarChar', indexed: false, description: 'RAG collection id' },
   { name: 'documentId', type: 'VarChar', indexed: false, description: 'Source id in metadata store' },
   { name: 'chunkIndex', type: 'Int32', indexed: false, description: 'Ordinal row within a source' },
@@ -157,7 +157,7 @@ async function saveMeta(meta: RagMetaStore): Promise<void> {
 async function connectDb() {
   await mkdir(DB_URI, { recursive: true });
   if (!lancedbModule) {
-    const runtimeRoot = process.env.ACE_INSTALL_ROOT || process.cwd();
+    const runtimeRoot = getRepoRoot();
     const loaderPath = join(runtimeRoot, 'runtime', 'lancedb.cjs');
     const loader = runtimeRequire(loaderPath) as { loadLanceDb?: () => typeof import('@lancedb/lancedb') };
     if (typeof loader.loadLanceDb !== 'function') {
@@ -326,7 +326,7 @@ function ensureDefaultKnowledgeBase(meta: RagMetaStore): boolean {
   const timestamp = now();
   meta.knowledgeBases.unshift({
     id: DEFAULT_RAG_KNOWLEDGE_BASE_ID,
-    name: 'ACEHarness 默认 RAG 数据库',
+    name: 'CSIHarness 默认 RAG 数据库',
     description: '内置 LanceDB 向量数据库。导入内容会切块、embedding 并写入 LanceDB table。',
     tableName: DEFAULT_TABLE_NAME,
     databaseUri: DB_URI,

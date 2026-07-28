@@ -9,14 +9,14 @@ describe('channel delivery bridge', () => {
   beforeEach(() => {
     vi.resetModules();
     aceHome = mkdtempSync(join(tmpdir(), 'aceharness-channel-delivery-'));
-    process.env.ACE_HOME = aceHome;
+    process.env.CSIHARNESS_HOME = aceHome;
   });
 
   afterEach(async () => {
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     workflowRegistry.removeAllListeners();
     rmSync(aceHome, { recursive: true, force: true });
-    delete process.env.ACE_HOME;
+    delete process.env.CSIHARNESS_HOME;
     vi.restoreAllMocks();
   });
 

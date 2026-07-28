@@ -313,7 +313,7 @@ export async function compactChatRuntimeContextManually(
 }
 
 export function isChatRuntimeTimingDebug(): boolean {
-  return process.env.ACE_TIMING_DEBUG === '1' || process.env.ACE_TIMING_DEBUG === 'true';
+  return process.env.CSIHARNESS_TIMING_DEBUG === '1' || process.env.CSIHARNESS_TIMING_DEBUG === 'true';
 }
 
 class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine {

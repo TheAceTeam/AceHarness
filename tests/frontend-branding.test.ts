@@ -5,30 +5,37 @@ import { describe, expect, test } from 'vitest';
 const projectRoot = resolve(__dirname, '..');
 const scanRoots = [
   'messages',
-  'src/app',
+  'src/client/pages',
+  'src/routes',
   'src/components',
   'src/contexts',
   'src/hooks',
   'src/lib/agent',
   'src/lib/ai',
   'src/lib/chat',
+  'src/lib/core/instrumentation-nodejs.ts',
   'src/lib/core/creator-validation.ts',
   'src/lib/core/default-supervisor.ts',
   'src/lib/models',
   'src/lib/notify',
   'src/lib/rag',
-  'src/app/api/channels/integrations/[id]/test-send/route.ts',
+  'src/server/api-routes/channels/integrations/[id]/test-send/route.ts',
+  'src/server/api-routes/channels/wechat-official/qrcode-image/route.ts',
+  'src/server/api-routes/workflow/spec-merge/route.ts',
   'src/lib/channel/providers.ts',
   'src/lib/channel/wechat/official-client.ts',
-  'src/lib/engines/codex-wrapper.ts',
+  'src/lib/channel/wechat/official-service.ts',
   'src/lib/runtime/database-capabilities.ts',
   'src/lib/state-machine/workflow-manager.ts',
   'src/lib/workflow/git-baseline.ts',
   'src/plugins',
+  'src/cli.ts',
+  'src/start.ts',
+  'scripts/start-tanstack-start.mjs',
   'public',
 ];
-const sourceExtensions = new Set(['.ts', '.tsx', '.json', '.svg']);
-const oldBrandPattern = /\bACEHarness\b|\bACE Harness\b|\bACEHARNESS\b|\bACE Service\b/g;
+const sourceExtensions = new Set(['.ts', '.tsx', '.mjs', '.json', '.svg']);
+const oldBrandPattern = /\bACEHarness\b|\bAceHarness\b|\bACE Harness\b|\bACEHARNESS\b|\bACE Service\b/g;
 const oldLowercaseVisibleBrandPattern = /^\s*aceharness\s*$/gim;
 
 async function collectFrontendFiles(root: string): Promise<string[]> {
@@ -74,6 +81,20 @@ describe('frontend branding', () => {
       }
     }
 
+    expect(offenders).toEqual([]);
+  });
+
+  test('user-facing command examples do not advertise the removed ace binary', async () => {
+    const commandSources = [
+      'src/client/pages/EnginesPage.tsx',
+      'src/components/models/ModelDiagnosticsWorkbench.tsx',
+    ];
+    const offenders: string[] = [];
+    for (const file of commandSources) {
+      const content = await readFile(resolve(projectRoot, file), 'utf8');
+      if (/<code>ace(?:\s|<)/.test(content)) offenders.push(`${file}: code`);
+      if (/\$\s+ace(?:\s|$)/m.test(content)) offenders.push(`${file}: terminal`);
+    }
     expect(offenders).toEqual([]);
   });
 });

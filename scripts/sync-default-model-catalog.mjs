@@ -8,12 +8,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
 function resolveWorkspaceRoot() {
-  if (process.env.ACE_HOME?.trim()) return path.resolve(process.env.ACE_HOME.trim());
+  if (process.env.CSIHARNESS_HOME?.trim()) return path.resolve(process.env.CSIHARNESS_HOME.trim());
   if (process.platform === 'win32' && process.env.APPDATA?.trim()) {
-    return path.resolve(process.env.APPDATA.trim(), 'ACEHarness');
+    return path.resolve(process.env.APPDATA.trim(), 'CSIHarness');
   }
-  if (process.env.XDG_DATA_HOME?.trim()) return path.resolve(process.env.XDG_DATA_HOME.trim(), 'aceharness');
-  return path.resolve(process.env.HOME || process.cwd(), '.aceharness');
+  if (process.env.XDG_DATA_HOME?.trim()) return path.resolve(process.env.XDG_DATA_HOME.trim(), 'csiharness');
+  return path.resolve(process.env.HOME || process.cwd(), '.csiharness');
 }
 
 function ensureSchema(db) {

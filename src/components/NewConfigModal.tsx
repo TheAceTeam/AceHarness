@@ -497,7 +497,7 @@ function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, b
     '- 不要输出占位符、泛泛而谈的“完善/优化/处理”等空任务；每个小点都要能支撑后续 AI 执行和人工审查。',
   ].join('\n');
   return [
-    '你正在 ACEHarness 的分步工作流创建向导中工作。',
+    '你正在 CSIHarness 的分步工作流创建向导中工作。',
     `当前小点名称：${step.name}`,
     `当前小点类型：${step.kind}`,
     '请完成当前小点，并在回复末尾输出机器可读结果。',

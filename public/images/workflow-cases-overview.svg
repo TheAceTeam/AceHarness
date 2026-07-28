@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
-  <title id="title">AceHarness 工作流案例总览</title>
-  <desc id="desc">展示 AceHarness 在复杂问题修复、性能优化和生产迁移上的四类代表性工作流案例。</desc>
+  <title id="title">CSIHarness 工作流案例总览</title>
+  <desc id="desc">展示 CSIHarness 在复杂问题修复、性能优化和生产迁移上的四类代表性工作流案例。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#081120"/>
@@ -25,12 +25,12 @@
   <circle cx="1330" cy="860" r="240" fill="url(#glowOrange)"/>
   <path d="M0 180C320 120 420 360 700 310C930 270 1040 110 1600 180V0H0Z" fill="#ffffff" fill-opacity="0.025"/>
 
-  <text x="112" y="108" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">ACEHARNESS CASES</text>
+  <text x="112" y="108" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">CSIHARNESS CASES</text>
   <text x="112" y="164" fill="#f8fafc" font-size="44" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">工作流案例总览</text>
   <text x="112" y="208" fill="#cbd5e1" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">从复杂编译器问题修复，到性能治理和生产迁移，统一由状态机与多 Agent 协作驱动。</text>
 
   <rect x="112" y="248" rx="24" ry="24" width="1376" height="90" fill="#0f172a" fill-opacity="0.62" stroke="#334155" stroke-opacity="0.9"/>
-  <text x="150" y="302" fill="#f8fafc" font-size="24" font-weight="600" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AceHarness</text>
+  <text x="150" y="302" fill="#f8fafc" font-size="24" font-weight="600" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">CSIHarness</text>
   <text x="300" y="302" fill="#94a3b8" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">状态机编排 · Supervisor 路由 · 对抗式迭代 · Human-in-the-Loop</text>
 
   <line x1="800" y1="338" x2="446" y2="396" stroke="#475569" stroke-dasharray="8 10"/>

@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 
-export const ACE_PACKAGE_NAME = '@cangjielang/aceharness';
+export const CSI_PACKAGE_NAME = 'csiharness';
 export const DEFAULT_UPDATE_TARGET = 'latest';
 
 export interface NpmUpdateOptions {
@@ -27,7 +27,7 @@ export function normalizeUpdateTarget(target?: string): string {
 }
 
 export function buildNpmPackageSpec(
-  packageName = ACE_PACKAGE_NAME,
+  packageName = CSI_PACKAGE_NAME,
   target?: string,
 ): string {
   const normalizedTarget = normalizeUpdateTarget(target);

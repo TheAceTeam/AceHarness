@@ -93,7 +93,7 @@ export default function ChannelIntegrationsContent() {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [secretVisible, setSecretVisible] = useState(false);
   const [bootstrapText, setBootstrapText] = useState('');
-  const [testSendText, setTestSendText] = useState('ACEHarness channel test');
+  const [testSendText, setTestSendText] = useState('CSIHarness channel test');
   const [testSendResult, setTestSendResult] = useState('');
   const [testSending, setTestSending] = useState(false);
   const [inboundConversationId, setInboundConversationId] = useState('wechat-test-room');

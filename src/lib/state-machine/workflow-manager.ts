@@ -152,7 +152,7 @@ const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
 const DEFAULT_AGENT_PREWARM_CONCURRENCY = Math.max(
   1,
-  Math.min(4, Number.parseInt(process.env.ACE_WORKFLOW_AGENT_PREWARM_CONCURRENCY || '2', 10) || 2)
+  Math.min(4, Number.parseInt(process.env.CSIHARNESS_WORKFLOW_AGENT_PREWARM_CONCURRENCY || '2', 10) || 2)
 );
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
@@ -1060,7 +1060,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
     if (needed.size === 0) {
-      // 没有指定 skills 时，只逐项链接非 ACEHarness 内置 skill，避免镜像整棵目录。
+      // 没有指定 skills 时，只逐项链接非 CSIHarness 内置 skill，避免镜像整棵目录。
       await mkdir(workspaceSkillsDir, { recursive: true });
       const entries = await readdir(serverSkillsDir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
@@ -3742,7 +3742,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const childSpecDeltas = await this.collectChildSpecDeltaSummaries();
 
     const summaryPrompt = [
-      '你是 ACEHarness 的工作流指挥官，请输出本次工作流的结算结果。',
+      '你是 CSIHarness 的工作流指挥官，请输出本次工作流的结算结果。',
       '请严格输出 JSON，不要附加其他说明。',
       'scoreCards.score 使用 10 分制，范围 0-10，可保留 1 位小数。',
       'JSON 结构：',
@@ -4290,7 +4290,7 @@ try {
   }
 
   private getSegmentHandoffDelayMs(config: StateMachineWorkflowConfig): number {
-    const raw = config.context?.segmentDelayMs ?? process.env.ACE_STATE_SEGMENT_DELAY_MS;
+    const raw = config.context?.segmentDelayMs ?? process.env.CSIHARNESS_STATE_SEGMENT_DELAY_MS;
     const parsed = typeof raw === 'number' ? raw : Number.parseInt(String(raw || '0'), 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
     return Math.min(parsed, 30000);

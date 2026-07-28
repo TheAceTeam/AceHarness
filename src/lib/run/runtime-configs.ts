@@ -13,13 +13,17 @@ const DELETED_MARKER = '.deleted.json';
 
 let seedPromise: Promise<void> | null = null;
 
+function normalizeRelativeConfigPath(relativePath: string): string {
+  return relativePath.replace(/\\/g, '/');
+}
+
 async function loadDeletedSet(configsDir: string): Promise<Set<string>> {
   const markerPath = resolve(configsDir, DELETED_MARKER);
   if (!existsSync(markerPath)) return new Set();
   try {
     const content = await readFile(markerPath, 'utf-8');
     const list: string[] = JSON.parse(content);
-    return new Set(list);
+    return new Set(list.map(normalizeRelativeConfigPath));
   } catch {
     return new Set();
   }
@@ -32,14 +36,15 @@ async function saveDeletedSet(configsDir: string, deleted: Set<string>): Promise
 
 export async function markConfigDeleted(configsDir: string, relativePath: string): Promise<void> {
   const deleted = await loadDeletedSet(configsDir);
-  deleted.add(relativePath);
+  deleted.add(normalizeRelativeConfigPath(relativePath));
   await saveDeletedSet(configsDir, deleted);
 }
 
 export async function unmarkConfigDeleted(configsDir: string, relativePath: string): Promise<void> {
   const deleted = await loadDeletedSet(configsDir);
-  if (!deleted.has(relativePath)) return;
-  deleted.delete(relativePath);
+  const normalizedPath = normalizeRelativeConfigPath(relativePath);
+  if (!deleted.has(normalizedPath)) return;
+  deleted.delete(normalizedPath);
   await saveDeletedSet(configsDir, deleted);
 }
 
@@ -54,7 +59,7 @@ async function copyMissingRecursive(src: string, dst: string, deletedSet: Set<st
     return;
   }
 
-  const rel = relative(baseDir, dst);
+  const rel = normalizeRelativeConfigPath(relative(baseDir, dst));
   if (deletedSet.has(rel)) return;
 
   if (existsSync(dst)) return;

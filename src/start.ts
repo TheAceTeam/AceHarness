@@ -7,7 +7,7 @@ if (typeof process !== 'undefined' && typeof process.on === 'function' && !(glob
   (globalThis as any)[streamLifetimeGuardKey] = true;
   process.on('uncaughtException', (error) => {
     if (String((error as Error)?.message || error).includes(STREAM_LIFETIME_ERROR)) {
-      console.warn('[ACEHarness] TanStack SSR stream timed out and was cleaned up.');
+      console.warn('[CSIHarness] TanStack SSR stream timed out and was cleaned up.');
       return;
     }
     throw error;
@@ -15,12 +15,14 @@ if (typeof process !== 'undefined' && typeof process.on === 'function' && !(glob
 }
 
 if (import.meta.env.SSR) {
-  void import('@/lib/run/runtime-skills')
+  void import('@/lib/core/runtime-home')
+    .then(({ ensureRuntimeHomeInitialized }) => ensureRuntimeHomeInitialized())
+    .then(() => import('@/lib/run/runtime-skills'))
     .then(({ refreshBundledAceHarnessSkillsOnStartup }) => {
       refreshBundledAceHarnessSkillsOnStartup();
     })
     .catch((error) => {
-      console.warn('[ACEHarness] Runtime skill startup refresh failed:', error);
+      console.warn('[CSIHarness] Runtime skill startup refresh failed:', error);
     });
 }
 

@@ -14,16 +14,17 @@ import { ToastProvider } from '../components/ui/toast';
 import { ChatProvider } from '../contexts/ChatContext';
 import ChatModalWrapper from '../components/ChatModalWrapper';
 import OnboardingPortal from '../components/onboarding/OnboardingPortal';
+import { PRODUCT_DISPLAY_NAME } from '../lib/core/branding';
 
 export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'ACEHarness' },
+      { title: PRODUCT_DISPLAY_NAME },
       {
         name: 'description',
-        content: 'ACEHarness - Agent Centric Engineering Harness',
+        content: `${PRODUCT_DISPLAY_NAME} - Agent Centric Engineering Harness`,
       },
     ],
   }),
@@ -50,7 +51,7 @@ function RootComponent() {
 }
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
-  const locale = typeof process !== 'undefined' && process.env.ACE_LOCALE === 'en' ? 'en' : 'zh-CN';
+  const locale = typeof process !== 'undefined' && process.env.CSIHARNESS_LOCALE === 'en' ? 'en' : 'zh-CN';
 
   return (
     <html lang={locale} suppressHydrationWarning>

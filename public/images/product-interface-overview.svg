@@ -1,6 +1,6 @@
 <svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness 前端页面功能云图</title>
-  <desc id="desc">以功能云图展示 ACEHarness 前端页面入口，包括对话、工作流、议场、Notebook、模型引擎、渠道、用户和系统设置。</desc>
+  <title id="title">CSIHarness 前端页面功能云图</title>
+  <desc id="desc">以功能云图展示 CSIHarness 前端页面入口，包括对话、工作流、议场、Notebook、模型引擎、渠道、用户和系统设置。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#06101F"/>
@@ -36,7 +36,7 @@
   <path d="M0 594C224 520 414 638 640 604C882 568 1022 516 1200 552V720H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
   <g class="font">
-    <text x="70" y="78" class="title">ACEHarness 前端页面功能云图</text>
+    <text x="70" y="78" class="title">CSIHarness 前端页面功能云图</text>
     <text x="70" y="110" class="subtitle">围绕工程任务闭环组织页面入口：创建、运行、协作、沉淀、治理和接入。</text>
   </g>
 
@@ -53,7 +53,7 @@
   <g class="font" filter="url(#shadow)">
     <circle cx="600" cy="350" r="104" fill="url(#core)"/>
     <circle cx="600" cy="350" r="78" fill="#FFFFFF" fill-opacity="0.10" stroke="#FFFFFF" stroke-opacity="0.34"/>
-    <text x="600" y="330" text-anchor="middle" class="center">ACEHarness</text>
+    <text x="600" y="330" text-anchor="middle" class="center">CSIHarness</text>
     <text x="600" y="363" text-anchor="middle" class="centerSub">Console Pages</text>
     <text x="600" y="391" text-anchor="middle" class="centerSub">Chat / Workflow / Knowledge / Ops</text>
   </g>

@@ -618,7 +618,7 @@ function buildDiagnosticTerminalOutput(
   const visibleLogs = detailed ? logs : logs.filter((item) => !item.verbose);
   const verboseCount = logs.length - visibleLogs.length;
   const lines: string[] = [
-    `${ANSI.cyan}$ ace diagnostics ${detailed ? '--full-log' : '--summary'}${ANSI.reset}`,
+    `${ANSI.cyan}$ csiharness diagnostics ${detailed ? '--full-log' : '--summary'}${ANSI.reset}`,
     `${ANSI.dim}stream=${running ? 'open' : 'closed'} mode=${detailed ? 'full' : 'summary'} logs=${visibleLogs.length}${verboseCount > 0 && !detailed ? ` hidden_verbose=${verboseCount}` : ''} result=${result ? 'ready' : 'pending'}${ANSI.reset}`,
     '',
   ];
@@ -757,7 +757,7 @@ function buildSummaryTerminalLines(
   const hiddenOlderCount = Math.max(0, visibleLogs.length - SUMMARY_TERMINAL_LOG_LIMIT);
   const tailLogs = hiddenOlderCount > 0 ? visibleLogs.slice(-SUMMARY_TERMINAL_LOG_LIMIT) : visibleLogs;
   const lines: TerminalDisplayLine[] = [
-    { key: 'header-command', text: '$ ace diagnostics --summary', tone: 'accent' },
+    { key: 'header-command', text: '$ csiharness diagnostics --summary', tone: 'accent' },
     {
       key: 'header-state',
       text: `stream=${running ? 'open' : 'closed'} logs=${tailLogs.length}${hiddenVerboseCount > 0 ? ` hidden_verbose=${hiddenVerboseCount}` : ''} result=${result ? 'ready' : 'pending'}${hiddenOlderCount > 0 ? ` older_hidden=${hiddenOlderCount}` : ''}`,

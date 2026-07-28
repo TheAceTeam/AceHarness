@@ -435,7 +435,7 @@ export function UsersContent({ embedded = false }: { embedded?: boolean } = {}) 
         open={drawerOpen}
         mode={editingUser ? 'edit' : 'create'}
         title={editingUser ? '编辑用户' : '新建用户'}
-        subtitle={editingUser ? editingUser.email : '创建可登录 ACEHarness 的账号'}
+        subtitle={editingUser ? editingUser.email : '创建可登录 CSIHarness 的账号'}
         status={editingUser ? { label: statusLabel(editingUser.status), tone: statusTone(editingUser.status) } : undefined}
         dirty={formDirty}
         saving={createUserMutation.isPending || updateUserMutation.isPending}

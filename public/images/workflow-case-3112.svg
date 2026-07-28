@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
   <title id="title">Extend ICE 修复闭环</title>
-  <desc id="desc">展示 ACEHarness 在 Issue #3112 Extend ICE 修复中从复现到验证的完整闭环，包含红蓝对抗和人工审查。</desc>
+  <desc id="desc">展示 CSIHarness 在 Issue #3112 Extend ICE 修复中从复现到验证的完整闭环，包含红蓝对抗和人工审查。</desc>
   <defs>
     <linearGradient id="bg3112" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0a1120"/>

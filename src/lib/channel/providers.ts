@@ -65,7 +65,7 @@ export const CHANNEL_PROVIDER_PRESETS: ChannelProviderPreset[] = [
     name: 'WeChat Bridge',
     category: 'bridge',
     transport: 'webhook',
-    description: '通过中间桥接器把微信消息归一化后送入 ACEHarness。',
+    description: '通过中间桥接器把微信消息归一化后送入 CSIHarness。',
     capabilities: ['workflow-runtime', 'agent-chat', 'attachments'],
     fields: [
       { key: 'bridgeName', label: 'Bridge Name', type: 'text', placeholder: 'hermes / wechaty / custom bridge' },

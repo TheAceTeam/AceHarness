@@ -41,7 +41,7 @@ function baseCharacterSpec(agent) {
   return [
     'Use case: stylized-concept',
     'Asset type: game character asset for an office simulation UI',
-    `Primary request:真人比例的半写实 2D 角色，代表 ACEHarness Agent「${agent.title || agent.name}」。`,
+    `Primary request:真人比例的半写实 2D 角色，代表 CSIHarness Agent「${agent.title || agent.name}」。`,
     `Subject: ${profile}.`,
     'Style/medium: polished 2D game character art, semi-realistic proportions, clean anime-adjacent rendering, not chibi, not mascot.',
     'Composition/framing: full-body character, front three-quarter view, centered, generous padding, feet visible.',

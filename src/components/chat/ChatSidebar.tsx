@@ -62,6 +62,7 @@ import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { isRunningWorkflowConversation } from '@/lib/workflow/run-status';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { RobotLogo } from '@/components/brand/RobotLogo';
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 
 type SkillItem = {
   name: string;
@@ -89,7 +90,7 @@ const EMPTY_MCP_SERVERS: McpServerItem[] = [];
 const DEFAULT_CHAT_KNOWLEDGE_BASE = {
   id: 'default',
   name: '默认知识库',
-  description: 'ACEHarness 默认 RAG 知识库',
+  description: `${PRODUCT_DISPLAY_NAME} 默认 RAG 知识库`,
   chunkCount: 0,
   documentCount: 0,
 };
@@ -1524,7 +1525,7 @@ function ChatSidebarComponent({
               </span>
             </label>
             <p className="text-xs leading-5 text-muted-foreground">
-              只会对 ACEHarness 默认创建并绑定到该会话的 agora workspace 生效；用户手动选择的目录不会出现这个选项。
+              只会对 {PRODUCT_DISPLAY_NAME} 默认创建并绑定到该会话的 agora workspace 生效；用户手动选择的目录不会出现这个选项。
             </p>
           </div>
         )}

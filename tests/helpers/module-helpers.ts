@@ -15,17 +15,17 @@ export async function withTempDir<T>(prefix: string, fn: (dir: string) => Promis
 
 export async function withIsolatedAceHome<T>(fn: (aceHome: string) => Promise<T>): Promise<T> {
   return withTempDir('aceharness-test-home-', async (baseDir) => {
-    const runtimeDirName = process.platform === 'win32' ? 'ACEHarness' : 'aceharness';
+    const runtimeDirName = process.platform === 'win32' ? 'CSIHarness' : 'csiharness';
     const aceHome = path.join(baseDir, runtimeDirName);
     await mkdir(aceHome, { recursive: true });
-    const previousAceHome = process.env.ACE_HOME;
+    const previousAceHome = process.env.CSIHARNESS_HOME;
     const previousAppData = process.env.APPDATA;
     const previousXdgDataHome = process.env.XDG_DATA_HOME;
-    const previousWorkflowEventStore = process.env.ACE_WORKFLOW_EVENT_STORE;
-    process.env.ACE_HOME = aceHome;
+    const previousWorkflowEventStore = process.env.CSIHARNESS_WORKFLOW_EVENT_STORE;
+    process.env.CSIHARNESS_HOME = aceHome;
     process.env.APPDATA = baseDir;
     process.env.XDG_DATA_HOME = baseDir;
-    process.env.ACE_WORKFLOW_EVENT_STORE = 'jsonl';
+    process.env.CSIHARNESS_WORKFLOW_EVENT_STORE = 'jsonl';
     try {
       return await fn(aceHome);
     } finally {
@@ -33,14 +33,14 @@ export async function withIsolatedAceHome<T>(fn: (aceHome: string) => Promise<T>
         const { resetWorkflowEventStoreForTests } = await import('@/lib/workflow/event-store');
         resetWorkflowEventStoreForTests();
       } catch {}
-      if (previousAceHome === undefined) delete process.env.ACE_HOME;
-      else process.env.ACE_HOME = previousAceHome;
+      if (previousAceHome === undefined) delete process.env.CSIHARNESS_HOME;
+      else process.env.CSIHARNESS_HOME = previousAceHome;
       if (previousAppData === undefined) delete process.env.APPDATA;
       else process.env.APPDATA = previousAppData;
       if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
       else process.env.XDG_DATA_HOME = previousXdgDataHome;
-      if (previousWorkflowEventStore === undefined) delete process.env.ACE_WORKFLOW_EVENT_STORE;
-      else process.env.ACE_WORKFLOW_EVENT_STORE = previousWorkflowEventStore;
+      if (previousWorkflowEventStore === undefined) delete process.env.CSIHARNESS_WORKFLOW_EVENT_STORE;
+      else process.env.CSIHARNESS_WORKFLOW_EVENT_STORE = previousWorkflowEventStore;
     }
   });
 }

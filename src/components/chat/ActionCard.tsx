@@ -19,7 +19,7 @@ import {
   ConfirmationAction,
 } from '@/components/ai-elements/confirmation';
 
-/** Map ACEHarness ActionState.status → ai-elements ToolPart['state'] */
+/** Map CSIHarness ActionState.status → ai-elements ToolPart['state'] */
 function toToolState(status: ActionState['status']): ToolPart['state'] {
   switch (status) {
     case 'pending': return 'approval-requested';

@@ -806,7 +806,7 @@ export default function ApiDocsPage() {
 
   const exportCollection = () => {
     const collection = {
-      name: 'ACEHarness API',
+      name: 'CSIHarness API',
       exportedAt: new Date().toISOString(),
       endpoints: API_DATA.flatMap((category) =>
         category.endpoints.map((endpoint) => ({

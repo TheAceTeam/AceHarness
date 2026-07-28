@@ -13,7 +13,7 @@ description: 用于实施评审通过后，把最终代码变更、验证证据�
 
 优先读取以下正式产物，并以实际仓库状态补充事实：
 
-- `context.requirements`、`context.projectRoot` 和 ACEHarness `runId`；
+- `context.requirements`、`context.projectRoot` 和 CSIHarness `runId`；
 - `specs/<AR-ID>/design/` 下的 `clarification.md`、`design.md`、`plan.md`、`task.md`、`design-review.md`；
 - `specs/<AR-ID>/dt/` 下的 `dt-cases.md`、`dt-test-code-summary.md`、`dt-baseline-report.md`、`dt-quality-review.md`；
 - `specs/<AR-ID>/implementation/` 下的 `implementation-summary.md`、`dt-test-report-post.md`、`code-review.md`、`implementation-review.md`；

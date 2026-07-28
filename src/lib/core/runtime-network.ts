@@ -9,7 +9,7 @@ function parsePort(value: string | undefined, label: string): number | undefined
   return port;
 }
 
-export function resolveRuntimePort(env: NodeJS.ProcessEnv, savedPort?: number): number {
+export function resolveRuntimePort(env: Record<string, string | undefined>, savedPort?: number): number {
   const csiPort = parsePort(env.CSIHARNESS_PORT, 'CSIHARNESS_PORT');
   if (csiPort !== undefined) return csiPort;
   const genericPort = parsePort(env.PORT, 'PORT');

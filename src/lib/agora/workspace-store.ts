@@ -80,7 +80,7 @@ async function ensureGitRepositoryReady(dir: string) {
 
 async function ensureGitBaseline(dir: string) {
   await ensureGitRepositoryReady(dir);
-  await runGit(dir, ['config', 'user.name', 'ACEHarness Agora']).catch(() => {});
+  await runGit(dir, ['config', 'user.name', 'CSIHarness Agora']).catch(() => {});
   await runGit(dir, ['config', 'user.email', 'agora@aceharness.local']).catch(() => {});
   const head = await runGit(dir, ['rev-parse', '--verify', 'HEAD']).catch(() => '');
   if (!head) {

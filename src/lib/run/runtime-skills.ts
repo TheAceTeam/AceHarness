@@ -49,7 +49,12 @@ async function refreshBundledSkills(srcDir: string, dstDir: string): Promise<voi
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
+    const isCsiEditablePreset = entry.name.toLowerCase().startsWith('csi-');
+    await copyBundledEntry(
+      resolve(srcDir, entry.name),
+      resolve(dstDir, entry.name),
+      { replaceExisting: !isCsiEditablePreset },
+    );
   }
 }
 

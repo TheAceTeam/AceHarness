@@ -786,7 +786,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
           <div className="flex flex-col gap-3 rounded-lg border border-border bg-card px-5 py-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="font-semibold text-foreground">引擎安装与服务说明</div>
-              <div className="mt-1">安装命令、可用性检查和 ACE Service 指导已集中到右侧说明面板。</div>
+              <div className="mt-1">安装命令、可用性检查和 CSIHarness Service 指导已集中到右侧说明面板。</div>
             </div>
             <Button
               variant="outline"
@@ -810,7 +810,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
             <section className="space-y-2">
               <h3 className="text-sm font-semibold text-foreground">引擎范围</h3>
               <p className="text-sm leading-6 text-muted-foreground">
-                Aceharness 支持 OpenCode、Claude Code、Kiro CLI 等 AI 编程助手，并接入代码编辑与执行流程。
+                CSIHarness 支持 OpenCode、Claude Code、Kiro CLI 等 AI 编程助手，并接入代码编辑与执行流程。
               </p>
             </section>
 
@@ -859,11 +859,11 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
             </section>
 
             <section className="space-y-2">
-              <h3 className="text-sm font-semibold text-foreground">ACE Service 使用指导</h3>
+              <h3 className="text-sm font-semibold text-foreground">CSIHarness Service 使用指导</h3>
               <div className="space-y-1.5 rounded-lg border border-border bg-background/60 p-3 text-xs leading-6 text-muted-foreground">
-                <p>全局安装后，使用 <code>ace</code> 或 <code>ace start</code> 启动本地 ACE Service。首次启动会引导你完成语言、默认引擎、默认模型、管理员账号和网络模式配置。</p>
+                <p>全局安装后，使用 <code>csiharness</code> 或 <code>csiharness start</code> 启动本地 CSIHarness Service。首次启动会引导你完成语言、默认引擎、默认模型、管理员账号和网络模式配置。</p>
                 <p>启动向导里可直接开启后台运行。后台模式会把服务脱离当前终端继续运行，适合常驻使用。</p>
-                <p>服务启动后，可用 <code>ace service</code> 查看当前受管实例，并按提示停止指定实例。</p>
+                <p>服务启动后，可用 <code>csiharness service</code> 查看当前受管实例，并按提示停止指定实例。</p>
               </div>
             </section>
           </DetailDrawerBody>

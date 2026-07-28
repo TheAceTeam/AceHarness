@@ -14,6 +14,7 @@ import { useToast } from '@/components/ui/toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { ArrowRight, LockKeyhole, Mail, Settings } from 'lucide-react';
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -155,7 +156,7 @@ export default function LoginPage() {
                   <RobotLogo size={30} />
                 </div>
                 <div>
-                  <div className="text-lg font-black tracking-tight">ACEHarness</div>
+                  <div className="text-lg font-black tracking-tight">{PRODUCT_DISPLAY_NAME}</div>
                   <div className="text-xs text-white/52">Agent Centric Engineering Harness</div>
                 </div>
               </div>
@@ -215,7 +216,7 @@ export default function LoginPage() {
               <div className="flex items-center gap-3">
                 <RobotLogo size={38} />
                 <div>
-                  <div className="text-xl font-black tracking-tight">ACEHarness</div>
+                  <div className="text-xl font-black tracking-tight">{PRODUCT_DISPLAY_NAME}</div>
                   <div className="text-xs text-muted-foreground">Your team of AI</div>
                 </div>
               </div>
@@ -316,7 +317,7 @@ export default function LoginPage() {
             </div>
 
             <div className="mt-8 flex items-center justify-between border-t border-[#E3E3DF] pt-5 dark:border-white/10">
-              <p className="text-xs text-[#AAA7A0] dark:text-slate-500">© 2026 ACEHarness</p>
+              <p className="text-xs text-[#AAA7A0] dark:text-slate-500">© 2026 {PRODUCT_DISPLAY_NAME}</p>
               <Button type="button" variant="ghost" className="h-auto cursor-pointer gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[#73736D] hover:bg-[#F7F7F4] hover:text-[#151515] dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white" onClick={() => router.push('/setup')}>
                 <Settings className="h-4 w-4 shrink-0" />
                 首次设置

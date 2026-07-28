@@ -389,8 +389,9 @@ describe('runtime adapters', () => {
     });
   });
 
-  test('writes acpx debug trace NDJSON only when ACE_ACPX_DEBUG_TRACE is enabled', async () => {
-    const previousTrace = process.env.ACE_ACPX_DEBUG_TRACE;
+  test('writes acpx debug trace NDJSON only when CSIHARNESS_ACPX_DEBUG_TRACE is enabled', async () => {
+    const previousTrace = process.env.CSIHARNESS_ACPX_DEBUG_TRACE;
+    const previousLegacyTrace = process.env.ACE_ACPX_DEBUG_TRACE;
     const traceDir = getAcpxDebugTraceDirectory();
     const offSessionId = `trace-session-off-${Date.now()}`;
     const onSessionId = `trace-session-on-${Date.now()}`;
@@ -399,7 +400,8 @@ describe('runtime adapters', () => {
     try {
       rmSync(offTraceFile, { force: true });
       rmSync(onTraceFile, { force: true });
-      process.env.ACE_ACPX_DEBUG_TRACE = 'false';
+      process.env.ACE_ACPX_DEBUG_TRACE = 'true';
+      process.env.CSIHARNESS_ACPX_DEBUG_TRACE = 'false';
 
       const acpx = new AcpxAdapter({
         async *runTurn(_binding, input) {
@@ -409,7 +411,7 @@ describe('runtime adapters', () => {
       await collect(acpx.runTurn(await acpx.createOrLoadSession(createSessionInput(offSessionId, 'codex', 'acpx')), createTurnInput()));
       expect(existsSync(offTraceFile)).toBe(false);
 
-      process.env.ACE_ACPX_DEBUG_TRACE = 'true';
+      process.env.CSIHARNESS_ACPX_DEBUG_TRACE = 'true';
       writeAcpxDebugTrace({
         stage: 'acpx.raw_event',
         context: {
@@ -454,8 +456,10 @@ describe('runtime adapters', () => {
         'acpx.turn_result',
       ]));
     } finally {
-      if (previousTrace === undefined) delete process.env.ACE_ACPX_DEBUG_TRACE;
-      else process.env.ACE_ACPX_DEBUG_TRACE = previousTrace;
+      if (previousTrace === undefined) delete process.env.CSIHARNESS_ACPX_DEBUG_TRACE;
+      else process.env.CSIHARNESS_ACPX_DEBUG_TRACE = previousTrace;
+      if (previousLegacyTrace === undefined) delete process.env.ACE_ACPX_DEBUG_TRACE;
+      else process.env.ACE_ACPX_DEBUG_TRACE = previousLegacyTrace;
       rmSync(offTraceFile, { force: true });
       rmSync(onTraceFile, { force: true });
     }

@@ -34,7 +34,7 @@ metadata:
 
 一次性例外缺少有效授权、超出精确范围、跨越当前运行，或实际影响行为、契约、任务/验收、DT Case 或测试基线时，不具备准入效力；按问题来源分别回到 `implementation`、`design`、`requirement` 或 `dt`。
 
-差异基线或补丁证据由实施阶段漏采集时使用 `owner=implementation`；运行环境阻止采集或验证时使用 `owner=environment`。两者都对应 `conditional_pass`：能够补齐时记录所需证据，已经无法从当前工作树重建时记录“从可追踪基线重新实施”的恢复条件。代码实现状态在有限重试预算内修订或重试，预算耗尽后 ACEHarness 将本次运行标记为失败。
+差异基线或补丁证据由实施阶段漏采集时使用 `owner=implementation`；运行环境阻止采集或验证时使用 `owner=environment`。两者都对应 `conditional_pass`：能够补齐时记录所需证据，已经无法从当前工作树重建时记录“从可追踪基线重新实施”的恢复条件。代码实现状态在有限重试预算内修订或重试，预算耗尽后 CSIHarness 将本次运行标记为失败。
 
 评审能够完成准入判断时，`status` 使用 `reviewed`，并按裁决输出任一 verdict。正式输入缺失或不可读、导致评审本身无法完成时，`status` 使用 `blocked`；问题归属为 `implementation | environment` 时输出 `conditional_pass`，归属为 `dt | design | requirement` 时输出 `fail`。`status: blocked` 不得与 `verdict: pass` 组合。
 
@@ -64,4 +64,4 @@ updated_at: <ISO-8601>
 ---
 ```
 
-正文包含版本核验、端到端追踪、任务与围栏、一次性例外有效性、差异证据充分性、Green 证据、findings 处理、blocking issues、accepted risks、裁决理由和下一步类别。完成报告后在步骤结果中输出 ACEHarness 标准 verdict JSON。
+正文包含版本核验、端到端追踪、任务与围栏、一次性例外有效性、差异证据充分性、Green 证据、findings 处理、blocking issues、accepted risks、裁决理由和下一步类别。完成报告后在步骤结果中输出 CSIHarness 标准 verdict JSON。

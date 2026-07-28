@@ -49,6 +49,21 @@ describe('CSIHarness runtime home ownership', () => {
     });
   });
 
+  test('rejects a runtime root whose existing ancestor symlink enters an ACEHarness root', async () => {
+    if (process.platform === 'win32') return;
+    await withTempDir('csiharness-runtime-home-', async (base) => {
+      const legacyRoot = path.join(base, '.aceharness');
+      const linkedParent = path.join(base, 'linked-parent');
+      await mkdir(legacyRoot);
+      await symlink(legacyRoot, linkedParent);
+
+      await expect(ensureRuntimeHomeInitialized({
+        runtimeRoot: path.join(linkedParent, 'csi-child'),
+        knownAceRoots: [legacyRoot],
+      })).rejects.toThrow(/ACEHarness/i);
+    });
+  });
+
   test('accepts only reset targets that stay inside a marked canonical root', async () => {
     await withTempDir('csiharness-runtime-home-', async (base) => {
       const root = path.join(base, 'runtime');

@@ -54,8 +54,14 @@ export async function ensureRuntimeHomeInitialized(options: RuntimeHomeOptions =
     throw new Error(`Unsafe CSIHarness runtime root: ${root}`);
   }
 
+  const canonicalRoot = await canonicalizeCandidate(root);
   for (const legacy of options.knownAceRoots ?? knownAceRoots()) {
-    if (isInsideOrEqual(path.resolve(legacy), root)) {
+    const resolvedLegacy = path.resolve(legacy);
+    const canonicalLegacy = await canonicalizeCandidate(resolvedLegacy);
+    if (
+      isInsideOrEqual(resolvedLegacy, root)
+      || isInsideOrEqual(canonicalLegacy, canonicalRoot)
+    ) {
       throw new Error(`CSIHarness runtime root cannot use an ACEHarness directory: ${root}`);
     }
   }
@@ -91,6 +97,13 @@ async function nearestExistingAncestor(candidate: string): Promise<string> {
     current = parent;
   }
   return current;
+}
+
+async function canonicalizeCandidate(candidate: string): Promise<string> {
+  const resolvedCandidate = path.resolve(candidate);
+  const existingAncestor = await nearestExistingAncestor(resolvedCandidate);
+  const canonicalAncestor = await realpath(existingAncestor);
+  return path.resolve(canonicalAncestor, path.relative(existingAncestor, resolvedCandidate));
 }
 
 export async function assertSafeRuntimeTargets(runtimeRoot: string, targets: string[]): Promise<string[]> {

@@ -1,6 +1,7 @@
 import * as React from 'react'
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding'
 
-const DEFAULT_TITLE = 'ACEHarness'
+const DEFAULT_TITLE = PRODUCT_DISPLAY_NAME
 
 function formatTitle(segment?: string | null): string {
   const normalized = segment?.trim()

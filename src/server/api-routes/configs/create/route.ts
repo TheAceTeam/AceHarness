@@ -315,7 +315,7 @@ export async function POST(request: Request) {
         requirements,
       });
     } else if (workflowMode === 'ai-guided') {
-      const port = process.env.PORT || '3000';
+      const port = process.env.CSIHARNESS_PORT || process.env.PORT || '3001';
       try {
         const response = await fetch(`http://localhost:${port}/api/configs/ai-generate`, {
           method: 'POST',

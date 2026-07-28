@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { StatusPill } from '@/components/ui/status-pill';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/brand/RobotLogo';
+import { PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
 import { PASSWORD_POLICY_DESCRIPTION, getLoginPasswordError } from '@/lib/auth/password-policy';
 
 export default function ResetPasswordPage() {
@@ -116,7 +117,7 @@ export default function ResetPasswordPage() {
               <div className="flex items-center gap-3">
                 <RobotLogo size={42} />
                 <div>
-                  <h1 className="text-xl font-semibold">ACEHarness</h1>
+                  <h1 className="text-xl font-semibold">{PRODUCT_DISPLAY_NAME}</h1>
                   <p className="text-xs text-muted-foreground">Account Recovery</p>
                 </div>
               </div>
@@ -208,7 +209,7 @@ export default function ResetPasswordPage() {
                 <EmptyState
                   icon={<CheckCircle2 className="h-5 w-5" />}
                   title="密码已重置"
-                  description="现在可以使用新密码登录 ACEHarness。"
+                  description={`现在可以使用新密码登录 ${PRODUCT_DISPLAY_NAME}。`}
                   primaryAction={<Button variant="outline" className="bg-white" onClick={() => router.push('/login')}>返回登录</Button>}
                 />
               </motion.div>

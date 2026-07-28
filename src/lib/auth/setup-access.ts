@@ -2,11 +2,11 @@ import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
 import { getWorkspaceRoot, getWorkspacePath } from '@/lib/core/app-paths';
 
-export const SETUP_ACCESS_COOKIE_NAME = 'ace_setup_access';
+export const SETUP_ACCESS_COOKIE_NAME = 'csi_setup_access';
 export const SETUP_VERIFICATION_FILE_NAME = 'setup-verification-code.txt';
 
 const SETUP_ACCESS_MAX_AGE_SECONDS = 60 * 60;
-const SETUP_GRANT_CONTEXT = 'ACEHarness/setup-access/v1:';
+const SETUP_GRANT_CONTEXT = 'CSIHarness/setup-access/v1:';
 
 let ensureCodePromise: Promise<string> | null = null;
 
@@ -55,7 +55,7 @@ export async function ensureSetupVerificationCode(): Promise<string> {
     const filePath = getSetupVerificationFilePath();
     try {
       await writeFile(filePath, `${code}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-      console.log(`[ACEHarness] 首次设置验证码已写入：${filePath}`);
+      console.log(`[CSIHarness] 首次设置验证码已写入：${filePath}`);
       return code;
     } catch (error: any) {
       if (error?.code === 'EEXIST') {

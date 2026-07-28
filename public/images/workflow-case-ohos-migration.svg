@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 860" role="img" aria-labelledby="title desc">
   <title id="title">OpenHarmony 仓颉迁移</title>
-  <desc id="desc">展示 AceHarness 在 OpenHarmony 仓颉迁移场景中的生产级状态机、技能注入、构建脚本和人工审批机制。</desc>
+  <desc id="desc">展示 CSIHarness 在 OpenHarmony 仓颉迁移场景中的生产级状态机、技能注入、构建脚本和人工审批机制。</desc>
   <defs>
     <linearGradient id="bgOhos" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0b1320"/>

@@ -20,7 +20,7 @@ workflow:
 
             - `raw_ar`: `context.requirements`
             - `project_root`: `context.projectRoot`
-            - `run_id`: ACEHarness `runId`
+            - `run_id`: CSIHarness `runId`
             - `ar_id`: AR 中的显式 ID；缺省时使用 `runId`
             - 已有澄清产物和最近人工回答（若存在）
             - `specs/<AR-ID>/design/clarification-review.md`（澄清修订时）
@@ -416,7 +416,7 @@ workflow:
 
             - `raw_ar`: `context.requirements`
             - `project_root`: `context.projectRoot`
-            - `run_id`: ACEHarness `runId`
+            - `run_id`: CSIHarness `runId`
             - `specs/<AR-ID>/design/clarification.md`
             - `specs/<AR-ID>/design/design.md`
             - `specs/<AR-ID>/design/plan.md`
@@ -435,7 +435,7 @@ workflow:
             ## 正式输出
 
             - `specs/<AR-ID>/implementation/code-change-report.md`
-            - ACEHarness 标准 JSON：报告 `status: ready` 时返回 `{"verdict":"pass","summary":"<报告摘要>"}`；报告 `status: blocked` 或文件无法写入/读取时返回 `{"verdict":"fail","summary":"<阻塞原因>"}`
+            - CSIHarness 标准 JSON：报告 `status: ready` 时返回 `{"verdict":"pass","summary":"<报告摘要>"}`；报告 `status: blocked` 或文件无法写入/读取时返回 `{"verdict":"fail","summary":"<阻塞原因>"}`
 
             报告必须先写入并重新读取确认。证据缺口写入报告的待复核项，不把缺失证据表述为已通过；实施评审、实施后 DT 或代码审查证据缺失/冲突时将报告标记为 `blocked`。
 
@@ -455,7 +455,7 @@ workflow:
 
             ## 正式输出
 
-            - ACEHarness 标准 JSON：`{"verdict":"pass","summary":"<完成摘要>"}`；已有产物保持原样
+            - CSIHarness 标准 JSON：`{"verdict":"pass","summary":"<完成摘要>"}`；已有产物保持原样
           role: judge
           enableReviewPanel: false
       transitions: []
