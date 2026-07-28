@@ -2,6 +2,9 @@ import { jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState } from '@/lib/run/state-persistence';
 
+const WORKFLOW_ALREADY_RUNNING_ERROR = '已有工作流正在运行';
+const WORKFLOW_ALREADY_RUNNING_RESPONSE = '该配置的工作流已在运行中';
+
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody<any>(request, {});
@@ -46,7 +49,7 @@ export async function POST(request: Request) {
         });
       }
       return jsonOk(
-        { error: '该配置的工作流已在运行中' },
+        { error: WORKFLOW_ALREADY_RUNNING_RESPONSE },
         { status: 409 }
       );
     }
@@ -83,9 +86,15 @@ export async function POST(request: Request) {
       success: true,
       message: `已恢复运行: ${runId}`,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === WORKFLOW_ALREADY_RUNNING_ERROR) {
+      return jsonOk(
+        { error: WORKFLOW_ALREADY_RUNNING_RESPONSE },
+        { status: 409 }
+      );
+    }
     return jsonOk(
-      { error: '恢复工作流失败', message: error.message },
+      { error: '恢复工作流失败', message: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
   }

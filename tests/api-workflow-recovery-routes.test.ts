@@ -136,6 +136,20 @@ describe('workflow recovery routes', () => {
     expect(manager.resumeInBackground).toHaveBeenCalledWith('run-recovery-1');
   });
 
+  test('returns conflict when a concurrent resume wins the startup race', async () => {
+    const manager = makeStateMachineManager({
+      resumeInBackground: vi.fn().mockRejectedValue(new Error('已有工作流正在运行')),
+    });
+    mocks.getManagerByRunId.mockResolvedValue(manager);
+
+    const { POST } = await import('@/server/api-routes/workflow/resume/route');
+    const response = await POST(postRequest('/api/workflow/resume', { runId: 'run-recovery-1' }));
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body).toEqual({ error: '该配置的工作流已在运行中' });
+  });
+
   test('returns force-recovery startup errors to the caller', async () => {
     const manager = makeStateMachineManager({
       forceJumpToStateInBackground: vi.fn().mockRejectedValue(new Error('执行引擎初始化失败')),
