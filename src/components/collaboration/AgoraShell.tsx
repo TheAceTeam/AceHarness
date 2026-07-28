@@ -1,6 +1,6 @@
 'use client';
 
-import dynamic from 'next/dynamic';
+import dynamic from '@/lib/navigation/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FolderOpen, GitBranch, MessageSquareText, PanelRightClose, PanelRightOpen, Settings2 } from 'lucide-react';
 import { agentApi, agoraApi } from '@/lib/core/api';
@@ -33,6 +33,7 @@ import { AgoraChatPanel } from '@/components/collaboration/agora/AgoraChatPanel'
 import { ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
 import { detectOpeningRole, type OpeningRole } from '@/lib/agora/opening-copy';
 import { mergeFinalRawStreamContent } from '@/lib/chat/ai-process-blocks';
+import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then((m) => m.WorkspaceEditor), {
   ssr: false,
@@ -692,6 +693,7 @@ export function AgoraShell({
       let settled = false;
       let stoppedByUser = false;
       let partialContent = '';
+      let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
 
       const closeEvents = () => {
         try {
@@ -758,21 +760,41 @@ export function AgoraShell({
       });
 
       stream.events.addEventListener('delta', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const content = String(data?.content || '');
         partialContent += content;
+        const row = storeChatStreamSseEventAsAgentMessage('delta', data, {
+          chatId: stream.streamId,
+          stepKey: runtimeName,
+          provider: data?.engine,
+          model: data?.model,
+          sessionId: data?.sessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'agora-agent-chat',
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         lifecycle?.onDelta?.(content, partialContent);
       }) as EventListener);
 
       stream.events.addEventListener('thinking', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const content = String(data?.content || '');
         partialContent += content;
+        const row = storeChatStreamSseEventAsAgentMessage('thinking', data, {
+          chatId: stream.streamId,
+          stepKey: runtimeName,
+          provider: data?.engine,
+          model: data?.model,
+          sessionId: data?.sessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'agora-agent-chat',
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         lifecycle?.onDelta?.(content, partialContent);
       }) as EventListener);
 
       stream.events.addEventListener('done', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const hasSessionField = hasOwnKey(data, 'sessionId');
         const nextSessionId = hasSessionField ? normalizeSessionId(data.sessionId) : undefined;
         if (hasSessionField) {
@@ -786,6 +808,19 @@ export function AgoraShell({
           String(data?.rawOutput || data?.output || data?.error || ''),
         );
         if (data?.isError) {
+          storeChatStreamSseEventAsAgentMessage('error', {
+            ...data,
+            content: finalRawContent || finalContent,
+            isError: true,
+          }, {
+            chatId: stream.streamId,
+            stepKey: runtimeName,
+            provider: data?.engine,
+            model: data?.model,
+            sessionId: data?.sessionId || nextSessionId || existingSession,
+            frontendSessionId: activeSessionId || undefined,
+            streamScope: 'agora-agent-chat',
+          }, aiPrevious);
           finishReject(Object.assign(new Error(data?.error || finalContent || 'Agent 发言失败'), {
             partialContent: finalContent,
             rawContent: finalRawContent,
@@ -794,6 +829,19 @@ export function AgoraShell({
           }));
           return;
         }
+        const row = storeChatStreamSseEventAsAgentMessage('done', {
+          ...data,
+          content: finalRawContent || finalContent,
+        }, {
+          chatId: stream.streamId,
+          stepKey: runtimeName,
+          provider: data?.engine,
+          model: data?.model,
+          sessionId: data?.sessionId || nextSessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'agora-agent-chat',
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         finishResolve({
           status: 'done',
           content: finalContent,
@@ -804,8 +852,21 @@ export function AgoraShell({
       }) as EventListener);
 
       stream.events.addEventListener('failed', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const errorText = data?.message || 'Agent 发言失败';
+        storeChatStreamSseEventAsAgentMessage('error', {
+          ...data,
+          content: partialContent || errorText,
+          isError: true,
+        }, {
+          chatId: stream.streamId,
+          stepKey: runtimeName,
+          provider: data?.engine,
+          model: data?.model,
+          sessionId: data?.sessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'agora-agent-chat',
+        }, aiPrevious);
         finishReject(Object.assign(new Error(errorText), {
           partialContent: partialContent || errorText,
           rawContent: partialContent || errorText,
@@ -815,6 +876,16 @@ export function AgoraShell({
       stream.events.onerror = () => {
         if (stoppedByUser || settled) return;
         const errorText = 'Agent 发言连接中断';
+        storeChatStreamSseEventAsAgentMessage('error', {
+          content: partialContent || errorText,
+          isError: true,
+        }, {
+          chatId: stream.streamId,
+          stepKey: runtimeName,
+          sessionId: existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'agora-agent-chat',
+        }, aiPrevious);
         finishReject(Object.assign(new Error(errorText), {
           partialContent: partialContent || errorText,
           rawContent: partialContent || errorText,
@@ -1145,16 +1216,17 @@ export function AgoraShell({
           {lockWorkspace ? null : (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-md"
-              title="设置工作区"
-              aria-label="设置工作区"
+              size="sm"
+              className="h-8 rounded-md px-2.5 text-xs"
+              title="切换工作区"
+              aria-label="切换工作区"
               onClick={() => {
                 setWorkspaceDraft(pinnedWorkspacePath || defaultWorkspacePath);
                 setWorkspaceDialogOpen(true);
               }}
             >
-              <Settings2 className="h-4 w-4" />
+              <Settings2 className="mr-1.5 h-4 w-4" />
+              切换工作区
             </Button>
           )}
         </div>

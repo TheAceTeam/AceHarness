@@ -15,10 +15,26 @@ function isWorkspaceAbsolutePath(value: string): boolean {
   return value.startsWith("/") || WINDOWS_DRIVE_ABSOLUTE_PATH.test(value) || UNC_ABSOLUTE_PATH.test(value);
 }
 
+/** Restore a persisted workspace root only when it is an absolute filesystem path. */
+export function resolveWorkspaceRootFromRoute(
+  currentWorkspacePath: string | null | undefined,
+  requestedWorkspaceRoot: string | null | undefined,
+): string {
+  const current = normalizeWorkspacePathValue(currentWorkspacePath).replace(/\/+$/g, "");
+  const requested = normalizeWorkspacePathValue(requestedWorkspaceRoot).replace(/\/+$/g, "");
+  return requested && isWorkspaceAbsolutePath(requested) ? requested : current;
+}
+
 function toPositiveInteger(value: string | undefined): number | null {
   if (!value) return null;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function shouldParseColonLocation(pathPart: string): boolean {
+  if (isWorkspaceAbsolutePath(pathPart)) return true;
+  const lastSegment = pathPart.split('/').filter(Boolean).pop() || pathPart;
+  return pathPart.includes('/') || /\.[^/.]+$/.test(lastSegment);
 }
 
 export function parseWorkspaceFileLocation(value: string | null | undefined): WorkspaceFileLocation {
@@ -37,7 +53,7 @@ export function parseWorkspaceFileLocation(value: string | null | undefined): Wo
   }
 
   const colonMatch = normalized.match(/^(.+?):([1-9]\d*)(?::([1-9]\d*))?$/);
-  if (!colonMatch?.[1]) {
+  if (!colonMatch?.[1] || !shouldParseColonLocation(colonMatch[1])) {
     return { path: normalized, lineNumber: null, column: null };
   }
 

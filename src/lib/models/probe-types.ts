@@ -23,6 +23,7 @@ export interface ModelProbeRecord {
   groupId: string;
   groupName: string;
   name: string;
+  modelRouteId?: string;
   engine: string;
   driver?: 'auto' | 'sdk' | 'stdio';
   model: string;
@@ -57,6 +58,7 @@ export interface ModelProbeSummary {
   groupId: string;
   groupName: string;
   name: string;
+  modelRouteId?: string;
   engine: string;
   engineLabel: string;
   driver?: 'auto' | 'sdk' | 'stdio';
@@ -108,9 +110,10 @@ export interface CreateModelProbeInput {
   groupId?: string;
   groupName?: string;
   name?: string;
-  engine: string;
+  modelRouteId?: string;
+  engine?: string;
   driver?: 'auto' | 'sdk' | 'stdio';
-  model: string;
+  model?: string;
   endpoints?: string[];
   intervalMinutes?: number;
   timeoutMs?: number;
@@ -122,6 +125,7 @@ export interface UpdateModelProbeInput {
   groupId?: string;
   groupName?: string;
   name?: string;
+  modelRouteId?: string;
   engine?: string;
   driver?: 'auto' | 'sdk' | 'stdio';
   model?: string;
@@ -133,8 +137,9 @@ export interface UpdateModelProbeInput {
 }
 
 export interface RecordModelProbeObservationInput {
-  engine: string;
-  model: string;
+  modelRouteId?: string;
+  engine?: string;
+  model?: string;
   success: boolean;
   responseLatencyMs?: number | null;
   totalDurationMs?: number | null;

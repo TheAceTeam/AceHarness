@@ -24,7 +24,7 @@ describe('workflow event log route', () => {
   test('rejects unauthenticated requests', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
-      const route = await import('@/app/api/workflow/event-log/route');
+      const route = await import('@/server/api-routes/workflow/event-log/route');
       await assertErrorResponse(await route.GET(makeRequest('/api/workflow/event-log?runId=run-1')), 401);
     });
   });
@@ -36,7 +36,7 @@ describe('workflow event log route', () => {
       const store = getWorkflowEventStore();
       await store.append('run-event-log-route', 'run.state.saved', { status: 'running' });
       await store.append('run-event-log-route', 'workflow.step-start', { step: 'Build' });
-      const route = await import('@/app/api/workflow/event-log/route');
+      const route = await import('@/server/api-routes/workflow/event-log/route');
 
       const response = await route.GET(makeRequest('/api/workflow/event-log?runId=run-event-log-route&afterSeq=1', {
         token,
@@ -52,6 +52,68 @@ describe('workflow event log route', () => {
         payload: { step: 'Build' },
       });
       expect(json.nextSeq).toBe(2);
+    });
+  });
+
+  test('returns lightweight run state fields for live recovery', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const { saveRunState } = await import('@/lib/run/state-persistence');
+      await saveRunState({
+        runId: 'run-event-log-live-recovery',
+        configFile: 'live-recovery.yaml',
+        status: 'running',
+        startTime: new Date().toISOString(),
+        endTime: null,
+        currentPhase: '编码',
+        currentState: '编码',
+        currentStep: '编码-实现',
+        activeSteps: ['编码-实现'],
+        activeConcurrencyGroups: [],
+        completedSteps: ['设计-方案'],
+        failedSteps: [],
+        stepLogs: [{
+          id: 'log-1',
+          stepName: '设计-方案',
+          agent: 'planner',
+          status: 'completed',
+          output: 'large output should not be required for live recovery',
+          timestamp: '2026-07-18T00:00:00.000Z',
+        }],
+        stateHistory: [{
+          from: '设计',
+          to: '编码',
+          reason: '方案完成',
+          issues: [],
+          timestamp: '2026-07-18T00:00:00.000Z',
+        }],
+        transitionCount: 1,
+        agents: [],
+        iterationStates: {},
+        processes: [],
+      } as any);
+      const route = await import('@/server/api-routes/workflow/event-log/route');
+
+      const response = await route.GET(makeRequest('/api/workflow/event-log?runId=run-event-log-live-recovery', {
+        token,
+      }));
+      const json = await responseJson<any>(response);
+      const saved = json.events.find((event: any) => event.type === 'run.state.saved');
+
+      expect(saved?.payload).toMatchObject({
+        currentState: '编码',
+        currentStep: '编码-实现',
+        activeSteps: ['编码-实现'],
+        completedSteps: ['设计-方案'],
+        transitionCount: 1,
+      });
+      expect(saved?.payload.stateHistory).toHaveLength(1);
+      expect(saved?.payload.stepLogs[0]).toMatchObject({
+        id: 'log-1',
+        stepName: '设计-方案',
+        status: 'completed',
+      });
+      expect(saved?.payload.stepLogs[0].output).toBeUndefined();
     });
   });
 
@@ -76,7 +138,7 @@ describe('workflow event log route', () => {
         iterationStates: {},
         processes: [],
       } as any);
-      const route = await import('@/app/api/workflow/event-log/route');
+      const route = await import('@/server/api-routes/workflow/event-log/route');
 
       const response = await route.GET(makeRequest('/api/workflow/event-log?runId=run-private-event-log', {
         token: other.token,
@@ -116,7 +178,7 @@ describe('workflow event log route', () => {
         ip: '127.0.0.1',
         userAgent: 'vitest',
       });
-      const route = await import('@/app/api/workflow/audit-log/route');
+      const route = await import('@/server/api-routes/workflow/audit-log/route');
 
       const response = await route.GET(makeRequest('/api/workflow/audit-log?runId=run-audit-route', {
         token: owner.token,

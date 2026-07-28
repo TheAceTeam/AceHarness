@@ -13,8 +13,9 @@ vi.mock('@/lib/spec/persistence', () => ({
   readDeltaSpec: vi.fn(),
 }));
 
-vi.mock('@/lib/engines/engine-factory', () => ({
-  createEngine: vi.fn(),
+vi.mock('@/lib/workflow/runtime-facade', () => ({
+  createWorkflowRuntime: vi.fn(),
+  executeWorkflowRuntimeWithContextRecovery: vi.fn((engine, options) => engine.execute(options)),
 }));
 
 vi.mock('@/lib/core/app-paths', () => ({
@@ -62,7 +63,7 @@ describe('spec merge flow', () => {
   });
 
   test('returns 400 when action is missing', async () => {
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { runId: 'run-123' },
     }));
@@ -71,7 +72,7 @@ describe('spec merge flow', () => {
   });
 
   test('returns 400 when runId is missing', async () => {
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'preview' },
     }));
@@ -80,7 +81,7 @@ describe('spec merge flow', () => {
   });
 
   test('returns 400 for unsupported action', async () => {
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'invalid', runId: 'run-123' },
     }));
@@ -104,7 +105,7 @@ describe('spec merge flow', () => {
     });
     (buildStructuralMergedMasterSpec as any).mockResolvedValue('# Merged\nContent');
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'preview', runId: 'run-123' },
     }));
@@ -119,7 +120,7 @@ describe('spec merge flow', () => {
   test('falls back to structural merge when AI engine is unavailable', async () => {
     const { loadRunState } = await import('@/lib/run/state-persistence');
     const { readDeltaSpec, buildStructuralMergedMasterSpec } = await import('@/lib/spec/persistence');
-    const { createEngine } = await import('@/lib/engines/engine-factory');
+    const { createWorkflowRuntime } = await import('@/lib/workflow/runtime-facade');
     const { readFile } = await import('fs/promises');
 
     (loadRunState as any).mockResolvedValue(makeRunState());
@@ -127,10 +128,10 @@ describe('spec merge flow', () => {
     (readDeltaSpec as any).mockResolvedValue({
       artifacts: { requirements: 'req', design: 'des', tasks: 'tsk' },
     });
-    (createEngine as any).mockResolvedValue(null); // AI unavailable
+    (createWorkflowRuntime as any).mockResolvedValue(null); // AI unavailable
     (buildStructuralMergedMasterSpec as any).mockResolvedValue('# Structural Merge');
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'preview', runId: 'run-123' },
     }));
@@ -153,7 +154,7 @@ describe('spec merge flow', () => {
       },
     }));
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'apply', runId: 'run-123', mergedHash: 'wrong-hash' },
     }));
@@ -187,7 +188,7 @@ describe('spec merge flow', () => {
       return modifiedMaster; // master was modified
     });
 
-    const { POST } = await import('@/app/api/workflow/spec-merge/route');
+    const { POST } = await import('@/server/api-routes/workflow/spec-merge/route');
     const response = await POST(makeRequest('/api/workflow/spec-merge', {
       json: { action: 'apply', runId: 'run-123', mergedHash },
     }));

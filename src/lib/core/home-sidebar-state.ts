@@ -380,6 +380,7 @@ export interface HomeSidebarHint {
 
 export interface SessionWorkbenchState {
   conversationMode?: 'plain' | 'agent-chat' | 'workflow-drafting' | 'workflow-running' | 'workflow-completed';
+  creationAssistantEnabled?: boolean;
   homeSidebar?: HomeSidebarHint | null;
   rightRail?: {
     collapsed?: boolean;
@@ -396,7 +397,7 @@ export interface SessionWorkbenchState {
   lightweightWorkflowDraft?: {
     stage: 'discovery' | 'clarification' | 'draft' | 'confirming' | 'generating' | 'starting';
     busy?: boolean;
-    backendSessionId?: string;
+    runtimeSessionId?: string;
     creationContextSummary?: string;
     clarificationForm?: unknown;
     clarificationAnswers?: Record<string, unknown>;
@@ -424,6 +425,42 @@ export interface SessionWorkbenchState {
     secret?: string;
     updatedAt: number;
   } | null;
+}
+
+export interface CreationAssistantSessionLike {
+  workflowBinding?: unknown;
+  agentBinding?: unknown;
+  sessionWorkbenchState?: SessionWorkbenchState | null;
+}
+
+export function resolveCreationAssistantEnabled(
+  session?: CreationAssistantSessionLike | null
+): boolean {
+  if (
+    session?.workflowBinding
+    || session?.agentBinding
+    || session?.sessionWorkbenchState?.collaborationRoom
+  ) {
+    return false;
+  }
+
+  return session?.sessionWorkbenchState?.creationAssistantEnabled !== false;
+}
+
+export function isCreationAssistantSidebarHint(hint?: HomeSidebarHint | null): boolean {
+  if (!hint) return false;
+  if (hint.intent === 'create-workflow' || hint.intent === 'create-agent') return true;
+  if (hint.agentDraft) return true;
+  if (hint.workflowDraft && hint.intent !== 'workflow-review') return true;
+  return Boolean(
+    hint.shouldOpenModal
+    && (
+      hint.activeTab === 'workflow'
+      || hint.activeTab === 'agent'
+      || hint.tabs?.includes('workflow')
+      || hint.tabs?.includes('agent')
+    )
+  );
 }
 
 export function inferHomeSidebarTab(

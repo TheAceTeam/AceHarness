@@ -3,10 +3,21 @@ import { makeRequest, responseJson, assertErrorResponse } from './helpers/route-
 import { MockEngine } from './helpers/mock-engine';
 import { REAL_OPENCODE_CONNECTED_REPLAY } from './fixtures/real-engine-events';
 
-vi.mock('@/lib/engines/engine-factory', () => ({
-  getOrCreateEngine: vi.fn(),
-  getConfiguredEngine: vi.fn().mockResolvedValue('mock-engine'),
-  resolveRequestedEngineType: vi.fn().mockResolvedValue('mock-engine'),
+vi.mock('@/lib/chat/chat-engine-runtime', () => ({
+  getOrCreateChatRuntimeEngine: vi.fn(),
+  executeChatRuntimeWithContextRecovery: vi.fn(async (engine: MockEngine) => {
+    const result = await engine.execute({ prompt: '', systemPrompt: '', model: '', workingDirectory: '' } as any);
+    return {
+      success: result.success,
+      output: result.output,
+      error: result.error,
+      sessionId: result.sessionId ?? 'runtime-session-1',
+      metadata: result.metadata ?? {},
+    };
+  }),
+  isChatRuntimeTimingDebug: vi.fn().mockReturnValue(false),
+  resolveRecoveredRuntimeSessionId: vi.fn((result: { sessionId?: string }, fallback?: string) => result.sessionId || fallback || null),
+  resolveRequestedChatRuntimeEngineType: vi.fn().mockResolvedValue('mock-engine'),
 }));
 
 vi.mock('@/lib/core/process-manager', () => ({
@@ -36,7 +47,7 @@ vi.mock('@/lib/chat/stream-state', () => ({
   updateEngineStreamLiveSession: vi.fn(),
   getEngineStream: vi.fn().mockReturnValue(null),
   getEngineStreamByFrontendSessionId: vi.fn().mockReturnValue(null),
-  getBackendSessionIdByFrontendSessionId: vi.fn().mockReturnValue(undefined),
+  getRuntimeSessionIdByFrontendSessionId: vi.fn().mockReturnValue(undefined),
   removeEngineStream: vi.fn(),
 }));
 
@@ -49,6 +60,7 @@ vi.mock('@/lib/chat/settings', () => ({
 
 vi.mock('@/lib/chat/system-prompt', () => ({
   buildDashboardSystemPrompt: vi.fn().mockResolvedValue('system prompt'),
+  buildDashboardConversationSystemPrompt: vi.fn().mockResolvedValue('conversation prompt'),
 }));
 
 vi.mock('@/lib/auth/middleware', () => ({
@@ -104,7 +116,7 @@ describe('chat stream flow', () => {
   });
 
   test('POST returns 400 for empty message', async () => {
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: { message: '' },
     }));
@@ -113,10 +125,10 @@ describe('chat stream flow', () => {
   });
 
   test('POST returns 500 when engine is unavailable', async () => {
-    const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
-    (getOrCreateEngine as any).mockResolvedValue(null);
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(null);
 
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello' },
     }));
@@ -128,10 +140,10 @@ describe('chat stream flow', () => {
 
   test('POST returns chatId on success', async () => {
     const engine = new MockEngine({ success: true, output: 'Hello!' });
-    const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
-    (getOrCreateEngine as any).mockResolvedValue(engine);
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
 
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello', mode: 'dashboard' },
     }));
@@ -141,14 +153,37 @@ describe('chat stream flow', () => {
     expect(json.chatId).toMatch(/^chat-/);
   });
 
+  test('POST selects the regular conversation prompt when creation assistant is disabled', async () => {
+    const engine = new MockEngine({ success: true, output: 'Hello!' });
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
+    const {
+      buildDashboardConversationSystemPrompt,
+      buildDashboardSystemPrompt,
+    } = await import('@/lib/chat/system-prompt');
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
+
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
+    const response = await POST(makeRequest('/api/chat/stream', {
+      json: {
+        message: 'Review this project',
+        mode: 'dashboard',
+        creationAssistantEnabled: false,
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(buildDashboardConversationSystemPrompt).toHaveBeenCalled();
+    expect(buildDashboardSystemPrompt).not.toHaveBeenCalled();
+  });
+
   test('POST registers scoped streams separately from the visible frontend session', async () => {
     const engine = new MockEngine({ success: true, output: 'Planning only' });
-    const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
     const { registerEngineStream } = await import('@/lib/chat/stream-state');
     const { processManager } = await import('@/lib/core/process-manager');
-    (getOrCreateEngine as any).mockResolvedValue(engine);
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
 
-    const { POST } = await import('@/app/api/chat/stream/route');
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
     const response = await POST(makeRequest('/api/chat/stream', {
       json: {
         message: 'Create workflow plan',
@@ -160,7 +195,7 @@ describe('chat stream flow', () => {
 
     expect(response.status).toBe(200);
     const json = await responseJson(response);
-    expect(getOrCreateEngine).toHaveBeenCalledWith('mock-engine', 'front-1:workflow-planning', 'user-1');
+    expect(getOrCreateChatRuntimeEngine).toHaveBeenCalledWith('mock-engine', 'front-1:workflow-planning', 'user-1');
     expect(registerEngineStream).toHaveBeenCalledWith(json.chatId, 'front-1:workflow-planning', 'mock-engine', '');
     expect(processManager.registerActiveStream).toHaveBeenCalledWith('front-1:workflow-planning', json.chatId);
   });
@@ -176,7 +211,7 @@ describe('chat stream flow', () => {
       model: '',
     });
 
-    const { GET } = await import('@/app/api/chat/stream/route');
+    const { GET } = await import('@/server/api-routes/chat/stream/route');
     const response = await GET(makeRequest('/api/chat/stream?checkActive=front-1&streamScope=workflow-planning'));
 
     expect(response.status).toBe(200);
@@ -212,7 +247,7 @@ describe('chat stream flow', () => {
       },
     });
 
-    const { GET } = await import('@/app/api/chat/stream/route');
+    const { GET } = await import('@/server/api-routes/chat/stream/route');
     const response = await GET(makeRequest('/api/chat/stream?checkActive=front-2'));
 
     expect(response.status).toBe(200);
@@ -232,19 +267,19 @@ describe('chat stream flow', () => {
 
   test('GET does not replay buffered delta content before connected', async () => {
     const engine = new MockEngine({ success: true, output: 'Hello!' });
-    const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
     const { getEngineStream } = await import('@/lib/chat/stream-state');
-    (getOrCreateEngine as any).mockResolvedValue(engine);
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
 
-    const { POST, GET } = await import('@/app/api/chat/stream/route');
+    const { POST, GET } = await import('@/server/api-routes/chat/stream/route');
     const createResponse = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello', mode: 'dashboard' },
     }));
     const { chatId } = await responseJson(createResponse);
 
-    (getEngineStream as any).mockReturnValueOnce({
+    (getEngineStream as any).mockReturnValue({
       chatId,
-      backendSessionId: REAL_OPENCODE_CONNECTED_REPLAY.backendSessionId,
+      runtimeSessionId: 'runtime-session-replay',
       streamContent: REAL_OPENCODE_CONNECTED_REPLAY.replayDelta,
       status: 'running',
       engine: 'mock-engine',
@@ -257,17 +292,17 @@ describe('chat stream flow', () => {
 
     expect(body).toContain('event: connected');
     expect(body).toContain('event: session');
-    expect(body).toContain(REAL_OPENCODE_CONNECTED_REPLAY.backendSessionId);
+    expect(body).toContain('runtime-session-replay');
     expect(body).not.toContain(REAL_OPENCODE_CONNECTED_REPLAY.replayDelta);
   });
 
   test('DELETE cancels engine and returns killed=true', async () => {
     const engine = new MockEngine();
-    const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
-    (getOrCreateEngine as any).mockResolvedValue(engine);
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
 
     // First create a chat to get a chatId
-    const { POST, DELETE } = await import('@/app/api/chat/stream/route');
+    const { POST, DELETE } = await import('@/server/api-routes/chat/stream/route');
     const createResponse = await POST(makeRequest('/api/chat/stream', {
       json: { message: 'Hello' },
     }));
@@ -284,7 +319,7 @@ describe('chat stream flow', () => {
   });
 
   test('GET returns 400 when id is missing', async () => {
-    const { GET } = await import('@/app/api/chat/stream/route');
+    const { GET } = await import('@/server/api-routes/chat/stream/route');
     const response = await GET(makeRequest('/api/chat/stream'));
 
     await assertErrorResponse(response, 400);

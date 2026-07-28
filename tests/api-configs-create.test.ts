@@ -25,7 +25,7 @@ describe('configs create route', () => {
     await withIsolatedAceHome(async () => {
       const { token } = await createAuthToken();
       vi.resetModules();
-      const { POST } = await import('@/app/api/configs/create/route');
+      const { POST } = await import('@/server/api-routes/configs/create/route');
 
       // Missing filename
       let response = await POST(makeRequest('/api/configs/create', {
@@ -55,7 +55,7 @@ describe('configs create route', () => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token } = await createAuthToken();
         vi.resetModules();
-        const { POST } = await import('@/app/api/configs/create/route');
+        const { POST } = await import('@/server/api-routes/configs/create/route');
 
         const body = {
           filename: 'duplicate.yaml',
@@ -79,7 +79,7 @@ describe('configs create route', () => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token } = await createAuthToken();
         vi.resetModules();
-        const { POST } = await import('@/app/api/configs/create/route');
+        const { POST } = await import('@/server/api-routes/configs/create/route');
         const { readFile } = await import('fs/promises');
         const { parse } = await import('yaml');
         const path = await import('path');
@@ -116,7 +116,7 @@ describe('configs create route', () => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token } = await createAuthToken();
         vi.resetModules();
-        const { POST } = await import('@/app/api/configs/create/route');
+        const { POST } = await import('@/server/api-routes/configs/create/route');
         const { readFile } = await import('fs/promises');
         const { parse } = await import('yaml');
         const path = await import('path');
@@ -151,7 +151,7 @@ describe('configs create route', () => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token } = await createAuthToken();
         vi.resetModules();
-        const { POST } = await import('@/app/api/configs/create/route');
+        const { POST } = await import('@/server/api-routes/configs/create/route');
 
         const stateReference = await POST(makeRequest('/api/configs/create', {
           token,
@@ -211,7 +211,7 @@ describe('configs create route', () => {
   test('rejects unauthenticated requests', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
-      const { POST } = await import('@/app/api/configs/create/route');
+      const { POST } = await import('@/server/api-routes/configs/create/route');
       const response = await POST(makeRequest('/api/configs/create', {
         json: {
           filename: 'test.yaml',

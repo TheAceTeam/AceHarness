@@ -9,12 +9,12 @@ describe('channel test-send route', () => {
 
   beforeEach(() => {
     aceHome = mkdtempSync(join(tmpdir(), 'aceharness-channel-test-send-'));
-    process.env.CSIHARNESS_HOME = aceHome;
+    process.env.ACE_HOME = aceHome;
   });
 
   afterEach(() => {
     rmSync(aceHome, { recursive: true, force: true });
-    delete process.env.CSIHARNESS_HOME;
+    delete process.env.ACE_HOME;
     vi.restoreAllMocks();
   });
 
@@ -22,7 +22,7 @@ describe('channel test-send route', () => {
     vi.resetModules();
     const userStore = await import('@/lib/core/user-store');
     const channelStore = await import('@/lib/channel/store');
-    const route = await import('../src/app/api/channels/integrations/[id]/test-send/route');
+    const route = await import('../src/server/api-routes/channels/integrations/[id]/test-send/route');
 
     await userStore.createUser({
       username: 'tester',

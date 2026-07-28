@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from '@/lib/navigation/client';
 import { agentApi, configApi, specCodingApi, workflowApi } from '@/lib/core/api';
 import type {
   CollaborationChatroomState,
@@ -24,6 +24,16 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  DetailDrawer,
+  DetailDrawerBody,
+  DetailDrawerContent,
+  DetailDrawerDescription,
+  DetailDrawerFooter,
+  DetailDrawerHeader,
+  DetailDrawerTitle,
+} from '@/components/ui/detail-drawer';
+import { StatusPill } from '@/components/ui/status-pill';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { usePluginRenderers } from '@/hooks/usePluginRenderers';
@@ -51,6 +61,7 @@ import { extractAgentMentions, extractNextRoundMentions } from '@/lib/collaborat
 import NewConfigModal from '@/components/NewConfigModal';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
+import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { SingleCombobox } from '@/components/ui/combobox';
 import { EngineSelect } from '@/components/EngineSelect';
@@ -2556,9 +2567,20 @@ export default function HomeCommandSidebar({
     });
     return await new Promise<string>((resolve, reject) => {
       let content = '';
+      let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
       stream.events.addEventListener('delta', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         content += String(data?.content || '');
+        const row = storeChatStreamSseEventAsAgentMessage('delta', data, {
+          chatId: stream.streamId,
+          stepKey: agentName,
+          provider: data?.engine || effectiveEngine,
+          model: data?.model || effectiveModel,
+          sessionId: data?.sessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'werewolf-agent-chat',
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         const displayContent = stripWerewolfResultBlocks(content);
         const nextMessage = {
           ...baseMessage,
@@ -2577,7 +2599,7 @@ export default function HomeCommandSidebar({
         updateStreamingCollaborationMessage(nextMessage, werewolfState ? { ...werewolfState, currentActor: agentName } : werewolfState);
       }) as EventListener);
       stream.events.addEventListener('done', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const hasSessionField = hasOwnKey(data, 'sessionId');
         const nextSessionId = hasSessionField ? normalizeSessionId(data.sessionId) : undefined;
         if (hasSessionField) {
@@ -2593,6 +2615,19 @@ export default function HomeCommandSidebar({
         const displayContent = data?.output
           || formatWerewolfMessageForDisplay(finalContent).content
           || '';
+        const row = storeChatStreamSseEventAsAgentMessage('done', {
+          ...data,
+          content: finalContent,
+        }, {
+          chatId: stream.streamId,
+          stepKey: agentName,
+          provider: data?.engine || effectiveEngine,
+          model: data?.model || effectiveModel,
+          sessionId: data?.sessionId || nextSessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'werewolf-agent-chat',
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         const finalMessage = {
           ...baseMessage,
           content: displayContent,
@@ -2618,8 +2653,21 @@ export default function HomeCommandSidebar({
         resolve(finalContent);
       }) as EventListener);
       stream.events.addEventListener('failed', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const errorText = data?.message || 'Agent 对话失败';
+        storeChatStreamSseEventAsAgentMessage('error', {
+          ...data,
+          content: content || errorText,
+          isError: true,
+        }, {
+          chatId: stream.streamId,
+          stepKey: agentName,
+          provider: data?.engine || effectiveEngine,
+          model: data?.model || effectiveModel,
+          sessionId: data?.sessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: 'werewolf-agent-chat',
+        }, aiPrevious);
         const finalMessage = {
           ...baseMessage,
           content: stripWerewolfResultBlocks(content) || errorText,
@@ -2713,9 +2761,20 @@ export default function HomeCommandSidebar({
     });
     return await new Promise<string>((resolve, reject) => {
       let content = '';
+      let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
       stream.events.addEventListener('delta', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         content += String(data?.content || '');
+        const row = storeChatStreamSseEventAsAgentMessage('delta', data, {
+          chatId: stream.streamId,
+          stepKey: agentName,
+          provider: data?.engine,
+          model: data?.model,
+          sessionId: data?.sessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: temporaryRoleConfig ? 'temporary-agent-chat' : 'workflow-agent-chat',
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         const nextMessage = {
           ...baseMessage,
           content,
@@ -2728,7 +2787,7 @@ export default function HomeCommandSidebar({
         updateStreamingCollaborationMessage(nextMessage, werewolfState);
       }) as EventListener);
       stream.events.addEventListener('done', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const hasSessionField = hasOwnKey(data, 'sessionId');
         const nextSessionId = hasSessionField ? normalizeSessionId(data.sessionId) : undefined;
         if (hasSessionField) {
@@ -2737,6 +2796,19 @@ export default function HomeCommandSidebar({
         const finalContent = data?.specCodingRevision?.applied
           ? `${data.output || content || data.error || '无输出'}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
           : (data?.output || content || data?.error || '无输出');
+        const row = storeChatStreamSseEventAsAgentMessage('done', {
+          ...data,
+          content: finalContent,
+        }, {
+          chatId: stream.streamId,
+          stepKey: agentName,
+          provider: data?.engine,
+          model: data?.model,
+          sessionId: data?.sessionId || nextSessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: temporaryRoleConfig ? 'temporary-agent-chat' : 'workflow-agent-chat',
+        }, aiPrevious);
+        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         const finalMessage = {
           ...baseMessage,
           content: finalContent,
@@ -2757,8 +2829,21 @@ export default function HomeCommandSidebar({
         resolve(finalContent);
       }) as EventListener);
       stream.events.addEventListener('failed', ((event: MessageEvent) => {
-        const data = JSON.parse(event.data || '{}');
+        const data = parseAceSseEventData(event.data);
         const errorText = data?.message || 'Agent 对话失败';
+        storeChatStreamSseEventAsAgentMessage('error', {
+          ...data,
+          content: content || errorText,
+          isError: true,
+        }, {
+          chatId: stream.streamId,
+          stepKey: agentName,
+          provider: data?.engine,
+          model: data?.model,
+          sessionId: data?.sessionId || existingSession,
+          frontendSessionId: activeSessionId || undefined,
+          streamScope: temporaryRoleConfig ? 'temporary-agent-chat' : 'workflow-agent-chat',
+        }, aiPrevious);
         const finalMessage = {
           ...baseMessage,
           content: content || errorText,
@@ -4737,20 +4822,20 @@ export default function HomeCommandSidebar({
       `}</style>
       <aside
         className={cn(
-          'flex h-full min-h-0 flex-col border-l bg-card/40 backdrop-blur-sm',
+          'flex h-full min-h-0 flex-col border-l border-border bg-card',
           werewolfMode && 'werewolf-wood-panel border-l-stone-700/60'
         )}
       >
-        <div className={cn('border-b px-4 py-4', werewolfMode && 'border-stone-700/60 bg-black/5')}>
+        <div className={cn('border-b bg-card px-4 py-4', werewolfMode && 'border-stone-700/60 bg-black/5')}>
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Command</p>
-              <h2 className="text-lg font-semibold">首页指挥区</h2>
+              <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Context</p>
+              <h2 className="text-lg font-semibold">上下文指挥区</h2>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant="outline" className="border-amber-500/40 text-amber-600 dark:text-amber-300">
+              <StatusPill tone="warning">
                 指挥官
-              </Badge>
+              </StatusPill>
               <Button size="icon" variant="ghost" className="h-11 w-11" onClick={expanded ? onCollapse : onExpand}>
                 <span className="material-symbols-outlined" style={{ fontSize: '28px' }}>{expanded ? 'right_panel_close' : 'right_panel_open'}</span>
               </Button>
@@ -4761,8 +4846,8 @@ export default function HomeCommandSidebar({
               <Button
                 key={tab}
                 size="sm"
-                variant={activeTab === tab ? 'default' : 'outline'}
-                className="justify-center"
+                variant={activeTab === tab ? 'secondary' : 'outline'}
+                className="justify-center rounded-md"
                 onClick={() => onTabChange(tab)}
               >
                 {TAB_LABELS[tab]}
@@ -4773,7 +4858,7 @@ export default function HomeCommandSidebar({
 
         <div className="home-chat-scroll flex-1 overflow-y-auto px-4 py-4 pb-16">
           {isWerewolfLab ? (
-            <div className="mb-4 rounded-2xl border border-primary/20 bg-primary/5 p-3">
+            <div className="mb-4 rounded-lg border border-border bg-card p-3">
               <button
                 type="button"
                 className="flex w-full items-center justify-between gap-3 text-left"
@@ -4811,17 +4896,17 @@ export default function HomeCommandSidebar({
           ) : null}
 
           {shouldShowHomeContext && (sidebarHint?.summary || sidebarHint?.reason || recentConversation.length > 0 || sidebarHint?.knownFacts?.length || sidebarHint?.missingFields?.length || sidebarHint?.questions?.length || sidebarHint?.recommendedNextAction) && (
-            <div className="mb-4 space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4">
+            <div className="mb-4 space-y-3 rounded-lg border border-border bg-card p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-medium">当前对话上下文</div>
-                  <div className="mt-1 text-xs text-muted-foreground">由最近一条结构化 `home_sidebar` 结果驱动，侧边栏表单会按此自动预填。</div>
+                  <div className="mt-1 text-xs text-muted-foreground">根据最近对话整理目标、缺口和下一步动作。</div>
                 </div>
                 <div className="flex items-center gap-2">
                   {sidebarHint?.stage ? (
-                    <Badge variant="secondary">{formatSidebarStage(sidebarHint.stage)}</Badge>
+                    <StatusPill tone="accent">{formatSidebarStage(sidebarHint.stage)}</StatusPill>
                   ) : null}
-                  <Badge variant="outline">AI整理</Badge>
+                  <StatusPill tone="neutral">AI整理</StatusPill>
                 </div>
               </div>
               {sidebarHint?.reason ? (
@@ -4955,7 +5040,7 @@ export default function HomeCommandSidebar({
             <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>
               {expanded ? 'right_panel_close' : 'right_panel_open'}
             </span>
-            <span className="text-xs">{expanded ? '收起侧边栏' : '展开侧边栏'}</span>
+            <span className="text-xs">{expanded ? '收起上下文' : '展开上下文'}</span>
           </Button>
         </div>
       </aside>
@@ -5031,23 +5116,24 @@ export default function HomeCommandSidebar({
         }}
       />
 
-      <Sheet open={!!inspectedWorkflow} onOpenChange={(open) => !open && setInspectedWorkflow(null)}>
-        <SheetContent side="right" className="w-[420px] sm:max-w-[420px]">
-          <SheetHeader>
-            <SheetTitle>{inspectedWorkflow?.name || '工作流详情'}</SheetTitle>
-            <SheetDescription>{inspectedWorkflow?.filename || ''}</SheetDescription>
-          </SheetHeader>
-          <div className="mt-6 space-y-4 text-sm">
-            <div className="rounded-2xl border p-4">
+      <DetailDrawer open={!!inspectedWorkflow} onOpenChange={(open) => !open && setInspectedWorkflow(null)}>
+        <DetailDrawerContent widthClassName="w-[min(440px,calc(100vw-1rem))]">
+          <DetailDrawerHeader>
+            <DetailDrawerTitle>{inspectedWorkflow?.name || '工作流详情'}</DetailDrawerTitle>
+            <DetailDrawerDescription>{inspectedWorkflow?.filename || ''}</DetailDrawerDescription>
+          </DetailDrawerHeader>
+          <DetailDrawerBody className="space-y-4 text-sm">
+            <div className="rounded-lg border border-border bg-card p-4">
               <div className="text-xs text-muted-foreground">描述</div>
               <div className="mt-2 leading-6">{inspectedWorkflow?.description || '暂无描述'}</div>
             </div>
-            <div className="rounded-2xl border p-4">
+            <div className="rounded-lg border border-border bg-card p-4">
               <div className="text-xs text-muted-foreground">模式</div>
               <div className="mt-2">{inspectedWorkflow?.mode || 'workflow'}</div>
             </div>
-            <div className="flex gap-2">
-              <Button className="flex-1" onClick={() => {
+          </DetailDrawerBody>
+          <DetailDrawerFooter>
+              <Button variant="outline" onClick={() => {
                 if (inspectedWorkflow?.filename) setSelectedWorkflow(inspectedWorkflow.filename);
                 setInspectedWorkflow(null);
                 onTabChange('commander');
@@ -5057,10 +5143,9 @@ export default function HomeCommandSidebar({
               <Button variant="outline" onClick={() => inspectedWorkflow?.filename && openWorkflowRun(inspectedWorkflow.filename)}>
                 打开
               </Button>
-            </div>
-          </div>
-        </SheetContent>
-      </Sheet>
+          </DetailDrawerFooter>
+        </DetailDrawerContent>
+      </DetailDrawer>
       <Sheet open={werewolfRolebookOpen} onOpenChange={setWerewolfRolebookOpen}>
         <SheetContent side="right" className="w-[min(94vw,960px)] overflow-y-auto sm:max-w-[960px]">
           <SheetHeader>

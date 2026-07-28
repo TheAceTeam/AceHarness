@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, test, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 
@@ -225,6 +225,54 @@ describe('ChatSidebar', () => {
     expect(screen.getAllByText('ready.yaml').length).toBeGreaterThan(0);
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
     expect(screen.getAllByText('运行').length).toBeGreaterThan(0);
+  });
+
+  test('shows creation or conversation mode alongside the session status', () => {
+    mockSessions = [
+      {
+        id: 'creation-mode',
+        title: 'Creation Mode',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: { creationAssistantEnabled: true },
+      },
+      {
+        id: 'conversation-mode',
+        title: 'Conversation Mode',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: { creationAssistantEnabled: false },
+      },
+      {
+        id: 'workflow-mode',
+        title: 'Workflow Mode',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        workflowBinding: {
+          configFile: 'workflow.yaml',
+          runId: 'run-mode',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        sessionWorkbenchState: { creationAssistantEnabled: true },
+      },
+    ];
+
+    render(<ChatSidebar />);
+
+    const rowFor = (title: string) => screen.getAllByText(title)
+      .map((node) => node.closest('.home-chat-session-row'))
+      .find((row): row is HTMLElement => Boolean(row));
+    expect(within(rowFor('Creation Mode')!).getByText('创建')).toBeTruthy();
+    expect(within(rowFor('Conversation Mode')!).getByText('对话')).toBeTruthy();
+    expect(within(rowFor('Workflow Mode')!).getByText('对话')).toBeTruthy();
+    expect(within(rowFor('Workflow Mode')!).getByText('运行')).toBeTruthy();
   });
 
   test('shows workflow run sessions without loaded summary', async () => {

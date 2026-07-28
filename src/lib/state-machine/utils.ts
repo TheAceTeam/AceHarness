@@ -25,8 +25,14 @@ export function stripJsonFence(text: string): string {
 }
 
 export function compactStepConclusion(raw: string): string {
+  const MAX_CONCLUSION_CHARS = 4000;
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
-  if (tagged) return tagged;
+  if (tagged) {
+    // 与 state-machine/workflow-manager.ts 内的同名实现保持一致：超长保留开头。
+    return tagged.length > MAX_CONCLUSION_CHARS
+      ? tagged.slice(0, MAX_CONCLUSION_CHARS).trim() + '\n...(结论过长已截断)'
+      : tagged;
+  }
 
   const text = stripNonAiStreamArtifacts(raw).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
@@ -80,6 +86,11 @@ function isStepToolFailure(message: string): boolean {
     || /permission denied/i.test(message);
 }
 
+function isHttpAuthStatusFailure(message: string): boolean {
+  return /(?:HTTP|status|statusCode|response|request|code)[^\r\n]{0,40}\b(?:401|403)\b/i.test(message)
+    || /\b(?:401|403)\b[^\r\n]{0,80}(?:unauthorized|forbidden|invalid token|invalid api key|authentication failed|无效的令牌|令牌无效|认证失败|鉴权失败)/i.test(message);
+}
+
 export function isEngineLevelFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
@@ -91,7 +102,7 @@ export function isEngineLevelFailure(message: string): boolean {
     || /模型调用失败(?:\s*\(\s*\d{3}\s*\))?\s*:/i.test(normalized)
     || /(?:unauthorized|invalid token|invalid api key|authentication failed|permission denied)/i.test(normalized)
     || /(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/i.test(normalized)
-    || /(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)
+    || isHttpAuthStatusFailure(normalized)
     || /context window limit/i.test(normalized)
     || /reached (its |the )?context window limit/i.test(normalized)
     || /maximum context length/i.test(normalized)

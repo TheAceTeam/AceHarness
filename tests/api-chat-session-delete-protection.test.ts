@@ -1,4 +1,3 @@
-import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 const routeMocks = vi.hoisted(() => ({
@@ -23,8 +22,8 @@ vi.mock('@/lib/run/state-persistence', () => ({
   loadRunState: routeMocks.loadRunState,
 }));
 
-function makeRequest(path: string, init?: ConstructorParameters<typeof NextRequest>[1]) {
-  return new NextRequest(`http://localhost${path}`, init);
+function makeRequest(path: string, init?: ConstructorParameters<typeof Request>[1]) {
+  return new Request(`http://localhost${path}`, init);
 }
 
 function makeSession(id: string, patch: Record<string, any> = {}) {
@@ -59,7 +58,7 @@ describe('chat session delete protection', () => {
     }));
     routeMocks.loadRunState.mockResolvedValue({ runId: 'run-active', status: 'running' });
 
-    const route = await import('@/app/api/chat/sessions/[id]/route');
+    const route = await import('@/server/api-routes/chat/sessions/[id]/route');
     const response = await route.DELETE(makeRequest('/api/chat/sessions/chat-run'), {
       params: Promise.resolve({ id: 'chat-run' }),
     });
@@ -81,7 +80,7 @@ describe('chat session delete protection', () => {
     }));
     routeMocks.loadRunState.mockResolvedValue(null);
 
-    const route = await import('@/app/api/chat/sessions/[id]/route');
+    const route = await import('@/server/api-routes/chat/sessions/[id]/route');
     const response = await route.DELETE(makeRequest('/api/chat/sessions/chat-mode'), {
       params: Promise.resolve({ id: 'chat-mode' }),
     });
@@ -107,7 +106,7 @@ describe('chat session delete protection', () => {
       runId === 'run-active' ? { runId, status: 'waiting-human' } : null
     ));
 
-    const route = await import('@/app/api/chat/sessions/batch-delete/route');
+    const route = await import('@/server/api-routes/chat/sessions/batch-delete/route');
     const response = await route.POST(makeRequest('/api/chat/sessions/batch-delete', {
       method: 'POST',
       body: JSON.stringify({ ids: ['plain-1', 'run-1'] }),

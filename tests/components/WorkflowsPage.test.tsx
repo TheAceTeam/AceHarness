@@ -1,146 +1,127 @@
 // @vitest-environment jsdom
 import React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import WorkflowsPage from '@/client/pages/WorkflowsPage';
 
-const mocks = vi.hoisted(() => ({
-  mockPush: vi.fn(),
-  mockListConfigs: vi.fn(async () => ({
-    configs: [],
-    pagination: {
-      total: 0,
-      totalPages: 1,
-      page: 1,
-      pageSize: 20,
-      unfilteredTotal: 0,
-    },
-  })),
-  mockListCreationSessions: vi.fn(async () => ({ sessions: [] })),
-  mockListShareableUsers: vi.fn(async () => []),
-  mockToast: vi.fn(),
-  mockConfirm: vi.fn(async () => false),
-}));
-
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mocks.mockPush,
-    replace: vi.fn(),
-    back: vi.fn(),
-    forward: vi.fn(),
-    refresh: vi.fn(),
-    prefetch: vi.fn(async () => {}),
-  }),
-  useSearchParams: () => ({
-    get: vi.fn(() => null),
-    toString: vi.fn(() => ''),
-  }),
-}));
-
-vi.mock('next/link', () => ({
-  default: ({ href, children, ...props }: any) => (
-    <a href={typeof href === 'string' ? href : href?.pathname || ''} {...props}>
-      {children}
-    </a>
-  ),
-}));
-
-vi.mock('framer-motion', async () => {
-  const React = await import('react');
-  const createMotionComponent = (tag: keyof JSX.IntrinsicElements) =>
-    React.forwardRef<any, any>(({ children, ...props }, ref) =>
-      React.createElement(tag, { ref, ...props }, children)
-    );
-
-  return {
-    motion: new Proxy({}, {
-      get: (_target, tag: string) => createMotionComponent(tag as keyof JSX.IntrinsicElements),
-    }),
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  };
-});
-
-vi.mock('@/components/dashboard/DashboardDockWorkspace', () => ({
-  useDashboardDockWorkspace: () => null,
-}));
-
-vi.mock('@/components/dashboard/DashboardShellHeader', () => ({
-  useDashboardShellHeader: () => ({ isDashboardShell: false }),
-}));
-
-vi.mock('@/components/ui/toast', () => ({
-  useToast: () => ({ toast: mocks.mockToast }),
-}));
-
-vi.mock('@/hooks/useConfirmDialog', () => ({
-  useConfirmDialog: () => ({ confirm: mocks.mockConfirm, dialogProps: null }),
-}));
-
-vi.mock('@/hooks/useDocumentTitle', () => ({
-  useDocumentTitle: vi.fn(),
-}));
-
-vi.mock('@/components/theme-toggle', () => ({
-  ThemeToggle: () => <div data-testid="theme-toggle" />,
-}));
-
-vi.mock('@/components/language-toggle', () => ({
-  LanguageToggle: () => <div data-testid="language-toggle" />,
-}));
-
-vi.mock('@/components/NewConfigModal', () => ({
-  default: ({ isOpen, initialMode, hideAiGuided, focusRequirementsOnOpen }: any) => (
-    isOpen ? (
-      <div
-        data-testid="new-config-modal"
-        data-initial-mode={initialMode}
-        data-hide-ai-guided={String(hideAiGuided)}
-        data-focus-requirements={String(focusRequirementsOnOpen)}
-      />
-    ) : null
-  ),
+const apiMocks = vi.hoisted(() => ({
+  listCreationSessions: vi.fn(),
+  listShareableUsers: vi.fn(),
 }));
 
 vi.mock('@/lib/core/api', () => ({
-  configApi: {
-    listConfigs: mocks.mockListConfigs,
-    deleteConfig: vi.fn(),
-    batchDeleteConfigs: vi.fn(),
-    copyConfig: vi.fn(),
-    getConfig: vi.fn(),
-    saveConfigWithMeta: vi.fn(),
-    importConfigZip: vi.fn(),
-    exportConfigs: vi.fn(),
-  },
+  configApi: {},
   specCodingApi: {
-    listCreationSessions: mocks.mockListCreationSessions,
+    listCreationSessions: apiMocks.listCreationSessions,
   },
   usersApi: {
-    listShareableUsers: mocks.mockListShareableUsers,
+    listShareableUsers: apiMocks.listShareableUsers,
   },
 }));
 
-import WorkflowsPage from '@/app/workflows/page';
-
-describe('WorkflowsPage AI creation entry', () => {
+describe('WorkflowsPage Start client entry', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      configs: [],
+      pagination: {
+        total: 0,
+        totalPages: 1,
+        page: 1,
+        pageSize: 20,
+        unfilteredTotal: 0,
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    apiMocks.listCreationSessions.mockResolvedValue({ sessions: [] });
+    apiMocks.listShareableUsers.mockResolvedValue([]);
   });
 
-  test('opens the create workflow modal directly with AI guided mode', async () => {
-    const user = userEvent.setup();
+  test('renders the restored workflow manager empty state', async () => {
+    renderWithQuery(<WorkflowsPage />);
 
-    render(<WorkflowsPage />);
-
-    await user.click(screen.getAllByRole('button', { name: /AI 创建/ })[0]);
+    expect(screen.getByRole('heading', { name: '工作流管理' })).toBeInTheDocument();
 
     await waitFor(() => {
-      const modal = screen.getByTestId('new-config-modal');
-      expect(modal).toHaveAttribute('data-initial-mode', 'ai-guided');
-      expect(modal).toHaveAttribute('data-hide-ai-guided', 'false');
-      expect(modal).toHaveAttribute('data-focus-requirements', 'true');
+      expect(screen.getByText('还没有工作流')).toBeInTheDocument();
     });
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/configs?page=1&pageSize=500&sortKey=name&sortDirection=asc'),
+      expect.any(Object),
+    );
+  });
 
-    expect(mocks.mockPush).not.toHaveBeenCalled();
+  test('consumes typed route search for workflow filters and emits typed sort updates', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      configs: [
+        {
+          filename: 'alpha.yaml',
+          name: 'Alpha Flow',
+          mode: 'phase-based',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          filename: 'beta.yaml',
+          name: 'Beta Machine',
+          mode: 'state-machine',
+          createdAt: '2026-01-02T00:00:00.000Z',
+        },
+      ],
+      pagination: {
+        total: 2,
+        totalPages: 1,
+        page: 1,
+        pageSize: 20,
+        unfilteredTotal: 2,
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }) as any);
+    const onRouteSearchChange = vi.fn();
+
+    renderWithQuery(
+      <WorkflowsPage
+        routeSearch={{
+          keyword: 'Beta',
+          mode: 'state-machine',
+          sortKey: 'createdAt',
+          sortDirection: 'desc',
+          page: 1,
+          pageSize: 20,
+        }}
+        onRouteSearchChange={onRouteSearchChange}
+      />,
+    );
+
+    expect(await screen.findByText('Beta Machine')).toBeInTheDocument();
+    expect(screen.queryByText('Alpha Flow')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /名称/ }));
+    expect(onRouteSearchChange).toHaveBeenCalledWith(expect.objectContaining({
+      keyword: 'Beta',
+      mode: 'state-machine',
+      sortKey: 'name',
+      sortDirection: 'asc',
+      page: 1,
+      pageSize: 20,
+    }));
   });
 });
+
+function renderWithQuery(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>,
+  );
+}

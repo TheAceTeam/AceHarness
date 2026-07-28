@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
-  <title id="title">CSIHarness Core Capabilities</title>
+  <title id="title">ACEHarness Core Capabilities</title>
   <desc id="desc">Six capability cards showing requirements and plan modeling, workflow orchestration, multi-agent collaboration, knowledge capture, capability extension, and external channels.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -38,7 +38,7 @@
   <path d="M0 858C292 756 560 920 824 884C1134 842 1340 716 1600 780V1040H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
   <g class="font">
-    <text x="80" y="126" fill="#F8FAFC" font-size="52" font-weight="800">CSIHarness Core Capabilities</text>
+    <text x="80" y="126" fill="#F8FAFC" font-size="52" font-weight="800">ACEHarness Core Capabilities</text>
     <text x="80" y="172" fill="#CBD5E1" font-size="20">A local AI engineering loop for planning, execution, collaboration, knowledge, extension, and channels.</text>
   </g>
 
@@ -131,6 +131,6 @@
   <g class="font">
     <rect x="80" y="880" width="1440" height="74" rx="24" fill="#0B1220" fill-opacity="0.86" stroke="#334155"/>
     <text x="122" y="925" fill="#F8FAFC" font-size="21" font-weight="700">Positioning</text>
-    <text x="244" y="925" fill="#CBD5E1" font-size="18">CSIHarness turns one-off AI chats into a local engineering system for planning, collaboration, governance, and knowledge.</text>
+    <text x="244" y="925" fill="#CBD5E1" font-size="18">ACEHarness turns one-off AI chats into a local engineering system for planning, collaboration, governance, and knowledge.</text>
   </g>
 </svg>

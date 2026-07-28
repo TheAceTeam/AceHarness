@@ -2,7 +2,7 @@
 
 import SpriteAvatar from '@/components/SpriteAvatar';
 
-const CSIHARNESS_LOGO_AVATAR_VALUE = 'sprite:group1:24';
+const ACEHARNESS_LOGO_AVATAR_VALUE = 'sprite:group1:24';
 const DISABLE_LOGO_GLOW_CLASS_PATTERN = /\banimate-none\b/;
 
 export function RobotLogo({ size = 32, className = '' }: { size?: number; className?: string }) {
@@ -10,10 +10,10 @@ export function RobotLogo({ size = 32, className = '' }: { size?: number; classN
 
   return (
     <SpriteAvatar
-      avatar={CSIHARNESS_LOGO_AVATAR_VALUE}
+      avatar={ACEHARNESS_LOGO_AVATAR_VALUE}
       seed="aceharness-logo"
       category="all"
-      fallback="CSI"
+      fallback="ACE"
       aria-hidden="true"
       size={size}
       className={`inline-flex overflow-visible rounded-full ${className}`.trim()}

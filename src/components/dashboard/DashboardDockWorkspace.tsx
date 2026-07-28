@@ -1,6 +1,6 @@
 'use client';
 
-import dynamic from 'next/dynamic';
+import dynamic from '@/lib/navigation/dynamic';
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import {
   DockviewReact,
@@ -29,6 +29,15 @@ import {
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useTranslations } from '@/hooks/useTranslations';
 import { cn } from '@/lib/core/utils';
+import { buildWorkbenchSearch as buildWorkbenchSearchParams, type WorkbenchMode } from '@/client/navigation/workbench-links';
+import {
+  groupDockviewContextActions,
+  resolveDockviewTabPolicy,
+  shouldReuseDockviewTab,
+  type DockviewContextAction,
+  type DockviewTabPolicy,
+  type DockviewTabPolicyInput,
+} from '@/lib/navigation/dockview-tab-policy';
 
 export const DASHBOARD_DOCK_DRAG_MIME = 'application/x-aceharness-dashboard-tab';
 const CHAT_SECONDARY_SIDEBAR_WIDTH_STORAGE_KEY = 'aceharness:dashboard-chat-secondary-sidebar-width';
@@ -47,19 +56,19 @@ const parseStoredChatSecondarySidebarPercent = (value: string | null): number =>
   return clampChatSecondarySidebarPercent(numeric);
 };
 
-const WorkflowsPage = dynamic(() => import('@/app/workflows/page'), { ssr: false });
-const ModelsPage = dynamic(() => import('@/app/models/page'), { ssr: false });
-const EnginesPage = dynamic(() => import('@/app/engines/page'), { ssr: false });
-const SchedulesPage = dynamic(() => import('@/app/schedules/page'), { ssr: false });
-const RunHistoryPage = dynamic(() => import('@/app/run-history/page'), { ssr: false });
-const KnowledgePage = dynamic(() => import('@/app/knowledge/page'), { ssr: false });
-const KnowledgeLibraryPage = dynamic(() => import('@/app/knowledge/library/page'), { ssr: false });
-const ApiDocsPage = dynamic(() => import('@/app/api-docs/page'), { ssr: false });
-const OfficePage = dynamic(() => import('@/app/office/page'), { ssr: false });
-const NotebookPageContent = dynamic(() => import('@/app/notebook/page').then((m) => m.NotebookPageContent), { ssr: false });
-const AccountContent = dynamic(() => import('@/app/account/page').then((m) => m.AccountContent), { ssr: false });
-const UsersContent = dynamic(() => import('@/app/users/page').then((m) => m.UsersContent), { ssr: false });
-const WorkbenchClient = dynamic(() => import('@/app/workbench/[config]/WorkbenchClient'), { ssr: false });
+const WorkflowsPage = dynamic(() => import('@/client/pages/WorkflowsPage'), { ssr: false });
+const ModelsPage = dynamic(() => import('@/client/pages/ModelsPage'), { ssr: false });
+const EnginesPage = dynamic(() => import('@/client/pages/EnginesPage'), { ssr: false });
+const SchedulesPage = dynamic(() => import('@/client/pages/SchedulesPage'), { ssr: false });
+const RunHistoryPage = dynamic(() => import('@/client/pages/RunHistoryPage'), { ssr: false });
+const KnowledgePage = dynamic(() => import('@/client/pages/KnowledgePage'), { ssr: false });
+const KnowledgeLibraryPage = dynamic(() => import('@/client/pages/KnowledgeLibraryPage'), { ssr: false });
+const ApiDocsPage = dynamic(() => import('@/client/pages/ApiDocsPage'), { ssr: false });
+const OfficePage = dynamic(() => import('@/client/pages/OfficePage'), { ssr: false });
+const NotebookPageContent = dynamic(() => import('@/client/pages/NotebookPage').then((m) => m.NotebookPageContent), { ssr: false });
+const AccountContent = dynamic(() => import('@/client/pages/AccountPage').then((m) => m.AccountContent), { ssr: false });
+const UsersContent = dynamic(() => import('@/client/pages/UsersPage').then((m) => m.UsersContent), { ssr: false });
+const WorkbenchClient = dynamic(() => import('@/client/pages/workbench/WorkbenchClient'), { ssr: false });
 
 export type DashboardDockTab =
   | { id: 'chat'; title: string; kind: 'chat' }
@@ -73,7 +82,7 @@ export type DashboardDockTab =
   | { id: 'models'; title: string; kind: 'models' }
   | { id: 'engines'; title: string; kind: 'engines' }
   | { id: 'schedules'; title: string; kind: 'schedules' }
-  | { id: 'run-history'; title: string; kind: 'run-history' }
+  | { id: 'run-history'; title: string; kind: 'run-history'; search?: string }
   | { id: 'knowledge'; title: string; kind: 'knowledge' }
   | { id: 'knowledge-library'; title: string; kind: 'knowledge-library' }
   | { id: 'api-docs'; title: string; kind: 'api-docs' }
@@ -107,6 +116,8 @@ type DashboardDockWorkspaceProps = {
 type DashboardDockWorkspaceContextValue = {
   openTab: (tab: DashboardDockTab, options?: DashboardDockOpenOptions) => void;
   updateActiveWorkbenchSearch: (config: string, search: string) => void;
+  updateActiveRunHistorySearch: (search: string) => void;
+  updateActiveNotebookSearch: (search: string) => void;
 };
 
 const DashboardDockWorkspaceContext = createContext<DashboardDockWorkspaceContextValue | null>(null);
@@ -121,6 +132,7 @@ type WorkspacePanelParams = DashboardDockTab & {
   chatSecondarySidebarPinned?: boolean;
   showChatSecondarySidebar?: boolean;
   renderChatSecondarySidebar?: () => ReactNode;
+  dockviewPolicy: DockviewTabPolicy;
 };
 
 const DEFAULT_SHELL_HEADERS: Record<DashboardDockTab['kind'], { title: string; subtitle: string }> = {
@@ -137,7 +149,7 @@ const DEFAULT_SHELL_HEADERS: Record<DashboardDockTab['kind'], { title: string; s
   schedules: { title: '定时任务', subtitle: '管理自动运行计划' },
   'run-history': { title: '运行记录', subtitle: '查看历史运行和 Token 排行' },
   knowledge: { title: '知识库', subtitle: '知识库与全局 Notebook' },
-  'knowledge-library': { title: '知识库', subtitle: 'CSIHarness 原生 RAG 容器' },
+  'knowledge-library': { title: '知识库', subtitle: 'ACEHarness 原生 RAG 容器' },
   'api-docs': { title: 'API 文档', subtitle: '接口示例、请求参数与在线调试' },
   office: { title: '一人公司', subtitle: '办公室、协作、记忆和工作流聚合桌面' },
   notebook: { title: 'Cangjie Notebook', subtitle: '编辑、整理和运行 Notebook' },
@@ -172,12 +184,28 @@ function useDashboardDockHeader(tab: DashboardDockTab): { title: string; subtitl
   return headers[tab.kind] || DEFAULT_SHELL_HEADERS[tab.kind] || { title: tab.title, subtitle: '' };
 }
 
+function normalizeDockSearch(search?: string) {
+  if (typeof search !== 'string') return undefined;
+  return search.startsWith('?') ? search.slice(1) : search;
+}
+
+function getWorkbenchSearchState(tab: Extract<DashboardDockTab, { kind: 'workbench' }>) {
+  const search = normalizeDockSearch(tab.search);
+  const params = typeof search === 'string' ? new URLSearchParams(search) : null;
+  const runId = params?.get('runId') || params?.get('run') || (typeof search === 'string' ? null : tab.runId || null);
+  const mode: WorkbenchMode = runId ? 'run' : params?.get('mode') === 'design' || tab.mode === 'design' ? 'design' : 'run';
+
+  return {
+    search,
+    mode,
+    runId,
+  };
+}
+
 function buildWorkbenchSearch(tab: Extract<DashboardDockTab, { kind: 'workbench' }>) {
-  if (tab.search) return tab.search.startsWith('?') ? tab.search.slice(1) : tab.search;
-  const params = new URLSearchParams();
-  if (tab.mode) params.set('mode', tab.mode);
-  if (tab.runId) params.set('runId', tab.runId);
-  return params.toString();
+  const state = getWorkbenchSearchState(tab);
+  if (typeof state.search === 'string') return state.search;
+  return buildWorkbenchSearchParams(state.mode, state.runId);
 }
 
 function PageFrame({
@@ -202,6 +230,7 @@ function PageFrame({
 
 function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
   const tab = props.params;
+  const dockWorkspace = useDashboardDockWorkspace();
   const chatPanelRef = useRef<HTMLDivElement>(null);
   const [chatSecondarySidebarPercent, setChatSecondarySidebarPercent] = useState(() => {
     if (typeof window === 'undefined') return CHAT_SECONDARY_SIDEBAR_DEFAULT_PERCENT;
@@ -307,7 +336,12 @@ function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
       scrollable = true;
       break;
     case 'run-history':
-      content = <RunHistoryPage />;
+      content = (
+        <RunHistoryPage
+          embeddedSearch={tab.search || ''}
+          onEmbeddedSearchChange={(search: string) => dockWorkspace?.updateActiveRunHistorySearch(search)}
+        />
+      );
       scrollable = true;
       break;
     case 'knowledge':
@@ -329,7 +363,13 @@ function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
       );
       break;
     case 'notebook':
-      content = <NotebookPageContent embedded embeddedSearch={tab.search || ''} />;
+      content = (
+        <NotebookPageContent
+          embedded
+          embeddedSearch={tab.search || ''}
+          onEmbeddedSearchChange={(search: string) => dockWorkspace?.updateActiveNotebookSearch(search)}
+        />
+      );
       break;
     case 'account':
       content = <AccountContent embedded embeddedSearch={tab.search || ''} />;
@@ -397,32 +437,109 @@ function shouldAlwaysRenderTab(tab: DashboardDockTab) {
   return tab.kind === 'chat';
 }
 
-function normalizeDashboardDockTab(tab: DashboardDockTab): DashboardDockTab {
-  if (tab.kind !== 'workbench') return tab;
+function getDockviewPolicyInputForTab(tab: DashboardDockTab): DockviewTabPolicyInput {
+  if (tab.kind === 'workbench') {
+    const mode = tab.mode === 'design' ? 'design' : 'run';
+    const runId = tab.runId || '';
+    const workbenchIdentity = tab.config;
+    return {
+      resourceType: 'workflow-workbench',
+      resourceId: workbenchIdentity,
+      resourceTitle: tab.title,
+      resourceSubtitle: runId ? `Mode: ${mode} · ${runId}` : `Mode: ${mode}`,
+      openMode: 'canonical',
+      preferredGroup: 'main',
+      restoreKey: workbenchIdentity,
+      contextActions: [],
+    };
+  }
+
+  if (tab.kind === 'notebook' || tab.kind === 'account') {
+    return {
+      resourceType: tab.kind,
+      resourceId: tab.id,
+      resourceTitle: tab.title,
+      openMode: 'canonical',
+      preferredGroup: 'main',
+      restoreKey: tab.id,
+    };
+  }
+
   return {
-    ...tab,
-    id: `workbench:${tab.config}`,
+    resourceType: 'dashboard-destination',
+    resourceId: tab.kind,
+    resourceTitle: tab.title,
+    openMode: 'canonical',
+    preferredGroup: 'main',
+    restoreKey: tab.kind,
   };
 }
 
-function hasSameTabIdentity(current: WorkspacePanelParams, next: DashboardDockTab) {
+function resolvePolicyForDashboardTab(tab: DashboardDockTab) {
+  return resolveDockviewTabPolicy(getDockviewPolicyInputForTab(tab));
+}
+
+function withWorkspaceParams(tab: DashboardDockTab): DashboardDockTab & { dockviewPolicy: DockviewTabPolicy } {
+  return {
+    ...tab,
+    dockviewPolicy: resolvePolicyForDashboardTab(tab),
+  };
+}
+
+function normalizeDashboardDockTab(tab: DashboardDockTab): DashboardDockTab & { dockviewPolicy: DockviewTabPolicy } {
+  if (tab.kind !== 'workbench') return withWorkspaceParams(tab);
+  const state = getWorkbenchSearchState(tab);
+  return withWorkspaceParams({
+    ...tab,
+    search: state.search,
+    mode: state.mode,
+    runId: state.runId,
+    id: `workbench:${encodeURIComponent(tab.config)}`,
+  });
+}
+
+function hasSameReusablePanelParams(current: WorkspacePanelParams, next: DashboardDockTab) {
   if (current.id !== next.id || current.kind !== next.kind || current.title !== next.title) {
     return false;
   }
 
   if (current.kind === 'workbench' && next.kind === 'workbench') {
+    const currentState = getWorkbenchSearchState(current);
+    const nextState = getWorkbenchSearchState(next);
     return current.config === next.config
-      && (current.mode || 'run') === (next.mode || 'run')
-      && (current.runId || '') === (next.runId || '')
-      && (current.search || '') === (next.search || '');
+      && (currentState.search || '') === (nextState.search || '')
+      && currentState.mode === nextState.mode
+      && (currentState.runId || '') === (nextState.runId || '');
+  }
+
+  if (current.kind === 'run-history' && next.kind === 'run-history') {
+    return (normalizeDockSearch(current.search) || '') === (normalizeDockSearch(next.search) || '');
   }
 
   if ((current.kind === 'notebook' && next.kind === 'notebook')
     || (current.kind === 'account' && next.kind === 'account')) {
-    return (current.search || '') === (next.search || '');
+    return (normalizeDockSearch(current.search) || '') === (normalizeDockSearch(next.search) || '');
   }
 
   return true;
+}
+
+function findReusableDockPanel(api: DockviewApi, tab: DashboardDockTab & { dockviewPolicy: DockviewTabPolicy }) {
+  const exact = api.getPanel(tab.id);
+  if (exact) return exact;
+
+  if (!tab.dockviewPolicy.reuseExisting) return undefined;
+
+  return api.panels.find((panel) => {
+    const params = panel.params as WorkspacePanelParams | undefined;
+    if (!params?.dockviewPolicy) return false;
+    return shouldReuseDockviewTab(params.dockviewPolicy, {
+      resourceType: tab.dockviewPolicy.resourceType,
+      resourceId: tab.dockviewPolicy.resourceId,
+      openMode: tab.dockviewPolicy.openMode,
+      restoreKey: tab.dockviewPolicy.restoreKey,
+    });
+  });
 }
 
 function getDropDirection(event: DragEvent<HTMLDivElement>, element: HTMLDivElement): Exclude<Direction, 'within'> | null {
@@ -462,8 +579,21 @@ function closeDockPanels(panels: IDockviewPanel[]) {
   }
 }
 
+function getContextActionGroups(actions: readonly DockviewContextAction[]) {
+  return groupDockviewContextActions(actions);
+}
+
 function DashboardDockTabComponent({ api, containerApi, tabLocation }: IDockviewPanelHeaderProps) {
   const currentPanel = containerApi.getPanel(api.id);
+  const currentParams = currentPanel?.params as WorkspacePanelParams | undefined;
+  const policyActionGroups = getContextActionGroups(currentParams?.dockviewPolicy?.contextActions || []);
+  const policyActions = [
+    ...policyActionGroups.run,
+    ...policyActionGroups.edit,
+    ...policyActionGroups.view,
+    ...policyActionGroups.export,
+    ...policyActionGroups.danger,
+  ];
   const groupPanels = api.group.panels;
   const currentIndex = groupPanels.findIndex((panel) => panel.id === api.id);
   const leftPanels = currentIndex > 0 ? groupPanels.slice(0, currentIndex) : [];
@@ -502,6 +632,21 @@ function DashboardDockTabComponent({ api, containerApi, tabLocation }: IDockview
           刷新
         </ContextMenuItem>
         <ContextMenuSeparator />
+        {policyActions.length > 0 ? (
+          <>
+            {policyActions.map((action) => (
+              <ContextMenuItem
+                key={action.id}
+                disabled
+                className={cn((action.danger || action.group === 'danger') && 'text-destructive')}
+                title={action.disabledReason || '该 Dockview 策略动作由页面内部控件执行'}
+              >
+                {action.label}
+              </ContextMenuItem>
+            ))}
+            <ContextMenuSeparator />
+          </>
+        ) : null}
         <ContextMenuItem onSelect={() => api.close()}>
           关闭
         </ContextMenuItem>
@@ -604,10 +749,10 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       if (!api) return;
       const normalizedTab = normalizeDashboardDockTab(tab);
 
-      const existing = api.getPanel(normalizedTab.id);
+      const existing = findReusableDockPanel(api, normalizedTab);
       if (existing) {
         const params = existing.params as WorkspacePanelParams | undefined;
-        if (params && !hasSameTabIdentity(params, normalizedTab)) {
+        if (params && !hasSameReusablePanelParams(params, normalizedTab)) {
           if (existing.api.title !== normalizedTab.title) {
             existing.api.setTitle(normalizedTab.title);
           }
@@ -620,6 +765,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
               chatSecondarySidebarPinned: chatSecondarySidebarPinnedRef.current,
               showChatSecondarySidebar: showChatSecondarySidebarRef.current,
               renderChatSecondarySidebar: () => renderChatSecondarySidebarRef.current?.(),
+              dockviewPolicy: normalizedTab.dockviewPolicy,
             },
           });
         }
@@ -653,12 +799,13 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
           chatSecondarySidebarPinned: chatSecondarySidebarPinnedRef.current,
           showChatSecondarySidebar: showChatSecondarySidebarRef.current,
           renderChatSecondarySidebar: () => renderChatSecondarySidebarRef.current?.(),
+          dockviewPolicy: normalizedTab.dockviewPolicy,
         },
       });
       if (singlePanelModeRef.current) {
         replacingSinglePanelRef.current = false;
-        addedPanel.api.setActive();
       }
+      addedPanel.api.setActive();
     }, []);
 
     const updateActiveWorkbenchSearch = useCallback((config: string, search: string) => {
@@ -670,12 +817,50 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
 
       const normalizedSearch = search.startsWith('?') ? search.slice(1) : search;
       const searchParams = new URLSearchParams(normalizedSearch);
+      const nextParams = {
+        ...params,
+        search: normalizedSearch,
+        mode: searchParams.get('mode') || params.mode || 'run',
+        runId: searchParams.get('runId') || searchParams.get('run') || null,
+      };
+      activePanel.update({
+        params: nextParams,
+      });
+      onActiveTabChange?.(nextParams);
+    }, [onActiveTabChange]);
+
+    const updateActiveRunHistorySearch = useCallback((search: string) => {
+      const api = apiRef.current;
+      const activePanel = api?.activePanel;
+      if (!activePanel) return;
+      const params = activePanel.params as WorkspacePanelParams | undefined;
+      if (!params || params.kind !== 'run-history') return;
+
+      const normalizedSearch = search.startsWith('?') ? search.slice(1) : search;
       activePanel.update({
         params: {
           ...params,
           search: normalizedSearch,
-          mode: searchParams.get('mode') || params.mode || 'run',
-          runId: searchParams.get('runId') || searchParams.get('run') || params.runId || null,
+        },
+      });
+    }, []);
+
+    const updateActiveNotebookSearch = useCallback((search: string) => {
+      const api = apiRef.current;
+      const activePanel = api?.activePanel;
+      if (!activePanel) return;
+      const params = activePanel.params as WorkspacePanelParams | undefined;
+      if (!params || params.kind !== 'notebook') return;
+
+      const normalizedSearch = search.startsWith('?') ? search.slice(1) : search;
+      const searchParams = new URLSearchParams(normalizedSearch);
+      const scope = searchParams.get('notebookScope') === 'personal' ? 'personal' : 'global';
+      const file = searchParams.get('notebookFile') || searchParams.get('notebookShare') || 'root';
+      activePanel.update({
+        params: {
+          ...params,
+          id: `notebook:${scope}:${file}`,
+          search: normalizedSearch,
         },
       });
     }, []);
@@ -705,6 +890,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
           id: 'chat',
           title: '对话',
           kind: 'chat',
+          dockviewPolicy: resolvePolicyForDashboardTab({ id: 'chat', title: '对话', kind: 'chat' }),
           renderOverview: () => renderOverviewRef.current(),
           onToggleChatSecondarySidebar: () => toggleChatSecondarySidebarRef.current?.(),
           chatSecondarySidebarPinned: chatSecondarySidebarPinnedRef.current,
@@ -712,7 +898,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
           renderChatSecondarySidebar: () => renderChatSecondarySidebarRef.current?.(),
         },
       });
-      const initial = initialTabRef.current;
+      const initial = initialTabRef.current ? normalizeDashboardDockTab(initialTabRef.current) : undefined;
       const panel = initial
         ? event.api.addPanel<WorkspacePanelParams>({
             id: initial.id,
@@ -726,6 +912,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
               chatSecondarySidebarPinned: chatSecondarySidebarPinnedRef.current,
               showChatSecondarySidebar: showChatSecondarySidebarRef.current,
               renderChatSecondarySidebar: () => renderChatSecondarySidebarRef.current?.(),
+              dockviewPolicy: initial.dockviewPolicy,
             },
           })
         : openFallbackChatPanel();
@@ -776,8 +963,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       const distance = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
       if (distance < 6) return;
       pending.dragging = true;
-      window.requestAnimationFrame(restorePreDragActivePanel);
-    }, [restorePreDragActivePanel]);
+    }, []);
 
     const handlePointerUpCapture = useCallback(() => {
       window.setTimeout(() => {
@@ -830,7 +1016,9 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
     const workspaceContextValue = useMemo<DashboardDockWorkspaceContextValue>(() => ({
       openTab,
       updateActiveWorkbenchSearch,
-    }), [openTab, updateActiveWorkbenchSearch]);
+      updateActiveRunHistorySearch,
+      updateActiveNotebookSearch,
+    }), [openTab, updateActiveNotebookSearch, updateActiveRunHistorySearch, updateActiveWorkbenchSearch]);
 
     return (
       <div

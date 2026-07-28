@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import { parse } from 'yaml';
 import { getRuntimeModelsConfigPath } from '@/lib/run/runtime-configs';
 import { modelEnginesSupportEngine, normalizeModelEngineIds } from '@/lib/models/engine-compatibility';
+import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
 
 export interface ModelOption {
   value: string;
@@ -33,6 +34,16 @@ function uniqueStrings(values: unknown): string[] {
   );
 }
 
+function defaultedUniqueStrings(values: unknown, defaults: readonly string[]): string[] {
+  const normalized = uniqueStrings(values);
+  return normalized.length > 0 ? normalized : [...defaults];
+}
+
+function normalizeContextWindow(value: unknown): number {
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? next : DEFAULT_MODEL_CONTEXT_WINDOW;
+}
+
 export function normalizeModelEngines(engines: unknown): string[] {
   return normalizeModelEngineIds(engines);
 }
@@ -40,8 +51,9 @@ export function normalizeModelEngines(engines: unknown): string[] {
 export function normalizeModelOption(model: ModelOption): ModelOption {
   return {
     ...model,
-    endpoints: uniqueStrings(model.endpoints),
+    endpoints: defaultedUniqueStrings(model.endpoints, DEFAULT_MODEL_ENDPOINTS),
     engines: normalizeModelEngines(model.engines),
+    contextWindow: normalizeContextWindow(model.contextWindow),
   };
 }
 

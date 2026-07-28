@@ -2,7 +2,7 @@
 
 import { ActionState, RISK_MAP } from '@/lib/chat/actions';
 import { Button } from '@/components/ui/button';
-import { useRouter } from 'next/navigation';
+import { useRouter } from '@/lib/navigation/client';
 import ResultRenderer from './ResultRenderer';
 import {
   Tool,
@@ -19,7 +19,7 @@ import {
   ConfirmationAction,
 } from '@/components/ai-elements/confirmation';
 
-/** Map CSIHarness ActionState.status → ai-elements ToolPart['state'] */
+/** Map ACEHarness ActionState.status → ai-elements ToolPart['state'] */
 function toToolState(status: ActionState['status']): ToolPart['state'] {
   switch (status) {
     case 'pending': return 'approval-requested';

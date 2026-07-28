@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const targets = [path.join(root, '.next')];
+const targets = [path.join(root, 'dist')];
 let removed = 0;
 
 function pruneMaps(dir) {

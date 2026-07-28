@@ -40,7 +40,7 @@ async function loadRouteWithMockedRuns(mockRuns: any[], configNameMap: Record<st
       readAccessibleConfigNameMap: vi.fn(async () => configNameMap),
     };
   });
-  return import('@/app/api/run-history/route');
+  return import('@/server/api-routes/run-history/route');
 }
 
 function sampleRun(overrides: Record<string, any>) {
@@ -75,7 +75,7 @@ describe('run history route', () => {
   test('rejects unauthenticated requests', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
-      const route = await import('@/app/api/run-history/route');
+      const route = await import('@/server/api-routes/run-history/route');
       await assertErrorResponse(await route.GET(makeRequest('/api/run-history')), 401);
     });
   });
@@ -263,21 +263,21 @@ describe('run history route', () => {
     });
   });
 
-  test('keeps legacy run summaries without parent-child fields displayable', async () => {
+  test('keeps preRuntime run summaries without parent-child fields displayable', async () => {
     await withIsolatedAceHome(async () => {
-      const { token, user } = await createAuthToken('user', 'legacy');
-      const legacyRun = sampleRun({
-        id: 'run-legacy',
-        configFile: 'legacy.yaml',
+      const { token, user } = await createAuthToken('user', 'preRuntime');
+      const preRuntimeRun = sampleRun({
+        id: 'run-preRuntime',
+        configFile: 'preRuntime.yaml',
         ownerId: user.id,
         ownerName: user.username,
       });
-      delete (legacyRun as any).childRunIds;
-      delete (legacyRun as any).subworkflowRuns;
-      delete (legacyRun as any).parentRunId;
-      delete (legacyRun as any).rootRunId;
-      const route = await loadRouteWithMockedRuns([legacyRun], {
-        'legacy.yaml': 'Legacy Workflow',
+      delete (preRuntimeRun as any).childRunIds;
+      delete (preRuntimeRun as any).subworkflowRuns;
+      delete (preRuntimeRun as any).parentRunId;
+      delete (preRuntimeRun as any).rootRunId;
+      const route = await loadRouteWithMockedRuns([preRuntimeRun], {
+        'preRuntime.yaml': 'preRuntime Workflow',
       });
 
       const response = await route.GET(makeRequest('/api/run-history?tree=1', { token }));
@@ -286,8 +286,8 @@ describe('run history route', () => {
       const json = await responseJson<any>(response);
       expect(json.runs).toHaveLength(1);
       expect(json.runs[0]).toMatchObject({
-        id: 'run-legacy',
-        configName: 'Legacy Workflow',
+        id: 'run-preRuntime',
+        configName: 'preRuntime Workflow',
         childRuns: [],
         childSummary: {
           total: 0,

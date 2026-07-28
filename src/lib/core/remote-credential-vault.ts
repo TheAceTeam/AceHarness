@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, type AuthenticatedUser } from '@/lib/auth/middleware';
 import { WorkspacePathError } from '@/lib/core/workspace-path-safety';
 import { isRemoteWorkspace, normalizeRemoteWorkspaceUrl, type RemoteCredentials } from '@/lib/core/remote-workspace';
@@ -82,7 +81,7 @@ export function forgetRemoteCredentials(input: { userId: string; workspace: stri
   vault.delete(entryKey(input.userId, workspaceKey));
 }
 
-export async function requireRemoteWorkspaceAuth(request: NextRequest): Promise<AuthenticatedUser | NextResponse> {
+export async function requireRemoteWorkspaceAuth(request: Request): Promise<AuthenticatedUser | Response> {
   return requireAuth(request);
 }
 

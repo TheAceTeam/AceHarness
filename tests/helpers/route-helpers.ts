@@ -1,4 +1,3 @@
-import { NextRequest } from 'next/server';
 import { expect, vi } from 'vitest';
 
 interface RequestOptions {
@@ -9,7 +8,7 @@ interface RequestOptions {
   token?: string;
 }
 
-export function makeRequest(urlPath: string, options: RequestOptions = {}): NextRequest {
+export function makeRequest(urlPath: string, options: RequestOptions = {}): Request {
   const url = urlPath.startsWith('http') ? urlPath : `http://localhost${urlPath}`;
   const headers = new Headers(options.headers ?? {});
   let body = options.body;
@@ -23,7 +22,7 @@ export function makeRequest(urlPath: string, options: RequestOptions = {}): Next
     headers.set('authorization', `Bearer ${options.token}`);
   }
 
-  return new NextRequest(url, {
+  return new Request(url, {
     method: options.method ?? (body === undefined ? 'GET' : 'POST'),
     headers,
     body,

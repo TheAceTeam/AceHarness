@@ -266,6 +266,7 @@ interface CollaborationRoomSurfaceProps {
   emptyText?: string;
   helperText?: ReactNode;
   customControls?: ReactNode;
+  messagesPrefix?: ReactNode;
   inlineContent?: ReactNode;
   inlineContentSpeakerName?: string;
   composerOverlay?: ReactNode;
@@ -309,6 +310,7 @@ export function CollaborationRoomSurface({
   emptyText = '',
   helperText,
   customControls,
+  messagesPrefix,
   inlineContent,
   inlineContentSpeakerName,
   composerOverlay,
@@ -624,6 +626,11 @@ export function CollaborationRoomSurface({
             ref={scrollContainerRef}
             className={cn(isChannel ? 'min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5' : 'max-h-[640px] space-y-3 overflow-y-auto px-4 py-4', messagesClassName)}
           >
+          {messagesPrefix ? (
+            <div className="shrink-0">
+              {messagesPrefix}
+            </div>
+          ) : null}
           {messages.length === 0 ? (
             isChannel || !emptyText ? <div className="min-h-[160px]" /> : (
               <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">

@@ -27,8 +27,8 @@ async function createAuthToken(role: 'admin' | 'user' = 'user'): Promise<AuthRes
 
 async function loadSpecCodingRoutes() {
   const [sessions, sessionById] = await Promise.all([
-    import('@/app/api/spec-coding/sessions/route'),
-    import('@/app/api/spec-coding/sessions/[id]/route'),
+    import('@/server/api-routes/spec-coding/sessions/route'),
+    import('@/server/api-routes/spec-coding/sessions/[id]/route'),
   ]);
   return { sessions, sessionById };
 }

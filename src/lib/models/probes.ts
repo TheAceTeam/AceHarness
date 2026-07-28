@@ -4,14 +4,9 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { getWorkspaceDataDir, getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import { getModelOptions } from '@/lib/core/models';
-import {
-  createEngine,
-  normalizeDriverSelection,
-  resolveEffectiveEngine,
-  type EngineDriver,
-  type EngineType,
-} from '@/lib/engines/engine-factory';
-import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
+import { runRuntimeDiagnosticPrompt } from '@/lib/models/diagnostics-runtime-bridge';
+import { resolveRuntimeModelRoute } from '@/lib/runtime-agent/models/model-routes-api';
+import type { ResolvedModelRouteRecord } from '@/lib/runtime-agent/models/model-routes';
 import type {
   CreateModelProbeInput,
   ModelProbeAvailabilityWindow,
@@ -37,6 +32,7 @@ const DEFAULT_HISTORY_LIMIT = 60;
 const ENGINE_ENDPOINT_HINTS: Record<string, string[]> = {
   'claude-code': ['anthropic'],
   'claude-code-acp': ['anthropic'],
+  codeagent: ['anthropic'],
   'codex': ['openai'],
 };
 
@@ -77,16 +73,21 @@ function uniqueStrings(values: unknown): string[] {
   );
 }
 
+function optionalTrimmedString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 function previewText(value: string | undefined, maxLength = 160): string | undefined {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return undefined;
   return normalized.slice(0, maxLength);
 }
 
-function normalizeStoredDriver(value: unknown, engine?: string): 'auto' | EngineDriver | undefined {
+type ProbeDriver = 'sdk' | 'stdio';
+
+function normalizeStoredDriver(value: unknown, _engine?: string): 'auto' | ProbeDriver | undefined {
   if (value === 'auto') return 'auto';
-  const normalized = normalizeDriverSelection(engine, typeof value === 'string' ? value : null);
-  return normalized || undefined;
+  return value === 'sdk' || value === 'stdio' ? value : undefined;
 }
 
 function normalizeRunRecord(item: unknown): ModelProbeRunRecord | null {
@@ -144,6 +145,7 @@ function normalizeProbeRecord(item: unknown): ModelProbeRecord | null {
       ? source.groupName.trim()
       : String(source.name || `${engine} / ${model}`),
     name: String(source.name || `${engine} / ${model}`),
+    modelRouteId: optionalTrimmedString(source.modelRouteId),
     engine,
     driver: normalizeStoredDriver(source.driver, engine),
     model,
@@ -160,6 +162,45 @@ function normalizeProbeRecord(item: unknown): ModelProbeRecord | null {
     runs: runs
       .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt))
       .slice(0, MAX_RUNS_PER_PROBE),
+  };
+}
+
+function resolveStoredModelRoute(input: {
+  modelRouteId?: string;
+  engine?: string;
+  model?: string;
+}): ResolvedModelRouteRecord | null {
+  return resolveRuntimeModelRoute({
+    modelRouteId: input.modelRouteId,
+    agentId: input.engine,
+    modelId: input.model,
+  });
+}
+
+function routeDisplayFields(route: ResolvedModelRouteRecord | null, fallback: {
+  modelRouteId?: string;
+  engine?: string;
+  model?: string;
+  endpoints?: string[];
+}): {
+  modelRouteId?: string;
+  engine: string;
+  model: string;
+  endpoints?: string[];
+} {
+  if (route) {
+    return {
+      modelRouteId: route.modelRouteId,
+      engine: route.agentId,
+      model: route.providerModel,
+      endpoints: route.providerId ? [route.providerId] : fallback.endpoints,
+    };
+  }
+  return {
+    modelRouteId: optionalTrimmedString(fallback.modelRouteId),
+    engine: optionalTrimmedString(fallback.engine) || '',
+    model: optionalTrimmedString(fallback.model) || '',
+    endpoints: fallback.endpoints,
   };
 }
 
@@ -189,12 +230,18 @@ function buildFallbackEndpoints(engine: string): string[] {
 
 async function resolveProbeEndpoints(input: {
   endpoints?: string[];
+  modelRouteId?: string;
   engine: string;
   model: string;
   currentProbe?: ModelProbeRecord;
 }): Promise<string[]> {
   const explicit = uniqueStrings(input.endpoints);
   if (explicit.length > 0) return explicit;
+  if (input.modelRouteId) {
+    const route = resolveStoredModelRoute({ modelRouteId: input.modelRouteId });
+    const fromRoute = uniqueStrings(route?.providerId ? [route.providerId] : []);
+    if (fromRoute.length > 0) return fromRoute;
+  }
   if (input.currentProbe?.endpoints?.length) return uniqueStrings(input.currentProbe.endpoints);
 
   const models = await getModelOptions().catch(() => []);
@@ -289,11 +336,20 @@ function isProbeDue(probe: ModelProbeRecord, nowMs = Date.now()): boolean {
 async function summarizeProbe(probe: ModelProbeRecord, historyLimit: number): Promise<ModelProbeSummary> {
   const nowMs = Date.now();
   const latestRun = probe.runs[0] || null;
+  const route = probe.modelRouteId
+    ? resolveStoredModelRoute({ modelRouteId: probe.modelRouteId })
+    : null;
+  const display = routeDisplayFields(route, {
+    modelRouteId: probe.modelRouteId,
+    engine: probe.engine,
+    model: probe.model,
+    endpoints: probe.endpoints,
+  });
   const matchingModels = await getModelOptions().catch(() => []);
-  const matchedModel = matchingModels.find((item) => item.value === probe.model);
+  const matchedModel = matchingModels.find((item) => item.value === display.model || item.value === route?.modelId);
   const endpoints = probe.endpoints.length > 0
     ? uniqueStrings(probe.endpoints)
-    : uniqueStrings(matchedModel?.endpoints || buildFallbackEndpoints(probe.engine));
+    : uniqueStrings(display.endpoints || matchedModel?.endpoints || buildFallbackEndpoints(display.engine));
   const status = computeProbeStatus(probe, latestRun);
 
   return {
@@ -301,10 +357,11 @@ async function summarizeProbe(probe: ModelProbeRecord, historyLimit: number): Pr
     groupId: probe.groupId,
     groupName: probe.groupName,
     name: probe.name,
-    engine: probe.engine,
-    engineLabel: getEngineDisplayName(probe.engine),
+    modelRouteId: display.modelRouteId,
+    engine: display.engine,
+    engineLabel: getEngineDisplayName(display.engine),
     driver: probe.driver,
-    model: probe.model,
+    model: display.model,
     endpoints,
     intervalMinutes: probe.intervalMinutes,
     timeoutMs: probe.timeoutMs,
@@ -412,31 +469,31 @@ function buildProbeExecutionFailure(input: {
 async function executeProbeRun(probe: ModelProbeRecord): Promise<ModelProbeRunRecord> {
   const startedAt = Date.now();
   const availabilityStartedAt = Date.now();
-  const effectiveEngine = probe.driver && probe.driver !== 'auto'
-    ? resolveEffectiveEngine(probe.engine, probe.driver)
-    : probe.engine;
-  const engine = await createEngine((effectiveEngine || probe.engine) as EngineType);
+  const route = probe.modelRouteId
+    ? resolveStoredModelRoute({ modelRouteId: probe.modelRouteId })
+    : null;
+  const executionIdentity = routeDisplayFields(route, {
+    modelRouteId: probe.modelRouteId,
+    engine: probe.engine,
+    model: probe.model,
+    endpoints: probe.endpoints,
+  });
+  const runtimeEngine = executionIdentity.engine;
+  const runtimeModel = executionIdentity.model;
   const availabilityCheckMs = Date.now() - availabilityStartedAt;
-
-  if (!engine) {
-    return buildProbeExecutionFailure({
-      startedAt,
-      availabilityCheckMs,
-      message: `${getEngineDisplayName(probe.engine)} 当前不可用`,
-      engineAvailable: false,
-    });
-  }
 
   try {
     const responseStartedAt = Date.now();
-    const result = await executeEngineWithContextRecovery(engine, {
+    const result = await runRuntimeDiagnosticPrompt({
+      modelRouteId: executionIdentity.modelRouteId,
+      engineId: runtimeEngine,
+      model: runtimeModel,
       agent: 'model-probe-monitor',
       step: 'availability-check',
       prompt: 'Reply with exactly OK.',
       systemPrompt: 'You are a health probe. Reply with exactly OK.',
-      model: probe.model,
-      workingDirectory: process.cwd(),
       timeoutMs: probe.timeoutMs,
+      category: 'probe',
     });
     const responseLatencyMs = Date.now() - responseStartedAt;
     const preview = previewText(result.output);
@@ -465,12 +522,6 @@ async function executeProbeRun(probe: ModelProbeRecord): Promise<ModelProbeRunRe
       message: error instanceof Error ? error.message : String(error),
       engineAvailable: true,
     });
-  } finally {
-    try {
-      (engine as any).cleanup?.();
-    } catch {
-      // ignore cleanup failures
-    }
   }
 }
 
@@ -497,9 +548,18 @@ async function appendProbeRun(id: string, run: ModelProbeRunRecord): Promise<Mod
 }
 
 export async function recordModelProbeObservation(input: RecordModelProbeObservationInput): Promise<number> {
-  const engine = String(input.engine || '').trim();
-  const model = String(input.resolvedModel || input.model || '').trim();
-  if (!engine || !model) return 0;
+  const inputRouteId = optionalTrimmedString(input.modelRouteId);
+  const route = inputRouteId
+    ? resolveStoredModelRoute({ modelRouteId: inputRouteId })
+    : null;
+  const display = routeDisplayFields(route, {
+    modelRouteId: inputRouteId,
+    engine: input.engine,
+    model: input.resolvedModel || input.model,
+  });
+  const engine = display.engine;
+  const model = String(input.resolvedModel || display.model || '').trim();
+  if ((!inputRouteId && !engine) || !model) return 0;
 
   const finishedAt = normalizeObservationTimestamp(input.occurredAt);
   const responseLatencyMs = clampPositiveInt(input.responseLatencyMs, 0, 0, 3600_000);
@@ -524,7 +584,9 @@ export async function recordModelProbeObservation(input: RecordModelProbeObserva
 
     for (let index = 0; index < probes.length; index += 1) {
       const previous = probes[index];
-      if (previous.engine !== engine || previous.model !== model || !previous.enabled) continue;
+      const routeMatches = Boolean(inputRouteId && previous.modelRouteId === inputRouteId);
+      const preRuntimeMatches = !inputRouteId && previous.engine === engine && previous.model === model;
+      if ((!routeMatches && !preRuntimeMatches) || !previous.enabled) continue;
 
       const run: ModelProbeRunRecord = {
         id: randomUUID(),
@@ -583,8 +645,19 @@ export async function getModelProbe(id: string, historyLimit = DEFAULT_HISTORY_L
 
 export async function createModelProbe(input: CreateModelProbeInput): Promise<ModelProbeSummary> {
   const now = new Date().toISOString();
-  const engine = String(input.engine || '').trim();
-  const model = String(input.model || '').trim();
+  const route = resolveStoredModelRoute({
+    modelRouteId: input.modelRouteId,
+    engine: input.engine,
+    model: input.model,
+  });
+  const display = routeDisplayFields(route, {
+    modelRouteId: input.modelRouteId,
+    engine: input.engine,
+    model: input.model,
+    endpoints: input.endpoints,
+  });
+  const engine = display.engine;
+  const model = display.model;
   if (!engine) throw new Error('engine is required');
   if (!model) throw new Error('model is required');
 
@@ -593,10 +666,16 @@ export async function createModelProbe(input: CreateModelProbeInput): Promise<Mo
     groupId: String(input.groupId || '').trim() || randomUUID(),
     groupName: String(input.groupName || input.name || `${getEngineDisplayName(engine)} Group`).trim(),
     name: String(input.name || `${getEngineDisplayName(engine)} / ${model}`).trim(),
+    modelRouteId: display.modelRouteId,
     engine,
     driver: normalizeStoredDriver(input.driver, engine),
     model,
-    endpoints: await resolveProbeEndpoints({ endpoints: input.endpoints, engine, model }),
+    endpoints: await resolveProbeEndpoints({
+      endpoints: input.endpoints || display.endpoints,
+      modelRouteId: display.modelRouteId,
+      engine,
+      model,
+    }),
     intervalMinutes: clampPositiveInt(input.intervalMinutes, DEFAULT_INTERVAL_MINUTES, 1, 24 * 60),
     timeoutMs: clampPositiveInt(input.timeoutMs, DEFAULT_TIMEOUT_MS, 5_000, 300_000),
     enabled: input.enabled !== false,
@@ -622,8 +701,22 @@ export async function updateModelProbe(id: string, patch: UpdateModelProbeInput)
     if (index < 0) throw new Error('探针不存在');
 
     const previous = probes[index];
-    const nextEngine = typeof patch.engine === 'string' && patch.engine.trim() ? patch.engine.trim() : previous.engine;
-    const nextModel = typeof patch.model === 'string' && patch.model.trim() ? patch.model.trim() : previous.model;
+    const requestedRouteId = optionalTrimmedString(patch.modelRouteId) || previous.modelRouteId;
+    const route = patch.modelRouteId || patch.engine || patch.model
+      ? resolveStoredModelRoute({
+        modelRouteId: requestedRouteId,
+        engine: patch.engine || previous.engine,
+        model: patch.model || previous.model,
+      })
+      : null;
+    const display = routeDisplayFields(route, {
+      modelRouteId: requestedRouteId,
+      engine: patch.engine || previous.engine,
+      model: patch.model || previous.model,
+      endpoints: patch.endpoints || previous.endpoints,
+    });
+    const nextEngine = display.engine || previous.engine;
+    const nextModel = display.model || previous.model;
     const nextDriver = patch.driver === 'auto'
       ? 'auto'
       : normalizeStoredDriver(patch.driver, nextEngine) ?? previous.driver;
@@ -636,11 +729,13 @@ export async function updateModelProbe(id: string, patch: UpdateModelProbeInput)
       name: typeof patch.name === 'string' && patch.name.trim()
         ? patch.name.trim()
         : previous.name,
+      modelRouteId: display.modelRouteId,
       engine: nextEngine,
       driver: nextDriver,
       model: nextModel,
       endpoints: await resolveProbeEndpoints({
-        endpoints: patch.endpoints,
+        endpoints: patch.endpoints || display.endpoints,
+        modelRouteId: display.modelRouteId,
         engine: nextEngine,
         model: nextModel,
         currentProbe: { ...previous, engine: nextEngine },

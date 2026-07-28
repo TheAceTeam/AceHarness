@@ -9,13 +9,13 @@ describe('channel setup route', () => {
 
   beforeEach(() => {
     aceHome = mkdtempSync(join(tmpdir(), 'aceharness-channel-setup-'));
-    process.env.CSIHARNESS_HOME = aceHome;
+    process.env.ACE_HOME = aceHome;
   });
 
   it('creates a one-click integration with webhook secret and default binding', async () => {
     vi.resetModules();
     const userStore = await import('@/lib/core/user-store');
-    const route = await import('../src/app/api/channels/setup/route');
+    const route = await import('../src/server/api-routes/channels/setup/route');
 
     await userStore.createUser({
       username: 'tester',
@@ -56,6 +56,6 @@ describe('channel setup route', () => {
 
   afterEach(() => {
     rmSync(aceHome, { recursive: true, force: true });
-    delete process.env.CSIHARNESS_HOME;
+    delete process.env.ACE_HOME;
   });
 });

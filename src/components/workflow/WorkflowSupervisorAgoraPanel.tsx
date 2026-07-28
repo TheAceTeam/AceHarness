@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ClipboardCheck, UsersRound, Vote } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
 import { AgoraShell } from '@/components/collaboration/AgoraShell';
@@ -116,19 +116,23 @@ export default function WorkflowSupervisorAgoraPanel({
   const {
     activeSessionId,
     activeSession,
+    createSession,
     setActiveSessionId,
     setSessionWorkbenchState,
     appendSessionMessage,
   } = useChat();
+  const [fallbackSessionId, setFallbackSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
+    if (fallbackSessionId) return;
     if (activeSessionId !== sessionId) {
       setActiveSessionId(sessionId);
     }
-  }, [activeSessionId, sessionId, setActiveSessionId]);
+  }, [activeSessionId, fallbackSessionId, sessionId, setActiveSessionId]);
 
-  const loaded = Boolean(sessionId && activeSession?.id === sessionId);
+  const targetSessionId = fallbackSessionId || sessionId || null;
+  const loaded = Boolean(targetSessionId && activeSession?.id === targetSessionId);
   const roster = useMemo(() => buildWorkflowRoster(initialGuests), [initialGuests]);
   const sessionMap = useMemo(() => normalizeSessionMap({
     ...agentSessionIds,
@@ -137,6 +141,18 @@ export default function WorkflowSupervisorAgoraPanel({
   const rosterKey = useMemo(() => roster.map(getRosterRuntimeKey).join('|'), [roster]);
   const sessionMapKey = useMemo(() => JSON.stringify(sessionMap), [sessionMap]);
   const topic = title?.trim() || '工作流协作议题';
+
+  useEffect(() => {
+    if (!sessionId || loaded || fallbackSessionId) return;
+    const timer = window.setTimeout(() => {
+      const nextSessionId = createSession({
+        title: topic,
+        sessionWorkbenchState: {},
+      });
+      setFallbackSessionId(nextSessionId);
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [createSession, fallbackSessionId, loaded, sessionId, topic]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -326,6 +342,7 @@ export default function WorkflowSupervisorAgoraPanel({
         allowTopicControls={false}
         showComposerControls={false}
         lockWorkspace
+        fixedGuestPanel
         inlineContentSpeakerName={supervisorAgent || 'Supervisor'}
       />
     </div>

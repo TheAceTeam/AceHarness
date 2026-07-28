@@ -1,12 +1,15 @@
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { resolve } from 'path';
 import { loadChatSettings, type ChatSettings } from '@/lib/chat/settings';
-import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
-import { getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/core/app-paths';
+import {
+  buildDashboardConversationSystemPrompt,
+  buildDashboardSystemPrompt,
+} from '@/lib/chat/system-prompt';
+import { getWorkspaceAgentConfigDir, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { loadChatSession } from '@/lib/chat/persistence';
+import { resolveCreationAssistantEnabled } from '@/lib/core/home-sidebar-state';
 import { loadCreationSession } from '@/lib/spec/coding-store';
 import { workflowRegistry } from '@/lib/workflow/registry';
-import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { resolveMcpServersByNames, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
@@ -216,6 +219,7 @@ export async function buildChatRequestContext(options: {
   extraSystemPrompt?: string;
   requestedSkills?: RequestedSkillsInput;
   requestedMcpServers?: RequestedMcpServersInput;
+  creationAssistantEnabled?: boolean;
   personalDir?: string;
 }): Promise<{
   systemPrompt: string;
@@ -225,6 +229,7 @@ export async function buildChatRequestContext(options: {
   runtimeSkillNames: string[];
   enabledMcpServers: ManagedMcpServer[];
   runtimeDatabaseEnv: Record<string, string>;
+  creationAssistantEnabled: boolean;
 }> {
   const {
     mode,
@@ -234,14 +239,24 @@ export async function buildChatRequestContext(options: {
     extraSystemPrompt,
     requestedSkills,
     requestedMcpServers,
+    creationAssistantEnabled: requestedCreationAssistantEnabled,
     personalDir,
   } = options;
 
   const isResume = Boolean(sessionId);
   const chatSettings = mode === 'dashboard' ? await loadChatSettings() : null;
-  const enabledSkills = chatSettings
+  const persistedSession = mode === 'dashboard' && frontendSessionId && requestedCreationAssistantEnabled === undefined
+    ? await loadChatSession(frontendSessionId).catch(() => null)
+    : null;
+  const creationAssistantEnabled = mode === 'dashboard'
+    ? requestedCreationAssistantEnabled ?? resolveCreationAssistantEnabled(persistedSession)
+    : false;
+  const configuredSkills = chatSettings
     ? expandCapabilitySkillNames(resolveEnabledSkills(chatSettings, requestedSkills), chatSettings.capabilitySkills)
     : [];
+  const enabledSkills = creationAssistantEnabled
+    ? configuredSkills
+    : configuredSkills.filter((skillName) => !REQUIRED_DASHBOARD_SKILLS.includes(skillName));
   const requestedWorkingDirectory = typeof workingDirectory === 'string' ? workingDirectory.trim() : '';
   const engineRuntimeDirectory = getWorkspaceRoot();
   const resolvedWorkingDirectory = requestedWorkingDirectory || chatSettings?.workingDirectory || engineRuntimeDirectory;
@@ -262,31 +277,37 @@ export async function buildChatRequestContext(options: {
   let systemPrompt = '';
   let runtimeSkillNames: string[] = [];
   if (mode === 'dashboard') {
+    const dashboardSkills = [...enabledSkills];
+    if (creationAssistantEnabled) {
+      for (const skillName of REQUIRED_DASHBOARD_SKILLS) {
+        if (!dashboardSkills.includes(skillName)) dashboardSkills.push(skillName);
+      }
+    }
     if (isResume) {
-      systemPrompt = enabledSkills.length > 0
+      const modeReminder = creationAssistantEnabled
+        ? '当前会话已启用创建助手模式。创建 workflow 或 Agent 时，必须使用 aceharness-workflow-creator，并在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON；需要打开创建弹窗时设置 `shouldOpenModal:true`。'
+        : '当前会话是普通工程对话模式。不要使用 aceharness-workflow-creator，不要输出 `intent=create-workflow` 或 `intent=create-agent` 的 `home_sidebar`，也不要触发 workflow / Agent 创建弹窗。';
+      systemPrompt = dashboardSkills.length > 0
         ? [
-          `当前启用的 Skills: ${enabledSkills.join(', ')}。需要时查阅 skills/{skill-name}/SKILL.md。`,
-          enabledSkills.includes('aceharness-chat-card')
+          modeReminder,
+          `当前启用的 Skills: ${dashboardSkills.join(', ')}。需要时查阅 skills/{skill-name}/SKILL.md。`,
+          dashboardSkills.includes('aceharness-chat-card')
             ? '当用户查看/列出/统计 workflow、Agent、模型、运行记录、状态或其他 API 查询结果时，优先在回复末尾输出 `<result>{"kind":"card","payload":{...}}</result>`；列表优先用 table，不要只用纯文本复述长列表。'
             : '',
         ].filter(Boolean).join('\n')
-        : '';
-      runtimeSkillNames = [...enabledSkills];
+        : modeReminder;
+      runtimeSkillNames = [...dashboardSkills];
       const skillsDir = await getRuntimeSkillsDirPath();
       const dbPrompt = buildDatabaseCapabilityPrompt(runtimeDatabaseGrant, skillsDir);
       if (dbPrompt) {
         systemPrompt = `${systemPrompt}${systemPrompt ? '\n\n' : ''}${dbPrompt}`.trim();
       }
     } else {
-      const mergedSkills = [...enabledSkills];
-      for (const skillName of REQUIRED_DASHBOARD_SKILLS) {
-        if (!mergedSkills.includes(skillName)) mergedSkills.push(skillName);
-      }
-      runtimeSkillNames = [...mergedSkills];
-      systemPrompt = await buildDashboardSystemPrompt(mergedSkills, {
-        personalDir,
-        workingDirectory: resolvedWorkingDirectory,
-      });
+      runtimeSkillNames = [...dashboardSkills];
+      const promptOptions = { personalDir, workingDirectory: resolvedWorkingDirectory };
+      systemPrompt = creationAssistantEnabled
+        ? await buildDashboardSystemPrompt(dashboardSkills, promptOptions)
+        : await buildDashboardConversationSystemPrompt(dashboardSkills, promptOptions);
       const skillsDir = await getRuntimeSkillsDirPath();
       const dbPrompt = buildDatabaseCapabilityPrompt(runtimeDatabaseGrant, skillsDir);
       if (dbPrompt) {
@@ -310,12 +331,13 @@ export async function buildChatRequestContext(options: {
     runtimeSkillNames,
     enabledMcpServers,
     runtimeDatabaseEnv,
+    creationAssistantEnabled,
   };
 }
 
 export async function ensureEngineRuntimeSkillsAvailable(engineType: string, workDir: string, skillNames?: string[]): Promise<void> {
   try {
-    const engineConfigDir = getEngineConfigDir(engineType);
+    const engineConfigDir = getWorkspaceAgentConfigDir(engineType);
     const configDir = resolve(workDir, engineConfigDir);
     const skillsDir = await getRuntimeSkillsDirPath();
     if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });

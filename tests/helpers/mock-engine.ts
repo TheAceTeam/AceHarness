@@ -1,13 +1,43 @@
 import { EventEmitter } from 'node:events';
-import type {
-  Engine,
-  EngineOptions,
-  EngineResult,
-  EngineStreamEvent,
-} from '@/lib/engines/engine-interface';
+
+export interface MockEngineOptions {
+  agent?: string;
+  step?: string;
+  prompt: string;
+  systemPrompt?: string;
+  model?: string;
+  workingDirectory?: string;
+  allowedTools?: string[];
+  timeoutMs?: number;
+  sessionId?: string;
+  appendSystemPrompt?: boolean;
+}
+
+export interface MockEngineResult {
+  success: boolean;
+  output: string;
+  error?: string;
+  sessionId?: string;
+  stopReason?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MockEngineStreamEvent {
+  type: 'text' | 'thought' | 'error' | 'tool';
+  content: string;
+}
+
+export interface MockEngineLike {
+  execute(options: MockEngineOptions): Promise<MockEngineResult>;
+  cancel(): void;
+  isAvailable(): Promise<boolean>;
+  getName(): string;
+  on(event: 'stream', listener: (event: MockEngineStreamEvent) => void): this;
+  off(event: 'stream', listener: (event: MockEngineStreamEvent) => void): this;
+}
 
 export interface MockEngineCall {
-  options: EngineOptions;
+  options: MockEngineOptions;
   timestamp: number;
 }
 
@@ -20,18 +50,18 @@ export interface MockEngineCall {
  *   const engine = new MockEngine();
  *   engine.executeImpl = async (opts) => ({ success: true, output: `echo: ${opts.prompt}` });
  */
-export class MockEngine extends EventEmitter implements Engine {
+export class MockEngine extends EventEmitter implements MockEngineLike {
   private available = true;
   private name = 'mock-engine';
 
   /** Configurable return value for execute() */
-  executeResult: EngineResult = {
+  executeResult: MockEngineResult = {
     success: true,
     output: 'mock output',
   };
 
   /** Optional callback for custom execute logic (overrides executeResult) */
-  executeImpl?: (options: EngineOptions) => Promise<EngineResult>;
+  executeImpl?: (options: MockEngineOptions) => Promise<MockEngineResult>;
 
   /** History of all execute() calls */
   calls: MockEngineCall[] = [];
@@ -39,14 +69,14 @@ export class MockEngine extends EventEmitter implements Engine {
   /** Number of cancel() calls */
   cancelCalls = 0;
 
-  constructor(result?: Partial<EngineResult>) {
+  constructor(result?: Partial<MockEngineResult>) {
     super();
     if (result) {
       this.executeResult = { ...this.executeResult, ...result };
     }
   }
 
-  async execute(options: EngineOptions): Promise<EngineResult> {
+  async execute(options: MockEngineOptions): Promise<MockEngineResult> {
     this.calls.push({ options, timestamp: Date.now() });
     if (this.executeImpl) {
       return this.executeImpl(options);
@@ -78,21 +108,21 @@ export class MockEngine extends EventEmitter implements Engine {
 
   /** Emit a stream text event */
   emitStream(content: string): void {
-    this.emit('stream', { type: 'text', content } satisfies EngineStreamEvent);
+    this.emit('stream', { type: 'text', content } satisfies MockEngineStreamEvent);
   }
 
   /** Emit a thought event */
   emitThought(content: string): void {
-    this.emit('stream', { type: 'thought', content } satisfies EngineStreamEvent);
+    this.emit('stream', { type: 'thought', content } satisfies MockEngineStreamEvent);
   }
 
   /** Emit an error event */
   emitError(content: string): void {
-    this.emit('stream', { type: 'error', content } satisfies EngineStreamEvent);
+    this.emit('stream', { type: 'error', content } satisfies MockEngineStreamEvent);
   }
 
   /** Emit a tool-use event */
   emitTool(content: string): void {
-    this.emit('stream', { type: 'tool', content } satisfies EngineStreamEvent);
+    this.emit('stream', { type: 'tool', content } satisfies MockEngineStreamEvent);
   }
 }

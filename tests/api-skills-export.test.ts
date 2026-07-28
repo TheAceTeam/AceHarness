@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { describe, expect, test, vi, beforeEach } from 'vitest';
 import unzipper from 'unzipper';
-import { PUT } from '@/app/api/skills/route';
+import { PUT } from '@/server/api-routes/skills/route';
 import {
   getRuntimeSkillsDirPath,
   getSkillsTempPath,

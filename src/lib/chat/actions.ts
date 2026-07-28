@@ -3,7 +3,6 @@
  */
 
 import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from '@/lib/core/api';
-import { getWorkspaceSkillPath } from '@/lib/core/app-paths';
 import { extractJsonObject as extractResultJsonObject } from '@/lib/ai/result-channel';
 import { type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { extractAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
@@ -153,7 +152,7 @@ function isActionLike(obj: any): obj is Pick<ActionBlock, 'type' | 'params' | 'd
   return true;
 }
 
-function isLegacyActionFencePayload(obj: any): obj is Pick<ActionBlock, 'type' | 'params' | 'description'> {
+function isPreRuntimeActionFencePayload(obj: any): obj is Pick<ActionBlock, 'type' | 'params' | 'description'> {
   if (!obj || typeof obj !== 'object') return false;
   if (typeof obj.type !== 'string' || !obj.type.trim()) return false;
   if (typeof obj.description !== 'string' || !obj.description.trim()) return false;
@@ -177,7 +176,8 @@ const VALID_ICONS: Set<string> = (() => {
   }
   try {
     const fs = require('fs');
-    const jsonPath = getWorkspaceSkillPath('aceharness-chat-card', 'scripts', 'material-icons.json');
+    const path = require('path');
+    const jsonPath = path.resolve(process.cwd(), 'skills', 'aceharness-chat-card', 'scripts', 'material-icons.json');
     const icons: string[] = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
     return new Set(icons);
   } catch {
@@ -558,7 +558,7 @@ function collectMachinePayload(
   lang: string,
   cards: any[],
   sidebarHints: HomeSidebarHint[],
-  options: { allowLegacyShape?: boolean } = {},
+  options: { allowPreRuntimeShape?: boolean } = {},
 ): boolean {
   if (!parsed || typeof parsed !== 'object') return false;
 
@@ -590,7 +590,7 @@ function collectMachinePayload(
     return true;
   }
 
-  if (options.allowLegacyShape) {
+  if (options.allowPreRuntimeShape) {
     if (isCardLike(parsed)) {
       cards.push(validateCard(parsed));
       return true;
@@ -716,7 +716,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     if (block.lang !== 'action' && block.lang !== 'json') continue;
     try {
       const parsed = JSON.parse(block.content);
-      if (block.lang === 'action' && isLegacyActionFencePayload(parsed)) {
+      if (block.lang === 'action' && isPreRuntimeActionFencePayload(parsed)) {
         actions.push({ type: parsed.type as ActionType, params: parsed.params || {}, description: parsed.description });
         removals.push([block.start, block.end]);
         continue;
@@ -742,7 +742,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     let sectionHasStructured = false;
     const trimmedContent = section.content.trim();
     const rootParsed = trimmedContent.startsWith('```') ? null : extractResultJsonObject(section.content);
-    sectionHasStructured = collectMachinePayload(rootParsed, 'json', cards, sidebarHints, { allowLegacyShape: true });
+    sectionHasStructured = collectMachinePayload(rootParsed, 'json', cards, sidebarHints, { allowPreRuntimeShape: true });
 
     const codeBlockRegex = /```(card|json)\s*/g;
     let match: RegExpExecArray | null;
@@ -775,7 +775,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
 
       try {
         const parsed = JSON.parse(jsonStr);
-        sectionHasStructured = collectMachinePayload(parsed, match[1], cards, sidebarHints, { allowLegacyShape: true }) || sectionHasStructured;
+        sectionHasStructured = collectMachinePayload(parsed, match[1], cards, sidebarHints, { allowPreRuntimeShape: true }) || sectionHasStructured;
 
         // Any card/json code block inside <result> is machine-readable output.
         // Non-visual JSON (for example workflow item or plan item results) is
@@ -796,7 +796,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
       }
     }
 
-    // Keep legacy shape for callers during migration, but do not surface
+    // Keep preRuntime shape for callers during migration, but do not surface
     // machine-channel plain text back into visible chat.
     if (!sectionHasStructured && section.content.trim()) {
       resultPlainTexts.push('');

@@ -4,7 +4,6 @@ import path from 'path';
 import { parse, stringify } from 'yaml';
 import { resolveAgentSelection } from '@/lib/agent/engine-selection';
 import { getEngineConfigPath, getWorkspaceDataFile } from '@/lib/core/app-paths';
-import { getConfiguredEngine } from '@/lib/engines/engine-factory';
 import { getRuntimeAgentConfigPath } from '@/lib/run/runtime-configs';
 import type { RoleConfig } from '@/lib/core/schemas';
 
@@ -165,12 +164,11 @@ async function resolveGuestRuntime(input: {
     ? 'explicit'
     : 'system';
   const globalSelection = readGlobalEngineSelection();
-  const configuredEngine = await getConfiguredEngine().catch(() => globalSelection.engine || '');
   const templateSelection = resolveAgentSelection(input.template, globalSelection, undefined);
   const templateModels = input.template?.engineModels || {};
   const engine = runtimeStrategy === 'system'
-    ? (explicitEngine || configuredEngine || globalSelection.engine || templateSelection.effectiveEngine || '')
-    : (explicitEngine || templateSelection.effectiveEngine || configuredEngine || globalSelection.engine || '');
+    ? (explicitEngine || globalSelection.engine || templateSelection.effectiveEngine || '')
+    : (explicitEngine || templateSelection.effectiveEngine || globalSelection.engine || '');
   const model = runtimeStrategy === 'system'
     ? (
       explicitModel

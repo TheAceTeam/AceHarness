@@ -9,13 +9,15 @@ const engineState = vi.hoisted(() => ({
   engine: null as MockEngine | null,
 }));
 
-vi.mock('@/lib/engines', () => ({
-  createEngine: vi.fn().mockImplementation(async () => engineState.engine),
-  getConfiguredEngine: vi.fn().mockResolvedValue('mock-engine'),
-}));
-
-vi.mock('@/lib/engines/engine-config', () => ({
-  getEngineSkillsSubdir: vi.fn().mockReturnValue('.agent/skills'),
+vi.mock('@/lib/workflow/runtime-facade', () => ({
+  createWorkflowRuntime: vi.fn().mockImplementation(async () => engineState.engine),
+  getConfiguredWorkflowRuntime: vi.fn().mockResolvedValue('mock-engine'),
+  getWorkflowRuntimeSkillsSubdir: vi.fn().mockReturnValue('.agent/skills'),
+  getLogicalEngineId: vi.fn((engine) => engine),
+  resolveRequestedWorkflowRuntimeType: vi.fn((engine) => engine || 'mock-engine'),
+  compactWorkflowRuntimeContextManually: vi.fn().mockResolvedValue(null),
+  executeWorkflowRuntimeWithContextRecovery: vi.fn((engine, options) => engine.execute(options)),
+  resolveRecoveredWorkflowRuntimeSessionId: vi.fn((result, fallback) => result.sessionId || fallback || null),
 }));
 
 async function createAuthToken(): Promise<{ token: string; userId: string }> {
@@ -105,7 +107,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         const configDraft = oneStepStateMachineConfig(workspace);
         const filename = `mock-spec-run-${Date.now()}.yaml`;
 
-        const sessionsRoute = await import('@/app/api/spec-coding/sessions/route');
+        const sessionsRoute = await import('@/server/api-routes/spec-coding/sessions/route');
         const sessionResponse = await sessionsRoute.POST(makeRequest('/api/spec-coding/sessions', {
           token,
           json: {
@@ -127,7 +129,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(boundTaskId).toBeTruthy();
         const boundConfigDraft = oneStepStateMachineConfig(workspace, boundTaskId);
 
-        const createConfigRoute = await import('@/app/api/configs/create/route');
+        const createConfigRoute = await import('@/server/api-routes/configs/create/route');
         const createResponse = await createConfigRoute.POST(makeRequest('/api/configs/create', {
           token,
           json: {
@@ -206,7 +208,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         const configDraft = oneStepStateMachineConfig(workspace);
         const filename = `mock-persisted-spec-run-${Date.now()}.yaml`;
 
-        const sessionsRoute = await import('@/app/api/spec-coding/sessions/route');
+        const sessionsRoute = await import('@/server/api-routes/spec-coding/sessions/route');
         const sessionResponse = await sessionsRoute.POST(makeRequest('/api/spec-coding/sessions', {
           token,
           json: {
@@ -231,7 +233,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(boundTaskId).toBeTruthy();
         const boundConfigDraft = oneStepStateMachineConfig(workspace, boundTaskId);
 
-        const createConfigRoute = await import('@/app/api/configs/create/route');
+        const createConfigRoute = await import('@/server/api-routes/configs/create/route');
         const createResponse = await createConfigRoute.POST(makeRequest('/api/configs/create', {
           token,
           json: {

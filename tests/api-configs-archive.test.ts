@@ -144,7 +144,7 @@ describe('/api/configs/archive', () => {
         await writeFile(path.join(configsDir, 'alpha.yaml'), stringify(workflowConfig(workspace, 'Alpha')), 'utf8');
         await writeFile(path.join(configsDir, 'nested', 'beta.yaml'), stringify(workflowConfig(workspace, 'Beta')), 'utf8');
 
-        const { PUT } = await import('@/app/api/configs/archive/route');
+        const { PUT } = await import('@/server/api-routes/configs/archive/route');
         const response = await PUT(makeRequest('/api/configs/archive', {
           method: 'PUT',
           token,
@@ -167,7 +167,7 @@ describe('/api/configs/archive', () => {
   test('returns 404 when exporting a missing workflow', async () => {
     await withIsolatedAceHome(async () => {
       const { token } = await createAuthToken();
-      const { PUT } = await import('@/app/api/configs/archive/route');
+      const { PUT } = await import('@/server/api-routes/configs/archive/route');
       const response = await PUT(makeRequest('/api/configs/archive', {
         method: 'PUT',
         token,
@@ -191,7 +191,7 @@ describe('/api/configs/archive', () => {
         'utf8',
       );
 
-      const { PUT } = await import('@/app/api/configs/archive/route');
+      const { PUT } = await import('@/server/api-routes/configs/archive/route');
       const response = await PUT(makeRequest('/api/configs/archive', {
         method: 'PUT',
         token,
@@ -228,7 +228,7 @@ describe('/api/configs/archive', () => {
         session.specCoding.artifacts.requirements = '# Requirements\n\nPreserve this exported spec.';
         await saveCreationSession(session);
 
-        const { PUT } = await import('@/app/api/configs/archive/route');
+        const { PUT } = await import('@/server/api-routes/configs/archive/route');
         const response = await PUT(makeRequest('/api/configs/archive', {
           method: 'PUT',
           token,
@@ -258,7 +258,7 @@ describe('/api/configs/archive', () => {
       await writeFile(path.join(configsDir, 'parent.yaml'), stringify(stateMachineSubworkflowConfig('Parent', 'child.yaml')), 'utf8');
       await writeFile(path.join(configsDir, 'child.yaml'), stringify(stateMachineSubworkflowConfig('Child')), 'utf8');
 
-      const { PUT } = await import('@/app/api/configs/archive/route');
+      const { PUT } = await import('@/server/api-routes/configs/archive/route');
       const response = await PUT(makeRequest('/api/configs/archive', {
         method: 'PUT',
         token,
@@ -289,7 +289,7 @@ describe('/api/configs/archive', () => {
         const formData = new FormData();
         formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-        const { POST } = await import('@/app/api/configs/archive/route');
+        const { POST } = await import('@/server/api-routes/configs/archive/route');
         const response = await POST(makeRequest('/api/configs/archive', {
           method: 'POST',
           token,
@@ -312,6 +312,103 @@ describe('/api/configs/archive', () => {
     });
   });
 
+  test('imports a standalone workflow YAML file and records private metadata', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token, user } = await createAuthToken();
+        const formData = new FormData();
+        formData.append('file', new File(
+          [stringify(workflowConfig(workspace, 'Direct YAML Import'))],
+          'direct-import.yaml',
+          { type: 'text/yaml' },
+        ));
+
+        const { POST } = await import('@/server/api-routes/configs/archive/route');
+        const response = await POST(makeRequest('/api/configs/archive', {
+          method: 'POST',
+          token,
+          body: formData,
+        }));
+
+        expect(response.status).toBe(200);
+        const body = await responseJson<any>(response);
+        expect(body.imported).toEqual(['direct-import.yaml']);
+
+        const imported = parse(await readFile(path.join(aceHome, 'configs', 'direct-import.yaml'), 'utf8'));
+        expect(imported.workflow.name).toBe('Direct YAML Import');
+        const meta = JSON.parse(await readFile(path.join(aceHome, 'configs', '.metadata.json'), 'utf8'));
+        expect(meta['direct-import.yaml'].createdBy).toBe(user.id);
+        expect(meta['direct-import.yaml'].visibility).toBe('private');
+      });
+    });
+  });
+
+  test('accepts the .yml extension for standalone workflow imports', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const formData = new FormData();
+      formData.append('file', new File(
+        [stringify(portableWorkflowConfig('Direct YML Import'))],
+        'direct-import.yml',
+        { type: 'application/x-yaml' },
+      ));
+
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
+      const response = await POST(makeRequest('/api/configs/archive', {
+        method: 'POST',
+        token,
+        body: formData,
+      }));
+
+      expect(response.status).toBe(200);
+      const body = await responseJson<any>(response);
+      expect(body.imported).toEqual(['direct-import.yml']);
+    });
+  });
+
+  test('ignores macOS metadata entries when importing a workflow zip', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const archive = await createZip({
+        'clean.yaml': stringify(portableWorkflowConfig('Clean ZIP Import')),
+        '__MACOSX/._clean.yaml': '\u0000\u0005\u0016\u0007Mac OS X metadata',
+        '.DS_Store': 'metadata',
+      });
+      const formData = new FormData();
+      formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
+
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
+      const response = await POST(makeRequest('/api/configs/archive', {
+        method: 'POST',
+        token,
+        body: formData,
+      }));
+
+      expect(response.status).toBe(200);
+      const body = await responseJson<any>(response);
+      expect(body.imported).toEqual(['clean.yaml']);
+    });
+  });
+
+  test('rejects unsupported workflow import file extensions', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      const formData = new FormData();
+      formData.append('file', new File(['not a workflow'], 'workflow.txt', { type: 'text/plain' }));
+
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
+      const response = await POST(makeRequest('/api/configs/archive', {
+        method: 'POST',
+        token,
+        body: formData,
+      }));
+
+      expect(response.status).toBe(400);
+      const body = await responseJson<any>(response);
+      expect(body.error).toContain('.yaml');
+    });
+  });
+
   test('rejects zip files without valid workflow YAML', async () => {
     await withIsolatedAceHome(async () => {
       const { token } = await createAuthToken();
@@ -319,7 +416,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,
@@ -341,7 +438,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,
@@ -394,7 +491,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,
@@ -448,7 +545,7 @@ describe('/api/configs/archive', () => {
         const formData = new FormData();
         formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-        const { POST } = await import('@/app/api/configs/archive/route');
+        const { POST } = await import('@/server/api-routes/configs/archive/route');
         const response = await POST(makeRequest('/api/configs/archive', {
           method: 'POST',
           token,
@@ -482,7 +579,7 @@ describe('/api/configs/archive', () => {
       const formData = new FormData();
       formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
 
-      const { POST } = await import('@/app/api/configs/archive/route');
+      const { POST } = await import('@/server/api-routes/configs/archive/route');
       const response = await POST(makeRequest('/api/configs/archive', {
         method: 'POST',
         token,

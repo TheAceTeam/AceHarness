@@ -14,7 +14,6 @@ import { parse } from 'yaml';
 import { resolveAgentEngineSelection, resolveAgentModel } from '@/lib/workflow/manager';
 import { resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { processManager } from '@/lib/core/process-manager';
-import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from '@/lib/engines/engine-interface';
 import { createRun, updateRun } from '@/lib/run/store';
 import {
   saveRunState, saveProcessOutput, appendStreamContent, appendFeedbackToStream,
@@ -49,10 +48,23 @@ import type {
   Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
 } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
-import { createEngine, getConfiguredEngine, getLogicalEngineId, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
-import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
-import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
-import { compactEngineContextManually, executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import {
+  compactWorkflowRuntimeContextManually,
+  createWorkflowRuntime,
+  executeWorkflowRuntimeWithContextRecovery,
+  getConfiguredWorkflowRuntime,
+  getWorkflowRuntimeSkillsSubdir,
+  getLogicalEngineId,
+  prewarmWorkflowRuntimeSession,
+  resolveRecoveredWorkflowRuntimeSessionId,
+  resolveRequestedWorkflowRuntimeType,
+  type WorkflowRuntime,
+  type WorkflowRuntimeJsonResult,
+  type WorkflowRuntimeResultMetadata,
+  type WorkflowRuntimeStreamEvent,
+  type WorkflowRuntimeTokenUsage,
+  type WorkflowRuntimeType,
+} from '@/lib/workflow/runtime-facade';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
@@ -129,7 +141,7 @@ export interface TokenUsage {
   cacheReadInputTokens?: number;
 }
 
-const ZERO_ENGINE_USAGE: EngineTokenUsage = {
+const ZERO_ENGINE_USAGE: WorkflowRuntimeTokenUsage = {
   input_tokens: 0,
   output_tokens: 0,
   cache_creation_input_tokens: 0,
@@ -138,6 +150,10 @@ const ZERO_ENGINE_USAGE: EngineTokenUsage = {
 
 const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
+const DEFAULT_AGENT_PREWARM_CONCURRENCY = Math.max(
+  1,
+  Math.min(4, Number.parseInt(process.env.ACE_WORKFLOW_AGENT_PREWARM_CONCURRENCY || '2', 10) || 2)
+);
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
 const TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS = 2;
@@ -174,7 +190,7 @@ function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage {
+function normalizeEngineUsage(metadata?: WorkflowRuntimeResultMetadata): WorkflowRuntimeTokenUsage {
   const usage = metadata?.usage;
   return {
     input_tokens: numberOrZero(usage?.input_tokens),
@@ -184,11 +200,11 @@ function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage
   };
 }
 
-function metadataNumber(metadata: EngineResultMetadata | undefined, snakeKey: string, camelKey: string): number {
+function metadataNumber(metadata: WorkflowRuntimeResultMetadata | undefined, snakeKey: string, camelKey: string): number {
   return numberOrZero(metadata?.[snakeKey] ?? metadata?.[camelKey]);
 }
 
-function toPersistedTokenUsage(usage: EngineTokenUsage): TokenUsage {
+function toPersistedTokenUsage(usage: WorkflowRuntimeTokenUsage): TokenUsage {
   return {
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
@@ -258,6 +274,16 @@ export function stripNonAiStreamArtifacts(text: string): string {
     .trim();
 }
 
+function stripAceProcessBlocks(text: string): string {
+  let output = String(text || '').replace(/<ace-process>[\s\S]*?<\/ace-process>/gi, '\n');
+  const lastOpen = output.toLowerCase().lastIndexOf('<ace-process>');
+  const lastClose = output.toLowerCase().lastIndexOf('</ace-process>');
+  if (lastOpen !== -1 && lastOpen > lastClose) {
+    output = output.slice(0, lastOpen);
+  }
+  return output;
+}
+
 function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): boolean {
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
 }
@@ -322,14 +348,29 @@ function extractTaggedBlocks(text: string, tag: string): string[] {
   return blocks;
 }
 
+function normalizeWorkflowVerdict(value: unknown): 'pass' | 'conditional_pass' | 'fail' | null {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'pass') return 'pass';
+  if (raw === 'conditional_pass') return 'conditional_pass';
+  if (raw === 'fail') return 'fail';
+  return null;
+}
+
 export function compactStepConclusion(raw: string): string {
+  const MAX_CONCLUSION_CHARS = 4000;
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
-  if (tagged) return tagged;
+  if (tagged) {
+    // 结论是"结果/裁决"前置结构，超长时保留开头。缺失此上限会导致
+    // agent 把整篇文档塞进 <step-conclusion> 时按原样落盘（曾出现 117KB/134KB 结论文件）。
+    return tagged.length > MAX_CONCLUSION_CHARS
+      ? tagged.slice(0, MAX_CONCLUSION_CHARS).trim() + '\n...(结论过长已截断)'
+      : tagged;
+  }
 
   const text = stripNonAiStreamArtifacts(raw).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
-  return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
+  return tail.length > MAX_CONCLUSION_CHARS ? tail.slice(-MAX_CONCLUSION_CHARS).trim() : tail;
 }
 
 function createEmptySpecRevisionTally(): Record<WorkflowSpecRevisionVoteChoice, number> {
@@ -520,6 +561,11 @@ function isStepToolFailure(message: string): boolean {
     || /permission denied/i.test(message);
 }
 
+function isHttpAuthStatusFailure(message: string): boolean {
+  return /(?:HTTP|status|statusCode|response|request|code)[^\r\n]{0,40}\b(?:401|403)\b/i.test(message)
+    || /\b(?:401|403)\b[^\r\n]{0,80}(?:unauthorized|forbidden|invalid token|invalid api key|authentication failed|无效的令牌|令牌无效|认证失败|鉴权失败)/i.test(message);
+}
+
 export function isEngineLevelFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
@@ -531,7 +577,7 @@ export function isEngineLevelFailure(message: string): boolean {
     || /模型调用失败(?:\s*\(\s*\d{3}\s*\))?\s*:/i.test(normalized)
     || /(?:unauthorized|invalid token|invalid api key|authentication failed|permission denied)/i.test(normalized)
     || /(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/i.test(normalized)
-    || /(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)
+    || isHttpAuthStatusFailure(normalized)
     || /context window limit/i.test(normalized)
     || /reached (its |the )?context window limit/i.test(normalized)
     || /maximum context length/i.test(normalized)
@@ -548,7 +594,7 @@ function isTransientEngineFailure(message: string): boolean {
   if (!normalized.trim()) return false;
   if (/(?:unauthorized|invalid token|invalid api key|authentication failed)/i.test(normalized)) return false;
   if (/(?:无效的令牌|令牌无效|认证失败|鉴权失败|API\s*Key\s*无效)/.test(normalized)) return false;
-  if (/(?:HTTP\s*)?(?:401|403)\b/i.test(normalized)) return false;
+  if (isHttpAuthStatusFailure(normalized)) return false;
   if (/context window limit|maximum context length|prompt is too long/i.test(normalized)) return false;
 
   return /acp\s+connection\s+closed/i.test(normalized)
@@ -562,6 +608,15 @@ function isTransientEngineFailure(message: string): boolean {
 function isRecoverableStepExecutionError(message: string): boolean {
   const normalized = String(message || '').trim();
   return Boolean(normalized) && !isEngineLevelFailure(normalized);
+}
+
+function isFatalRuntimeConfigurationError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { fatal?: unknown }).fatal === true
+    && (error as { code?: unknown }).code === 'MODEL_ROUTE_NOT_FOUND'
+  );
 }
 
 function buildStepAutoRecoveryPrompt(input: {
@@ -706,9 +761,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private stepLogs: PersistedStepLog[] = [];
   private qualityChecks: PersistedQualityCheck[] = [];
   /** Current engine instance (Kiro CLI, etc.) */
-  private currentEngine: Engine | null = null;
+  private currentRuntime: WorkflowRuntime | null = null;
   /** Current engine type */
-  private engineType: EngineType = 'claude-code';
+  private engineType: WorkflowRuntimeType = 'claude-code';
   private engineExecutionTail: Promise<void> = Promise.resolve();
   private workflowGit: WorkflowGitState | null = null;
   /** Resolved workflow-level MCP servers from context.mcpServers */
@@ -722,7 +777,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
-    return getEngineSkillsSubdir(this.engineType);
+    return getWorkflowRuntimeSkillsSubdir(this.engineType);
   }
 
   private resolveProjectRootPath(projectRoot?: string | null): string {
@@ -831,7 +886,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const policy = resolveWorkflowExecutionPolicy(input.workflowConfig.context);
     const agent = this.agents.find((item) => item.name === input.agentName);
     const existingSessionId = agent?.sessionId || undefined;
-    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentEngine) {
+    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentRuntime) {
       return { prompt: input.prompt, sessionId: existingSessionId };
     }
     if (!this.stepLogs.some((log) => log.agent === input.agentName)) {
@@ -844,7 +899,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         level: 'info',
         message: `步骤切换前自动压缩 ${input.agentName} 的上下文：${input.stepName}`,
       });
-      const compacted = await this.withEngineExecutionLock(() => compactEngineContextManually(this.currentEngine!, {
+      const compacted = await this.withEngineExecutionLock(() => compactWorkflowRuntimeContextManually(this.currentRuntime!, {
         agent: input.agentName,
         step: input.stepName,
         prompt: input.prompt,
@@ -1005,7 +1060,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
     if (needed.size === 0) {
-      // 没有指定 skills 时，只逐项链接非 CSIHarness 内置 skill，避免镜像整棵目录。
+      // 没有指定 skills 时，只逐项链接非 ACEHarness 内置 skill，避免镜像整棵目录。
       await mkdir(workspaceSkillsDir, { recursive: true });
       const entries = await readdir(serverSkillsDir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
@@ -1129,7 +1184,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
           this.currentStep = `复制工作目录（建立清单：已扫描 ${scannedFiles} 文件）`;
           this.emit('status', {
             status: 'preparing',
-            message: `准备中：建立清单，已扫描 ${scannedFiles} 文件`,
             runId,
             startTime: this.runStartTime,
             currentPhase: '准备阶段',
@@ -1188,7 +1242,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = stepText;
       this.emit('status', {
         status: 'preparing',
-        message: `准备中：${stepText}`,
         runId,
         startTime: this.runStartTime,
         currentPhase: '准备阶段',
@@ -1425,7 +1478,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     await this.syncRunSpecCodingDelta();
     this.emit('status', {
       status: this.status,
-      message: '已从 workspace delta spec 导入用户修订',
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -1445,7 +1497,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     configFile: string,
     requirementsOrChecks?: string | PersistedQualityCheck[],
     maybePreflightChecks?: PersistedQualityCheck[],
-    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string> },
+    initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string>; workingDirectory?: string },
     requestedRunId?: string,
   ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
@@ -1476,6 +1528,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.stepLogs = [];
       this.qualityChecks = [...preflightChecks];
       this.currentState = null;
+      this.currentStep = null;
+      this.agents = [];
       this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
       this.latestSupervisorReview = null;
       this.specRevisionVote = null;
@@ -1489,6 +1543,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.stepTaskBindingsSnapshot = [];
       this.bindingValidation = undefined;
       this.runStartTime = new Date().toISOString();
+      this.runEndTime = null;
+      this.statusReason = null;
       this.accumulatedWaitMs = 0;
       this.waitStartedAt = null;
       this.currentConfigFile = configFile;
@@ -1540,6 +1596,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Load config
       const configContent = await this.readWorkflowConfigContent(configFile);
       let workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+      if (initialContexts?.workingDirectory) {
+        workflowConfig = {
+          ...workflowConfig,
+          context: {
+            ...(workflowConfig.context || {}),
+            projectRoot: initialContexts.workingDirectory,
+          },
+        };
+      }
       this.currentWorkflowConfig = workflowConfig;
       this.workflowName = workflowConfig.workflow.name || '';
       this.currentRequirements = requirements || workflowConfig.context?.requirements || '';
@@ -1662,7 +1727,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       this.emit('status', {
         status: 'preparing',
-        message: '准备中...',
         runId,
         startTime: this.runStartTime,
         currentPhase: '准备阶段',
@@ -1704,11 +1768,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
         await this.persistState();
       }
 
-      const reportPreparingProgress = async (message: string, step: string) => {
+      const reportPreparingProgress = async (_message: string, step: string) => {
         this.currentStep = step;
         this.emit('status', {
           status: 'preparing',
-          message,
           runId,
           startTime: this.runStartTime,
           currentPhase: '准备阶段',
@@ -1838,18 +1901,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = null;
       this.resumeStateName = null;
       this.resumeStepKey = null;
-      this.emit('status', {
-        status: 'running',
-        message: '状态机工作流已启动',
-        runId,
-        startTime: this.runStartTime,
-        endTime: this.runEndTime,
-        currentConfigFile: this.currentConfigFile,
-        workingDirectory: this.getWorkingDirectory(),
-        workflowFrontendSessionId: this._frontendSessionId || null,
-      });
+      this.emitRuntimeStatus();
       await this.persistState();
 
+      this.startWorkflowAgentPrewarm(workflowConfig);
       await this.executeStateMachine(workflowConfig, this.currentRequirements);
       await this.specRevisionVoteTail.catch(() => {});
 
@@ -1859,7 +1914,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.completeRunSpecCoding('工作流执行完成。');
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           runId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -1876,7 +1930,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -1889,9 +1942,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(): Promise<{ stopped: boolean; cleanupErrors: string[]; cancelledProcesses: boolean }> {
+    const cleanupErrors: string[] = [];
     this.shouldStop = true;
     this.status = 'stopped';
+    this.statusReason = '用户手动停止';
+    this.runEndTime = this.runEndTime || new Date().toISOString();
     const childRunId = this.activeSubworkflowRunId;
     if (childRunId) {
       const runtime = this.getActiveSubworkflowRuntime(childRunId);
@@ -1916,28 +1972,33 @@ export class StateMachineWorkflowManager extends EventEmitter {
           const { workflowRegistry } = await import('@/lib/workflow/registry');
           const childManager = await workflowRegistry.getManagerByRunId(childRunId);
           await (childManager as any)?.stop?.();
-        } catch {
+        } catch (error) {
+          cleanupErrors.push(`子工作流停止失败: ${error instanceof Error ? error.message : String(error)}`);
           // best-effort child stop; parent stop must continue.
         }
       }
     }
     this.clearRuntimeActivity();
-    this.emit('status', {
-      status: 'stopped',
-      message: '工作流已停止',
-      startTime: this.runStartTime,
-      endTime: this.runEndTime,
-      currentConfigFile: this.currentConfigFile
-    });
+    this.emitRuntimeStatus();
 
     // Kill any running child processes immediately
-    this.cancelCurrentProcesses();
+    const cancelledProcesses = this.cancelCurrentProcesses();
+    try {
+      this.cleanupCurrentEngine();
+    } catch (error) {
+      cleanupErrors.push(`引擎清理失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
-    await this.finalizeRun('stopped');
+    try {
+      await this.persistState('stopped');
+    } catch (error) {
+      cleanupErrors.push(`状态落盘失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { stopped: cleanupErrors.length === 0, cleanupErrors, cancelledProcesses };
   }
 
   private cleanupCurrentEngine(): void {
-    const engine = this.currentEngine;
+    const engine = this.currentRuntime;
     if (!engine) return;
     try {
       engine.cancel();
@@ -1949,7 +2010,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     } catch {
       // best-effort cleanup
     }
-    this.currentEngine = null;
+    this.currentRuntime = null;
   }
 
   forceTransition(targetState: string, instruction?: string, actor?: WorkflowActionActor): void {
@@ -1986,7 +2047,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
       currentStep: this.currentStep,
       activeSteps: Array.from(this.activeStepKeys),
       activeConcurrencyGroups: this.activeConcurrencyGroups,
-      message: `正在强制跳转到 ${targetState}`,
     });
     this.emit('force-transition', { targetState, from: this.currentState, instruction, actor });
     if (fromState !== '__human_approval__' && fromState !== targetState && this.currentWorkflowConfig) {
@@ -2339,7 +2399,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private parseHumanHelpRequests(output: string, config: StateMachineWorkflowConfig): HumanHelpRequest[] {
     if (!this.isHumanHelpEnabled(config)) return [];
     const requests: HumanHelpRequest[] = [];
-    for (const block of extractTaggedBlocks(output, 'human-help')) {
+    for (const block of extractTaggedBlocks(stripAceProcessBlocks(output), 'human-help')) {
       let parsed: any = null;
       try {
         parsed = JSON.parse(block);
@@ -2839,8 +2899,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         const rawProc = processManager.getProcessRaw(proc.id);
         if (rawProc?.childProcess) {
           try { rawProc.childProcess.kill('SIGTERM'); } catch { /* already dead */ }
-        } else if (this.currentEngine) {
-          this.currentEngine.cancel();
+        } else if (this.currentRuntime) {
+          this.currentRuntime.cancel();
         }
         if (rawProc) {
           rawProc.status = 'killed';
@@ -2850,8 +2910,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     let cancelledViaEngine = false;
-    if (running.length === 0 && this.currentEngine && this.currentProcesses.length > 0) {
-      this.currentEngine.cancel();
+    if (running.length === 0 && this.currentRuntime && this.currentProcesses.length > 0) {
+      this.currentRuntime.cancel();
       cancelledViaEngine = true;
     }
 
@@ -2994,6 +3054,36 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return extractStructuredJsonObject(raw);
   }
 
+  private extractVerdictJson(raw: string): { verdict: 'pass' | 'conditional_pass' | 'fail' } | null {
+    const fencedJsonPattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+    const candidates: any[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = fencedJsonPattern.exec(raw)) !== null) {
+      const parsed = this.extractJsonObject(match[1] || '');
+      if (parsed && normalizeWorkflowVerdict(parsed.verdict)) candidates.push(parsed);
+    }
+
+    for (const block of extractTaggedBlocks(raw, 'step-conclusion')) {
+      const parsed = this.extractJsonObject(block);
+      if (parsed && normalizeWorkflowVerdict(parsed.verdict)) candidates.push(parsed);
+    }
+
+    const direct = this.extractJsonObject(raw);
+    if (direct && normalizeWorkflowVerdict(direct.verdict)) candidates.push(direct);
+
+    const fromResult = extractStructuredResult(raw, (parsed: any): parsed is { verdict: 'pass' | 'conditional_pass' | 'fail' } => (
+      Boolean(parsed && normalizeWorkflowVerdict(parsed.verdict))
+    ));
+    if (fromResult && normalizeWorkflowVerdict(fromResult.verdict)) candidates.push(fromResult);
+
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      const verdict = normalizeWorkflowVerdict(candidates[index]?.verdict);
+      if (verdict) return { verdict };
+    }
+
+    return null;
+  }
+
   private buildSpecRevisionVoteContext(input: SpecRevisionVoteTriggerInput): string {
     const result = input.result;
     const issueSummary = result?.issues?.length
@@ -3035,10 +3125,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     ].filter(Boolean).join('\n\n');
   }
 
-  private emitSpecRevisionVoteStatus(message?: string): void {
+  private emitSpecRevisionVoteStatus(_message?: string): void {
     this.emit('status', {
       status: this.status,
-      message,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -3048,6 +3137,24 @@ export class StateMachineWorkflowManager extends EventEmitter {
       workflowFrontendSessionId: this._frontendSessionId || null,
       specRevisionVote: this.specRevisionVote,
       specRevisionVoteHistory: this.specRevisionVoteHistory,
+      ...this.buildRunSpecCodingStatusPayload(),
+    });
+  }
+
+  private emitRuntimeStatus(_message?: string): void {
+    this.emit('status', {
+      status: this.status,
+      runId: this.currentRunId,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      currentPhase: this.currentState,
+      currentStep: this.currentStep,
+      activeSteps: Array.from(this.activeStepKeys),
+      completedSteps: this.completedSteps,
+      failedSteps: this.failedSteps,
+      currentConfigFile: this.currentConfigFile,
+      workingDirectory: this.getWorkingDirectory(),
+      workflowFrontendSessionId: this._frontendSessionId || null,
       ...this.buildRunSpecCodingStatusPayload(),
     });
   }
@@ -3635,7 +3742,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const childSpecDeltas = await this.collectChildSpecDeltaSummaries();
 
     const summaryPrompt = [
-      '你是 CSIHarness 的工作流指挥官，请输出本次工作流的结算结果。',
+      '你是 ACEHarness 的工作流指挥官，请输出本次工作流的结算结果。',
       '请严格输出 JSON，不要附加其他说明。',
       'scoreCards.score 使用 10 分制，范围 0-10，可保留 1 位小数。',
       'JSON 结构：',
@@ -3798,6 +3905,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return Math.round(Math.max(0, Math.min(10, normalized)) * 10) / 10;
   }
 
+  private isWorkflowFinalReviewJsonResponse(text: string): boolean {
+    const parsed = this.extractJsonObject(text);
+    if (!parsed || typeof parsed !== 'object') return false;
+    const candidate = parsed as any;
+    return typeof candidate.summary === 'string'
+      && Array.isArray(candidate.nextFocus)
+      && Array.isArray(candidate.experience)
+      && Array.isArray(candidate.scoreCards);
+  }
+
   /**
    * Initialize the AI engine based on workflow config first, then global config.
    */
@@ -3806,18 +3923,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const requestedEngine = workflowEngine?.trim();
 try {
         this.engineType = requestedEngine
-          ? await resolveRequestedEngineType(requestedEngine)
-          : await getConfiguredEngine();
+          ? await resolveRequestedWorkflowRuntimeType(requestedEngine)
+          : await getConfiguredWorkflowRuntime();
       } catch {
-        const globalEngine = await getConfiguredEngine();
+        const globalEngine = await getConfiguredWorkflowRuntime();
         this.emit('log', `工作流配置的引擎无效: ${requestedEngine}，回退到全局引擎 ${globalEngine}`);
         this.engineType = globalEngine;
       }
       this.emit('log', `使用引擎: ${this.engineType}`);
 
-      // Always initialize currentEngine for the selected engine, including claude-code.
-      this.currentEngine = await createEngine(this.engineType);
-      if (!this.currentEngine) {
+      // Always initialize currentRuntime for the selected engine, including claude-code.
+      this.currentRuntime = await createWorkflowRuntime(this.engineType);
+      if (!this.currentRuntime) {
         throw new Error(`引擎初始化失败: ${this.engineType} 不可用`);
       }
 
@@ -3829,35 +3946,35 @@ try {
 
   private async ensureEngineForExecution(requestedEngine?: string): Promise<void> {
     const requested = String(requestedEngine || this.engineType || '').trim();
-    let resolvedEngine: EngineType;
+    let resolvedEngine: WorkflowRuntimeType;
     try {
       resolvedEngine = requested
-        ? await resolveRequestedEngineType(requested)
-        : await getConfiguredEngine();
+        ? await resolveRequestedWorkflowRuntimeType(requested)
+        : await getConfiguredWorkflowRuntime();
     } catch {
-      resolvedEngine = await getConfiguredEngine();
+      resolvedEngine = await getConfiguredWorkflowRuntime();
       this.emit('log', `Agent 配置的引擎无效: ${requested || '<empty>'}，回退到全局引擎 ${resolvedEngine}`);
     }
 
-    if (this.currentEngine && this.engineType === resolvedEngine) return;
+    if (this.currentRuntime && this.engineType === resolvedEngine) return;
 
-    if (this.currentEngine) {
+    if (this.currentRuntime) {
       try {
-        this.currentEngine.cancel();
+        this.currentRuntime.cancel();
       } catch {}
-      const cleanup = (this.currentEngine as any).cleanup;
+      const cleanup = (this.currentRuntime as any).cleanup;
       if (typeof cleanup === 'function') {
         try {
-          cleanup.call(this.currentEngine);
+          cleanup.call(this.currentRuntime);
         } catch {}
       }
     }
 
-    const nextEngine = await createEngine(resolvedEngine);
+    const nextEngine = await createWorkflowRuntime(resolvedEngine);
     if (!nextEngine) {
       throw new Error(`引擎初始化失败: ${resolvedEngine} 不可用`);
     }
-    this.currentEngine = nextEngine;
+    this.currentRuntime = nextEngine;
     this.engineType = resolvedEngine;
     this.emit('log', `使用引擎: ${this.engineType}`);
   }
@@ -3873,14 +3990,14 @@ try {
     systemPrompt: string,
     model: string,
     options: any
-  ): Promise<EngineJsonResult> {
+  ): Promise<WorkflowRuntimeJsonResult> {
     return this.withEngineExecutionLock(async () => {
       await this.ensureEngineForExecution(options.engineType);
-      if (!this.currentEngine) {
+      if (!this.currentRuntime) {
         throw new Error(`引擎未初始化 (engineType=${this.engineType})`);
       }
 
-      const engine = this.currentEngine;
+      const engine = this.currentRuntime;
       const displayStep =
         options.streamStepName || options.streamStepLabel || step;
 
@@ -3902,7 +4019,7 @@ try {
 
       let fullStreamContent = '';
 
-      const streamHandler = (event: EngineStreamEvent) => {
+      const streamHandler = (event: WorkflowRuntimeStreamEvent) => {
         // 'thought' events are forwarded separately (matching Claude Code's { thinking } field),
         // not accumulated into streamContent.
         if (event.type === 'thought') {
@@ -3914,8 +4031,8 @@ try {
           return;
         }
 
-        // Only accumulate 'text' events into the preview stream.
-        if (event.type !== 'text') return;
+        // Accumulate visible message text and structured tool blocks into the preview stream.
+        if (event.type !== 'text' && event.type !== 'tool') return;
 
         fullStreamContent += event.content;
         const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
@@ -3930,7 +4047,7 @@ try {
       engine.on('stream', streamHandler);
 
       try {
-        const result = await executeEngineWithContextRecovery(engine, {
+        const result = await executeWorkflowRuntimeWithContextRecovery(engine, {
           agent, step, prompt, systemPrompt, model,
           workingDirectory: options.workingDirectory,
           allowedTools: options.allowedTools,
@@ -3952,7 +4069,7 @@ try {
         });
 
         // Mark process as completed
-        const resolvedSessionId = resolveRecoveredSessionId(result, options.resumeSessionId);
+        const resolvedSessionId = resolveRecoveredWorkflowRuntimeSessionId(result, options.resumeSessionId);
         const rawProc = processManager.getProcessRaw(processId);
         if (rawProc) {
           rawProc.status = result.success ? 'completed' : 'failed';
@@ -3970,7 +4087,8 @@ try {
         const fallbackOutput = result.output || fullStreamContent || rawProc?.streamContent || '';
         return {
           result: result.success ? fallbackOutput : (result.error || fallbackOutput || '引擎执行失败（无输出）'),
-          session_id: resolvedSessionId || '',
+          runtimeSessionId: resolvedSessionId || '',
+          stop_reason: result.stopReason,
           is_error: !result.success,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
           duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
@@ -4028,6 +4146,140 @@ try {
     this.emit('agents', { agents: this.agents });
   }
 
+  private shouldPrewarmWorkflowAgents(workflowConfig: StateMachineWorkflowConfig): boolean {
+    const raw = (workflowConfig.context as any)?.prewarmAgents;
+    if (raw === false) return false;
+    if (typeof raw === 'string' && ['0', 'false', 'off', 'disabled', 'none'].includes(raw.trim().toLowerCase())) return false;
+    return true;
+  }
+
+  private getWorkflowAgentPrewarmConcurrency(workflowConfig: StateMachineWorkflowConfig): number {
+    const raw = (workflowConfig.context as any)?.prewarmAgentConcurrency;
+    const parsed = Number.parseInt(String(raw || ''), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AGENT_PREWARM_CONCURRENCY;
+    return Math.max(1, Math.min(4, parsed));
+  }
+
+  private collectWorkflowAgentPrewarmTargets(workflowConfig: StateMachineWorkflowConfig): Array<{
+    runtimeAgentName: string;
+    baseAgentName: string;
+    stepName: string;
+    roleConfig?: RoleConfig;
+    engine: string;
+    model: string;
+  }> {
+    const targets = new Map<string, {
+      runtimeAgentName: string;
+      baseAgentName: string;
+      stepName: string;
+      roleConfig?: RoleConfig;
+      engine: string;
+      model: string;
+    }>();
+    const addTarget = (runtimeAgentName: string | undefined, baseAgentName: string | undefined, stepName: string) => {
+      const normalizedRuntimeName = String(runtimeAgentName || '').trim();
+      const normalizedBaseName = String(baseAgentName || normalizedRuntimeName).trim();
+      if (!normalizedRuntimeName || targets.has(normalizedRuntimeName)) return;
+      const roleConfig = this.agentConfigs.find((role) => role.name === normalizedBaseName)
+        || workflowConfig.roles?.find((role) => role.name === normalizedBaseName);
+      const selection = resolveAgentEngineSelection(roleConfig, workflowConfig.context);
+      targets.set(normalizedRuntimeName, {
+        runtimeAgentName: normalizedRuntimeName,
+        baseAgentName: normalizedBaseName,
+        stepName,
+        roleConfig,
+        engine: selection.engine,
+        model: selection.model,
+      });
+    };
+
+    for (const state of workflowConfig.workflow.states || []) {
+      for (const step of state.steps || []) {
+        addTarget(getStepRuntimeAgentName(step), step.agent, `${state.name} / ${step.name}`);
+      }
+    }
+    if (workflowConfig.workflow.supervisor?.enabled !== false) {
+      const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+      addTarget(supervisorName, supervisorName, 'supervisor');
+    }
+    return Array.from(targets.values()).filter((target) => Boolean(target.model));
+  }
+
+  private getInitialSegmentAgentNames(workflowConfig: StateMachineWorkflowConfig): Set<string> {
+    const stateName = this.currentState || workflowConfig.workflow.states.find((state) => state.isInitial)?.name || workflowConfig.workflow.states[0]?.name;
+    const state = workflowConfig.workflow.states.find((item) => item.name === stateName);
+    const segments = state?.steps?.length ? groupStateStepsIntoSegments(state.steps) : [];
+    const resumeStepKey = this.resumeStateName === stateName ? this.resumeStepKey : null;
+    const initialSegment = resumeStepKey
+      ? segments.find((segment) => this.getSegmentStepKeys(stateName, segment).includes(resumeStepKey))
+      : segments[0];
+    if (!initialSegment) return new Set();
+    const steps = initialSegment.type === 'parallel' ? initialSegment.steps : [initialSegment.step];
+    return new Set(steps.map((step) => getStepRuntimeAgentName(step)).filter(Boolean));
+  }
+
+  private async prewarmWorkflowAgents(workflowConfig: StateMachineWorkflowConfig): Promise<void> {
+    if (!this.shouldPrewarmWorkflowAgents(workflowConfig)) return;
+    const workingDirectory = workflowConfig.context?.projectRoot
+      ? this.resolveProjectRootPath(workflowConfig.context.projectRoot)
+      : this.resolveProjectRootPath();
+    const initialSegmentAgents = this.getInitialSegmentAgentNames(workflowConfig);
+    const targets = this.collectWorkflowAgentPrewarmTargets(workflowConfig)
+      .filter((target) => !initialSegmentAgents.has(target.runtimeAgentName))
+      .filter((target) => !this.agents.find((agent) => agent.name === target.runtimeAgentName)?.sessionId);
+    if (!targets.length) return;
+
+    const concurrency = this.getWorkflowAgentPrewarmConcurrency(workflowConfig);
+    this.emit('log', {
+      level: 'info',
+      message: `开始异步预热后续 Agent runtime session：${targets.length} 个，并发 ${concurrency}`,
+    });
+    let cursor = 0;
+    const worker = async () => {
+      while (!this.shouldStop) {
+        const target = targets[cursor++];
+        if (!target) return;
+        const agent = this.agents.find((item) => item.name === target.runtimeAgentName);
+        if (!agent || agent.sessionId) continue;
+        try {
+          agent.engine = target.engine;
+          agent.model = target.model;
+          const sessionId = await prewarmWorkflowRuntimeSession({
+            runtimeType: target.engine,
+            agent: target.runtimeAgentName,
+            step: target.stepName,
+            model: target.model,
+            workingDirectory,
+            userId: this._createdBy,
+          });
+          if (this.shouldStop) return;
+          replaceAgentStateSessionId(agent, sessionId);
+          this.emit('agents', { agents: this.agents });
+          this.emit('log', {
+            level: 'info',
+            message: `Agent 已预热：${target.runtimeAgentName}`,
+          });
+          await this.persistState();
+        } catch (error) {
+          this.emit('log', {
+            level: 'warning',
+            message: `Agent 预热失败：${target.runtimeAgentName} - ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+    };
+    await Promise.allSettled(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()));
+  }
+
+  private startWorkflowAgentPrewarm(workflowConfig: StateMachineWorkflowConfig): void {
+    void this.prewarmWorkflowAgents(workflowConfig).catch((error) => {
+      this.emit('log', {
+        level: 'warning',
+        message: `Agent 预热任务异常：${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
+  }
+
   private ensureSupervisorAgentExists(workflowConfig: StateMachineWorkflowConfig): void {
     const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
     const existsInConfigs = this.agentConfigs.some((config) => config.name === supervisorName);
@@ -4038,7 +4290,7 @@ try {
   }
 
   private getSegmentHandoffDelayMs(config: StateMachineWorkflowConfig): number {
-    const raw = config.context?.segmentDelayMs ?? process.env.CSIHARNESS_STATE_SEGMENT_DELAY_MS;
+    const raw = config.context?.segmentDelayMs ?? process.env.ACE_STATE_SEGMENT_DELAY_MS;
     const parsed = typeof raw === 'number' ? raw : Number.parseInt(String(raw || '0'), 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return 0;
     return Math.min(parsed, 30000);
@@ -4257,8 +4509,9 @@ try {
 
     this.emit('state-change', {
       state: this.currentState,
-      message: `进入状态: ${this.currentState}`,
     });
+    this.emitRuntimeStatus();
+    await this.persistState();
 
     while (this.currentState && !this.shouldStop) {
       // Check max transitions
@@ -4293,15 +4546,18 @@ try {
             result: finalResult,
           }, config);
         }
-        this.emit('state-change', {
-          state: this.currentState,
-          message: `到达终止状态: ${this.currentState}`,
-        });
-        break;
+      this.emit('state-change', {
+        state: this.currentState,
+      });
+      this.emitRuntimeStatus();
+      break;
       }
 
       // Execute current state
       const result = await this.executeState(stateConfig, config, requirements);
+      if (this.shouldStop) {
+        break;
+      }
 
       // Evaluate transitions
       // Remember whether this transition was forced by the user so we can skip human approval
@@ -4342,7 +4598,7 @@ try {
       // Check self-transition circuit breaker
       if (nextState === this.currentState) {
         const currentSelfCount = this.selfTransitionCounts.get(this.currentState!) || 0;
-        const maxSelfTransitions = stateConfig.maxSelfTransitions || 3;
+        const maxSelfTransitions = stateConfig.maxSelfTransitions ?? 3;
         if (currentSelfCount >= maxSelfTransitions) {
           // Circuit breaker triggered - force transition to a different state or fail
           this.emit('circuit-breaker', {
@@ -4352,7 +4608,10 @@ try {
             message: `状态 "${this.currentState}" 自我转换次数超过限制 (${maxSelfTransitions})，自动熔断`,
           });
           // Find an alternative transition target
-          const alternativeTransition = stateConfig.transitions.find(t => t.to !== this.currentState);
+          const alternativeTransition = stateConfig.transitions.find(t =>
+            t.to !== this.currentState
+            && (!t.condition?.verdict || t.condition.verdict === result.verdict)
+          ) || stateConfig.transitions.find(t => t.to !== this.currentState);
           if (alternativeTransition) {
             this.stateHistory.push({
               from: this.currentState!,
@@ -4514,30 +4773,9 @@ try {
         const fromState = fromStateName
           ? config.workflow.states.find(s => s.name === fromStateName)
           : undefined;
-        const toState = config.workflow.states.find(s => s.name === humanSelectedState);
-        if (fromState && toState && fromState.steps.length > 0 && toState.steps.length > 0) {
-          const fromAgent = fromState.steps[fromState.steps.length - 1].agent;
-          const toAgent = toState.steps[0].agent;
-          if (fromAgent !== toAgent) {
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'stream',
-              fromAgent,
-              toAgent,
-              message: `状态流转: ${fromState.name} -> ${toState.name} (人工审查后)`,
-              stateName: fromState.name,
-              stepName: fromState.steps[fromState.steps.length - 1].name,
-              round: 0,
-              timestamp: new Date().toISOString(),
-            });
-            this.emit('agent-flow', { agentFlow: this.agentFlow });
-          }
-        }
-
         this.currentState = humanSelectedState;
         this.emit('state-change', {
           state: this.currentState,
-          message: `进入状态: ${this.currentState}`,
         });
       } else {
         // No human approval needed, proceed automatically
@@ -4558,32 +4796,9 @@ try {
           issues: result.issues,
         });
 
-        // 添加状态切换的流转线
-        const fromState = config.workflow.states.find(s => s.name === this.currentState);
-        const toState = config.workflow.states.find(s => s.name === nextState);
-        if (fromState && toState && fromState.steps.length > 0 && toState.steps.length > 0) {
-          const fromAgent = fromState.steps[fromState.steps.length - 1].agent;
-          const toAgent = toState.steps[0].agent;
-          if (fromAgent !== toAgent) {
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'stream',
-              fromAgent: fromAgent,
-              toAgent: toAgent,
-              message: `状态流转: ${fromState.name} -> ${toState.name}`,
-              stateName: fromState.name,
-              stepName: fromState.steps[fromState.steps.length - 1].name,
-              round: 0,
-              timestamp: new Date().toISOString(),
-            });
-            this.emit('agent-flow', { agentFlow: this.agentFlow });
-          }
-        }
-
         this.currentState = nextState;
         this.emit('state-change', {
           state: this.currentState,
-          message: `进入状态: ${this.currentState}`,
         });
       }
     }
@@ -4988,6 +5203,7 @@ try {
       state: state.name,
       stepCount: state.steps.length,
     });
+    this.emitRuntimeStatus();
     if (this.currentRunSpecCoding) {
       this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
         stateName: state.name,
@@ -5110,10 +5326,13 @@ try {
           }
         }
       } catch (stepError: any) {
+        if (this.shouldStop) {
+          break;
+        }
         const errorMsg = stepError.message || String(stepError);
         stepOutputs.push(`ERROR: ${errorMsg}`);
 
-        if (isEngineLevelFailure(errorMsg)) {
+        if (isFatalRuntimeConfigurationError(stepError) || isEngineLevelFailure(errorMsg)) {
           // Engine-level failures are fatal for state-machine execution to avoid
           // uncontrolled fallback iterations and token burn.
           throw new Error(`引擎异常，已停止工作流：${errorMsg}`);
@@ -5253,7 +5472,6 @@ try {
     });
     this.emit('status', {
       status: this.status,
-      message: `Spec Coding tasks.md 已由系统更新 ${taskIds.length} 项`,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -6122,19 +6340,7 @@ try {
       validation: `Step started: ${state.name} / ${step.name}`,
     });
     this.emit('agents', { agents: this.agents });
-    
-    this.agentFlow.push({
-      id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: 'stream',
-      fromAgent: runtimeAgentName,
-      toAgent: runtimeAgentName,
-      message: `开始执行步骤: ${step.name}`,
-      stateName: state.name,
-      stepName: step.name,
-      round: 0,
-      timestamp: new Date().toISOString(),
-    });
-    this.emit('agent-flow', { agentFlow: this.agentFlow });
+    this.emitRuntimeStatus();
     await this.persistState();
 
     this.emit('step-start', {
@@ -6180,7 +6386,14 @@ try {
       // Execute step (reuse existing process manager logic)
       let stepResult = await this.runAgentStep(step, context, config, stepId);
       let output = stepResult.output;
+      if (isEngineLevelFailure(output)) {
+        throw new Error(output.trim() || '引擎返回致命错误输出');
+      }
       if (this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
+        this.emit('log', {
+          level: 'warning',
+          message: `步骤 "${state.name}/${step.name}" 缺少严格最终裁决 JSON，正在请求 Agent 补交。`,
+        });
         const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
         const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
         output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
@@ -6193,9 +6406,9 @@ try {
           sessionId: repairResult.sessionId || stepResult.sessionId,
           tokenUsage: this.mergeTokenUsage(stepResult.tokenUsage, repairResult.tokenUsage),
         };
-      }
-      if (isEngineLevelFailure(output)) {
-        throw new Error(output.trim() || '引擎返回致命错误输出');
+        if (!this.hasRequiredVerdictJson(output)) {
+          throw new Error(`步骤 "${state.name}/${step.name}" 补交后仍缺少严格最终裁决 JSON`);
+        }
       }
       this.assertStepOutputIsNotSupervisorReview(step, state, runtimeAgentName, output);
       const conclusion = compactStepConclusion(stepResult.lastRoundOutput || output);
@@ -6283,27 +6496,6 @@ try {
         dedupeKey: `workflow-step-complete-${stepId}`,
         speakerName: runtimeAgentName,
       });
-
-      // 记录步骤完成的流转线
-      const currentStepIndex = state.steps.findIndex(s => s.name === step.name);
-      if (currentStepIndex >= 0 && currentStepIndex < state.steps.length - 1) {
-        const nextStep = state.steps[currentStepIndex + 1];
-        const nextRuntimeAgentName = nextStep ? getStepRuntimeAgentName(nextStep) : '';
-        if (nextStep && nextRuntimeAgentName !== runtimeAgentName) {
-          this.agentFlow.push({
-            id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            type: 'stream',
-            fromAgent: runtimeAgentName,
-            toAgent: nextRuntimeAgentName,
-            message: `步骤流转: ${step.name} -> ${nextStep.name}`,
-            stateName: state.name,
-            stepName: step.name,
-            round: 0,
-            timestamp: new Date().toISOString(),
-          });
-          this.emit('agent-flow', { agentFlow: this.agentFlow });
-        }
-      }
 
       // Save output to file system
       if (this.currentRunId) {
@@ -6471,8 +6663,7 @@ try {
   }
 
   private hasRequiredVerdictJson(output: string): boolean {
-    const parsed = this.extractJsonObject(output);
-    return Boolean(parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict));
+    return Boolean(this.extractVerdictJson(output));
   }
 
   private buildMissingFinalVerdictPrompt(
@@ -6487,15 +6678,16 @@ try {
       '\n# 系统补充要求：缺少最终裁决 JSON',
       `你刚才完成了状态 "${state.name}" 的最后步骤 "${step.name}"，但回复中没有包含可解析的最终裁决 JSON。`,
       '不要重新执行任务，不要重复完整过程，只基于你刚才的结果补交最终裁决。',
-      '必须先输出以下 JSON 块（用 ```json 包裹），且 verdict 只能是 pass、conditional_pass、fail 三者之一：',
+      '必须只补交以下 JSON 块（用 ```json 包裹），且 verdict 的值必须从 pass、conditional_pass、fail 中选择一个真实值：',
       '```json',
       '{',
-      '  "verdict": "pass | conditional_pass | fail",',
+      '  "verdict": "pass",',
       '  "remaining_issues": 0,',
       '  "summary": "一句话总结"',
       '}',
       '```',
-      '随后必须输出 <step-conclusion>，用于步骤归档和后续步骤复用。',
+      '如果不能通过，请把 verdict 改为 conditional_pass 或 fail，并同步填写 remaining_issues。',
+      '随后可以输出 <step-conclusion>，用于步骤归档和后续步骤复用。',
       '\n# 你上一轮输出',
       previous || '[上一轮没有可用输出]',
     ].join('\n');
@@ -6595,9 +6787,6 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
-    if (requiresFinalVerdict) {
-      parts.push(this.buildStateVerdictTransitionContext(state));
-    }
 
     const roadmapKey = `${state.name}:${requiresFinalVerdict ? 'with-verdict' : 'without-verdict'}:${config.workflow.states.map((item) => {
       const stepSig = (item.steps || []).map((stateStep) => stateStep.name).join('|');
@@ -6772,7 +6961,7 @@ try {
         .filter((transition) => transition.condition?.verdict)
         .map((transition) => `- ${transition.condition.verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`)
         .join('\n') || '- 当前状态未配置 verdict 转移。';
-      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们的真实流向完全由当前状态 transitions 决定。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     if (this.currentRunId) {
@@ -6921,28 +7110,26 @@ try {
           const stateOutputs = Object.entries(outputs)
             .filter(([key]) => key.startsWith(`${prevState}-`));
           for (const [stepKey, content] of stateOutputs) {
-            // Truncate to last 2000 chars to avoid prompt bloat
+            // 结论按"结果/裁决"前置的结构书写，超长时保留开头，
+            // 与 compactStepConclusion 的截断方向一致；完整内容见 outputs 目录。
             const truncated = content.length > 2000
-              ? '...(截断)\n' + content.slice(-2000)
+              ? content.slice(0, 2000) + '\n...(已截断，全文见 outputs 目录)'
               : content;
             conclusions.push(`## ${stepKey}\n${truncated}`);
           }
         }
 
         if (conclusions.length > 0) {
-          parts.push(`\n# 前置步骤结论\n以下是之前步骤的产出，请参考：\n`);
+          const outputsDirPath = `${join(getWorkspaceRunsDir(), this.currentRunId, 'outputs')}/`;
+          parts.push(
+            `\n# 前置步骤结论\n` +
+            `以下是之前步骤产出的结论摘要（已截断，仅供快速参考）。优先依据这些摘要推进；` +
+            `如需完整内容，可读取 outputs 目录：\n\`${outputsDirPath}\`\n` +
+            `该目录含各步骤带时间戳前缀的完整"步骤成果详细总结"，按需读取对应文件即可，不必默认全读。\n`
+          );
           parts.push(conclusions.join('\n\n'));
         }
       } catch { /* non-critical */ }
-    }
-
-    // ========== Supervisor-Lite: 注入可选的下一状态 ==========
-    if (state.transitions && state.transitions.length > 0) {
-      parts.push(`\n# 可选的下一状态`);
-      for (const t of state.transitions) {
-        const targetState = config.workflow.states.find(s => s.name === t.to);
-        parts.push(`- ${t.to}: ${targetState?.description || '无描述'}`);
-      }
     }
 
     // ========== Supervisor-Lite: 注入额外上下文（信息收集循环） ==========
@@ -7131,6 +7318,7 @@ try {
     let accumulatedDuration = 0;
     let autoRecoveryAttempts = 0;
     let transientEngineRetryAttempts = 0;
+    let humanHelpStreamInterrupted = false;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
@@ -7205,6 +7393,15 @@ try {
       } else if (this.currentRunId && content) {
         scheduleTrailingFlush(2000 - (now - lastFlush));
       }
+      if (
+        !humanHelpStreamInterrupted
+        && this.isHumanHelpEnabled(config)
+        && extractTaggedBlocks(stripAceProcessBlocks(content), 'human-help').length > 0
+      ) {
+        humanHelpStreamInterrupted = true;
+        watchdogTriggeredForProcess = currentProcessId;
+        processManager.killProcess(currentProcessId);
+      }
     };
     processManager.on('stream', streamFlushHandler);
     const idleWatchdog = setInterval(() => {
@@ -7227,7 +7424,7 @@ try {
       if (this.shouldStop) {
         throw new Error('工作流已停止');
       }
-      let result: EngineJsonResult;
+      let result: WorkflowRuntimeJsonResult;
       try {
         result = await this.executeWithEngine(
           currentProcessId,
@@ -7249,6 +7446,26 @@ try {
           }
         );
       } catch (err) {
+        if (this.shouldStop) {
+          throw new Error('工作流已停止');
+        }
+        if (humanHelpStreamInterrupted) {
+          const proc = processManager.getProcess(currentProcessId);
+          if (proc?.streamContent) {
+            flushProcessStream(proc.streamContent);
+          }
+          result = {
+            result: proc?.streamContent || accumulatedStreamPreview || '',
+            runtimeSessionId: proc?.sessionId || currentSessionId || '',
+            stop_reason: 'cancelled',
+            is_error: false,
+            cost_usd: 0,
+            duration_ms: 0,
+            duration_api_ms: 0,
+            num_turns: 0,
+            usage: ZERO_ENGINE_USAGE,
+          };
+        } else
         // If force transition killed the process, return partial output and let main loop handle it
         if (this.pendingForceTransition) {
           console.log(`[SM-ForceTransition] 进程被强制跳转终止，目标: ${this.pendingForceTransition}`);
@@ -7268,7 +7485,7 @@ try {
           };
         }
         // If interrupted with feedback, resume with feedback
-        if (this.interruptFlag && this.liveFeedback.length > 0) {
+        else if (this.interruptFlag && this.liveFeedback.length > 0) {
           const isFeedbackOnly = this.feedbackInterrupt;
           this.interruptFlag = false;
           this.feedbackInterrupt = false;
@@ -7310,13 +7527,65 @@ try {
           this.emitLiveFeedbackStatus(feedbackEntries, 'delivered', feedbackTimestamp);
           continue;
         }
-        throw err;
+        else {
+          throw err;
+        }
       }
 
       // Accumulate stream content
       const proc = processManager.getProcess(currentProcessId);
       if (proc?.streamContent) {
         flushProcessStream(proc.streamContent);
+      }
+
+      if (this.shouldStop) {
+        throw new Error('工作流已停止');
+      }
+
+      if (humanHelpStreamInterrupted && !this.shouldStop) {
+        const streamOutput = proc?.streamContent || result.result || '';
+        const humanHelpRequests = this.parseHumanHelpRequests(streamOutput, config);
+        if (humanHelpRequests.length > 0) {
+          humanHelpStreamInterrupted = false;
+          currentSessionId = result.runtimeSessionId || currentSessionId || undefined;
+          const resumePrompt = await this.handleHumanHelpRequests({
+            requests: humanHelpRequests,
+            output: streamOutput,
+            step,
+            state: this.currentWorkflowConfig?.workflow?.states?.find((item) => item.name === this.currentState)
+              || config.workflow.states.find((item) => (item.steps || []).some((stateStep) => stateStep === step || stateStep.name === step.name))
+              || ({ name: this.currentState || '', steps: [step], transitions: [], isInitial: false, isFinal: false } as StateMachineState),
+            config,
+            runtimeAgentName,
+          });
+          if (resumePrompt) {
+            appendFeedbackMarker(resumePrompt);
+            currentPrompt = currentSessionId ? resumePrompt : `${context}\n\n${resumePrompt}`;
+            currentProcessId = stepId || currentProcessId;
+            currentProcessStreamLength = 0;
+            lastStreamAt = Date.now();
+            watchdogTriggeredForProcess = '';
+            if (agent) {
+              agent.status = 'running';
+              agent.currentTask = step.name;
+              this.emit('agents', { agents: this.agents });
+            }
+            this.upsertCurrentProcess({
+              pid: Date.now(),
+              id: currentProcessId,
+              agent: runtimeAgentName,
+              step: streamStepName,
+              stepId,
+              startTime: new Date().toISOString(),
+            });
+            this.emit('step-start', {
+              state: this.currentState,
+              step: streamStepName,
+              agent: runtimeAgentName,
+            });
+            continue;
+          }
+        }
       }
 
       if (result.is_error && this.interruptFlag && this.liveFeedback.length > 0 && !this.shouldStop) {
@@ -7326,7 +7595,7 @@ try {
         const { entries: feedbackEntries, prompt: feedbackPrompt } = this.consumeLiveFeedback();
         const feedbackTimestamp = new Date().toISOString();
         appendFeedbackMarker(feedbackPrompt);
-        const sessionId = result.session_id || currentSessionId;
+        const sessionId = result.runtimeSessionId || currentSessionId;
         currentSessionId = sessionId || undefined;
         currentPrompt = isFeedbackOnly
           ? `## 人工实时反馈\n用户在你执行过程中提供了补充反馈，请参考以下内容继续完成任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`
@@ -7353,6 +7622,10 @@ try {
         });
         this.emitLiveFeedbackStatus(feedbackEntries, 'delivered', feedbackTimestamp);
         continue;
+      }
+
+      if (result.stop_reason === 'cancelled' && !humanHelpStreamInterrupted) {
+        throw new Error('运行时执行已取消');
       }
 
       if (result.is_error) {
@@ -7393,7 +7666,7 @@ try {
         const recoveryTimestamp = new Date().toISOString();
         appendFeedbackMarker(recoveryPrompt);
 
-        const sessionId = result.session_id || currentSessionId;
+        const sessionId = result.runtimeSessionId || currentSessionId;
         currentSessionId = sessionId || undefined;
         currentPrompt = sessionId ? recoveryPrompt : `${context}\n\n${recoveryPrompt}`;
         currentProcessId = stepId || currentProcessId;
@@ -7436,10 +7709,11 @@ try {
       accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
       accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
 
-      // Always capture the latest session_id for reuse; clear if recovery could not produce one.
-      currentSessionId = result.session_id || undefined;
+      // Always capture the latest runtimeSessionId for reuse; clear if recovery could not produce one.
+      currentSessionId = result.runtimeSessionId || undefined;
 
       if (humanHelpRequests.length > 0 && !this.shouldStop) {
+        humanHelpStreamInterrupted = false;
         const resumePrompt = await this.handleHumanHelpRequests({
           requests: humanHelpRequests,
           output: roundOutput,
@@ -7482,7 +7756,7 @@ try {
       // Check for pending live feedback after completion
       if (this.liveFeedback.length > 0 && !this.shouldStop) {
         const { entries: feedbackEntries, prompt: feedbackPrompt } = this.consumeLiveFeedback();
-        const sessionId = result.session_id;
+        const sessionId = result.runtimeSessionId;
         if (!sessionId) break;
 
         const feedbackTimestamp = new Date().toISOString();
@@ -7751,44 +8025,27 @@ try {
       return 'fail';
     }
 
-    const parsed = this.extractJsonObject(output);
+    const parsed = this.extractVerdictJson(output);
     if (parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict)) {
       return parsed.verdict;
     }
 
-    const conclusion = extractTaggedBlock(output, 'step-conclusion');
-    const conclusionVerdict = conclusion ? this.parseVerdictFromConclusion(conclusion) : null;
-    if (conclusionVerdict) {
-      return conclusionVerdict;
-    }
-
-    // Fallback: check for keywords
-    if (/\b(fail|失败|不通过)\b/i.test(output)) return 'fail';
-    if (/\b(pass|通过|成功)\b/i.test(output)) return 'pass';
-    return 'conditional_pass';
-  }
-
-  private parseVerdictFromConclusion(conclusion: string): 'pass' | 'conditional_pass' | 'fail' | null {
-    const text = conclusion.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const verdictPattern = /(?:verdict|裁定|裁决|结果|结论|判断)\s*(?:为|是|:|：|=)?\s*`?\s*(conditional_pass|fail|pass|有条件通过|失败|不通过|通过|成功)\s*`?/i;
-    const match = text.match(verdictPattern);
-    if (!match) return null;
-    const raw = match[1].toLowerCase();
-    if (raw === 'fail' || raw === '失败' || raw === '不通过') return 'fail';
-    if (raw === 'conditional_pass' || raw === '有条件通过') return 'conditional_pass';
-    if (raw === 'pass' || raw === '通过' || raw === '成功') return 'pass';
-    return null;
+    throw new Error('缺少严格最终裁决 JSON');
   }
 
   private getTransitionReason(result: StateExecutionResult): string {
     if (result.verdict === 'pass') {
       return '所有检查通过';
-    } else if (result.issues.length > 0) {
+    }
+    if (result.issues.length > 0) {
       const criticalCount = result.issues.filter(i => i.severity === 'critical').length;
       const majorCount = result.issues.filter(i => i.severity === 'major').length;
       return `发现 ${criticalCount} 个严重问题, ${majorCount} 个主要问题`;
     }
-    return '条件性通过';
+    if (result.verdict === 'conditional_pass') {
+      return '条件性通过';
+    }
+    return '裁决失败';
   }
 
   private generateStateSummary(state: StateMachineState, issues: Issue[]): string {
@@ -7833,7 +8090,6 @@ try {
 
     this.emit('status', {
       status: 'running',
-      message: '恢复运行中...',
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -7862,7 +8118,6 @@ try {
       this.currentStep = resumeStepKey;
       this.emit('status', {
         status: 'running',
-        message: `恢复运行：将从步骤 ${resumeStepKey} 继续`,
         runId: this.currentRunId,
         startTime: this.runStartTime,
         endTime: this.runEndTime,
@@ -7896,6 +8151,7 @@ try {
     } else {
       await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
     }
+    this.startWorkflowAgentPrewarm(workflowConfig);
 
     // If resuming from __human_approval__, restore the approval wait flow
     if (this.currentState === '__human_approval__') {
@@ -8018,7 +8274,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -8034,7 +8289,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -8360,8 +8614,8 @@ try {
     if (!running) return null;
 
     // Kill the process
-    if (!processManager.killProcess(running.id) && this.currentEngine) {
-      this.currentEngine.cancel();
+    if (!processManager.killProcess(running.id) && this.currentRuntime) {
+      this.currentRuntime.cancel();
       const rawProc = processManager.getProcessRaw(running.id);
       if (rawProc) { rawProc.status = 'killed'; rawProc.endTime = new Date(); }
     }
@@ -8437,7 +8691,6 @@ try {
 
     this.emit('status', {
       status: 'running',
-      message: `从状态 ${stateName} 重新运行...`,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
       currentConfigFile: this.currentConfigFile
@@ -8464,6 +8717,7 @@ try {
         agent.sessionId = persistedAgent.sessionId;
       }
     }
+    this.startWorkflowAgentPrewarm(workflowConfig);
 
     // Continue execution from this state
     try {
@@ -8474,7 +8728,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           startTime: this.runStartTime,
           endTime: this.runEndTime,
           currentConfigFile: this.currentConfigFile
@@ -8488,7 +8741,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
           currentConfigFile: this.currentConfigFile
@@ -8562,7 +8814,6 @@ try {
 
     this.emit('status', {
       status: 'running',
-      message: `从已结束运行强制跳转到状态 ${targetState} 并恢复执行...`,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
@@ -8591,6 +8842,7 @@ try {
     } else {
       await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
     }
+    this.startWorkflowAgentPrewarm(workflowConfig);
 
     try {
       await this.executeStateMachine(workflowConfig, runState.requirements);
@@ -8600,7 +8852,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
-          message: '工作流执行完成',
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -8616,7 +8867,6 @@ try {
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
-          message: error.message,
           runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
@@ -8694,20 +8944,24 @@ try {
       if (result.is_error || isEngineLevelFailure(answer)) {
         throw new Error(answer.trim() || 'Agent 查询失败');
       }
-      replaceAgentStateSessionId(agentState, result.session_id);
-      
-      this.agentFlow.push({
-        id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        type: 'response',
-        fromAgent: agentName,
-        toAgent: 'supervisor',
-        message: answer,
-        stateName: this.currentState || '',
-        stepName: '',
-        round: 0,
-        timestamp: new Date().toISOString(),
-      });
-      this.emit('agent-flow', { agentFlow: this.agentFlow });
+      replaceAgentStateSessionId(agentState, result.runtimeSessionId);
+
+      const isSupervisorFinalReviewJson = agentName === this.currentSupervisorAgent
+        && this.isWorkflowFinalReviewJsonResponse(answer);
+      if (!isSupervisorFinalReviewJson) {
+        this.agentFlow.push({
+          id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'response',
+          fromAgent: agentName,
+          toAgent: 'supervisor',
+          message: answer,
+          stateName: this.currentState || '',
+          stepName: '',
+          round: 0,
+          timestamp: new Date().toISOString(),
+        });
+        this.emit('agent-flow', { agentFlow: this.agentFlow });
+      }
       
       return answer;
     } catch (error) {

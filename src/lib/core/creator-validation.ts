@@ -106,7 +106,7 @@ export function buildDefaultAgentDraft(input?: Partial<any>) {
     capabilities: Array.isArray(input?.capabilities) && input.capabilities.length > 0 ? input.capabilities : ['通用协作'],
     systemPrompt: typeof input?.systemPrompt === 'string' && input.systemPrompt.trim()
       ? input.systemPrompt
-      : '你是一个专业、可靠的 CSIHarness Agent。',
+      : '你是一个专业、可靠的 ACEHarness Agent。',
     description: typeof input?.description === 'string' ? input.description : '示例 Agent',
     keywords: Array.isArray(input?.keywords) ? input.keywords : ['示例'],
     tags: Array.isArray(input?.tags) ? input.tags : ['AI创建'],

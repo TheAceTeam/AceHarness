@@ -41,6 +41,7 @@ import type {
 } from '@/lib/core/home-sidebar-state';
 import { detectOpeningRole, type OpeningRole } from '@/lib/agora/opening-copy';
 import { createInitialChatroomState, ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
+import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 
 export interface AgoraChatPanelProps {
   availableAgents: Array<{ name: string; description?: string }>;
@@ -118,6 +119,8 @@ const MODE_LABELS: Record<CollaborationChatroomMode, string> = {
 };
 
 const USER_LED_AGENT_REPLY_LIMIT = 2;
+const AGORA_INITIAL_VISIBLE_MESSAGES = 5;
+const AGORA_VISIBLE_MESSAGE_STEP = 10;
 const USER_LED_AGENT_REPLY_PER_PARTICIPANT = 1;
 
 const AGORA_NATURAL_CONVERSATION_GUIDE = [
@@ -799,12 +802,25 @@ export function AgoraChatPanel({
   const normalizedRoom = ensureRoom(room);
   const chatroom = normalizedRoom.chatroom || createInitialChatroomState();
   const messages = normalizedRoom.messages || [];
+  const [visibleMessageCount, setVisibleMessageCount] = useState(AGORA_INITIAL_VISIBLE_MESSAGES);
+  const visibleMessages = useMemo(
+    () => messages.length > visibleMessageCount ? messages.slice(-visibleMessageCount) : messages,
+    [messages, visibleMessageCount],
+  );
+  const hiddenMessageCount = Math.max(0, messages.length - visibleMessages.length);
   const roomTitle = chatroom.topic || normalizedRoom.topic || '议场消息';
+
+  useEffect(() => {
+    setVisibleMessageCount((count) => {
+      const next = Math.max(AGORA_INITIAL_VISIBLE_MESSAGES, Math.min(count, messages.length || AGORA_INITIAL_VISIBLE_MESSAGES));
+      return next === count ? count : next;
+    });
+  }, [messages.length]);
   const participantRoster = useMemo<CollaborationChatroomParticipant[]>(() => {
-    const legacyTemporaryAgents = chatroom.temporaryAgents || [];
+    const preRuntimeTemporaryAgents = chatroom.temporaryAgents || [];
     if (chatroom.participantRoster?.length) return chatroom.participantRoster;
     return (chatroom.participants || []).map((name, index) => {
-      const temp = legacyTemporaryAgents.find((agent) => agent.name === name);
+      const temp = preRuntimeTemporaryAgents.find((agent) => agent.name === name);
       return temp ? {
         id: temp.id,
         name: temp.name,
@@ -815,7 +831,7 @@ export function AgoraChatPanel({
         model: temp.model || '',
         createdAt: temp.createdAt,
       } : {
-        id: `legacy-${index}-${name}`,
+        id: `preRuntime-${index}-${name}`,
         name,
         sourceType: 'agent' as const,
         sourceAgent: name,
@@ -840,6 +856,7 @@ export function AgoraChatPanel({
   const [voteDialogOpen, setVoteDialogOpen] = useState(false);
   const [temporaryParticipantDialogOpen, setTemporaryParticipantDialogOpen] = useState(false);
   const [globalRuntime, setGlobalRuntime] = useState({ engine: '', model: '' });
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
   const [voteDraft, setVoteDraft] = useState<VoteDraft>({ question: '', options: '', allowAbstain: false });
   const [topicDraft, setTopicDraft] = useState(chatroom.topic || '');
   const [temporaryAgentDraft, setTemporaryAgentDraft] = useState<TemporaryAgentDraft>({
@@ -857,32 +874,13 @@ export function AgoraChatPanel({
   }, [chatroom.settings.responseMode]);
 
   useEffect(() => {
-    let cancelled = false;
-    const refresh = () => {
-      fetch('/api/engine')
-        .then((res) => res.json())
-        .then((data) => {
-          if (cancelled) return;
-          setGlobalRuntime({
-            engine: typeof data?.engine === 'string' ? data.engine : '',
-            model: typeof data?.defaultModel === 'string' ? data.defaultModel : '',
-          });
-        })
-        .catch(() => {});
-    };
-    refresh();
-    const onEngineUpdated = () => refresh();
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === 'engine-config-updated-at') refresh();
-    };
-    window.addEventListener('engine:updated', onEngineUpdated as EventListener);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, []);
+    const data = runtimeSelectionQuery.data;
+    if (!data) return;
+    setGlobalRuntime({
+      engine: typeof data.engine === 'string' ? data.engine : '',
+      model: typeof data.defaultModel === 'string' ? data.defaultModel : '',
+    });
+  }, [runtimeSelectionQuery.data]);
 
   useEffect(() => {
     setTopicInput(chatroom.topic || normalizedRoom.topic || '');
@@ -893,8 +891,8 @@ export function AgoraChatPanel({
     if (!normalizedRoom.chatroom) return;
     if (chatroom.status !== 'setup') return;
     if (chatroom.settings.defaultRuntimeMode) return;
-    const hasLegacyDefaultRuntime = Boolean(chatroom.settings.defaultEngine || chatroom.settings.defaultModel);
-    if (!hasLegacyDefaultRuntime) return;
+    const hasPreRuntimeDefaultRuntime = Boolean(chatroom.settings.defaultEngine || chatroom.settings.defaultModel);
+    if (!hasPreRuntimeDefaultRuntime) return;
     updateRoom((current) => {
       const base = ensureRoom(current);
       const currentChatroom = base.chatroom;
@@ -2333,7 +2331,7 @@ export function AgoraChatPanel({
       {shouldRenderRoomTranscript ? (
         <div className={cn(layout === 'workspace' && 'flex min-h-0 flex-1 flex-col')}>
           <CollaborationRoomSurface
-            messages={messages}
+            messages={visibleMessages}
             hideMessages={false}
             hideComposer={hideComposer}
             draft={draft}
@@ -2349,6 +2347,19 @@ export function AgoraChatPanel({
             emptyText=""
             helperText={layout === 'workspace' ? null : 'Ctrl/Cmd + Enter 发送。'}
             customControls={runtimeComposerControls}
+            messagesPrefix={hiddenMessageCount > 0 ? (
+              <div className="mb-3 flex justify-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 rounded-full px-3 text-xs"
+                  onClick={() => setVisibleMessageCount((count) => count + AGORA_VISIBLE_MESSAGE_STEP)}
+                >
+                  加载更早的 {hiddenMessageCount} 条
+                </Button>
+              </div>
+            ) : null}
             inlineContent={inlineContent}
             inlineContentSpeakerName={inlineContentSpeakerName}
             onDeleteMessage={handleDeleteRoomMessage}

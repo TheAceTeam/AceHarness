@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import AuthGuard from '@/components/AuthGuard';
 import Markdown from '@/components/Markdown';
-import { workspaceApi } from '@/lib/core/api';
+import { useWorkspaceFileBlobQuery, useWorkspaceFileQuery } from '@/client/query/workspace';
 import { Button } from '@/components/ui/button';
 
 interface AbsoluteFilePreviewProps {
@@ -28,42 +28,24 @@ function extOf(path: string): string {
 }
 
 function AbsoluteFilePreviewContent({ absolutePath }: AbsoluteFilePreviewProps) {
-  const [content, setContent] = useState('');
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const workspace = useMemo(() => parentDirOf(absolutePath), [absolutePath]);
   const file = useMemo(() => fileNameOf(absolutePath), [absolutePath]);
   const ext = useMemo(() => extOf(absolutePath), [absolutePath]);
   const isMarkdown = ext === 'md' || ext === 'markdown' || ext === 'mdx';
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError('');
-    setContent('');
-
-    workspaceApi.getFile(workspace, file)
-      .then((data) => {
-        if (cancelled) return;
-        setContent(data.content || '');
-      })
-      .catch((err: any) => {
-        if (cancelled) return;
-        setError(err?.message || '读取文件失败');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [file, workspace]);
+  const fileQuery = useWorkspaceFileQuery(workspace, file, { enabled: Boolean(workspace && file) });
+  const blobQuery = useWorkspaceFileBlobQuery(workspace, file, { enabled: false });
+  const loading = fileQuery.isLoading;
+  const displayError = error || (fileQuery.error instanceof Error ? fileQuery.error.message : '');
+  const displayContent = fileQuery.data?.content ?? '';
 
   const handleDownload = async () => {
     try {
-      const blob = await workspaceApi.getFileBlob(workspace, file);
+      const result = await blobQuery.refetch();
+      if (result.error) throw result.error;
+      const blob = result.data;
+      if (!blob) throw new Error('下载失败');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -93,12 +75,12 @@ function AbsoluteFilePreviewContent({ absolutePath }: AbsoluteFilePreviewProps) 
         <div className="rounded-lg border bg-card p-4">
           {loading ? (
             <div className="py-10 text-center text-sm text-muted-foreground">加载中...</div>
-          ) : error ? (
-            <div className="py-10 text-center text-sm text-destructive">{error}</div>
+          ) : displayError ? (
+            <div className="py-10 text-center text-sm text-destructive">{displayError}</div>
           ) : isMarkdown ? (
-            <Markdown>{content}</Markdown>
+            <Markdown>{displayContent}</Markdown>
           ) : (
-            <pre className="whitespace-pre-wrap break-words text-sm leading-6">{content}</pre>
+            <pre className="whitespace-pre-wrap break-words text-sm leading-6">{displayContent}</pre>
           )}
         </div>
       </div>

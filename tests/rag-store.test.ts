@@ -7,7 +7,7 @@ let aceHome = '';
 
 async function loadStore() {
   vi.resetModules();
-  process.env.CSIHARNESS_HOME = aceHome;
+  process.env.ACE_HOME = aceHome;
   return import('@/lib/rag/store');
 }
 
@@ -17,7 +17,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(aceHome, { recursive: true, force: true });
-  delete process.env.CSIHARNESS_HOME;
+  delete process.env.ACE_HOME;
 });
 
 describe('rag store', () => {

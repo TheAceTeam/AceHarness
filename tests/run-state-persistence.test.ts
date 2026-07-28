@@ -536,6 +536,73 @@ describe('run-state-persistence', () => {
     });
   });
 
+  test('appendStreamContent withholds ace-process frames until the protocol block is complete', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState, appendStreamContent, loadStreamContent } = await loadPersistence();
+      const state = minimalRunState({ runId: 'run-stream-protocol-append' });
+      await saveRunState(state);
+
+      await appendStreamContent(state.runId, 'Build Step', 'before\n<ace-proce');
+      expect(await loadStreamContent(state.runId, 'Build Step')).toBe('before\n');
+
+      await appendStreamContent(state.runId, 'Build Step', 'ss>{"kind":"tool-result","toolName":"read","output":"ok"}</ace-process>\nafter');
+
+      const expected = 'before\n<ace-process>{"kind":"tool-result","toolName":"read","output":"ok"}</ace-process>\nafter';
+      expect(await loadStreamContent(state.runId, 'Build Step')).toBe(expected);
+
+      const chunkPath = resolve(aceHome, 'runs', state.runId, 'streams', 'Build_Step.chunks.jsonl');
+      const chunks = (await readFile(chunkPath, 'utf-8')).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+      expect(chunks.map((chunk) => chunk.text)).toEqual([
+        'before\n',
+        '<ace-process>{"kind":"tool-result","toolName":"read","output":"ok"}</ace-process>',
+        '\nafter',
+      ]);
+    });
+  });
+
+  test('saveStreamContent consumes partial ace-process frames without writing or duplicating them', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState, saveStreamContent, loadStreamContent } = await loadPersistence();
+      const state = minimalRunState({ runId: 'run-stream-protocol-save' });
+      await saveRunState(state);
+
+      await saveStreamContent(state.runId, 'Build Step', 'alpha <ace-process>{"kind":"tool-call"');
+      expect(await loadStreamContent(state.runId, 'Build Step')).toBe('alpha ');
+
+      await saveStreamContent(
+        state.runId,
+        'Build Step',
+        'alpha <ace-process>{"kind":"tool-call","toolName":"grep"}</ace-process> omega',
+      );
+
+      const expected = 'alpha <ace-process>{"kind":"tool-call","toolName":"grep"}</ace-process> omega';
+      expect(await loadStreamContent(state.runId, 'Build Step')).toBe(expected);
+
+      const chunkPath = resolve(aceHome, 'runs', state.runId, 'streams', 'Build_Step.chunks.jsonl');
+      const chunks = (await readFile(chunkPath, 'utf-8')).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+      expect(chunks.map((chunk) => chunk.text)).toEqual([
+        'alpha ',
+        '<ace-process>{"kind":"tool-call","toolName":"grep"}</ace-process>',
+        ' omega',
+      ]);
+    });
+  });
+
+  test('saveStreamContent rewrite does not persist truncated ace-process frames', async () => {
+    await withIsolatedAceHome(async () => {
+      const { saveRunState, saveStreamContent, loadStreamContent } = await loadPersistence();
+      const state = minimalRunState({ runId: 'run-stream-protocol-rewrite' });
+      await saveRunState(state);
+
+      await saveStreamContent(state.runId, 'Build Step', 'longer initial content');
+      await saveStreamContent(state.runId, 'Build Step', 'x <ace-process>{"kind":"tool-result"');
+      expect(await loadStreamContent(state.runId, 'Build Step')).toBe('x ');
+
+      await saveStreamContent(state.runId, 'Build Step', 'x <ace-process>{"kind":"tool-result","toolName":"read"}</ace-process>');
+      expect(await loadStreamContent(state.runId, 'Build Step')).toBe('x <ace-process>{"kind":"tool-result","toolName":"read"}</ace-process>');
+    });
+  });
+
   test('loadStreamContent returns null for nonexistent stream', async () => {
     await withIsolatedAceHome(async () => {
       const { loadStreamContent } = await loadPersistence();

@@ -12,6 +12,7 @@ import { Conversation, ConversationContent, ConversationScrollButton } from '@/c
 import { PromptInput, PromptInputTextarea, PromptInputFooter, PromptInputSubmit } from '@/components/ai-elements/prompt-input';
 import type { PromptInputMessage } from '@/components/ai-elements/prompt-input';
 import { normalizeAssistantDisplay } from '@/lib/chat/actions';
+import { resolveChatRuntimeDisplay } from '@/lib/chat/runtime-session-display';
 import { cn } from '@/lib/core/utils';
 
 interface AuthViewer {
@@ -80,25 +81,24 @@ interface Message {
 }
 
 export default function ChatModal() {
-  const { isOpen, toggleChat, closeChat, model: ctxModel, effectiveEngine: ctxEffectiveEngine, isModelSelectionReady } = useChat();
+  const { isOpen, toggleChat, closeChat, model: ctxModel, isModelSelectionReady } = useChat();
   const [messages, setMessages] = useState<Message[]>(createInitialMessages);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [model, setModel] = useState(() => ctxModel || '');
-  const [engine, setEngine] = useState(() => ctxEffectiveEngine || '');
+  const [model, setModel] = useState('');
+  const [engine, setEngine] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [draft, setDraft] = useState('');
   const [currentUser, setCurrentUser] = useState<AuthViewer | null>(() => readStoredAuthUser());
   const effectiveEngine = useCurrentEngine(engine);
-  const isComposerReady = isModelSelectionReady && Boolean(model && effectiveEngine);
-
-  useEffect(() => {
-    if (!model && ctxModel) setModel(ctxModel);
-  }, [ctxModel, model]);
-
-  useEffect(() => {
-    if (!engine && ctxEffectiveEngine) setEngine(ctxEffectiveEngine);
-  }, [ctxEffectiveEngine, engine]);
+  const effectiveModel = model || ctxModel;
+  const isComposerReady = isModelSelectionReady && Boolean(effectiveModel && effectiveEngine);
+  const runtimeDisplay = useMemo(() => resolveChatRuntimeDisplay({
+    engine: effectiveEngine,
+    model: effectiveModel,
+    isStreaming: loading,
+    hasError: messages.some((message) => message.role === 'error'),
+  }), [effectiveEngine, effectiveModel, loading, messages]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -131,7 +131,7 @@ export default function ChatModal() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ message: trimmed, model, engine: effectiveEngine, sessionId }),
+        body: JSON.stringify({ message: trimmed, model: effectiveModel, engine: effectiveEngine, sessionId }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -150,7 +150,7 @@ export default function ChatModal() {
           rawContent: data.result,
           costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
           engine: effectiveEngine,
-          model,
+          model: effectiveModel,
           timestamp: Date.now(),
         }]);
       }
@@ -247,7 +247,12 @@ export default function ChatModal() {
           )}
         >
           <div className="flex items-center justify-between border-b bg-muted px-4 py-3 flex-shrink-0">
-            <span className="font-semibold text-sm">轻聊</span>
+            <div className="min-w-0">
+              <span className="block text-sm font-semibold">轻聊</span>
+              <span className="block truncate text-[11px] text-muted-foreground">
+                {runtimeDisplay.status === 'idle' ? runtimeDisplay.routeLabel : `${runtimeDisplay.routeLabel} · ${runtimeDisplay.statusLabel}`}
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -275,7 +280,7 @@ export default function ChatModal() {
               {loading && (
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <RobotLogo size={24} />
-                  <Shimmer as="span" className="text-sm">思考中...</Shimmer>
+                  <Shimmer as="span" className="text-sm">{runtimeDisplay.statusLabel}</Shimmer>
                 </div>
               )}
             </ConversationContent>

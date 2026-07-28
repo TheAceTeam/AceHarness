@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { dirname } from 'path';
 import { parse, stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
-import { mcpServerSchema, type ManagedMcpServer } from '@/lib/mcp/types';
+import { mcpServerSchema, type ManagedMcpServer, type McpTransportType } from '@/lib/mcp/types';
 
 export type { ManagedMcpServer } from '@/lib/mcp/types';
 
@@ -16,20 +16,38 @@ function normalizeManagedMcpServer(input: unknown): ManagedMcpServer | null {
   if (!parsed.success) return null;
 
   const name = parsed.data.name.trim();
-  const command = parsed.data.command.trim();
+  const type: McpTransportType = parsed.data.type || 'stdio';
+  const command = parsed.data.command?.trim() || '';
+  const url = parsed.data.url?.trim() || '';
   const envEntries = Object.entries(parsed.data.env || {})
     .filter(([key, value]) => key.trim().length > 0 && typeof value === 'string');
   const env = envEntries.length > 0
     ? Object.fromEntries(envEntries.map(([key, value]) => [key.trim(), String(value)]))
     : undefined;
+  const headerEntries = Object.entries(parsed.data.headers || {})
+    .filter(([key, value]) => key.trim().length > 0 && typeof value === 'string');
+  const headers = headerEntries.length > 0
+    ? Object.fromEntries(headerEntries.map(([key, value]) => [key.trim(), String(value)]))
+    : undefined;
 
-  if (!name || !command) return null;
+  if (!name) return null;
+  if (type === 'stdio' && !command) return null;
+  if (type !== 'stdio' && !url) return null;
+
+  if (type === 'stdio') {
+    return {
+      name,
+      type,
+      command,
+      ...(env ? { env } : {}),
+    };
+  }
 
   return {
     name,
-    type: 'stdio',
-    command,
-    ...(env ? { env } : {}),
+    type,
+    url,
+    ...(headers ? { headers } : {}),
   };
 }
 
@@ -193,7 +211,8 @@ export function toClaudeSdkMcpServers(servers: ManagedMcpServer[]): Record<strin
   env?: Record<string, string>;
 }> {
   return Object.fromEntries(servers.flatMap((server) => {
-    const [command, ...args] = parseCommandString(server.command);
+    if (server.type !== 'stdio') return [];
+    const [command, ...args] = parseCommandString(server.command || '');
     if (!command) return [];
     return [[server.name, {
       type: 'stdio' as const,
@@ -211,7 +230,8 @@ export function toAcpMcpServers(servers: ManagedMcpServer[]): Array<{
   env: Array<{ name: string; value: string }>;
 }> {
   return servers.flatMap((server) => {
-    const [command, ...args] = parseCommandString(server.command);
+    if (server.type !== 'stdio') return [];
+    const [command, ...args] = parseCommandString(server.command || '');
     if (!command) return [];
     return [{
       name: server.name,
@@ -228,7 +248,8 @@ export function toOpenCodeMcpConfig(server: ManagedMcpServer): {
   environment?: Record<string, string>;
   enabled: true;
 } | null {
-  const command = parseCommandString(server.command);
+  if (server.type !== 'stdio') return null;
+  const command = parseCommandString(server.command || '');
   if (command.length === 0) return null;
   return {
     type: 'local',
@@ -246,7 +267,8 @@ export function toCodexMcpServers(servers: ManagedMcpServer[]): Record<string, {
   enabled: true;
 }> {
   return Object.fromEntries(servers.flatMap((server) => {
-    const [command, ...args] = parseCommandString(server.command);
+    if (server.type !== 'stdio') return [];
+    const [command, ...args] = parseCommandString(server.command || '');
     if (!command) return [];
     return [[server.name, {
       type: 'stdio' as const,

@@ -40,9 +40,9 @@ async function loginCommand() {
 
 async function bridgeCommand() {
   const accountId = getArg('account') || process.env.WECHAT_ACCOUNT_ID || '';
-  const webhookUrl = getArg('webhook') || process.env.CSIHARNESS_WEBHOOK_URL || '';
-  const secret = getArg('secret') || process.env.CSIHARNESS_SECRET || '';
-  const integrationId = getArg('integration') || process.env.CSIHARNESS_INTEGRATION_ID || '';
+  const webhookUrl = getArg('webhook') || process.env.ACE_WEBHOOK_URL || '';
+  const secret = getArg('secret') || process.env.ACE_SECRET || '';
+  const integrationId = getArg('integration') || process.env.ACE_INTEGRATION_ID || '';
 
   if (!accountId || !webhookUrl || !secret || !integrationId) {
     throw new Error('Missing required args. Need --account, --webhook, --secret, --integration.');

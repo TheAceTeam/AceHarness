@@ -1,9 +1,7 @@
-import nextVitals from 'eslint-config-next/core-web-vitals';
 import reactPlugin from 'eslint-plugin-react';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
 
 const eslintConfig = [
-  ...nextVitals,
   {
     plugins: {
       react: reactPlugin,
@@ -15,7 +13,6 @@ const eslintConfig = [
       },
     },
     rules: {
-      '@next/next/no-img-element': 'off',
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/immutability': 'off',
       'react-hooks/purity': 'off',
@@ -51,7 +48,6 @@ const eslintConfig = [
   },
   {
     ignores: [
-      '.next/**',
       'out/**',
       'build/**',
       'dist/**',

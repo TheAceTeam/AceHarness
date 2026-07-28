@@ -1,12 +1,11 @@
 import {
-  createEngine,
-  createEngineForDriver,
-  getEngineAvailabilityReport,
-  resolveEffectiveEngine,
-  type EngineDriver,
-  type EngineType,
-} from '@/lib/engines/engine-factory';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from '@/lib/engines/engine-interface';
+  getRuntimeDiagnosticAvailability,
+  resolveRuntimeDiagnosticIdentity,
+  runRuntimeDiagnosticPrompt,
+  type RuntimeDiagnosticPromptOptions,
+  type RuntimeDiagnosticPromptResult,
+  type RuntimeDiagnosticPromptEvent,
+} from '@/lib/models/diagnostics-runtime-bridge';
 import type {
   DiagnosticDriver,
   DiagnosticLogEntry,
@@ -154,6 +153,23 @@ function normalizeDriver(value: unknown): DiagnosticDriver {
   return value === 'sdk' || value === 'stdio' ? value : 'auto';
 }
 
+function optionalTrimmedString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function resolveDiagnosticModelRoute(input: ModelDiagnosticsRequest): {
+  modelRouteId?: string;
+  engineId: string;
+  model: string;
+} {
+  const route = resolveRuntimeDiagnosticIdentity(input);
+  return {
+    modelRouteId: route.modelRouteId,
+    engineId: route.engineId,
+    model: route.model,
+  };
+}
+
 function normalizeCapabilityIds(value: unknown): Set<string> {
   const allProbeCapabilities = MODEL_DIAGNOSTIC_CAPABILITIES.filter((id) => id !== 'output_speed');
   const all = new Set(allProbeCapabilities);
@@ -246,7 +262,7 @@ function parseJsonCandidate(output: string): JsonParseResult | null {
   return null;
 }
 
-function runStatusFromResult(result: EngineResult | null, output: string, error?: string): DiagnosticRunStatus {
+function runStatusFromResult(result: RuntimeDiagnosticPromptResult | null, output: string, error?: string): DiagnosticRunStatus {
   if (error) return 'failed';
   if (result?.success && output.trim()) return 'passed';
   if (output.trim()) return 'warning';
@@ -254,8 +270,7 @@ function runStatusFromResult(result: EngineResult | null, output: string, error?
 }
 
 async function runPrompt(
-  engine: Engine,
-  options: EngineOptions & { label: string; category: string; id: string },
+  options: RuntimeDiagnosticPromptOptions & { label: string; category: string; id: string },
   log?: DiagnosticLogger,
   signal?: AbortSignal,
 ): Promise<DiagnosticPromptRun> {
@@ -268,7 +283,7 @@ async function runPrompt(
   let verboseEventLogs = 0;
   let verboseEventLimitLogged = false;
 
-  const onStream = (event: EngineStreamEvent) => {
+  const onStream = (event: RuntimeDiagnosticPromptEvent) => {
     const atMs = Date.now() - startedAt;
     const content = String(event.content || '');
     const metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : null;
@@ -371,17 +386,14 @@ async function runPrompt(
   };
 
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const onAbort = () => {
-    try { engine.cancel(); } catch {}
-  };
+  const onAbort = () => undefined;
   signal?.addEventListener('abort', onAbort, { once: true });
-  engine.on('stream', onStream);
   try {
-    const executePromise = engine.execute(options);
+    const executePromise = runRuntimeDiagnosticPrompt(options);
     executePromise.catch(() => undefined);
     const result = await Promise.race([
       executePromise,
-      new Promise<EngineResult>((_, reject) => {
+      new Promise<RuntimeDiagnosticPromptResult>((_, reject) => {
         if (!signal) return;
         if (signal.aborted) {
           reject(abortError());
@@ -389,13 +401,13 @@ async function runPrompt(
         }
         signal.addEventListener('abort', () => reject(abortError()), { once: true });
       }),
-      new Promise<EngineResult>((_, reject) => {
+      new Promise<RuntimeDiagnosticPromptResult>((_, reject) => {
         timer = setTimeout(() => {
-          try { engine.cancel(); } catch {}
           reject(new Error(`诊断请求超时 ${options.timeoutMs || DEFAULT_TIMEOUT_MS}ms`));
         }, options.timeoutMs || DEFAULT_TIMEOUT_MS);
       }),
     ]);
+    for (const event of result.events) onStream(event);
     const durationMs = Date.now() - startedAt;
     const output = String(result.output || '');
     const outputPreviewLength = options.id === 'cap-drawing-pelican'
@@ -425,7 +437,6 @@ async function runPrompt(
   } catch (error) {
     const durationMs = Date.now() - startedAt;
     if (isAbortError(error)) {
-      try { engine.cancel(); } catch {}
       throw error;
     }
     return {
@@ -447,42 +458,27 @@ async function runPrompt(
   } finally {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
-    engine.off('stream', onStream);
   }
-}
-
-async function instantiateDiagnosticEngine(engineId: string, driver: DiagnosticDriver): Promise<{ engine: Engine | null; effectiveEngine?: string }> {
-  if (driver === 'sdk' || driver === 'stdio') {
-    const effectiveEngine = resolveEffectiveEngine(engineId, driver) || engineId;
-    return {
-      engine: await createEngineForDriver(engineId as EngineType, driver as EngineDriver),
-      effectiveEngine,
-    };
-  }
-  return {
-    engine: await createEngine(engineId as EngineType),
-    effectiveEngine: resolveEffectiveEngine(engineId, null) || engineId,
-  };
 }
 
 function basePromptOptions(input: {
+  modelRouteId?: string;
+  engineId: string;
   model: string;
   timeoutMs: number;
   sessionId?: string;
-}): Omit<EngineOptions, 'prompt' | 'systemPrompt' | 'agent' | 'step'> {
+}): Omit<RuntimeDiagnosticPromptOptions, 'prompt' | 'systemPrompt' | 'agent' | 'step'> {
   return {
+    modelRouteId: input.modelRouteId,
+    engineId: input.engineId,
     model: input.model,
-    workingDirectory: process.cwd(),
     timeoutMs: input.timeoutMs,
     sessionId: input.sessionId,
-    allowedTools: [],
-    appendSystemPrompt: true,
-    diagnosticLogging: true,
   };
 }
 
 async function runEngineDebug(input: {
-  engine: Engine;
+  modelRouteId?: string;
   engineId: string;
   driver: DiagnosticDriver;
   effectiveEngine?: string;
@@ -516,7 +512,7 @@ async function runEngineDebug(input: {
 
   const singleStartedAt = Date.now();
   input.log?.({ message: '开始单轮对话 probe', detail: `注入记忆验证码 ${MULTI_TURN_MEMORY_TOKEN}，期望输出 ACE_OK` });
-  const single = await runPrompt(input.engine, {
+  const single = await runPrompt({
     ...basePromptOptions(input),
     id: 'engine-single-turn',
     label: '单轮对话',
@@ -524,7 +520,7 @@ async function runEngineDebug(input: {
     agent: 'engine-diagnostics',
     step: 'single-turn',
     prompt: `请记住验证码 ${MULTI_TURN_MEMORY_TOKEN}，后续我会询问。现在请只回复 ACE_OK，不要解释，不要调用工具。`,
-    systemPrompt: '你是 CSIHarness 引擎诊断助手。严格按用户要求回复。',
+    systemPrompt: '你是 ACEHarness 引擎诊断助手。严格按用户要求回复。',
   }, input.log, input.signal);
   throwIfAborted(input.signal);
   input.log?.({
@@ -565,7 +561,7 @@ async function runEngineDebug(input: {
   const multiStartedAt = Date.now();
   if (single.sessionId) {
     input.log?.({ message: '开始多轮记忆 probe', detail: `复用 session=${single.sessionId.slice(0, 12)}...` });
-    const multi = await runPrompt(input.engine, {
+    const multi = await runPrompt({
       ...basePromptOptions({ ...input, sessionId: single.sessionId }),
       id: 'engine-multi-turn',
       label: '多轮记忆',
@@ -573,7 +569,7 @@ async function runEngineDebug(input: {
       agent: 'engine-diagnostics',
       step: 'multi-turn',
       prompt: '这是第二轮。请回忆我上一轮让你记住的验证码。只回复 MEMORY=验证码，不要解释。',
-      systemPrompt: '你是 CSIHarness 引擎诊断助手。严格按用户要求回复。',
+      systemPrompt: '你是 ACEHarness 引擎诊断助手。严格按用户要求回复。',
     }, input.log, input.signal);
     throwIfAborted(input.signal);
     const remembered = String(multi.outputPreview || '').includes(MULTI_TURN_MEMORY_TOKEN);
@@ -1334,7 +1330,7 @@ const CONSISTENCY_PROMPT: PromptSpec = {
 };
 
 async function runCapabilityPrompt(
-  engine: Engine,
+  identity: { modelRouteId?: string; engineId: string },
   spec: PromptSpec,
   model: string,
   timeoutMs: number,
@@ -1343,8 +1339,8 @@ async function runCapabilityPrompt(
 ): Promise<DiagnosticPromptRun> {
   const effectiveTimeoutMs = promptTimeoutMs(timeoutMs, spec);
   throwIfAborted(signal);
-  return runPrompt(engine, {
-    ...basePromptOptions({ model, timeoutMs: effectiveTimeoutMs }),
+  return runPrompt({
+    ...basePromptOptions({ ...identity, model, timeoutMs: effectiveTimeoutMs }),
     id: spec.id,
     label: spec.label,
     category: spec.category,
@@ -1356,7 +1352,7 @@ async function runCapabilityPrompt(
 }
 
 async function runModelEvaluation(
-  engine: Engine,
+  identity: { modelRouteId?: string; engineId: string },
   model: string,
   timeoutMs: number,
   selectedCapabilityIds: Set<string>,
@@ -1407,7 +1403,7 @@ async function runModelEvaluation(
       message: `开始${spec.label} probe`,
       detail: `capability=${spec.capabilityId}, timeout=${effectiveTimeoutMs}ms`,
     });
-    const run = await runCapabilityPrompt(engine, spec, model, timeoutMs, log, signal);
+    const run = await runCapabilityPrompt(identity, spec, model, timeoutMs, log, signal);
     throwIfAborted(signal);
     runs.push(run);
     capabilities.push(scorer(run));
@@ -1431,11 +1427,11 @@ async function runModelEvaluation(
     throwIfAborted(signal);
     const consistencyTimeoutMs = promptTimeoutMs(timeoutMs, CONSISTENCY_PROMPT);
     log?.({ message: '开始一致性首轮 probe', detail: `capability=consistency, timeout=${consistencyTimeoutMs}ms` });
-    const consistencyRunA = await runCapabilityPrompt(engine, CONSISTENCY_PROMPT, model, timeoutMs, log, signal);
+    const consistencyRunA = await runCapabilityPrompt(identity, CONSISTENCY_PROMPT, model, timeoutMs, log, signal);
     throwIfAborted(signal);
     log?.({ level: logLevelFromStatus(consistencyRunA.status), message: '一致性首轮 probe 完成', detail: runLogDetail(consistencyRunA), fullDetail: runLogFullDetail(consistencyRunA) });
     log?.({ message: '开始一致性复测 probe', detail: `capability=consistency, timeout=${consistencyTimeoutMs}ms` });
-    const consistencyRunB = await runCapabilityPrompt(engine, { ...CONSISTENCY_PROMPT, id: 'cap-consistency-repeat', label: '一致性复测' }, model, timeoutMs, log, signal);
+    const consistencyRunB = await runCapabilityPrompt(identity, { ...CONSISTENCY_PROMPT, id: 'cap-consistency-repeat', label: '一致性复测' }, model, timeoutMs, log, signal);
     throwIfAborted(signal);
     runs.push(consistencyRunA, consistencyRunB);
     capabilities.push(scoreConsistency(consistencyRunA, consistencyRunB));
@@ -1458,8 +1454,9 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
   const startedAtMs = Date.now();
   const { logs, log } = createLogCollector(startedAtMs, options.onLog);
   const signal = options.signal;
-  const engineId = String(input.engine || 'claude-code').trim();
-  const model = String(input.model || '').trim();
+  const routeIdentity = resolveDiagnosticModelRoute(input);
+  const engineId = routeIdentity.engineId;
+  const model = routeIdentity.model;
   const driver = normalizeDriver(input.driver);
   const timeoutMs = clampTimeoutMs(input.timeoutMs);
   const includeEngineDebug = input.includeEngineDebug !== false;
@@ -1468,12 +1465,11 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
 
   log({
     message: '诊断任务已创建',
-    detail: `engine=${engineId}, driver=${driver}, model=${model || '默认模型'}, timeout=${timeoutMs}ms, capabilities=${capabilitySelectionLabel(selectedCapabilityIds)}`,
+    detail: `engine=${engineId}, driver=${driver}, model=${model || '默认模型'}, route=${routeIdentity.modelRouteId || 'preRuntime-input'}, timeout=${timeoutMs}ms, capabilities=${capabilitySelectionLabel(selectedCapabilityIds)}`,
   });
   throwIfAborted(signal);
 
-  let engine: Engine | null = null;
-  let effectiveEngine: string | undefined;
+  const effectiveEngine = `${engineId}/runtime`;
   let engineDebug: EngineDiagnosticSummary | undefined;
   let modelEvaluation: ModelEvaluationSummary | undefined;
 
@@ -1498,7 +1494,11 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
   throwIfAborted(signal);
   let availability;
   try {
-    availability = await getEngineAvailabilityReport(engineId);
+    availability = await getRuntimeDiagnosticAvailability({
+      modelRouteId: routeIdentity.modelRouteId,
+      engineId,
+      model,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const failedAvailabilityStage = makeStage({
@@ -1565,30 +1565,27 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
   emitProgress();
 
   const createStartedAt = Date.now();
-  log({ message: '开始初始化引擎 wrapper', detail: driver === 'auto' ? '使用当前默认 driver' : `指定 ${driver}` });
+  log({ message: '开始初始化 runtime model route', detail: routeIdentity.modelRouteId || `${engineId}/${model || 'default'}` });
   throwIfAborted(signal);
   let createStage: DiagnosticStage;
   try {
-    const created = await instantiateDiagnosticEngine(engineId, driver);
-    engine = created.engine;
-    effectiveEngine = created.effectiveEngine;
     createStage = makeStage({
       id: 'create-engine',
-      label: 'Wrapper 初始化',
+      label: 'Runtime route 初始化',
       startedAtMs: createStartedAt,
-      status: engine ? 'passed' : 'failed',
-      detail: engine ? `effective=${effectiveEngine || engine.getName()}` : 'createEngine 返回 null',
+      status: availabilityOk ? 'passed' : 'failed',
+      detail: availability.detail || `effective=${effectiveEngine}`,
     });
     log({
       level: logLevelFromStatus(createStage.status),
-      message: '引擎 wrapper 初始化完成',
+      message: 'runtime model route 初始化完成',
       detail: createStage.detail,
     });
     engineDebug = {
       engine: engineId,
       driver,
       effectiveEngine,
-      available: availabilityOk && Boolean(engine),
+      available: availabilityOk,
       streamSupported: false,
       observedEventTypes: [],
       stages: [availabilityStage, createStage],
@@ -1599,14 +1596,14 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
     const message = error instanceof Error ? error.message : String(error);
     createStage = makeStage({
       id: 'create-engine',
-      label: 'Wrapper 初始化',
+      label: 'Runtime route 初始化',
       startedAtMs: createStartedAt,
       status: 'failed',
       detail: message,
     });
     log({
       level: 'error',
-      message: '引擎 wrapper 初始化失败',
+      message: 'runtime model route 初始化失败',
       detail: message,
       fullDetail: error instanceof Error && error.stack ? error.stack : safeJson(error),
     });
@@ -1634,9 +1631,9 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
     };
   }
 
-  if (!engine) {
+  if (!availabilityOk) {
     const finishedAtMs = Date.now();
-    log({ level: 'error', message: '诊断终止', detail: '引擎不可用，无法执行后续 probe' });
+    log({ level: 'error', message: '诊断终止', detail: 'runtime model route 不可用，无法执行后续 probe' });
     return {
       ok: false,
       engine: engineId,
@@ -1656,7 +1653,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
         runs: [],
       },
       logs,
-      error: '引擎不可用，无法执行诊断',
+      error: 'runtime model route 不可用，无法执行诊断',
     };
   }
 
@@ -1664,7 +1661,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
     if (includeEngineDebug) {
       throwIfAborted(signal);
       engineDebug = await runEngineDebug({
-        engine,
+        modelRouteId: routeIdentity.modelRouteId,
         engineId,
         driver,
         effectiveEngine,
@@ -1688,7 +1685,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
         engine: engineId,
         driver,
         effectiveEngine,
-        available: availabilityOk && Boolean(engine),
+        available: availabilityOk,
         streamSupported: false,
         observedEventTypes: [],
         stages: [availabilityStage, createStage],
@@ -1700,7 +1697,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
     if (includeModelScore) {
       throwIfAborted(signal);
       const scoreStartedAt = Date.now();
-      modelEvaluation = await runModelEvaluation(engine, model, timeoutMs, selectedCapabilityIds, log, (summary) => {
+      modelEvaluation = await runModelEvaluation({ modelRouteId: routeIdentity.modelRouteId, engineId }, model, timeoutMs, selectedCapabilityIds, log, (summary) => {
         modelEvaluation = summary;
         emitProgress();
       }, signal);
@@ -1755,13 +1752,6 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
       logs,
       error: error instanceof Error ? error.message : String(error),
     };
-  } finally {
-    try {
-      engine.cancel();
-      (engine as any).cleanup?.();
-    } catch {
-      // Best-effort cleanup.
-    }
   }
 }
 

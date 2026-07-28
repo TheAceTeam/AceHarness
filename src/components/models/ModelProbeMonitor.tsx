@@ -4,10 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   CheckCircle2,
   Clock3,
   Edit3,
@@ -32,6 +28,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { withBasePath } from '@/client/base-url';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
@@ -44,13 +41,16 @@ import {
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
-import { ComboboxPortalProvider, SingleCombobox } from '@/components/ui/combobox';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/core/utils';
+import { AiModelSelectorField } from '@/components/AiModelSelectorField';
+import { EngineSelect } from '@/components/EngineSelect';
+import { ModelSelect } from '@/components/ModelSelect';
 import { EngineIcon } from '@/components/EngineIcon';
 import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
+import { useModelProbeRows, useSyncModelProbesToDb } from '@/client/db/collections';
 import type { ModelProbeListResponse, ModelProbeRuntimeStatus, ModelProbeSummary } from '@/lib/models/probe-types';
 
 interface ManagedModelReference {
@@ -105,17 +105,6 @@ interface GroupActionDialogState {
 const POLL_INTERVAL_MS = 30_000;
 const HISTORY_BAR_COUNT = 60;
 const DEFAULT_POLL_MINUTES = 5;
-const DRIVER_CAPABLE_ENGINES = new Set(['claude-code', 'opencode', 'nga', 'codegenie']);
-const PROBE_ENGINES = [
-  'claude-code',
-  'codex',
-  'opencode',
-  'kiro-cli',
-  'nga',
-  'codegenie',
-  'cursor',
-  'trae-cli',
-] as const;
 const AVAILABILITY_WINDOWS: AvailabilityWindow[] = [7, 15, 30];
 
 function readStoredAuthUser(): AuthViewer | null {
@@ -144,8 +133,8 @@ async function authFetch(input: string, init?: RequestInit): Promise<Response> {
     localStorage.removeItem('auth-token');
     localStorage.removeItem('auth-user');
     window.dispatchEvent(new CustomEvent('auth:expired'));
-    if (window.location.pathname !== '/login') {
-      window.location.replace('/login');
+    if (window.location.pathname !== withBasePath('/login')) {
+      window.location.replace(withBasePath('/login'));
     }
   }
   return response;
@@ -186,16 +175,6 @@ function createGroupActionState(mode: GroupActionMode, groupName: string): Group
   };
 }
 
-function supportsDriverSelection(engine: string): boolean {
-  return DRIVER_CAPABLE_ENGINES.has(engine);
-}
-
-function driverLabel(driver?: string): string {
-  if (driver === 'sdk') return 'SDK';
-  if (driver === 'stdio') return 'STDIO';
-  return 'AUTO';
-}
-
 function ProbeEndpointBadge({ endpoint, iconOnly = false }: { endpoint?: string; iconOnly?: boolean }) {
   const value = endpoint || 'unknown';
   const label = getEndpointDisplayName(value);
@@ -206,7 +185,7 @@ function ProbeEndpointBadge({ endpoint, iconOnly = false }: { endpoint?: string;
       variant="secondary"
       title={label}
       className={cn(
-        'h-7 rounded-full border border-border/70 bg-background/80 px-2 text-muted-foreground shadow-sm',
+        'h-7 rounded-md border border-border/70 bg-background/80 px-2 text-muted-foreground shadow-sm',
         iconOnly ? 'w-7 justify-center px-0' : showText ? 'gap-1.5 px-2.5' : 'px-2.5'
       )}
     >
@@ -229,7 +208,7 @@ function ProbeEngineBadge({ engine, compact = false }: { engine: string; compact
       variant="outline"
       title={label}
       className={cn(
-        'rounded-full border-border/70 bg-background/80 text-foreground shadow-sm',
+        'rounded-md border-border/70 bg-background/80 text-foreground shadow-sm',
         compact ? 'h-7 gap-1.5 px-2.5' : 'gap-1.5 px-2.5 py-1'
       )}
     >
@@ -424,37 +403,14 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
   const [editingProbe, setEditingProbe] = useState<ModelProbeSummary | null>(null);
   const [singleForm, setSingleForm] = useState<SingleProbeFormState>(createEmptySingleForm);
   const [batchForm, setBatchForm] = useState<BatchProbeFormState>(createEmptyBatchForm);
-  const [batchLeftSelection, setBatchLeftSelection] = useState<string[]>([]);
-  const [batchRightSelection, setBatchRightSelection] = useState<string[]>([]);
   const [selectedProbeIds, setSelectedProbeIds] = useState<Set<string>>(new Set());
   const [groupActionDialog, setGroupActionDialog] = useState<GroupActionDialogState | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthViewer | null>(() => readStoredAuthUser());
   const [nowMs, setNowMs] = useState(() => Date.now());
   const isAdmin = currentUser?.role === 'admin';
-
-  const engineOptions = useMemo(() => PROBE_ENGINES.map((engine) => ({
-    value: engine,
-    label: getEngineDisplayName(engine),
-    icon: <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />,
-  })), []);
-
-  const driverOptions = useMemo(() => ([
-    { value: 'auto', label: '自动' },
-    { value: 'sdk', label: 'SDK' },
-    { value: 'stdio', label: 'STDIO' },
-  ]), []);
-
-  const suggestedModels = useMemo(() => {
-    const query = singleForm.model.trim().toLowerCase();
-    return managedModels
-      .filter((model) => modelSupportsEngine(model, singleForm.engine))
-      .filter((model) => {
-        if (!query) return true;
-        return model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query);
-      })
-      .slice(0, 10);
-  }, [managedModels, singleForm.engine, singleForm.model]);
+  useSyncModelProbesToDb(data);
+  const probeRows = useModelProbeRows();
 
   const eligibleBatchModels = useMemo(() => (
     managedModels
@@ -462,26 +418,15 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
   ), [batchForm.engine, managedModels]);
 
-  const availableBatchModels = useMemo(() => {
-    const selectedSet = new Set(batchForm.selectedModelIds);
-    const query = batchForm.search.trim().toLowerCase();
-    return eligibleBatchModels.filter((model) => {
-      if (selectedSet.has(model.id)) return false;
-      if (!query) return true;
-      return model.name.toLowerCase().includes(query) || model.id.toLowerCase().includes(query);
-    });
-  }, [batchForm.search, batchForm.selectedModelIds, eligibleBatchModels]);
-
-  const selectedBatchModels = useMemo(() => {
-    const byId = new Map(eligibleBatchModels.map((model) => [model.id, model]));
-    return batchForm.selectedModelIds
-      .map((id) => byId.get(id))
-      .filter((model): model is ManagedModelReference => Boolean(model));
-  }, [batchForm.selectedModelIds, eligibleBatchModels]);
+  const batchModelOptions = useMemo(() => eligibleBatchModels.map((model) => ({
+    value: model.id,
+    label: model.name,
+    description: model.id,
+  })), [eligibleBatchModels]);
 
   const groupedProbes = useMemo(() => {
     const grouped = new Map<string, ModelProbeSummary[]>();
-    for (const probe of data?.probes || []) {
+    for (const probe of probeRows) {
       const bucket = grouped.get(probe.groupId) || [];
       bucket.push(probe);
       grouped.set(probe.groupId, bucket);
@@ -499,7 +444,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
 
     groups.sort(groupOrder(sortMode, windowDays));
     return groups;
-  }, [data?.probes, sortMode, windowDays]);
+  }, [probeRows, sortMode, windowDays]);
 
   useEffect(() => {
     setCurrentUser(readStoredAuthUser());
@@ -544,8 +489,6 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     setEditingProbe(null);
     setSingleForm(createEmptySingleForm());
     setBatchForm(createEmptyBatchForm());
-    setBatchLeftSelection([]);
-    setBatchRightSelection([]);
     setDialogMode('single');
   }, []);
 
@@ -569,7 +512,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     setSingleForm({
       name: probe.name,
       engine: probe.engine,
-      driver: (probe.driver as ProbeDriver) || 'auto',
+      driver: 'auto',
       model: probe.model,
       intervalMinutes: String(probe.intervalMinutes),
       timeoutMs: String(probe.timeoutMs),
@@ -682,7 +625,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       const payload = {
         name: singleForm.name.trim() || undefined,
         engine,
-        driver: supportsDriverSelection(engine) ? singleForm.driver : 'auto',
+        driver: 'auto',
         model,
         intervalMinutes: Number.parseInt(singleForm.intervalMinutes, 10) || DEFAULT_POLL_MINUTES,
         timeoutMs: Number.parseInt(singleForm.timeoutMs, 10) || 45000,
@@ -733,7 +676,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       const probes = entries.map((entry) => ({
         name: `${getEngineDisplayName(engine)} / ${entry.name}`,
         engine,
-        driver: supportsDriverSelection(engine) ? batchForm.driver : 'auto',
+        driver: 'auto',
         model: entry.id,
         groupName: batchForm.groupName.trim() || 'New Group',
         intervalMinutes: Number.parseInt(batchForm.intervalMinutes, 10) || DEFAULT_POLL_MINUTES,
@@ -759,24 +702,6 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       setSubmitting(false);
     }
   }, [batchForm, isAdmin, managedModels, resetForms, toast]);
-
-  const moveBatchModelsToSelected = useCallback((ids: string[]) => {
-    if (ids.length === 0) return;
-    setBatchForm((prev) => ({
-      ...prev,
-      selectedModelIds: [...prev.selectedModelIds, ...ids.filter((id) => !prev.selectedModelIds.includes(id))],
-    }));
-    setBatchLeftSelection([]);
-  }, []);
-
-  const moveBatchModelsToAvailable = useCallback((ids: string[]) => {
-    if (ids.length === 0) return;
-    setBatchForm((prev) => ({
-      ...prev,
-      selectedModelIds: prev.selectedModelIds.filter((id) => !ids.includes(id)),
-    }));
-    setBatchRightSelection([]);
-  }, []);
 
   const toggleProbeSelection = useCallback((probeId: string) => {
     setSelectedProbeIds((prev) => {
@@ -808,7 +733,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '仅管理员可拆分分组');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     if (selected.length === 0) {
       toast('warning', '请先选择要拆分的模型');
       return;
@@ -819,7 +744,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       return;
     }
     setGroupActionDialog(createGroupActionState('split', `${selected[0].groupName} - Split`));
-  }, [data?.probes, isAdmin, selectedProbeIds, toast]);
+  }, [isAdmin, probeRows, selectedProbeIds, toast]);
 
   const splitSelectedProbes = useCallback(async () => {
     const nextGroupName = groupActionDialog?.groupName.trim();
@@ -827,7 +752,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '请输入新分组名称');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     try {
       setRefreshing(true);
       await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName);
@@ -840,14 +765,14 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
+  }, [groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, probeRows, selectedProbeIds, toast]);
 
   const openMergeSelectedProbes = useCallback(() => {
     if (!isAdmin) {
       toast('warning', '仅管理员可合并分组');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     if (selected.length < 2) {
       toast('warning', '请至少选择两个模型');
       return;
@@ -858,7 +783,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       return;
     }
     setGroupActionDialog(createGroupActionState('merge', 'Merged Group'));
-  }, [data?.probes, isAdmin, selectedProbeIds, toast]);
+  }, [isAdmin, probeRows, selectedProbeIds, toast]);
 
   const mergeSelectedProbes = useCallback(async () => {
     const nextGroupName = groupActionDialog?.groupName.trim();
@@ -866,7 +791,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '请输入合并后的分组名称');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     try {
       setRefreshing(true);
       await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName);
@@ -879,14 +804,14 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
+  }, [groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, probeRows, selectedProbeIds, toast]);
 
   const deleteSelectedProbes = useCallback(async () => {
     if (!isAdmin) {
       toast('warning', '仅管理员可删除探针');
       return;
     }
-    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    const selected = probeRows.filter((probe) => selectedProbeIds.has(probe.id));
     if (selected.length === 0) {
       toast('warning', '请先选择要删除的探针');
       return;
@@ -910,15 +835,15 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, isAdmin, loadProbes, selectedProbeIds, toast]);
+  }, [isAdmin, loadProbes, probeRows, selectedProbeIds, toast]);
 
   const selectedProbes = useMemo(
-    () => (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id)),
-    [data?.probes, selectedProbeIds]
+    () => probeRows.filter((probe) => selectedProbeIds.has(probe.id)),
+    [probeRows, selectedProbeIds]
   );
   const allProbeIds = useMemo(
-    () => (data?.probes || []).map((probe) => probe.id),
-    [data?.probes]
+    () => probeRows.map((probe) => probe.id),
+    [probeRows]
   );
   const allSelected = allProbeIds.length > 0 && selectedProbeIds.size === allProbeIds.length;
   const hasPartialProbeSelection = selectedProbeIds.size > 0 && !allSelected;
@@ -1116,7 +1041,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                                 />
                               ) : <div />}
                               <div className="flex flex-wrap items-center justify-end gap-1.5">
-                                <Badge className={cn('rounded-full border px-4 py-1 text-sm font-medium', meta.badgeClassName)}>
+                                <Badge className={cn('rounded-md border px-3 py-1 text-sm font-medium', meta.badgeClassName)}>
                                   <StatusIcon className="mr-1.5 inline h-4 w-4" />
                                   {meta.label}
                                 </Badge>
@@ -1139,12 +1064,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                             <div className="flex min-w-0 items-center gap-4">
                               <ProbeEngineAvatar engine={probe.engine} />
                               <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h4 className="break-words text-xl font-semibold">{probe.name}</h4>
-                                  <Badge variant="secondary" className="rounded-full px-2.5 py-1 text-xs text-muted-foreground">
-                                    {driverLabel(probe.driver)}
-                                  </Badge>
-                                </div>
+                                <h4 className="break-words text-xl font-semibold">{probe.name}</h4>
                                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     {probe.endpoints.length > 0 ? (
@@ -1321,11 +1241,10 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
         }}
       >
         <DialogContent className="sm:max-w-[680px]">
-          <ComboboxPortalProvider>
             <DialogHeader>
               <DialogTitle>{editingProbe ? '编辑模型探针' : '创建模型探针'}</DialogTitle>
               <DialogDescription>
-                探针默认每 5 分钟执行一次；支持显式指定 engine driver，也支持同引擎/driver 下的批量导入。
+                探针默认每 5 分钟执行一次；支持按引擎和模型批量导入。
               </DialogDescription>
             </DialogHeader>
 
@@ -1343,57 +1262,30 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                   />
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4">
                   <div className="grid gap-2">
                     <label className="text-sm font-medium">引擎</label>
-                    <SingleCombobox
+                    <EngineSelect
                       value={singleForm.engine}
-                      onValueChange={(value) => setSingleForm((prev) => ({
+                      onChange={(value) => setSingleForm((prev) => ({
                         ...prev,
                         engine: value || prev.engine,
-                        driver: supportsDriverSelection(value || prev.engine) ? prev.driver : 'auto',
+                        driver: 'auto',
                       }))}
-                      options={engineOptions}
-                      placeholder="选择引擎"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <label className="text-sm font-medium">驱动</label>
-                    <SingleCombobox
-                      value={supportsDriverSelection(singleForm.engine) ? singleForm.driver : 'auto'}
-                      onValueChange={(value) => setSingleForm((prev) => ({ ...prev, driver: (value as ProbeDriver) || 'auto' }))}
-                      options={driverOptions}
-                      placeholder="选择驱动"
-                      disabled={!supportsDriverSelection(singleForm.engine)}
+                      className="h-10"
                     />
                   </div>
                 </div>
 
                 <div className="grid gap-2">
-                  <label className="text-sm font-medium">模型 ID</label>
-                  <Input
+                  <label className="text-sm font-medium">模型</label>
+                  <ModelSelect
                     value={singleForm.model}
-                    onChange={(event) => setSingleForm((prev) => ({ ...prev, model: event.target.value }))}
-                    placeholder="例如：claude-sonnet-4-20250514"
+                    onChange={(value) => setSingleForm((prev) => ({ ...prev, model: value }))}
+                    engine={singleForm.engine}
+                    className="h-10"
+                    showChangeToast={false}
                   />
-                  {suggestedModels.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {suggestedModels.map((model) => (
-                        <button
-                          key={model.id}
-                          type="button"
-                          className="rounded-full border border-border/70 bg-muted/25 px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                          onClick={() => setSingleForm((prev) => ({
-                            ...prev,
-                            model: model.id,
-                            name: prev.name || `${getEngineDisplayName(prev.engine)} / ${model.name}`,
-                          }))}
-                        >
-                          {model.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -1423,7 +1315,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                 <div className="flex items-center justify-between rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
                   <div>
                     <div className="text-sm font-medium">启用探针</div>
-                    <div className="text-xs text-muted-foreground">关闭后会保留历史，但不会继续自动探测。</div>
+                    <div className="text-xs text-muted-foreground">关闭后会保留历史，并暂停后续自动探测。</div>
                   </div>
                   <Switch
                     checked={singleForm.enabled}
@@ -1453,32 +1345,21 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-4">
                     <div className="grid gap-2">
                       <label className="text-sm font-medium">引擎</label>
-                      <SingleCombobox
+                      <EngineSelect
                         value={batchForm.engine}
-                        onValueChange={(value) => setBatchForm((prev) => ({
+                        onChange={(value) => setBatchForm((prev) => ({
                           ...prev,
                           engine: value || prev.engine,
-                          driver: supportsDriverSelection(value || prev.engine) ? prev.driver : 'auto',
+                          driver: 'auto',
                           selectedModelIds: prev.selectedModelIds.filter((id) => {
                             const model = managedModels.find((item) => item.id === id);
                             return model ? modelSupportsEngine(model, value || prev.engine) : false;
                           }),
                         }))}
-                        options={engineOptions}
-                        placeholder="选择引擎"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <label className="text-sm font-medium">驱动</label>
-                      <SingleCombobox
-                        value={supportsDriverSelection(batchForm.engine) ? batchForm.driver : 'auto'}
-                        onValueChange={(value) => setBatchForm((prev) => ({ ...prev, driver: (value as ProbeDriver) || 'auto' }))}
-                        options={driverOptions}
-                        placeholder="选择驱动"
-                        disabled={!supportsDriverSelection(batchForm.engine)}
+                        className="h-10"
                       />
                     </div>
                   </div>
@@ -1508,10 +1389,10 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                   </div>
 
                   <div className="flex items-center justify-between rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-                    <div>
-                      <div className="text-sm font-medium">批量创建后立即启用</div>
-                      <div className="text-xs text-muted-foreground">所有新探针都会继承这一开关与 driver 配置。</div>
-                    </div>
+                      <div>
+                        <div className="text-sm font-medium">批量创建后立即启用</div>
+                      <div className="text-xs text-muted-foreground">所有新探针都会继承这一开关配置。</div>
+                      </div>
                     <Switch
                       checked={batchForm.enabled}
                       onCheckedChange={(checked) => setBatchForm((prev) => ({ ...prev, enabled: checked }))}
@@ -1520,128 +1401,17 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
 
                   <div className="grid gap-2">
                     <label className="text-sm font-medium">批量模型选择</label>
-                    <div className="grid gap-3 md:grid-cols-[1fr_auto_1fr]">
-                      <div className="rounded-2xl border border-border/70 bg-background/70">
-                        <div className="border-b border-border/60 px-4 py-3">
-                          <div className="text-sm font-medium">可选模型</div>
-                          <div className="mt-2">
-                            <Input
-                              value={batchForm.search}
-                              onChange={(event) => setBatchForm((prev) => ({ ...prev, search: event.target.value }))}
-                              placeholder="搜索模型名称或 ID"
-                            />
-                          </div>
-                        </div>
-                        <div className="max-h-72 space-y-1 overflow-y-auto p-2">
-                          {availableBatchModels.length === 0 ? (
-                            <div className="rounded-xl px-3 py-6 text-center text-sm text-muted-foreground">
-                              当前引擎下没有更多可选模型
-                            </div>
-                          ) : availableBatchModels.map((model) => {
-                            const selected = batchLeftSelection.includes(model.id);
-                            return (
-                              <button
-                                key={model.id}
-                                type="button"
-                                className={cn(
-                                  'w-full rounded-xl border px-3 py-2 text-left transition-colors',
-                                  selected
-                                    ? 'border-primary bg-primary/10'
-                                    : 'border-transparent bg-muted/20 hover:border-border hover:bg-muted/40'
-                                )}
-                                onClick={() => setBatchLeftSelection((prev) => (
-                                  prev.includes(model.id)
-                                    ? prev.filter((id) => id !== model.id)
-                                    : [...prev, model.id]
-                                ))}
-                              >
-                                <div className="text-sm font-medium">{model.name}</div>
-                                <div className="mt-1 text-xs text-muted-foreground">{model.id}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-row items-center justify-center gap-2 md:flex-col">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="rounded-full"
-                          onClick={() => moveBatchModelsToSelected(batchLeftSelection)}
-                          disabled={batchLeftSelection.length === 0}
-                        >
-                          <ChevronRight className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="rounded-full"
-                          onClick={() => moveBatchModelsToSelected(availableBatchModels.map((model) => model.id))}
-                          disabled={availableBatchModels.length === 0}
-                        >
-                          <ChevronsRight className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="rounded-full"
-                          onClick={() => moveBatchModelsToAvailable(batchRightSelection)}
-                          disabled={batchRightSelection.length === 0}
-                        >
-                          <ChevronLeft className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="rounded-full"
-                          onClick={() => moveBatchModelsToAvailable(batchForm.selectedModelIds)}
-                          disabled={batchForm.selectedModelIds.length === 0}
-                        >
-                          <ChevronsLeft className="h-4 w-4" />
-                        </Button>
-                      </div>
-
-                      <div className="rounded-2xl border border-border/70 bg-background/70">
-                        <div className="border-b border-border/60 px-4 py-3">
-                          <div className="text-sm font-medium">本次创建 ({selectedBatchModels.length})</div>
-                          <div className="mt-1 text-xs text-muted-foreground">右侧模型将批量生成探针</div>
-                        </div>
-                        <div className="max-h-72 space-y-1 overflow-y-auto p-2">
-                          {selectedBatchModels.length === 0 ? (
-                            <div className="rounded-xl px-3 py-6 text-center text-sm text-muted-foreground">
-                              从左侧选择模型加入本次批量创建
-                            </div>
-                          ) : selectedBatchModels.map((model) => {
-                            const selected = batchRightSelection.includes(model.id);
-                            return (
-                              <button
-                                key={model.id}
-                                type="button"
-                                className={cn(
-                                  'w-full rounded-xl border px-3 py-2 text-left transition-colors',
-                                  selected
-                                    ? 'border-primary bg-primary/10'
-                                    : 'border-transparent bg-muted/20 hover:border-border hover:bg-muted/40'
-                                )}
-                                onClick={() => setBatchRightSelection((prev) => (
-                                  prev.includes(model.id)
-                                    ? prev.filter((id) => id !== model.id)
-                                    : [...prev, model.id]
-                                ))}
-                              >
-                                <div className="text-sm font-medium">{model.name}</div>
-                                <div className="mt-1 text-xs text-muted-foreground">{model.id}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
+                    <AiModelSelectorField
+                      value=""
+                      onValueChange={() => {}}
+                      values={batchForm.selectedModelIds}
+                      onValuesChange={(selectedModelIds) => setBatchForm((prev) => ({ ...prev, selectedModelIds }))}
+                      options={batchModelOptions}
+                      placeholder="选择模型"
+                      searchPlaceholder="搜索模型..."
+                      emptyLabel="当前引擎下没有可选模型"
+                      className="h-10"
+                    />
                   </div>
 
                   <div className="grid gap-2">
@@ -1670,7 +1440,6 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                 {editingProbe ? '保存变更' : dialogMode === 'single' ? '创建探针' : '批量创建'}
               </Button>
             </DialogFooter>
-          </ComboboxPortalProvider>
         </DialogContent>
       </Dialog>
 

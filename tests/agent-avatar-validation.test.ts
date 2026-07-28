@@ -4,7 +4,7 @@ import { normalizeAgentAvatar } from '@/lib/agent/personas';
 import { validateAgentDraft } from '@/lib/core/creator-validation';
 
 describe('agent avatar normalization', () => {
-  test('normalizes legacy avatar style aliases', () => {
+  test('normalizes preRuntime avatar style aliases', () => {
     const avatar = normalizeAgentAvatar(
       {
         mode: 'deterministic',

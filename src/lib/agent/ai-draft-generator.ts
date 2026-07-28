@@ -1,5 +1,10 @@
-import { createEngine, getConfiguredEngine, resolveRequestedEngineType, type EngineType } from '@/lib/engines/engine-factory';
-import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
+import {
+  createWorkflowRuntime,
+  executeWorkflowRuntimeWithContextRecovery,
+  getConfiguredWorkflowRuntime,
+  resolveRequestedWorkflowRuntimeType,
+  type WorkflowRuntimeType,
+} from '@/lib/workflow/runtime-facade';
 import { createDeterministicAvatarConfig } from '@/lib/agent/personas';
 import { buildAgentCreationItemRepairPrompt, buildAgentDraftPrompt } from '@/lib/agent/ai-draft-prompt';
 import { readFile } from 'fs/promises';
@@ -189,7 +194,7 @@ function fallbackDraft(input: {
     activeEngine: input.engine || '',
     capabilities: keywords.length > 0 ? keywords : [input.mission],
     systemPrompt: [
-      `你是 ${input.displayName}，这是你在 CSIHarness 中的角色身份。`,
+      `你是 ${input.displayName}，这是你在 ACEHarness 中的角色身份。`,
       '',
       '你的工作目标：',
       input.mission,
@@ -333,7 +338,7 @@ function summarizeAgentClarificationStateForPrompt(state: ReturnType<typeof crea
 
 function buildAgentClarificationItemSystemPrompt(step: AgentClarificationItemStep, baseContext: string): string {
   return [
-    '你正在 CSIHarness 的 Agent 创建引导中工作。',
+    '你正在 ACEHarness 的 Agent 创建引导中工作。',
     `当前小点名称：${step.name}`,
     `当前小点类型：${step.kind}`,
     '当前阶段只产出补充问答小点。',
@@ -481,7 +486,7 @@ export async function generateAgentClarification(
   const team = String(input.team || baseAgent?.team || 'red').trim();
   const workingDirectory = String(input.workingDirectory || '').trim();
   const referenceWorkflow = String(input.referenceWorkflow || '').trim();
-  const requestedEngine = (input.engine || '') as EngineType | '';
+  const requestedEngine = (input.engine || '') as WorkflowRuntimeType | '';
   const requestedModel = String(input.model || '').trim();
   const requestedSessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : '';
 
@@ -494,9 +499,9 @@ export async function generateAgentClarification(
 
   progress('engine', '正在准备补充问答生成引擎。');
   const engineType = requestedEngine
-    ? await resolveRequestedEngineType(requestedEngine)
-    : await getConfiguredEngine();
-  const engine = await createEngine(engineType);
+    ? await resolveRequestedWorkflowRuntimeType(requestedEngine)
+    : await getConfiguredWorkflowRuntime();
+  const engine = await createWorkflowRuntime(engineType);
   if (!engine) {
     progress('fallback', '当前引擎不可用，已生成本地补充问答。');
     emit?.({ type: 'form', form: fallback });
@@ -595,7 +600,7 @@ export async function generateAgentClarification(
     ): Promise<{ result: AgentCreationItemResult; finalContent: string }> => {
       progress(step.kind, `AI 正在生成${step.title}。`);
       const streamStartIndex = streamChunks.length;
-      const result = await executeEngineWithContextRecovery(engine, {
+      const result = await executeWorkflowRuntimeWithContextRecovery(engine, {
         agent: 'agent-creator',
         step: `agent-clarification-${step.name}`,
         prompt: message,
@@ -687,7 +692,7 @@ export async function generateAgentDraft(
   const team = String(input.team || baseAgent?.team || 'red').trim();
   const workingDirectory = String(input.workingDirectory || '').trim();
   const referenceWorkflow = String(input.referenceWorkflow || '').trim();
-  const requestedEngine = (input.engine || '') as EngineType | '';
+  const requestedEngine = (input.engine || '') as WorkflowRuntimeType | '';
   const requestedModel = String(input.model || '').trim();
   const clarificationAnswers = String(input.clarificationAnswers || '').trim();
   const requestedSessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : '';
@@ -699,7 +704,7 @@ export async function generateAgentDraft(
   const progress = (stage: string, message: string) => emit?.({ type: 'progress', stage, message });
 
   const systemPrompt = [
-    '你是 CSIHarness Agent 创建助手。',
+    '你是 ACEHarness Agent 创建助手。',
     '你的任务是把用户的角色需求整理成可解析的结构化 Agent 创建 item。',
     '机器结果统一使用 <result> 包裹，result 内是单个 JSON 对象，顶层包含 kind 和 data。',
     '自然语言说明保持简短，结构化字段使用用户输入语言。',
@@ -785,9 +790,9 @@ export async function generateAgentDraft(
 
   progress('engine', '正在准备生成引擎。');
   const engineType = requestedEngine
-    ? await resolveRequestedEngineType(requestedEngine)
-    : await getConfiguredEngine();
-  const engine = await createEngine(engineType);
+    ? await resolveRequestedWorkflowRuntimeType(requestedEngine)
+    : await getConfiguredWorkflowRuntime();
+  const engine = await createWorkflowRuntime(engineType);
   if (!engine) {
     progress('fallback', '当前引擎不可用，已生成本地兜底草案。');
     const draft = mergeWithBaseAgent(
@@ -833,7 +838,7 @@ export async function generateAgentDraft(
     const runAgentCreator = async (runPrompt: string, step: string, message: string) => {
       progress(step, message);
       const streamStartIndex = streamChunks.length;
-      const result = await executeEngineWithContextRecovery(engine, {
+      const result = await executeWorkflowRuntimeWithContextRecovery(engine, {
         agent: 'agent-creator',
         step,
         prompt: runPrompt,

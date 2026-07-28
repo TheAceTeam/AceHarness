@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import dynamic from 'next/dynamic';
+import dynamic from '@/lib/navigation/dynamic';
 import FlowDiagram from '@/components/FlowDiagram';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';

@@ -1,53 +1,31 @@
 import { homedir } from 'os';
-import path, { dirname, join, resolve } from 'path';
-import { INSTALL_ROOT_ENV, RUNTIME_DIR_NAME, RUNTIME_HOME_ENV } from '@/lib/core/product-identity';
+import { dirname, join, resolve } from 'path';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 export type AppDirectoryKind = 'config' | 'data' | 'cache' | 'logs' | 'workspace';
 
-export function resolveInstallRootFromEnvironment(env: NodeJS.ProcessEnv, fallbackCwd: string): string {
-  const envInstallRoot = env[INSTALL_ROOT_ENV]?.trim();
+function resolveInstallRoot(): string {
+  const envInstallRoot = process.env.ACE_INSTALL_ROOT?.trim();
   if (envInstallRoot) return resolve(envInstallRoot);
 
-  return resolve(fallbackCwd);
+  return resolve(process.cwd());
 }
 
-const INSTALL_ROOT = resolveInstallRootFromEnvironment(process.env, process.cwd());
-
-export function resolveRuntimeRootFromEnvironment(input: {
-  env: NodeJS.ProcessEnv;
-  platform: NodeJS.Platform;
-  home: string;
-}): string {
-  const pathApi = input.platform === 'win32' ? path.win32 : path.posix;
-  const configuredHome = input.env[RUNTIME_HOME_ENV]?.trim();
-  if (configuredHome) {
-    if (configuredHome === '~' || configuredHome.startsWith('~/') || configuredHome.startsWith('~\\')) {
-      const suffix = configuredHome.slice(1).replace(/^[/\\]+/, '');
-      return pathApi.resolve(input.home, suffix);
-    }
-    if (!pathApi.isAbsolute(configuredHome)) {
-      throw new Error(`${RUNTIME_HOME_ENV} must be an absolute path or start with ~/`);
-    }
-    return pathApi.resolve(configuredHome);
-  }
-
-  if (input.platform === 'win32') {
-    const appData = input.env.APPDATA?.trim();
-    if (appData) return pathApi.resolve(appData, 'CSIHarness');
-  }
-
-  const xdgDataHome = input.env.XDG_DATA_HOME?.trim();
-  if (xdgDataHome) return pathApi.resolve(xdgDataHome, 'csiharness');
-
-  return pathApi.resolve(input.home, RUNTIME_DIR_NAME);
-}
+const INSTALL_ROOT = resolveInstallRoot();
 
 function resolveRuntimeRoot(): string {
-  return resolveRuntimeRootFromEnvironment({
-    env: process.env,
-    platform: process.platform,
-    home: homedir(),
-  });
+  const aceHome = process.env.ACE_HOME?.trim();
+  if (aceHome) return resolve(aceHome);
+
+  if (isWindows()) {
+    const appData = process.env.APPDATA?.trim();
+    if (appData) return resolve(appData, 'ACEHarness');
+  }
+
+  const xdgDataHome = process.env.XDG_DATA_HOME?.trim();
+  if (xdgDataHome) return resolve(xdgDataHome, 'aceharness');
+
+  return resolve(homedir(), '.aceharness');
 }
 
 export function getWorkspaceRoot(): string {
@@ -110,6 +88,16 @@ export function getEngineConfigPath(): string {
   return join(getWorkspaceRoot(), '.engine.json');
 }
 
+export const SHARED_AGENT_CONFIG_DIR = '.agents';
+
+export function getWorkspaceAgentConfigDir(_engineType?: string | null): string {
+  return SHARED_AGENT_CONFIG_DIR;
+}
+
+export function getWorkspaceAgentSkillsSubdir(engineType?: string | null): string {
+  return `${getWorkspaceAgentConfigDir(engineType)}/skills`;
+}
+
 export function getWorkspaceDataDir(): string {
   return getWorkspaceDirectory('data');
 }
@@ -131,7 +119,7 @@ export function getWorkspaceAgentsDir(): string {
 }
 
 export function getWorkspaceSkillsDir(): string {
-  return join(getWorkspaceRoot(), 'skills');
+  return getWorkspacePath('skills');
 }
 
 export function getWorkspaceSkillPath(...segments: string[]): string {

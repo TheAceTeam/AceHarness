@@ -184,7 +184,7 @@ class ProcessManager extends EventEmitter {
     proc.status = 'killed';
     proc.endTime = new Date();
     this.appendLogLine(id, `[${ts()}] 手动终止`);
-    // Kill child process if present (legacy)
+    // Kill child process if present (preRuntime)
     if (proc.childProcess) {
       try {
         proc.childProcess.kill('SIGTERM');

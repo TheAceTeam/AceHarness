@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { resolveWorkspaceEditorTargetFile, treeCanResolvePath } from "@/components/workspace/WorkspaceEditor"
 import type { TreeNode } from "@/lib/core/api"
-import { parseWorkspaceFileLocation, resolveWorkspaceLinkTarget } from "@/lib/workspace/link-target"
+import { parseWorkspaceFileLocation, resolveWorkspaceLinkTarget, resolveWorkspaceRootFromRoute } from "@/lib/workspace/link-target"
 
 describe("treeCanResolvePath", () => {
   it("keeps deep files selectable while ancestor children are still unloaded", () => {
@@ -170,5 +170,21 @@ describe("resolveWorkspaceLinkTarget", () => {
       lineNumber: null,
       column: null,
     })
+  })
+})
+
+describe("resolveWorkspaceRootFromRoute", () => {
+  it("restores a persisted run document directory instead of the project workspace", () => {
+    expect(resolveWorkspaceRootFromRoute(
+      "/Users/demo/ace-workspace",
+      "/Users/demo/.aceharness/runs/run-123/outputs",
+    )).toBe("/Users/demo/.aceharness/runs/run-123/outputs")
+  })
+
+  it("rejects a relative route root and falls back to the project workspace", () => {
+    expect(resolveWorkspaceRootFromRoute(
+      "/Users/demo/ace-workspace",
+      "../../other",
+    )).toBe("/Users/demo/ace-workspace")
   })
 })

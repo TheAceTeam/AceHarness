@@ -14,6 +14,7 @@
 /build
 /dist
 *.tgz
+target/
 
 # misc
 .DS_Store
@@ -24,6 +25,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .eslintcache
+.codex-run/
+.tanstack/
 
 # local env files
 .env
@@ -46,7 +49,7 @@ vite.config.ts
 .ace-outputs/
 .aceharness/
 
-runs/
+/runs/
 
 # check script outputs
 scripts/.check-batch-logs/
@@ -72,8 +75,6 @@ __pycache__/
 
 # Temp files
 .tmp/
-.worktrees/
 
 # Runtime uploaded assets
 /public/uploads/
-package-lock.json

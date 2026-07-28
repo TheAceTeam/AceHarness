@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { envApi } from '@/lib/core/api';
+import { Plus, Trash2, X } from 'lucide-react';
 
 interface EnvVar {
   key: string;
@@ -16,11 +17,60 @@ interface EnvVarError {
   key?: string;
 }
 
-const USER_AI_ENV_PRESETS = [
-  { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Anthropic API 密钥，Claude/Anthropic 兼容调用会读取。' },
-  { key: 'ANTHROPIC_BASE_URL', label: 'Anthropic 自定义 API 地址，用于代理或自建网关。' },
-  { key: 'OPENAI_API_KEY', label: 'OpenAI API 密钥，Codex/OpenAI 兼容调用会读取。' },
-  { key: 'OPENAI_BASE_URL', label: 'OpenAI 兼容 API 地址，Codex 会显式传给 SDK。' },
+const USER_ENV_GROUPS = [
+  {
+    id: 'claude',
+    title: 'Claude',
+    description: '当前用户自己的 Claude Code 变量。未设置时继续使用系统或宿主环境提供的值。',
+    presets: [
+      { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Claude Code 使用的认证令牌' },
+      { key: 'ANTHROPIC_BASE_URL', label: 'Claude Code 请求地址' },
+      { key: 'CLAUDE_CODE_BASE_URL', label: 'Claude Code base URL 兼容变量' },
+      { key: 'CLAUDE_CODE_API_BASE_URL', label: 'Claude Code API base URL 兼容变量' },
+      { key: 'ACE_CLAUDE_CODE_EXECUTABLE', label: '指定 Claude Code 可执行文件' },
+      { key: 'CLAUDE_CODE_EXECUTABLE', label: 'Claude Code 可执行文件备用变量' },
+    ],
+  },
+  {
+    id: 'codex',
+    title: 'Codex',
+    description: '当前用户自己的 Codex SDK 变量。未设置时继续使用系统或宿主环境提供的值。',
+    presets: [
+      { key: 'OPENAI_API_KEY', label: 'Codex SDK 使用的 API 密钥' },
+      { key: 'OPENAI_BASE_URL', label: 'Codex SDK 使用的 base URL' },
+    ],
+  },
+  {
+    id: 'opencode',
+    title: 'OpenCode',
+    description: 'OpenCode 相关代码读取配置目录和 stream 超时变量；模型密钥通常由 OpenCode 自身配置或模型路由处理。',
+    presets: [
+      { key: 'OPENCODE_CONFIG_DIR', label: '指定 OpenCode 全局配置目录' },
+      { key: 'ACE_OPENCODE_STREAM_TIMEOUT_MS', label: 'OpenCode stream 总超时，单位毫秒' },
+      { key: 'ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS', label: 'OpenCode stream 空闲超时，单位毫秒' },
+    ],
+  },
+  {
+    id: 'kiro',
+    title: 'Kiro',
+    description: '当前项目的 Kiro wrapper 没有声明专属 Kiro 环境变量 schema。',
+    presets: [],
+  },
+  {
+    id: 'other-cli',
+    title: '其他 CLI',
+    description: '当前代码或配置中明确出现的其他 CLI 相关变量。',
+    presets: [
+      { key: 'GEMINI_MODEL', label: 'Gemini CLI 模型覆盖变量' },
+      { key: 'MAGIC_CLI_PATH', label: '指定 Magic CLI 可执行文件路径' },
+      { key: 'ACE_NGA_SDK_BASE_URL', label: 'NGA SDK 外部服务地址' },
+      { key: 'ACE_NGA_SDK_COMMAND', label: '指定 NGA SDK 启动命令' },
+      { key: 'ACE_NGA_BIN', label: 'NGA SDK 启动命令备用变量' },
+      { key: 'ACE_CODEGENIE_SDK_BASE_URL', label: 'CodeGenie SDK 外部服务地址' },
+      { key: 'ACE_CODEGENIE_SDK_COMMAND', label: '指定 CodeGenie SDK 启动命令' },
+      { key: 'ACE_CODEGENIE_BIN', label: 'CodeGenie SDK 启动命令备用变量' },
+    ],
+  },
 ];
 
 function validateEnvVars(vars: EnvVar[]) {
@@ -146,15 +196,15 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-background border rounded-xl shadow-2xl w-[560px] max-h-[80vh] flex flex-col" onClick={(event) => event.stopPropagation()}>
+      <div className="bg-background border rounded-xl shadow-2xl w-[720px] max-w-[calc(100vw-2rem)] max-h-[84vh] flex flex-col" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-primary">key</span>
             <h2 className="text-base font-semibold">个人环境变量</h2>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-muted rounded">
-            <span className="material-symbols-outlined text-sm">close</span>
-          </button>
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label="关闭个人环境变量">
+            <X className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-3">
@@ -166,38 +216,53 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
                 <div className="text-xs text-destructive bg-destructive/10 rounded-md px-2 py-1.5">{submitError}</div>
               ) : null}
 
-              <div className="rounded-md border bg-muted/20 px-3 py-2">
-                <div className="mb-2 text-xs font-medium text-muted-foreground">常用 AI 凭据</div>
-                <div className="flex flex-wrap gap-2">
-                  {USER_AI_ENV_PRESETS.map((preset) => {
-                    const exists = displayVars.some((item) => item.key.trim() === preset.key);
-                    return (
-                      <button
-                        key={preset.key}
-                        type="button"
-                        onClick={() => addPreset(preset.key)}
-                        disabled={exists}
-                        title={preset.label}
-                        className="rounded border bg-background px-2 py-1 text-xs font-mono text-foreground hover:bg-muted disabled:cursor-default disabled:opacity-50"
-                      >
-                        {preset.key}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
-                  {USER_AI_ENV_PRESETS.map((preset) => (
-                    <div key={`${preset.key}-hint`} className="grid grid-cols-[auto_1fr] gap-2">
-                      <code className="font-mono text-primary">{preset.key}</code>
-                      <span>{preset.label}</span>
-                    </div>
-                  ))}
-                </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {USER_ENV_GROUPS.map((group) => (
+                  <div key={group.id} className="rounded-md border bg-muted/20 px-3 py-2">
+                    <div className="text-sm font-medium">{group.title}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{group.description}</div>
+                    {group.presets.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {group.presets.map((preset) => {
+                        const exists = displayVars.some((item) => item.key.trim() === preset.key);
+                        return (
+                          <Button
+                            key={`${group.id}-${preset.key}`}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => addPreset(preset.key)}
+                            disabled={exists}
+                            title={preset.label}
+                            className="h-7 px-2 font-mono text-xs"
+                          >
+                            {exists ? '已添加 ' : '添加 '}{preset.key}
+                          </Button>
+                        );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                        没有可添加的固定变量；需要时可在下方添加自定义变量。
+                      </div>
+                    )}
+                    {group.presets.length > 0 ? (
+                      <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                        {group.presets.map((preset) => (
+                          <div key={`${group.id}-${preset.key}-hint`} className="grid grid-cols-[auto_1fr] gap-2">
+                            <code className="font-mono text-primary">{preset.key}</code>
+                            <span>{preset.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
               </div>
 
-              <div className="grid grid-cols-[1fr_1fr_48px_32px] gap-2 text-xs text-muted-foreground font-medium px-1">
-                <span>Key</span>
-                <span>Value</span>
+              <div className="grid grid-cols-[1fr_1fr_48px_32px] gap-2 px-1 text-xs font-medium text-muted-foreground">
+                <span>变量名</span>
+                <span>变量值</span>
                 <span className="text-center">启用</span>
                 <span></span>
               </div>
@@ -207,13 +272,13 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
                     <Input
                       value={item.key}
                       onChange={(event) => updateVar(index, { key: event.target.value })}
-                      placeholder="KEY"
+                      placeholder="例如 OPENAI_API_KEY"
                       className={`h-8 text-xs font-mono ${errors[index]?.key ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                     />
                     <Input
                       value={item.value}
                       onChange={(event) => updateVar(index, { value: event.target.value })}
-                      placeholder="value"
+                      placeholder="只保存当前用户的值"
                       className="h-8 text-xs font-mono"
                     />
                     <div className="flex justify-center">
@@ -223,12 +288,16 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
                         className="scale-75"
                       />
                     </div>
-                    <button
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
                       onClick={() => removeVar(index)}
-                      className="p-1 rounded text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      aria-label={`删除环境变量 ${item.key || index + 1}`}
                     >
-                      <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
-                    </button>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
                   {errors[index]?.key ? (
                     <div className="px-1 text-xs text-destructive">{errors[index].key}</div>
@@ -244,13 +313,13 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
 
         <div className="flex items-center justify-between px-5 py-3 border-t">
           <Button variant="outline" size="sm" onClick={addRow}>
-            <span className="material-symbols-outlined mr-1" style={{ fontSize: '14px' }}>add</span>
-            添加
+            <Plus className="mr-2 h-4 w-4" />
+            添加自定义变量
           </Button>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>取消</Button>
             <Button size="sm" onClick={save} disabled={saving}>
-              {saving ? '保存中...' : '保存'}
+              {saving ? '保存中...' : '保存个人环境变量'}
             </Button>
           </div>
         </div>

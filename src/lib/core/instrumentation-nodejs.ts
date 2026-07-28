@@ -6,8 +6,7 @@
 export async function runNodejsInstrumentation() {
   const { existsSync, mkdirSync } = await import('fs');
   const { join } = await import('path');
-  const { getEngineConfigDir } = await import('@/lib/engines/engine-config');
-  const { getEngineConfigPath, getWorkspaceRoot } = await import('./app-paths');
+  const { getEngineConfigPath, getWorkspaceAgentConfigDir, getWorkspaceRoot } = await import('./app-paths');
 
   const workspaceRoot = getWorkspaceRoot();
 
@@ -17,7 +16,7 @@ export async function runNodejsInstrumentation() {
     if (existsSync(engineJson)) {
       const { readFileSync } = await import('fs');
       const config = JSON.parse(readFileSync(engineJson, 'utf-8'));
-      if (config.engine) engineConfigDir = getEngineConfigDir(config.engine);
+      if (config.engine) engineConfigDir = getWorkspaceAgentConfigDir(config.engine);
     }
   } catch {
     // Use the default engine config directory.
@@ -56,8 +55,8 @@ export async function runNodejsInstrumentation() {
   }
 
   try {
-    const { scheduler } = await import('@/lib/core/scheduler');
-    await scheduler.init();
+    const { ensureSchedulerInitialized } = await import('@/server/api-route-runtime/scheduler-runtime');
+    await ensureSchedulerInitialized();
   } catch (error) {
     console.error('[ACEHarness] Scheduler restore failed:', error);
   }

@@ -1,20 +1,42 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/core/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Checkbox } from '@/components/ui/checkbox';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import Markdown from '@/components/Markdown';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
+import {
+  DetailDrawer,
+  DetailDrawerBody,
+  DetailDrawerContent,
+  DetailDrawerDescription,
+  DetailDrawerHeader,
+  DetailDrawerTitle,
+} from '@/components/ui/detail-drawer';
+import { VirtualList } from '@/client/virtual/VirtualList';
 import { useTranslations } from '@/hooks/useTranslations';
 import { useToast } from '@/components/ui/toast';
-import styles from '@/app/workbench/[config]/page.module.css';
+import styles from '@/client/pages/workbench/page.module.css';
+import {
+  useDeleteDocumentsMutation,
+  useDocumentContentQuery,
+  useRenameDocumentMutation,
+  useRunDocumentsQuery,
+} from '@/client/query/documents';
+import { queryKeys } from '@/client/query/query-keys';
+import {
+  syncDocumentsMetadataToDb,
+  useDocumentMetadataRows,
+  useSyncDocumentsMetadataToDb,
+  type DocumentMetadataRow,
+} from '@/client/db/collections';
 
 export interface DocFile {
   filename: string;
@@ -28,6 +50,7 @@ export interface DocFile {
   documentKind?: 'conclusion' | 'detail';
   groupKey?: string;
   groupLabel?: string;
+  detailCount?: number;
   sourceRunId?: string;
   sourceConfigFile?: string;
   sourceLabel?: string;
@@ -42,26 +65,70 @@ interface DocTreeGroup {
   name: string;
   summary: DocFile | null;
   details: DocFile[];
+  detailCount: number;
   latestTime: number;
 }
 
 interface DocFolderGroup {
   key: string;
   label: string;
+  rawLabel: string;
+  order: number;
   files: DocFile[];
 }
+
+type DocTreeRow =
+  | { type: 'summary'; key: string; group: DocTreeGroup; file: DocFile }
+  | { type: 'group'; key: string; group: DocTreeGroup }
+  | { type: 'detail'; key: string; group: DocTreeGroup; file: DocFile };
 
 interface DocumentsPanelProps {
   runId: string | null;
   openLatestTimestampedRequest?: number;
+  focusRequest?: { requestId: number; stepName: string; filename?: string } | null;
   onOpenWorkspaceDirectory?: (path: string) => void;
+  previewPresentation?: 'inline' | 'drawer';
+  phaseDefinitions?: Array<{ name: string; label?: string; order: number }>;
 }
 
 type SortField = 'name' | 'time' | 'size';
 type SortOrder = 'asc' | 'desc';
 type DocFilter = 'all' | 'conclusion' | 'detail';
 
+export type DocumentHighlightKind = 'conclusion' | 'risk' | 'action' | 'evidence' | 'summary';
+
+export interface DocumentHighlight {
+  kind: DocumentHighlightKind;
+  heading: string;
+  points: string[];
+}
+
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/;
+
+const DOCUMENT_PHASE_LABELS: Record<string, string> = {
+  evidence_intake: '证据接收与核验',
+  metric_calc: '指标计算',
+  contradiction_analysis: '矛盾与风险分析',
+  advocacy: '正反论证',
+  report_checkpoint: '最终汇总与检查',
+};
+
+const DOCUMENT_PHASE_TOKEN_LABELS: Record<string, string> = {
+  evidence: '证据', intake: '接收', metric: '指标', calc: '计算', calculation: '计算',
+  contradiction: '矛盾', analysis: '分析', advocacy: '论证', report: '报告', checkpoint: '检查点',
+  review: '审查', summary: '汇总', validation: '验证', verify: '核验', risk: '风险', final: '最终',
+};
+
+export function formatDocumentPhaseLabel(name: string, configuredLabel?: string): string {
+  const raw = normalizeDocumentFolderLabel(name);
+  const configured = normalizeDocumentFolderLabel(configuredLabel || '');
+  if (configured && configured !== raw) return configured;
+  const key = normalizeDocumentFolderKey(raw);
+  if (DOCUMENT_PHASE_LABELS[key]) return DOCUMENT_PHASE_LABELS[key];
+  const tokens = raw.split(/[\s_-]+/).filter(Boolean);
+  const translated = tokens.map((token) => DOCUMENT_PHASE_TOKEN_LABELS[token.toLowerCase()] || token);
+  return translated.join(' · ') || raw || '其他阶段';
+}
 
 function hasTimestamp(filename: string): boolean {
   return TIMESTAMP_RE.test(filename);
@@ -69,6 +136,124 @@ function hasTimestamp(filename: string): boolean {
 
 function stripTimestampPrefix(filename: string): string {
   return filename.replace(TIMESTAMP_RE, '');
+}
+
+const HIGHLIGHT_RULES: Array<{ kind: DocumentHighlightKind; pattern: RegExp }> = [
+  { kind: 'conclusion', pattern: /结论|裁决|决策|审批意见|核心发现|关键发现|verdict|decision|conclusion/i },
+  { kind: 'risk', pattern: /风险|阻塞|问题|矛盾|异常|缺口|risk|blocker|issue|conflict/i },
+  { kind: 'action', pattern: /建议|行动|下一步|待办|跟进|整改|措施|recommendation|action|next\s*step|todo/i },
+  { kind: 'evidence', pattern: /证据|依据|数据|指标|核验|evidence|metric|verification/i },
+  { kind: 'summary', pattern: /摘要|概览|总结|要点|summary|overview|highlights/i },
+];
+
+function cleanHighlightPoint(value: string): string {
+  const cleaned = value
+    .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)/, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > 220 ? `${cleaned.slice(0, 217).trimEnd()}...` : cleaned;
+}
+
+/** Extract a compact, deterministic overview without changing the original run document. */
+export function extractDocumentHighlights(content: string): DocumentHighlight[] {
+  const lines = String(content || '').split(/\r?\n/);
+  const sections: Array<{ heading: string; body: string[] }> = [];
+  let current: { heading: string; body: string[] } | null = null;
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (headingMatch) {
+      if (current) sections.push(current);
+      current = { heading: cleanHighlightPoint(headingMatch[1]), body: [] };
+    } else if (current) {
+      current.body.push(line);
+    }
+  }
+  if (current) sections.push(current);
+
+  const highlights = sections.flatMap<DocumentHighlight>((section) => {
+    const rule = HIGHLIGHT_RULES.find((candidate) => candidate.pattern.test(section.heading));
+    if (!rule) return [];
+    const points = section.body
+      .filter((line) => /^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*|[^#\s].{8,})/.test(line))
+      .map(cleanHighlightPoint)
+      .filter((point) => point.length >= 6 && !/^[-|:]+$/.test(point))
+      .slice(0, 3);
+    return points.length > 0 ? [{ kind: rule.kind, heading: section.heading, points }] : [];
+  });
+
+  if (highlights.length > 0) return highlights.slice(0, 6);
+
+  const fallbackPoints = lines
+    .filter((line) => /^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)/.test(line))
+    .map(cleanHighlightPoint)
+    .filter((point) => point.length >= 8)
+    .slice(0, 5);
+  return fallbackPoints.length >= 2
+    ? [{ kind: 'summary', heading: '重点摘要', points: fallbackPoints }]
+    : [];
+}
+
+function getWorkspacePathFilename(path: string): string {
+  let decoded = String(path || '');
+  try { decoded = decodeURIComponent(decoded); } catch {}
+  const normalized = decoded.replace(/\\/g, '/').split(/[?#]/, 1)[0].replace(/\/+$/, '');
+  return normalized.slice(normalized.lastIndexOf('/') + 1);
+}
+
+export function findRunDocumentByWorkspacePath(files: DocFile[], path: string): DocFile | null {
+  const filename = getWorkspacePathFilename(path);
+  if (!filename) return null;
+  return files.find((file) => file.filename === filename || file.baseName === filename) || null;
+}
+
+const HIGHLIGHT_PRESENTATION: Record<DocumentHighlightKind, { label: string; icon: string; className: string }> = {
+  conclusion: { label: '关键结论', icon: 'gavel', className: 'border-emerald-500/25 bg-emerald-500/[0.06]' },
+  risk: { label: '风险与问题', icon: 'warning', className: 'border-amber-500/25 bg-amber-500/[0.06]' },
+  action: { label: '后续行动', icon: 'task_alt', className: 'border-blue-500/25 bg-blue-500/[0.06]' },
+  evidence: { label: '关键证据', icon: 'fact_check', className: 'border-violet-500/25 bg-violet-500/[0.06]' },
+  summary: { label: '重点摘要', icon: 'summarize', className: 'border-border bg-muted/35' },
+};
+
+function DocumentHighlightsView({ highlights }: { highlights: DocumentHighlight[] }) {
+  if (highlights.length === 0) return null;
+  return (
+    <section className="mb-5 rounded-xl border border-border/70 bg-muted/15 p-3" aria-label="文档重点速览">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="material-symbols-outlined text-base text-primary">filter_alt</span>
+        <div>
+          <div className="text-sm font-semibold">重点速览</div>
+          <div className="text-[11px] text-muted-foreground">按结论、风险、行动和证据自动聚合，完整原文见下方</div>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        {highlights.map((highlight, index) => {
+          const presentation = HIGHLIGHT_PRESENTATION[highlight.kind];
+          return (
+            <article key={`${highlight.heading}-${index}`} className={`rounded-lg border p-3 ${presentation.className}`}>
+              <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold">
+                <span className="material-symbols-outlined text-sm">{presentation.icon}</span>
+                <span>{presentation.label}</span>
+                {highlight.heading !== presentation.label ? (
+                  <span className="truncate font-normal text-muted-foreground">· {highlight.heading}</span>
+                ) : null}
+              </div>
+              <ul className="space-y-1 text-xs leading-5 text-foreground/85">
+                {highlight.points.map((point, pointIndex) => (
+                  <li key={`${point}-${pointIndex}`} className="flex gap-2">
+                    <span className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-current opacity-50" />
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function getDisplayFileName(file: DocFile): string {
@@ -162,14 +347,40 @@ function sortDocFiles(files: DocFile[], sortField: SortField, sortOrder: SortOrd
   return next;
 }
 
+function documentMetadataRowToDocFile(row: DocumentMetadataRow): DocFile {
+  const filename = row.filename || row.name;
+  return {
+    filename,
+    stepName: row.stepName || '',
+    baseName: row.baseName || filename,
+    logicalName: row.logicalName,
+    iteration: row.iteration ?? null,
+    agent: row.agent || '',
+    phaseName: row.phaseName || '',
+    role: row.role || '',
+    documentKind: row.documentKind === 'detail' || row.documentKind === 'conclusion' ? row.documentKind : undefined,
+    groupKey: row.groupKey,
+    groupLabel: row.groupLabel,
+    detailCount: row.detailCount,
+    sourceRunId: row.sourceRunId,
+    sourceConfigFile: row.sourceConfigFile,
+    sourceLabel: row.sourceLabel,
+    parentRunId: row.parentRunId,
+    rootRunId: row.rootRunId,
+    size: row.size || 0,
+    modifiedTime: row.modifiedTime || row.updatedAt || '',
+  };
+}
+
 function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: SortOrder): DocTreeGroup[] {
-  const map = new Map<string, { name: string; summary: DocFile | null; details: DocFile[] }>();
+  const map = new Map<string, { name: string; summary: DocFile | null; details: DocFile[]; detailCount: number }>();
 
   files.forEach((file) => {
     const key = getTreeGroupKey(file);
-    const existing = map.get(key) || { name: getTreeLinkName(file), summary: null, details: [] };
+    const existing = map.get(key) || { name: getTreeLinkName(file), summary: null, details: [], detailCount: 0 };
     existing.name ||= getTreeLinkName(file);
-    if (hasTimestamp(file.filename)) {
+    existing.detailCount = Math.max(existing.detailCount, file.detailCount || 0);
+    if (file.documentKind === 'detail' || hasTimestamp(file.filename)) {
       existing.details.push(file);
     } else if (!existing.summary) {
       existing.summary = file;
@@ -194,6 +405,7 @@ function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: Sort
         name: value.name,
         summary: value.summary,
         details: sortedDetails,
+        detailCount: Math.max(value.detailCount, sortedDetails.length),
         latestTime,
       };
     })
@@ -211,15 +423,23 @@ function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: Sort
     });
 }
 
-export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0, onOpenWorkspaceDirectory }: DocumentsPanelProps) {
+export default function DocumentsPanel({
+  runId,
+  openLatestTimestampedRequest = 0,
+  focusRequest,
+  onOpenWorkspaceDirectory,
+  previewPresentation = 'inline',
+  phaseDefinitions = [],
+}: DocumentsPanelProps) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [files, setFiles] = useState<DocFile[]>([]);
   const [docPage, setDocPage] = useState(1);
-  const [docPagination, setDocPagination] = useState<{ total: number; totalPages: number; page: number; pageSize: number } | null>(null);
+  const [docPagination, setDocPagination] = useState<{ total: number; totalPages?: number; page?: number; pageSize?: number; offset?: number; limit?: number; nextOffset?: number | null } | null>(null);
   const [documentDirectory, setDocumentDirectory] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
+  const [manualLoading, setManualLoading] = useState(false);
+  const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
+  const [loadedGroups, setLoadedGroups] = useState<Set<string>>(new Set());
 
   // Sorting / filtering
   const [sortField, setSortField] = useState<SortField>('time');
@@ -235,7 +455,6 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   // Preview
   const [previewFile, setPreviewFile] = useState<DocFile | null>(null);
   const [previewContent, setPreviewContent] = useState('');
-  const [loadingPreview, setLoadingPreview] = useState(false);
 
   // Rename
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
@@ -251,7 +470,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const [saveNotebookDirs, setSaveNotebookDirs] = useState<Array<{ path: string; label: string }>>([]);
   const [saveNotebookDirsLoading, setSaveNotebookDirsLoading] = useState(false);
 
-  // Fullscreen sidebar controls
+  // Embedded explorer sidebar controls
   const FOLDER_TREE_WIDTH_KEY = 'doc-folder-tree-width';
   const FILE_LIST_WIDTH_KEY = 'doc-file-list-width';
   const FOLDER_TREE_VISIBLE_KEY = 'doc-folder-tree-visible';
@@ -271,6 +490,23 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const startX = useRef(0);
   const startWidth = useRef(0);
   const lastOpenLatestRequestRef = useRef(0);
+  const documentsQueryParams = useMemo(() => ({
+    page: docPage,
+    pageSize: 50,
+    sortDirection: 'asc' as const,
+    scope: 'root' as const,
+    summaryOnly: docFilter === 'all',
+    documentKind: docFilter === 'all' ? undefined : docFilter,
+  }), [docFilter, docPage]);
+  const documentsQuery = useRunDocumentsQuery(runId, documentsQueryParams);
+  useSyncDocumentsMetadataToDb(runId || undefined, documentsQuery.data?.files || []);
+  const dbDocumentRows = useDocumentMetadataRows(runId || undefined);
+  const dbFiles = useMemo(() => dbDocumentRows.map(documentMetadataRowToDocFile), [dbDocumentRows]);
+  const previewContentQuery = useDocumentContentQuery(runId, previewFile?.filename, previewFile?.sourceRunId);
+  const renameDocumentMutation = useRenameDocumentMutation(runId);
+  const deleteDocumentsMutation = useDeleteDocumentsMutation(runId);
+  const loading = manualLoading || documentsQuery.isLoading;
+  const loadingPreview = previewContentQuery.isLoading;
 
   const selectedRootFilenames = useMemo(() => {
     return files
@@ -339,22 +575,31 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
   const loadFiles = useCallback(async () => {
     if (!runId) return;
-    setLoading(true);
-    try {
-      const data = await runsApi.listDocuments(runId, { page: docPage, pageSize: 200, sortDirection: 'asc' });
-      setFiles(data.files || []);
-      setDocPagination(data.pagination || null);
-      setDocumentDirectory(data.documentDirectory || null);
-    } catch {
-      setFiles([]);
-      setDocPagination(null);
-      setDocumentDirectory(null);
-    }
-    setLoading(false);
-  }, [docPage, runId]);
+    await documentsQuery.refetch();
+  }, [documentsQuery, runId]);
 
-  useEffect(() => { loadFiles(); }, [loadFiles]);
-  useEffect(() => { setDocPage(1); }, [runId]);
+  useEffect(() => { setDocPage(1); }, [docFilter, runId]);
+
+  useEffect(() => {
+    const data = documentsQuery.data;
+    if (!data) return;
+    setDocPagination(data.pagination || null);
+    setDocumentDirectory(data.documentDirectory || null);
+    setLoadedGroups(new Set());
+  }, [documentsQuery.data]);
+
+  useEffect(() => {
+    if (!documentsQuery.data && dbFiles.length === 0) return;
+    setFiles(dbFiles);
+  }, [dbFiles, documentsQuery.data]);
+
+  useEffect(() => {
+    if (!documentsQuery.isError) return;
+    setFiles([]);
+    setDocPagination(null);
+    setDocumentDirectory(null);
+    setLoadedGroups(new Set());
+  }, [documentsQuery.isError]);
 
   // Filter files by doc type
   const tabFiles = useMemo(() => {
@@ -364,16 +609,43 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   }, [files, docFilter]);
 
   // Build left folder groups from workflow metadata first, with filename fallback.
+  const phaseDefinitionMap = useMemo(() => new Map(
+    phaseDefinitions.map((phase) => [normalizeDocumentFolderKey(phase.name), phase]),
+  ), [phaseDefinitions]);
+
   const folderGroups = useMemo<DocFolderGroup[]>(() => {
     const map = new Map<string, DocFolderGroup>();
     tabFiles.forEach(f => {
       const group = getDocumentFolderGroup(f);
-      const existing = map.get(group.key) || { key: group.key, label: group.label, files: [] };
+      const definition = phaseDefinitionMap.get(group.key);
+      const existing = map.get(group.key) || {
+        key: group.key,
+        label: formatDocumentPhaseLabel(group.label, definition?.label),
+        rawLabel: group.label,
+        order: definition?.order ?? Number.MAX_SAFE_INTEGER,
+        files: [],
+      };
       existing.files.push(f);
       map.set(group.key, existing);
     });
-    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
-  }, [tabFiles]);
+    return Array.from(map.values()).sort((a, b) => (
+      a.order - b.order || a.label.localeCompare(b.label, 'zh-CN')
+    ));
+  }, [phaseDefinitionMap, tabFiles]);
+
+  const priorityGroup = useMemo(() => {
+    if (folderGroups.length === 0) return null;
+    const ordered = folderGroups.filter((group) => Number.isFinite(group.order) && group.order < Number.MAX_SAFE_INTEGER);
+    return ordered.length > 0 ? ordered[ordered.length - 1] : folderGroups[folderGroups.length - 1];
+  }, [folderGroups]);
+
+  const recommendedFile = useMemo(() => {
+    const candidates = priorityGroup?.files.filter((file) => !hasTimestamp(file.filename)) || [];
+    return [...candidates].sort((a, b) => {
+      const score = (file: DocFile) => /汇总|总结|执行摘要|summary|report|checkpoint/i.test(file.filename) ? 1 : 0;
+      return score(b) - score(a) || new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime();
+    })[0] || null;
+  }, [priorityGroup]);
 
   // Filtered + sorted files
   const scopedFiles = useMemo(() => {
@@ -412,6 +684,23 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       .filter(Boolean) as DocTreeGroup[];
   }, [scopedFiles, searchQuery, sortField, sortOrder]);
 
+  const treeRows = useMemo<DocTreeRow[]>(() => {
+    const rows: DocTreeRow[] = [];
+    treeGroups.forEach((group) => {
+      if (group.summary) {
+        rows.push({ type: 'summary', key: `summary:${group.key}`, group, file: group.summary });
+      } else {
+        rows.push({ type: 'group', key: `group:${group.key}`, group });
+      }
+      if (expandedGroups.has(group.key)) {
+        group.details.forEach((file) => {
+          rows.push({ type: 'detail', key: `detail:${group.key}:${getDocKey(file)}`, group, file });
+        });
+      }
+    });
+    return rows;
+  }, [expandedGroups, treeGroups]);
+
   const toggleSort = (field: SortField) => {
     if (sortField === field) setSortOrder(o => o === 'asc' ? 'desc' : 'asc');
     else { setSortField(field); setSortOrder('asc'); }
@@ -420,22 +709,124 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const selectFile = useCallback(async (file: DocFile) => {
     if (!runId) return;
     setPreviewFile(file);
-    setLoadingPreview(true);
-    try {
-      const { content } = await runsApi.getDocumentContent(runId, file.filename, { sourceRunId: file.sourceRunId });
-      setPreviewContent(content);
-    } catch { setPreviewContent('(无法加载)'); }
-    setLoadingPreview(false);
   }, [runId]);
+
+  const previewHighlights = useMemo(
+    () => extractDocumentHighlights(previewContent),
+    [previewContent],
+  );
+
+  const openLinkedRunDocument = useCallback(async (absolutePath: string) => {
+    const currentMatch = findRunDocumentByWorkspacePath(
+      previewFile ? [previewFile, ...files] : files,
+      absolutePath,
+    );
+    if (currentMatch) {
+      await selectFile(currentMatch);
+      return;
+    }
+    if (!runId) return;
+
+    try {
+      const [rootDocuments, childDocuments] = await Promise.all([
+        runsApi.listDocuments(runId, { scope: 'root', documentKind: 'detail', pageSize: 500 }),
+        runsApi.listDocuments(runId, { scope: 'children', documentKind: 'detail', pageSize: 500 }),
+      ]);
+      const discoveredFiles = [...(rootDocuments.files || []), ...(childDocuments.files || [])];
+      syncDocumentsMetadataToDb(runId, discoveredFiles);
+      const linkedDocument = findRunDocumentByWorkspacePath(discoveredFiles, absolutePath);
+      if (!linkedDocument) {
+        toast('error', `未找到运行产物：${getWorkspacePathFilename(absolutePath)}`);
+        return;
+      }
+      setFiles((previous) => {
+        const existing = new Set(previous.map(getDocKey));
+        return [...previous, ...discoveredFiles.filter((file) => !existing.has(getDocKey(file)))];
+      });
+      await selectFile(linkedDocument);
+    } catch {
+      toast('error', '打开运行产物失败');
+    }
+  }, [files, previewFile, runId, selectFile, toast]);
+
+  const handlePreviewLinkCapture = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null;
+    const workspaceLink = target?.closest<HTMLElement>('[data-workspace-absolute-path]');
+    const absolutePath = workspaceLink?.dataset.workspaceAbsolutePath;
+    if (!absolutePath) return;
+
+    const linkedDocument = findRunDocumentByWorkspacePath(
+      previewFile ? [previewFile, ...files] : files,
+      absolutePath,
+    );
+    const linkedFilename = getWorkspacePathFilename(absolutePath);
+    if (!linkedDocument && !hasTimestamp(linkedFilename)) return;
+
+    // Run artifacts live in the run document store, not necessarily in the project workspace.
+    // Stop the generic workspace handler and keep document-to-document navigation in this panel.
+    event.preventDefault();
+    event.stopPropagation();
+    void openLinkedRunDocument(absolutePath);
+  }, [files, openLinkedRunDocument, previewFile]);
+
+  useEffect(() => {
+    if (!previewFile) return;
+    if (previewContentQuery.isError) {
+      setPreviewContent('(无法加载)');
+      return;
+    }
+    if (previewContentQuery.data) {
+      setPreviewContent(previewContentQuery.data.content);
+    }
+  }, [previewContentQuery.data, previewContentQuery.isError, previewFile]);
+
+  const loadGroupDetails = useCallback(async (groupKey: string) => {
+    if (!runId || loadedGroups.has(groupKey) || loadingGroups.has(groupKey)) return;
+    setLoadingGroups((prev) => new Set(prev).add(groupKey));
+    try {
+      const params = {
+        scope: 'children',
+        groupKey,
+        documentKind: 'detail',
+        pageSize: 500,
+        sortDirection: sortOrder,
+      } as const;
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.documentGroupDetails(runId, groupKey, params),
+        queryFn: () => runsApi.listDocuments(runId, params),
+        staleTime: 30_000,
+      });
+      const detailFiles = data.files || [];
+      syncDocumentsMetadataToDb(runId, detailFiles);
+      setFiles((prev) => {
+        const existing = new Set(prev.map(getDocKey));
+        const additions = detailFiles.filter((file) => !existing.has(getDocKey(file)));
+        return additions.length > 0 ? [...prev, ...additions] : prev;
+      });
+      setLoadedGroups((prev) => new Set(prev).add(groupKey));
+    } catch {
+      toast('error', '加载文档详情失败');
+    } finally {
+      setLoadingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(groupKey);
+        return next;
+      });
+    }
+  }, [loadedGroups, loadingGroups, queryClient, runId, sortOrder, toast]);
 
   const toggleExpandedGroup = useCallback((groupKey: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(groupKey)) next.delete(groupKey);
-      else next.add(groupKey);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+        void loadGroupDetails(groupKey);
+      }
       return next;
     });
-  }, []);
+  }, [loadGroupDetails]);
 
   useEffect(() => {
     if (!previewFile) return;
@@ -444,35 +835,57 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       if (prev.has(key)) return prev;
       const next = new Set(prev);
       next.add(key);
+      void loadGroupDetails(key);
       return next;
     });
-  }, [previewFile]);
+  }, [loadGroupDetails, previewFile]);
 
   const openLatestTimestampedFile = useCallback(async () => {
     if (!runId) return;
-    setLoading(true);
+    setManualLoading(true);
     try {
-      const data = await runsApi.listDocuments(runId, { includeChildren: true, page: 1, pageSize: 500, sortDirection: 'desc' });
-      const nextFiles = data.files || [];
-      setFiles(nextFiles);
-      setDocPagination(data.pagination || null);
-      const latestFile = nextFiles
+      const rootParams = { page: 1, pageSize: 1, sortDirection: 'desc' as const, documentKind: 'detail' as const, scope: 'root' as const };
+      const rootData = await queryClient.fetchQuery({
+        queryKey: queryKeys.documentLatestDetail(runId, rootParams),
+        queryFn: () => runsApi.listDocuments(runId, rootParams),
+        staleTime: 30_000,
+      });
+      let nextFiles = rootData.files || [];
+      let nextPagination = rootData.pagination || null;
+      let latestFile = nextFiles
         .filter(file => hasTimestamp(file.filename))
         .sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime())[0];
+
+      if (!latestFile) {
+        const childParams = { scope: 'children' as const, page: 1, pageSize: 1, documentKind: 'detail' as const, sortDirection: 'desc' as const };
+        const childData = await queryClient.fetchQuery({
+          queryKey: queryKeys.documentLatestDetail(runId, childParams),
+          queryFn: () => runsApi.listDocuments(runId, childParams),
+          staleTime: 30_000,
+        });
+        nextFiles = childData.files || [];
+        nextPagination = childData.pagination || null;
+        latestFile = nextFiles
+          .filter(file => hasTimestamp(file.filename))
+          .sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime())[0];
+      }
+
+      syncDocumentsMetadataToDb(runId, nextFiles);
+      setFiles(nextFiles);
+      setDocPagination(nextPagination);
 
       if (!latestFile) {
         toast('error', '未找到 AI 最新结论文档');
         return;
       }
 
-      setModalOpen(true);
       await selectFile(latestFile);
     } catch {
       toast('error', '打开最新 AI 结论文档失败');
     } finally {
-      setLoading(false);
+      setManualLoading(false);
     }
-  }, [runId, selectFile, toast]);
+  }, [queryClient, runId, selectFile, toast]);
 
   useEffect(() => {
     if (!openLatestTimestampedRequest || openLatestTimestampedRequest === lastOpenLatestRequestRef.current) {
@@ -481,6 +894,28 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     lastOpenLatestRequestRef.current = openLatestTimestampedRequest;
     void openLatestTimestampedFile();
   }, [openLatestTimestampedFile, openLatestTimestampedRequest]);
+
+  useEffect(() => {
+    if (!focusRequest?.requestId || files.length === 0) return;
+    const requestedStep = focusRequest.stepName.trim();
+    const requestedFilename = String(focusRequest.filename || '').trim();
+    const candidates = [...files].sort((a, b) => {
+      const aTime = new Date(a.modifiedTime).getTime() || 0;
+      const bTime = new Date(b.modifiedTime).getTime() || 0;
+      return bTime - aTime;
+    });
+    const matched = candidates.find((file) => requestedFilename && file.filename === requestedFilename)
+      || candidates.find((file) => file.stepName === requestedStep)
+      || candidates.find((file) => requestedStep.endsWith(`-${file.stepName}`) || file.stepName.endsWith(`-${requestedStep}`))
+      || candidates.find((file) => {
+        const name = stripTimestampPrefix(file.baseName || file.filename).replace(/\.(md|txt)$/i, '');
+        return name === requestedStep || requestedStep.endsWith(`-${name}`) || name.endsWith(`-${requestedStep}`);
+      });
+    if (!matched) return;
+    const group = getDocumentFolderGroup(matched);
+    setActiveGroup(group.key);
+    void selectFile(matched);
+  }, [files, focusRequest, selectFile]);
 
   const toggleSelect = (docKey: string) => {
     setSelected(prev => {
@@ -501,20 +936,20 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const handleRename = async (file: string) => {
     if (!runId || !renameValue.trim()) return;
     try {
-      await runsApi.renameDocument(runId, file, renameValue.trim());
+      await renameDocumentMutation.mutateAsync({ file, newName: renameValue.trim() });
       setRenamingFile(null);
-      loadFiles();
+      await loadFiles();
     } catch { /* toast? */ }
   };
 
   const handleDelete = async (filenames: string[]) => {
     if (!runId) return;
     try {
-      await runsApi.deleteDocuments(runId, filenames);
+      await deleteDocumentsMutation.mutateAsync(filenames);
       setDeleteTarget(null);
       setSelected(prev => { const n = new Set(prev); filenames.forEach(f => n.delete(f)); return n; });
       if (previewFile && filenames.includes(previewFile.filename) && isRootRunFile(previewFile, runId)) { setPreviewFile(null); setPreviewContent(''); }
-      loadFiles();
+      await loadFiles();
     } catch { /* toast? */ }
   };
 
@@ -622,8 +1057,11 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
   // --- Left sidebar: folder tree ---
   const folderTree = () => (
-    <div className="w-48 shrink-0 border-r border-border bg-muted/20 flex flex-col overflow-hidden">
-      <div className="px-3 py-2 text-xs font-semibold text-muted-foreground border-b border-border/50">文件夹</div>
+    <div className="flex h-full w-full flex-col overflow-hidden border-r border-border bg-muted/20">
+      <div className="px-3 py-2 border-b border-border/50">
+        <div className="text-xs font-semibold text-muted-foreground">按执行阶段</div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground/80">从上到下为工作流执行顺序</div>
+      </div>
       <div className="flex-1 overflow-y-auto">
         <div
           className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === null ? 'bg-accent text-accent-foreground font-medium' : ''}`}
@@ -633,14 +1071,25 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           <span className="flex-1">全部文件</span>
           <span className="text-[10px] text-muted-foreground">{tabFiles.length}</span>
         </div>
-        {folderGroups.map(group => (
+        {folderGroups.map((group, index) => (
           <div
             key={group.key}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === group.key ? 'bg-accent text-accent-foreground font-medium' : ''}`}
+            className={`flex items-center gap-2 px-3 py-2 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === group.key ? 'bg-accent text-accent-foreground font-medium' : ''}`}
             onClick={() => setActiveGroup(group.key)}
+            title={`${index + 1}. ${group.label} (${group.rawLabel})`}
           >
-            <span className="material-symbols-outlined text-sm">folder</span>
-            <span className="flex-1 truncate">{group.label}</span>
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border bg-background text-[10px] font-semibold">{index + 1}</span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-1 truncate font-medium">
+                {group.label}
+                {priorityGroup?.key === group.key ? (
+                  <Badge className="h-4 shrink-0 px-1 text-[9px]">先看</Badge>
+                ) : null}
+              </span>
+              {group.rawLabel !== group.label ? (
+                <span className="block truncate text-[9px] font-normal text-muted-foreground">{group.rawLabel}</span>
+              ) : null}
+            </span>
             <span className="text-[10px] text-muted-foreground">{group.files.length}</span>
           </div>
         ))}
@@ -649,9 +1098,9 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   );
 
   // --- Toolbar ---
-  const toolbar = (compact?: boolean) => (
-    <div className={`flex items-center gap-2 flex-wrap ${compact ? 'p-2' : 'p-3'}`}>
-      {!compact && (
+  const toolbar = () => (
+    <div className="flex flex-wrap items-center gap-2 p-3">
+      {(
         <Input
           placeholder="搜索文件..."
           value={searchQuery}
@@ -659,7 +1108,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           className="h-7 text-xs w-40"
         />
       )}
-      {!compact && (
+      {(
         <Select value={sortField} onValueChange={v => { setSortField(v as SortField); }}>
           <SelectTrigger className="h-7 text-xs w-[90px]"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -669,12 +1118,12 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           </SelectContent>
         </Select>
       )}
-      {!compact && (
+      {(
         <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')} title={sortOrder === 'asc' ? '升序' : '降序'}>
           <span className="material-symbols-outlined text-sm">{sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward'}</span>
         </Button>
       )}
-      {!compact && (
+      {(
         <div className="flex items-center gap-1 ml-1">
           {([['all', '全部'], ['conclusion', '结论'], ['detail', '详情']] as const).map(([key, label]) => (
             <Badge
@@ -692,25 +1141,25 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         </div>
       )}
       <div className="flex-1" />
-      {!compact && docPagination && docPagination.totalPages > 1 && (
+      {docPagination && (docPagination.totalPages || 1) > 1 && (
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <Button
             variant="ghost"
             size="sm"
             className="h-7 w-7 p-0"
-            disabled={loading || docPagination.page <= 1}
+            disabled={loading || (docPagination.page || 1) <= 1}
             onClick={() => setDocPage((page) => Math.max(1, page - 1))}
             title="上一页"
           >
             <span className="material-symbols-outlined text-sm">chevron_left</span>
           </Button>
-          <span className="min-w-16 text-center">{docPagination.page}/{docPagination.totalPages}</span>
+          <span className="min-w-16 text-center">{docPagination.page || 1}/{docPagination.totalPages || 1}</span>
           <Button
             variant="ghost"
             size="sm"
             className="h-7 w-7 p-0"
-            disabled={loading || docPagination.page >= docPagination.totalPages}
-            onClick={() => setDocPage((page) => Math.min(docPagination.totalPages, page + 1))}
+            disabled={loading || (docPagination.page || 1) >= (docPagination.totalPages || 1)}
+            onClick={() => setDocPage((page) => Math.min(docPagination.totalPages || 1, page + 1))}
             title="下一页"
           >
             <span className="material-symbols-outlined text-sm">chevron_right</span>
@@ -737,35 +1186,20 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadFiles} disabled={loading}>
         <span className="material-symbols-outlined text-sm">refresh</span>
       </Button>
-      {compact && (
-        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setModalOpen(true)} title="弹出文件管理器">
-          <span className="material-symbols-outlined text-sm">open_in_new</span>
-        </Button>
-      )}
-      {!compact && fullscreen && (
-        <>
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFolderTreeVisible}
-            title={folderTreeVisible ? '隐藏文件夹' : '显示文件夹'}>
-            <span className="material-symbols-outlined text-sm">side_navigation</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFileListVisible}
-            title={fileListVisible ? '隐藏文件列表' : '显示文件列表'}>
-            <span className="material-symbols-outlined text-sm">view_sidebar</span>
-          </Button>
-        </>
-      )}
-      {!compact && (
-        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setFullscreen(f => !f)} title={fullscreen ? '退出全屏' : '全屏'}>
-          <span className="material-symbols-outlined text-sm">{fullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
-        </Button>
-      )}
+      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFolderTreeVisible}
+        title={folderTreeVisible ? '隐藏文件夹' : '显示文件夹'}>
+        <span className="material-symbols-outlined text-sm">side_navigation</span>
+      </Button>
+      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFileListVisible}
+        title={fileListVisible ? '隐藏文件列表' : '显示文件列表'}>
+        <span className="material-symbols-outlined text-sm">view_sidebar</span>
+      </Button>
     </div>
   );
 
   // --- File row ---
   const fileRow = (
     file: DocFile,
-    compact: boolean,
     options?: { indent?: number; prefix?: ReactNode; muted?: boolean }
   ) => {
     const docKey = getDocKey(file);
@@ -774,21 +1208,6 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     const isSelected = selected.has(docKey);
     const isActive = previewFile && getDocKey(previewFile) === docKey;
     const rowStyle = options?.indent ? { paddingLeft: `${12 + options.indent}px` } : undefined;
-
-    if (compact) {
-      return (
-        <div
-          key={file.filename}
-          className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30 ${options?.muted ? 'text-muted-foreground' : ''}`}
-          style={rowStyle}
-          onClick={() => { setModalOpen(true); selectFile(file); }}
-        >
-          {options?.prefix}
-          <span className={`material-symbols-outlined text-sm shrink-0 ${getDocumentIconClass(file)}`}>{getDocumentIcon(file)}</span>
-          <span className="truncate flex-1" title={file.filename}>{getDisplayFileName(file)}</span>
-        </div>
-      );
-    }
 
     return (
       <div
@@ -824,6 +1243,9 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
             子流程
           </Badge>
         )}
+        {recommendedFile && getDocKey(recommendedFile) === docKey ? (
+          <Badge className="h-4 shrink-0 px-1 text-[9px]">推荐</Badge>
+        ) : null}
         {hasTimestamp(file.filename) && (
           <Badge variant="outline" className="text-[9px] h-4 px-1 shrink-0 text-muted-foreground">
             {parseTimestamp(file.filename)}
@@ -869,12 +1291,12 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       title={expandedGroups.has(group.key) ? '收起详情' : '展开详情'}
     >
       <span className="material-symbols-outlined text-[12px]">
-        {expandedGroups.has(group.key) ? 'expand_more' : 'chevron_right'}
+        {loadingGroups.has(group.key) ? 'progress_activity' : expandedGroups.has(group.key) ? 'expand_more' : 'chevron_right'}
       </span>
     </button>
   );
 
-  const renderTreeList = (compact: boolean) => {
+  const renderTreeList = () => {
     if (loading) {
       return <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>;
     }
@@ -884,68 +1306,72 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
     return (
       <>
-        {!compact && (
-          <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
-            <Checkbox
-              checked={
-                (() => {
-                  const editableFiles = treeGroups
-                    .flatMap(group => group.summary ? [group.summary, ...group.details] : group.details)
-                    .filter(file => isRootRunFile(file, runId));
-                  return editableFiles.length > 0 && editableFiles.every(file => selected.has(getDocKey(file)));
-                })()
-              }
-              onCheckedChange={toggleSelectAll}
-              className="h-3 w-3"
-            />
-            <span className="flex-1">总结 / 详情</span>
-            <span className="w-14 text-right">大小</span>
-            <span className="w-20 text-right">时间</span>
-            <span className="w-5" />
-          </div>
-        )}
-        {treeGroups.map((group) => {
-          const expanded = expandedGroups.has(group.key);
-          const summaryFile = group.summary;
-          return (
-            <div key={group.key}>
-              {summaryFile ? (
-                fileRow(summaryFile, compact, {
-                  prefix: group.details.length > 0 ? treeChevron(group) : <span className="w-4 shrink-0" />,
-                })
-              ) : (
-                <div
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border/30 bg-muted/20"
-                  style={compact ? undefined : { paddingLeft: '12px' }}
-                >
-                  {group.details.length > 0 ? treeChevron(group) : <span className="w-4 shrink-0" />}
-                  <span className="material-symbols-outlined text-sm text-amber-600 shrink-0">topic</span>
-                  <span className="flex-1 truncate font-medium">{group.name}</span>
-                  {!compact && <span className="text-[10px] text-muted-foreground shrink-0">{group.details.length} 条详情</span>}
-                </div>
-              )}
-              {expanded && group.details.map((file) => fileRow(file, compact, {
+        <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
+          <Checkbox
+            checked={
+              (() => {
+                const editableFiles = treeGroups
+                  .flatMap(group => group.summary ? [group.summary, ...group.details] : group.details)
+                  .filter(file => isRootRunFile(file, runId));
+                return editableFiles.length > 0 && editableFiles.every(file => selected.has(getDocKey(file)));
+              })()
+            }
+            onCheckedChange={toggleSelectAll}
+            className="h-3 w-3"
+          />
+          <span className="flex-1">总结 / 详情</span>
+          <span className="w-14 text-right">大小</span>
+          <span className="w-20 text-right">时间</span>
+          <span className="w-5" />
+        </div>
+        <VirtualList
+          items={treeRows}
+          estimateSize={34}
+          height="calc(100% - 29px)"
+          className="min-h-0"
+          testId="documents-tree-virtual-list"
+          maxRenderedItems={80}
+          getKey={(row) => row.key}
+          renderItem={(row) => {
+            if (row.type === 'summary') {
+              return fileRow(row.file, {
+                prefix: row.group.detailCount > 0 ? treeChevron(row.group) : <span className="w-4 shrink-0" />,
+              });
+            }
+            if (row.type === 'detail') {
+              return fileRow(row.file, {
                 indent: 22,
                 prefix: <span className="material-symbols-outlined text-[12px] text-muted-foreground shrink-0">subdirectory_arrow_right</span>,
                 muted: true,
-              }))}
-            </div>
-          );
-        })}
+              });
+            }
+            return (
+              <div
+                className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border/30 bg-muted/20"
+                style={{ paddingLeft: '12px' }}
+              >
+                {row.group.detailCount > 0 ? treeChevron(row.group) : <span className="w-4 shrink-0" />}
+                <span className="material-symbols-outlined text-sm text-amber-600 shrink-0">topic</span>
+                <span className="flex-1 truncate font-medium">{row.group.name}</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">{row.group.detailCount} 条详情</span>
+              </div>
+            );
+          }}
+        />
       </>
     );
   };
 
   // --- File list ---
-  const fileList = (compact: boolean) => (
+  const fileList = () => (
     <div className="flex-1 overflow-y-auto">
-      {docFilter === 'all' ? renderTreeList(compact) : (
+      {docFilter === 'all' ? renderTreeList() : (
         <>
       {loading && <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>}
       {!loading && processedFiles.length === 0 && (
         <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
       )}
-      {!loading && !compact && processedFiles.length > 0 && (
+      {!loading && processedFiles.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
           <Checkbox
             checked={(() => {
@@ -967,30 +1393,18 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           <span className="w-5" />
         </div>
       )}
-      {!loading && processedFiles.map(f => fileRow(f, compact))}
-        </>
+      {!loading && processedFiles.length > 0 && (
+        <VirtualList
+          items={processedFiles}
+          estimateSize={34}
+          height="calc(100% - 29px)"
+          className="min-h-0"
+          testId="documents-file-virtual-list"
+          maxRenderedItems={80}
+          getKey={(file) => getDocKey(file)}
+          renderItem={(file) => fileRow(file)}
+        />
       )}
-    </div>
-  );
-
-  // --- Compact embedded: show folder groups + files ---
-  const compactView = () => (
-    <div className="flex-1 overflow-y-auto">
-      {docFilter === 'all' ? renderTreeList(true) : (
-        <>
-      {loading && <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>}
-      {!loading && files.length === 0 && (
-        <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
-      )}
-      {!loading && folderGroups.map(group => (
-        <div key={group.key}>
-          <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold text-muted-foreground bg-muted/30 border-b border-border/30 sticky top-0 z-10">
-            <span className="material-symbols-outlined text-xs">folder</span>
-            {group.label} ({group.files.length})
-          </div>
-          {group.files.map(f => fileRow(f, true))}
-        </div>
-      ))}
         </>
       )}
     </div>
@@ -1048,87 +1462,159 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
             {loadingPreview ? (
               <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>
             ) : (
-              <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+              <div onClickCapture={handlePreviewLinkCapture}>
+                <DocumentHighlightsView highlights={previewHighlights} />
+                {previewHighlights.length > 0 ? (
+                  <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    <span className="h-px flex-1 bg-border" />
+                    完整内容
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                ) : null}
+                <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+              </div>
             )}
           </div>
         </>
       ) : (
-        <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-          <span className="material-symbols-outlined text-4xl mb-2">preview</span>
+        <div className="flex h-full flex-col items-center justify-start gap-2 pt-10 text-muted-foreground">
+          <span className="material-symbols-outlined text-4xl">preview</span>
           <p className="text-xs">点击文件预览内容</p>
         </div>
       )}
     </div>
   );
 
+  const closePreview = () => {
+    setPreviewFile(null);
+    setPreviewContent('');
+  };
+
+  const previewDrawer = () => (
+    <DetailDrawer open={Boolean(previewFile)} onOpenChange={(open) => { if (!open) closePreview(); }}>
+      <DetailDrawerContent widthClassName="w-[min(640px,calc(100vw-1rem))]">
+        {previewFile ? (
+          <>
+            <DetailDrawerHeader>
+              <DetailDrawerTitle>{getDisplayFileName(previewFile)}</DetailDrawerTitle>
+              <DetailDrawerDescription>{previewFile.phaseName || previewFile.stepName || '运行文档'}</DetailDrawerDescription>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {documentDirectory && onOpenWorkspaceDirectory ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+                  >
+                    <span className="material-symbols-outlined mr-1 text-sm">folder_open</span>
+                    目录
+                  </Button>
+                ) : null}
+                <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => downloadFile(previewFile)}>
+                  <span className="material-symbols-outlined mr-1 text-sm">download</span>
+                  下载
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      disabled={savingNotebookFile === previewFile.filename}
+                    >
+                      <span className="material-symbols-outlined mr-1 text-sm">note_add</span>
+                      保存到 Notebook
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-44">
+                    <DropdownMenuItem onClick={() => void saveDocToNotebook(previewFile, 'personal')}>
+                      <span className="material-symbols-outlined mr-2 text-sm">person</span>个人 Notebook
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void saveDocToNotebook(previewFile, 'global')}>
+                      <span className="material-symbols-outlined mr-2 text-sm">groups</span>团队 Notebook
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </DetailDrawerHeader>
+            <DetailDrawerBody className="p-5">
+              {loadingPreview ? (
+                <div className="py-10 text-center text-xs text-muted-foreground">加载中...</div>
+              ) : (
+                <div onClickCapture={handlePreviewLinkCapture}>
+                  <DocumentHighlightsView highlights={previewHighlights} />
+                  {previewHighlights.length > 0 ? (
+                    <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <span className="h-px flex-1 bg-border" />
+                      完整内容
+                      <span className="h-px flex-1 bg-border" />
+                    </div>
+                  ) : null}
+                  <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+                </div>
+              )}
+            </DetailDrawerBody>
+          </>
+        ) : null}
+      </DetailDrawerContent>
+    </DetailDrawer>
+  );
+
   return (
     <>
-      {/* Embedded compact mode */}
-      <div className="flex flex-col h-full">
-        <div className="flex items-center gap-2 p-2">
-          <div className="flex items-center gap-1">
-            {([['all', '全部'], ['conclusion', '结论'], ['detail', '详情']] as const).map(([key, label]) => (
-              <Badge
-                key={key}
-                variant={docFilter === key ? 'default' : 'outline'}
-                className={`cursor-pointer text-[10px] h-5 px-1.5 select-none transition-colors ${docFilter === key ? '' : 'hover:bg-muted'}`}
-                onClick={() => setDocFilter(key)}
-              >
-                {label}
-              </Badge>
-            ))}
-          </div>
-          <div className="flex-1" />
-          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadFiles} disabled={loading}>
-            <span className="material-symbols-outlined text-sm">refresh</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setModalOpen(true)} title="弹出文件管理器">
-            <span className="material-symbols-outlined text-sm">open_in_new</span>
-          </Button>
-        </div>
-        {compactView()}
-      </div>
-
-      {/* Popup modal — Explorer style */}
-      <Dialog open={modalOpen} onOpenChange={(open) => { setModalOpen(open); if (!open) setFullscreen(false); }}>
-        <DialogContent className={`p-0 flex flex-col gap-0 ${fullscreen ? 'max-w-none w-screen h-screen rounded-none' : 'max-w-5xl w-[90vw] h-[80vh]'}`}>
-          <DialogTitle className="sr-only">文件管理器</DialogTitle>
-          <div className="border-b border-border">
-            {toolbar(false)}
-          </div>
-          <div className="flex flex-1 overflow-hidden">
-            {(!fullscreen || folderTreeVisible) && (
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+        <div className="shrink-0 border-b border-border">{toolbar()}</div>
+        {recommendedFile && priorityGroup ? (
+          <button
+            type="button"
+            className="mx-3 mt-3 flex shrink-0 items-center gap-3 rounded-lg border border-primary/25 bg-primary/[0.05] px-3 py-2 text-left transition-colors hover:bg-primary/[0.09]"
+            onClick={() => {
+              setActiveGroup(priorityGroup.key);
+              void selectFile(recommendedFile);
+            }}
+          >
+            <span className="material-symbols-outlined text-lg text-primary">recommend</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-semibold text-primary">建议优先查看</span>
+              <span className="block truncate text-xs font-medium">{getDisplayFileName(recommendedFile)}</span>
+              <span className="block truncate text-[10px] text-muted-foreground">最终阶段：{priorityGroup.label} · 点击直接打开结论</span>
+            </span>
+            <span className="material-symbols-outlined text-base text-muted-foreground">arrow_forward</span>
+          </button>
+        ) : null}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {folderTreeVisible ? (
+            <>
+              <div style={{ width: folderTreeWidth }} className="shrink-0 overflow-hidden">{folderTree()}</div>
               <div
-                style={fullscreen && folderTreeVisible ? { width: folderTreeWidth } : undefined}
-                className={fullscreen ? 'shrink-0 flex flex-col overflow-hidden' : ''}
-              >
-                {folderTree()}
-              </div>
-            )}
-            {fullscreen && folderTreeVisible && (
-              <div
-                className="w-1 hover:w-1.5 bg-border hover:bg-primary cursor-col-resize shrink-0 transition-colors"
+                className="w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary"
                 onMouseDown={e => onResizeStart('folderTree', e)}
               />
-            )}
-            {(!fullscreen || fileListVisible) && (
+            </>
+          ) : null}
+          {fileListVisible ? (
+            <>
               <div
-                style={fullscreen && fileListVisible ? { width: fileListWidth } : undefined}
-                className={`flex flex-col overflow-hidden border-r border-border ${fullscreen ? 'shrink-0' : 'flex-1'}`}
+                style={previewPresentation === 'inline' ? { width: fileListWidth } : undefined}
+                className={previewPresentation === 'inline'
+                  ? 'flex shrink-0 flex-col overflow-hidden border-r border-border'
+                  : 'flex min-w-0 flex-1 flex-col overflow-hidden'}
               >
-                {fileList(false)}
+                {fileList()}
               </div>
-            )}
-            {fullscreen && fileListVisible && (
-              <div
-                className="w-1 hover:w-1.5 bg-border hover:bg-primary cursor-col-resize shrink-0 transition-colors"
-                onMouseDown={e => onResizeStart('fileList', e)}
-              />
-            )}
-            {previewPane()}
-          </div>
-        </DialogContent>
-      </Dialog>
+              {previewPresentation === 'inline' ? (
+                <div
+                  className="w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary"
+                  onMouseDown={e => onResizeStart('fileList', e)}
+                />
+              ) : null}
+            </>
+          ) : null}
+          {previewPresentation === 'inline' ? previewPane() : null}
+        </div>
+      </div>
+
+      {previewPresentation === 'drawer' ? previewDrawer() : null}
 
       <NotebookSaveDialog
         open={saveNotebookDialogOpen}

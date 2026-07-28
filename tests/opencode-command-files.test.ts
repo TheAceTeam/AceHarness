@@ -51,7 +51,7 @@ describe('OpenCode command file fallback discovery', () => {
       '---\ndescription: ACEHarness runtime command\n---\nRuntime command',
     );
     writeCommand(
-      join(home, '.csiharness', '.opencode', 'command', 'csi-home.md'),
+      join(home, '.aceharness', '.opencode', 'command', 'ace-home.md'),
       '---\ndescription: ACEHarness home command\n---\nHome runtime command',
     );
     writeCommand(
@@ -76,7 +76,7 @@ describe('OpenCode command file fallback discovery', () => {
       'parent',
       'home',
       'ace',
-      'csi-home',
+      'ace-home',
       'alias-name',
       'global',
     ]);
@@ -84,7 +84,7 @@ describe('OpenCode command file fallback discovery', () => {
     expect(commands.find((command) => command.name === 'parent')?.description).toBe('Parent project command');
     expect(commands.find((command) => command.name === 'home')?.description).toBe('Home dot-opencode command');
     expect(commands.find((command) => command.name === 'ace')?.description).toBe('ACEHarness runtime command');
-    expect(commands.find((command) => command.name === 'csi-home')?.description).toBe('ACEHarness home command');
+    expect(commands.find((command) => command.name === 'ace-home')?.description).toBe('ACEHarness home command');
     expect(commands.find((command) => command.name === 'global')?.description).toBe('Global command');
   });
 
@@ -133,7 +133,7 @@ describe('OpenCode command file fallback discovery', () => {
       platform: 'linux',
     })).toEqual([
       join(runtimeRoot, '.opencode'),
-      join(tempRoot, 'home', '.csiharness', '.opencode'),
+      join(tempRoot, 'home', '.aceharness', '.opencode'),
     ]);
   });
 

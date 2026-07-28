@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
-import { renderWithProviders, defaultChatContextMock } from '../helpers/component-wrapper';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { defaultChatContextMock } from '../helpers/component-wrapper';
 import { cleanup, fireEvent, render, waitFor, screen } from '@testing-library/react';
 
 const chatContextMock = {
@@ -196,6 +197,20 @@ function createJsonResponse(data: any, ok = true, status = 200): Response {
   } as Response;
 }
 
+function renderNewConfigModal(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>
+  );
+}
+
 describe('NewConfigModal backend draft isolation', () => {
   const fetchCalls: FetchCall[] = [];
 
@@ -294,7 +309,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -369,7 +384,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -477,7 +492,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -619,7 +634,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -715,7 +730,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -833,7 +848,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -945,7 +960,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -1008,12 +1023,12 @@ describe('NewConfigModal backend draft isolation', () => {
             stageSessions: {
               clarification: {
                 frontendSessionId: 'planning-stale',
-                backendSessionId: 'backend-1',
+                runtimeSessionId: 'runtime-1',
                 updatedAt: Date.now(),
               },
               specPlanning: {
                 frontendSessionId: 'planning-stale',
-                backendSessionId: 'backend-1',
+                runtimeSessionId: 'runtime-1',
                 updatedAt: Date.now(),
               },
             },
@@ -1048,7 +1063,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -1095,8 +1110,8 @@ describe('NewConfigModal backend draft isolation', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             stageSessions: {
-              clarification: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
-              specPlanning: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
+              clarification: { frontendSessionId: 'planning-real', runtimeSessionId: 'runtime-1', updatedAt: Date.now() },
+              specPlanning: { frontendSessionId: 'planning-real', runtimeSessionId: 'runtime-1', updatedAt: Date.now() },
             },
             specCoding: {
               id: 'spec-real',
@@ -1144,7 +1159,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}
@@ -1191,7 +1206,7 @@ describe('NewConfigModal backend draft isolation', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             stageSessions: {
-              clarification: { frontendSessionId: 'planning-skel', backendSessionId: 'b1', updatedAt: Date.now() },
+              clarification: { frontendSessionId: 'planning-skel', runtimeSessionId: 'runtime-1', updatedAt: Date.now() },
             },
             specCoding: {
               id: 'spec-skel',
@@ -1220,7 +1235,7 @@ describe('NewConfigModal backend draft isolation', () => {
       throw new Error(`Unhandled fetch: ${method} ${url}`);
     });
 
-    renderWithProviders(
+    renderNewConfigModal(
       <NewConfigModal
         isOpen
         onClose={() => {}}

@@ -113,9 +113,9 @@ async function writeSnapshotCommit(input: {
     const parentArgs = hasHead ? ['-p', 'HEAD'] : [];
     const commit = await runGit(input.repoRoot, ['commit-tree', tree, ...parentArgs, '-m', input.message], {
       ...env,
-      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || 'CSIHarness',
+      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || 'ACEHarness',
       GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || 'aceharness@example.invalid',
-      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || 'CSIHarness',
+      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || 'ACEHarness',
       GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'aceharness@example.invalid',
     });
     await runGit(input.repoRoot, ['update-ref', input.ref, commit]);
@@ -199,7 +199,7 @@ export async function recordWorkflowGitSnapshot(input: {
   const nextIndex = (input.state.snapshots || []).length + 1;
   const ref = `refs/aceharness/runs/${safeRefSegment(input.state.runId)}/snapshots/${String(nextIndex).padStart(4, '0')}-${safeRefSegment(input.kind)}-${safeRefSegment(input.stepName || input.label)}`;
   const messageParts = [
-    `CSIHarness ${input.kind}`,
+    `ACEHarness ${input.kind}`,
     `run: ${input.state.runId}`,
     input.stepName ? `step: ${safeMessageLine(input.stepName)}` : '',
     input.phaseName ? `phase: ${safeMessageLine(input.phaseName)}` : '',

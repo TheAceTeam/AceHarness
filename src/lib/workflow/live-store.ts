@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from 'react';
 import { runsApi, workflowApi } from '@/lib/core/api';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
+import { storeWorkflowSseEventAsAgentMessage } from '@/client/ai/messages';
 
 export type WorkflowLiveChatStreamStatus = 'running' | 'completed' | 'failed' | 'killed';
 
@@ -173,6 +174,13 @@ function applyWorkflowEventLogRecord(record: { runId: string; type: string; seq:
   }
 }
 
+export function shouldStoreWorkflowLiveEventAsAgentMessage(type: string): boolean {
+  return type !== 'chat-stream-state'
+    && type !== 'chat-stream-removed'
+    && type !== 'chat-session-updated'
+    && type !== 'chat-session-removed';
+}
+
 function hydrateEventLog(runId: string) {
   if (typeof window === 'undefined' || !runId) return;
   if (eventLogInflightByRunId.has(runId)) return;
@@ -197,6 +205,11 @@ function hydrateEventLog(runId: string) {
 function handleWorkflowEvent(event: any) {
   const type = String(event?.type || '');
   const data = event?.data || {};
+  if (shouldStoreWorkflowLiveEventAsAgentMessage(type)) {
+    try {
+      storeWorkflowSseEventAsAgentMessage(event && typeof event === 'object' ? event : { type: 'workflow-event', data: event });
+    } catch {}
+  }
 
   if (type === 'snapshot') {
     const nextQuestions = Array.isArray(data.pendingHumanQuestions) ? sortQuestions(data.pendingHumanQuestions) : snapshot.pendingHumanQuestions;

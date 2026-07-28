@@ -1,8 +1,12 @@
 'use client';
 
-import dynamic from 'next/dynamic';
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import dynamic from '@/lib/navigation/dynamic';
+import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRouter } from '@/lib/navigation/client';
+import { logoutCurrentUser, useCurrentUserQuery } from '@/client/query/auth';
+import { useUsersQuery } from '@/client/query/users';
+import { queryKeys } from '@/client/query/query-keys';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
@@ -24,68 +28,47 @@ interface UserMenuProps {
   } | null;
 }
 
-const AccountContent = dynamic(() => import('@/app/account/page').then((m) => m.AccountContent), { ssr: false });
+const AccountContent = dynamic(() => import('@/client/pages/AccountPage').then((m) => m.AccountContent), { ssr: false });
 
 export default function UserMenu({ user }: UserMenuProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const currentUser = useCurrentUserQuery();
+  const menuUser = user ?? currentUser.data ?? null;
   const dockWorkspace = useDashboardDockWorkspace();
-  const [pendingUserCount, setPendingUserCount] = useState(0);
   const [accountOpen, setAccountOpen] = useState(false);
+  const usersQuery = useUsersQuery({ enabled: menuUser?.role === 'admin' });
+  const pendingUserCount = useMemo(() => {
+    if (menuUser?.role !== 'admin') return 0;
+    const users = Array.isArray(usersQuery.data?.users) ? usersQuery.data.users : [];
+    return users.filter((item) => item.status === 'pending').length;
+  }, [menuUser?.role, usersQuery.data?.users]);
 
   useEffect(() => {
-    if (user?.role !== 'admin') {
-      setPendingUserCount(0);
+    if (menuUser?.role !== 'admin') {
       return;
     }
 
-    const token = localStorage.getItem('auth-token');
-    if (!token) return;
-
-    let cancelled = false;
-    const loadPendingUserCount = () => fetch('/api/users', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (cancelled) return;
-        const users = Array.isArray(data?.users) ? data.users : [];
-        setPendingUserCount(users.filter((item: any) => item.status === 'pending').length);
-      })
-      .catch(() => {
-        if (!cancelled) setPendingUserCount(0);
-      });
-
-    const handlePendingCountChanged = (event: Event) => {
-      const count = (event as CustomEvent<number>).detail;
-      if (typeof count === 'number') setPendingUserCount(count);
+    const handlePendingCountChanged = () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.users() });
     };
 
-    loadPendingUserCount();
     window.addEventListener('aceharness:pending-users-changed', handlePendingCountChanged);
 
     return () => {
-      cancelled = true;
       window.removeEventListener('aceharness:pending-users-changed', handlePendingCountChanged);
     };
-  }, [user?.role]);
+  }, [menuUser?.role, queryClient]);
 
   const handleLogout = async () => {
-    const token = localStorage.getItem('auth-token');
-    if (token) {
-      await fetch('/api/auth/me', {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {});
-    }
-    localStorage.removeItem('auth-token');
-    localStorage.removeItem('auth-user');
+    await logoutCurrentUser(queryClient);
     router.push('/login');
   };
 
-  if (!user) return null;
+  if (!menuUser) return null;
 
-  const initials = user.username?.charAt(0)?.toUpperCase() || '?';
-  const hasPendingUsers = user.role === 'admin' && pendingUserCount > 0;
+  const initials = menuUser.username?.charAt(0)?.toUpperCase() || '?';
+  const hasPendingUsers = menuUser.role === 'admin' && pendingUserCount > 0;
   const pushDashboardRoute = (route: string) => {
     const params = new URLSearchParams();
     params.set('route', route);
@@ -123,10 +106,10 @@ export default function UserMenu({ user }: UserMenuProps) {
           <button className="flex items-center gap-2 rounded-full hover:opacity-80 transition-opacity focus:outline-none">
             <span className="relative">
               <SpriteAvatar
-                avatar={user.avatar}
-                seed={user.username}
+                avatar={menuUser.avatar}
+                seed={menuUser.username}
                 category="user-default"
-                alt={user.username}
+                alt={menuUser.username}
                 fallback={initials}
                 className="h-8 w-8"
                 fallbackClassName="text-xs bg-primary/20 text-primary"
@@ -135,13 +118,13 @@ export default function UserMenu({ user }: UserMenuProps) {
                 <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-destructive" />
               )}
             </span>
-            <span className="text-sm font-medium hidden sm:inline">{user.username}</span>
+            <span className="text-sm font-medium hidden sm:inline">{menuUser.username}</span>
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
           <div className="px-2 py-1.5">
-            <p className="text-sm font-medium">{user.username}</p>
-            <p className="text-xs text-muted-foreground">{user.email}</p>
+            <p className="text-sm font-medium">{menuUser.username}</p>
+            <p className="text-xs text-muted-foreground">{menuUser.email}</p>
           </div>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={openNotebook}>
@@ -152,7 +135,7 @@ export default function UserMenu({ user }: UserMenuProps) {
             <span className="material-symbols-outlined text-sm mr-2">person</span>
             账户设置
           </DropdownMenuItem>
-          {user.role === 'admin' && (
+          {menuUser.role === 'admin' && (
             <DropdownMenuItem onClick={openUsers} className="gap-2">
               <span className="material-symbols-outlined text-sm">group</span>
               <span className="flex-1">用户管理</span>

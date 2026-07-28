@@ -11,6 +11,8 @@ import type {
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
+import { buildLoginHref, getCurrentAuthReturnTo } from '@/lib/navigation/return-target';
 
 const API_BASE = '/api';
 
@@ -22,14 +24,14 @@ function getAuthHeaders(): Record<string, string> {
 
 function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = { ...getAuthHeaders(), ...(init?.headers || {}) };
-  return fetch(url, { ...init, headers }).then(res => {
+  return fetch(url, { ...init, credentials: init?.credentials || 'same-origin', headers }).then(res => {
     if (res.status === 401 && typeof window !== 'undefined') {
       localStorage.removeItem('auth-token');
       localStorage.removeItem('auth-user');
-      // Dispatch a custom event so AuthGuard / page can react
-      window.dispatchEvent(new CustomEvent('auth:expired'));
       if (window.location.pathname !== '/login') {
-        window.location.replace('/login');
+        // Dispatch a custom event so AuthGuard / page can react outside login.
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+        window.location.replace(buildLoginHref(getCurrentAuthReturnTo('/')));
       }
     }
     return res;
@@ -551,6 +553,15 @@ interface WorkflowStatusResponse {
     }>;
   } | null;
 }
+
+type WorkflowStatusStreamEvent = {
+  type?: string;
+  data?: WorkflowStatusResponse;
+  seq?: number;
+  timestamp?: string;
+  error?: string;
+  [key: string]: any;
+};
 
 interface RunCangjieResponse {
   success: boolean;
@@ -1811,7 +1822,7 @@ export const runsApi = {
     return response.json();
   },
 
-  async deleteRun(id: string, _cleanWorkDir = false): Promise< ApiResponse> {
+  async deleteRun(id: string, _cleanWorkDir = false): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/delete`, {
       method: 'DELETE',
     });
@@ -1828,22 +1839,40 @@ export const runsApi = {
     return response.json();
   },
 
-  async getStepOutput(id: string, stepName: string): Promise<{ stepName: string; content: string }> {
-    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/outputs?step=${encodeURIComponent(stepName)}`);
+  async getStepOutput(id: string, stepName: string, options: { stepLogId?: string; outputRef?: string } = {}): Promise<{ stepName: string; content: string }> {
+    const search = new URLSearchParams();
+    if (stepName) search.set('step', stepName);
+    if (options.stepLogId) search.set('stepLogId', options.stepLogId);
+    if (options.outputRef) search.set('outputRef', options.outputRef);
+    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/outputs?${search.toString()}`);
     if (!response.ok) throw new Error('获取步骤输出失败');
     return response.json();
   },
 
-  async listDocuments(id: string, options?: { includeChildren?: boolean; page?: number; pageSize?: number; sortDirection?: 'asc' | 'desc' }): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string; sourceRunId?: string; sourceConfigFile?: string; sourceLabel?: string; parentRunId?: string | null; rootRunId?: string | null }[]; documentDirectory?: string | null; childRuns?: { runId: string; configFile?: string; status?: string }[]; pagination?: { total: number; totalPages: number; page: number; pageSize: number } }> {
+  async listDocuments(id: string, options?: { includeChildren?: boolean; scope?: 'root' | 'children' | 'child'; childRunId?: string; groupKey?: string; documentKind?: 'conclusion' | 'detail'; summaryOnly?: boolean; page?: number; pageSize?: number; offset?: number; limit?: number; sortDirection?: 'asc' | 'desc' }): Promise<{ files: { filename: string; stepName: string; baseName: string; logicalName?: string; iteration: number | null; agent: string; phaseName: string; role: string; documentKind?: 'conclusion' | 'detail'; groupKey?: string; groupLabel?: string; detailCount?: number; size: number; modifiedTime: string; sourceRunId?: string; sourceConfigFile?: string; sourceLabel?: string; parentRunId?: string | null; rootRunId?: string | null }[]; documentDirectory?: string | null; childRuns?: { runId: string; configFile?: string; status?: string }[]; pagination?: { total: number; totalPages?: number; page?: number; pageSize?: number; offset?: number; limit?: number; nextOffset?: number | null }; lazy?: { content: boolean; summaryOnly?: boolean; groupKey?: string | null; scope?: string } }> {
     const search = new URLSearchParams();
     if (options?.includeChildren) search.set('includeChildren', '1');
-    if (options?.page) search.set('page', String(options.page));
-    if (options?.pageSize) search.set('pageSize', String(options.pageSize));
+    if (options?.scope) search.set('scope', options.scope);
+    if (options?.childRunId) search.set('childRunId', options.childRunId);
+    if (options?.groupKey) search.set('groupKey', options.groupKey);
+    if (options?.documentKind) search.set('documentKind', options.documentKind);
+    if (options?.summaryOnly) search.set('summaryOnly', '1');
+    const pageSize = options?.pageSize || options?.limit;
+    const offset = options?.offset ?? (options?.page && pageSize ? (options.page - 1) * pageSize : undefined);
+    if (offset !== undefined) search.set('offset', String(Math.max(0, offset)));
+    if (pageSize) search.set('limit', String(pageSize));
     if (options?.sortDirection) search.set('sortDirection', options.sortDirection);
     const params = search.toString() ? `?${search.toString()}` : '';
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents${params}`);
     if (!response.ok) return { files: [], documentDirectory: null };
-    return response.json();
+    const data = await response.json();
+    if (data?.pagination && pageSize) {
+      const total = Number(data.pagination.total || 0);
+      data.pagination.pageSize = pageSize;
+      data.pagination.page = offset !== undefined ? Math.floor(offset / pageSize) + 1 : options?.page;
+      data.pagination.totalPages = Math.max(1, Math.ceil(total / pageSize));
+    }
+    return data;
   },
 
   async getDocumentContent(id: string, filename: string, options?: { sourceRunId?: string }): Promise<{ file: string; content: string }> {
@@ -1918,7 +1947,7 @@ export const usersApi = {
 };
 
 export const workflowApi = {
-  async preflightPreview(configFile: string): Promise<{
+  async preflightPreview(configFile: string, workingDirectory?: string): Promise<{
     cwd: string;
     commands: Array<{
       command: string;
@@ -1933,7 +1962,7 @@ export const workflowApi = {
     const response = await authFetch(`${API_BASE}/workflow/preflight`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ configFile }),
+      body: JSON.stringify({ configFile, workingDirectory }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -1942,7 +1971,7 @@ export const workflowApi = {
     return data;
   },
 
-  async preflight(configFile: string): Promise<{
+  async preflight(configFile: string, workingDirectory?: string): Promise<{
     ok: boolean;
     cwd: string;
     checks: Array<{
@@ -1975,7 +2004,7 @@ export const workflowApi = {
     const response = await authFetch(`${API_BASE}/workflow/preflight`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ configFile }),
+      body: JSON.stringify({ configFile, workingDirectory }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -1991,6 +2020,7 @@ export const workflowApi = {
     initialContexts?: {
       globalContext?: string;
       phaseContexts?: Record<string, string>;
+      workingDirectory?: string;
     };
     preflightChecks?: Array<{
       id: string;
@@ -2029,14 +2059,18 @@ export const workflowApi = {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.error || '启动工作流失败');
     }
-    return response.json();
+    const data = await response.json();
+    if (data?.error) {
+      throw new Error(data.message ? `${data.error}: ${data.message}` : data.error);
+    }
+    return data;
   },
 
-  async stop(configFile?: string): Promise<ApiResponse> {
+  async stop(configFile?: string, runId?: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ configFile }),
+      body: JSON.stringify({ configFile, runId }),
     });
     if (!response.ok) throw new Error('停止工作流失败');
     return response.json();
@@ -2144,9 +2178,35 @@ export const workflowApi = {
     return response.json();
   },
 
+  async getStateHistory(runId: string, options: { offset?: number; limit?: number } = {}): Promise<{
+    runId: string;
+    items: any[];
+    pagination?: { offset: number; limit: number; total: number; nextOffset: number | null };
+  }> {
+    const search = new URLSearchParams({ runId });
+    if (options.offset !== undefined) search.set('offset', String(options.offset));
+    if (options.limit !== undefined) search.set('limit', String(options.limit));
+    const response = await authFetch(`${API_BASE}/workflow/state-history?${search.toString()}`);
+    if (!response.ok) throw new Error('获取状态流转历史失败');
+    return response.json();
+  },
+
+  async getStepLogs(runId: string, options: { offset?: number; limit?: number } = {}): Promise<{
+    runId: string;
+    items: any[];
+    pagination?: { offset: number; limit: number; total: number; nextOffset: number | null };
+  }> {
+    const search = new URLSearchParams({ runId });
+    if (options.offset !== undefined) search.set('offset', String(options.offset));
+    if (options.limit !== undefined) search.set('limit', String(options.limit));
+    const response = await authFetch(`${API_BASE}/workflow/step-logs?${search.toString()}`);
+    if (!response.ok) throw new Error('获取步骤日志失败');
+    return response.json();
+  },
+
   connectStatusStream(
     input: { configFile?: string; runId?: string },
-    onStatus: (status: WorkflowStatusResponse) => void,
+    onStatus: (status: WorkflowStatusResponse, event?: WorkflowStatusStreamEvent) => void,
     onError?: (message: string) => void,
   ): EventSource {
     const search = new URLSearchParams();
@@ -2157,9 +2217,9 @@ export const workflowApi = {
 
     eventSource.onmessage = (event) => {
       try {
-        const payload = JSON.parse(event.data);
+        const payload = parseSseJsonEventData(event.data);
         if (payload?.type === 'status' && payload.data) {
-          onStatus(payload.data);
+          onStatus(payload.data, payload);
         } else if (payload?.type === 'error') {
           onError?.(payload.error || '获取状态失败');
         }
@@ -2174,7 +2234,7 @@ export const workflowApi = {
       `workflow-status:${input.configFile || ''}:${input.runId || ''}`,
       () => startPolling(async () => {
         try {
-          onStatus(await fetchWorkflowStatusSnapshot(input.configFile, input.runId));
+          onStatus(await fetchWorkflowStatusSnapshot(input.configFile, input.runId, { compact: true }));
         } catch (error: any) {
           onError?.(error?.message || '获取状态失败');
         }
@@ -2268,6 +2328,43 @@ export const workflowApi = {
     return response.json();
   },
 
+  async getStartContextDefaults(configFile: string): Promise<{
+    globalContext: string;
+    phaseContexts: Record<string, string>;
+    workingDirectory?: string;
+    updatedAt?: string;
+  }> {
+    const params = new URLSearchParams();
+    params.set('configFile', configFile);
+    params.set('startDefault', '1');
+    const response = await authFetch(`${API_BASE}/workflow/context?${params.toString()}`);
+    if (!response.ok) throw new Error('获取启动上下文默认值失败');
+    return response.json();
+  },
+
+  async setStartContextDefaults(configFile: string, contexts: {
+    globalContext?: string;
+    phaseContexts?: Record<string, string>;
+    workingDirectory?: string;
+  }): Promise<ApiResponse> {
+    const response = await authFetch(`${API_BASE}/workflow/context`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'start-default',
+        configFile,
+        globalContext: contexts.globalContext || '',
+        phaseContexts: contexts.phaseContexts || {},
+        workingDirectory: contexts.workingDirectory || '',
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '保存启动上下文默认值失败');
+    }
+    return response.json();
+  },
+
   async rerunFromStep(runId: string, stepName: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/rerun-from-step`, {
       method: 'POST',
@@ -2340,7 +2437,7 @@ export const workflowApi = {
     const eventSource = createSafeEventSource(`${API_BASE}/workflow/events`);
 
     eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      const data = parseSseJsonEventData(event.data);
       onMessage(data);
     };
 
@@ -2404,16 +2501,12 @@ export const streamApi = {
     const url = `${API_BASE}/runs/${encodeURIComponent(runId)}/stream?step=${encodeURIComponent(stepName)}&live=1`;
     const es = createSafeEventSource(url);
     es.addEventListener('delta', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.content) onDelta(data.content);
-      } catch {}
+      const data = parseSseJsonEventData(e.data);
+      if (data.content) onDelta(String(data.content));
     });
     es.addEventListener('done', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        onDone?.(data.status || 'completed');
-      } catch {}
+      const data = parseSseJsonEventData(e.data);
+      onDone?.(String(data.status || 'completed'));
       es.close();
     });
     es.onerror = () => {
@@ -2506,6 +2599,36 @@ export const systemSettingsApi = {
       runtimeEnabled: boolean;
       persistMode: 'manual' | 'review' | 'auto';
     };
+    runtimeControls?: {
+      defaultPermissionPolicyId: 'unrestricted' | 'approve-reads' | 'ask' | 'deny-destructive' | 'deny-all';
+      envProfiles: Array<{
+        displayName: string;
+        agentId?: string;
+        visibility: 'private' | 'workspace';
+        variableCount: number;
+        readiness: 'ready' | 'missing' | 'misconfigured' | 'unknown';
+        missing: string[];
+        conflicts: Array<{ key: string; sources: string[]; selectedSource: string }>;
+        updatedAt?: string;
+      }>;
+      secretProfiles: Array<{
+        displayName: string;
+        agentId?: string;
+        visibility: 'private' | 'workspace';
+        encrypted: boolean;
+        encryptionKeyReady: boolean;
+        secretCount: number;
+        readiness: 'ready' | 'missing' | 'misconfigured' | 'unknown';
+        missing: string[];
+        conflicts: Array<{ key: string; sources: string[]; selectedSource: string }>;
+        updatedAt?: string;
+      }>;
+      conflicts: Array<{ key: string; sources: string[]; selectedSource: string }>;
+    };
+    runtimeDebug?: {
+      acpxTraceEnabled: boolean;
+      acpxTraceDirectory: string;
+    };
     emailNotifications?: {
       enabled: boolean;
       smtpHost: string;
@@ -2536,6 +2659,12 @@ export const systemSettingsApi = {
     agentMemory?: {
       runtimeEnabled?: boolean;
       persistMode?: 'manual' | 'review' | 'auto';
+    };
+    runtimeControls?: {
+      defaultPermissionPolicyId?: 'unrestricted' | 'approve-reads' | 'ask' | 'deny-destructive' | 'deny-all';
+    };
+    runtimeDebug?: {
+      acpxTraceEnabled?: boolean;
     };
     emailNotifications?: {
       enabled?: boolean;
@@ -2850,10 +2979,16 @@ async function throwWorkspaceApiError(response: Response, fallback: string): Pro
     status?: number;
     code?: string;
     workspace?: string;
+    size?: number;
+    path?: string;
+    limit?: number;
   };
   error.status = response.status;
   if (typeof data?.code === 'string') error.code = data.code;
   if (typeof data?.workspace === 'string') error.workspace = data.workspace;
+  if (typeof data?.size === 'number' && Number.isFinite(data.size)) error.size = data.size;
+  if (typeof data?.path === 'string') error.path = data.path;
+  if (typeof data?.limit === 'number' && Number.isFinite(data.limit)) error.limit = data.limit;
   throw error;
 }
 
@@ -2861,6 +2996,7 @@ export interface WorkspaceTreeOptions {
   depth?: number;
   offset?: number;
   limit?: number;
+  sort?: 'name' | 'modified-desc';
 }
 
 export interface RemoteWorkspaceCredentials {
@@ -3268,6 +3404,7 @@ export const workspaceApi = {
     params.set('depth', String(normalizedOptions.depth ?? 0));
     if (normalizedOptions.offset != null) params.set('offset', String(normalizedOptions.offset));
     if (normalizedOptions.limit != null) params.set('limit', String(normalizedOptions.limit));
+    if (normalizedOptions.sort) params.set('sort', normalizedOptions.sort);
     const res = await authFetch(`${API_BASE}/workspace/tree?${params.toString()}`);
     if (!res.ok) {
       await throwWorkspaceApiError(res, '获取文件树失败');
@@ -3282,6 +3419,7 @@ export const workspaceApi = {
     params.set('depth', String(normalizedOptions.depth ?? 0));
     if (normalizedOptions.offset != null) params.set('offset', String(normalizedOptions.offset));
     if (normalizedOptions.limit != null) params.set('limit', String(normalizedOptions.limit));
+    if (normalizedOptions.sort) params.set('sort', normalizedOptions.sort);
     const res = await authFetch(`${API_BASE}/workspace/tree?${params.toString()}`);
     if (!res.ok) {
       await throwWorkspaceApiError(res, '获取子目录失败');
@@ -3314,15 +3452,17 @@ export const workspaceApi = {
     return res.blob();
   },
   getStaticPreviewUrl(workspace: string, file: string): string {
+    const pathSegments = String(file || '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter(Boolean);
+    if (pathSegments.length === 0) {
+      throw new Error('请选择要预览的 HTML 文件');
+    }
     const token = typeof window === 'undefined'
       ? Buffer.from(workspace, 'utf8').toString('base64url')
       : btoa(unescape(encodeURIComponent(workspace))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-    const pathPart = file
-      .replace(/\\/g, '/')
-      .split('/')
-      .filter(Boolean)
-      .map((segment) => encodeURIComponent(segment))
-      .join('/');
+    const pathPart = pathSegments.map((segment) => encodeURIComponent(segment)).join('/');
     return `${API_BASE}/workspace/static/${encodeURIComponent(token)}/${pathPart}`;
   },
   async getGitDiff(workspace: string): Promise<GitDiffSummaryResponse> {
@@ -3368,7 +3508,7 @@ export const workspaceApi = {
 
     eventSource.onmessage = (event) => {
       try {
-        const payload = JSON.parse(event.data);
+        const payload = parseSseJsonEventData(event.data);
         if (payload?.type === 'summary' && payload.data) {
           onSummary(payload.data);
         } else if (payload?.type === 'error') {

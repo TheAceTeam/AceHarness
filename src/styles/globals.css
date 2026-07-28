@@ -1,0 +1,1535 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
+  pointer-events: none;
+}
+
+/* Dashboard Dockview tabs mirror the shadcn line tab style. */
+.ace-dashboard-dockview.dockview-theme-light,
+.ace-dashboard-dockview.dockview-theme-dark,
+.ace-workflow-run-dock.dockview-theme-light,
+.ace-workflow-run-dock.dockview-theme-dark {
+  --dv-tabs-and-actions-container-height: 36px;
+  --dv-tabs-and-actions-container-background-color: hsl(var(--background));
+  --dv-tabs-container-background-color: hsl(var(--background));
+  --dv-activegroup-header-background-color: hsl(var(--background));
+  --dv-inactivegroup-header-background-color: hsl(var(--background));
+  --dv-group-view-background-color: hsl(var(--background));
+  --dv-paneview-header-border-color: hsl(var(--border));
+  --dv-activegroup-visiblepanel-tab-background-color: transparent;
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-color: hsl(var(--foreground));
+  --dv-activegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-visiblepanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-separator-border: hsl(var(--border));
+  --dv-paneview-active-outline-color: transparent;
+  --dv-tab-divider-color: transparent;
+  --ace-dock-tab-width: 8.75rem;
+}
+
+.ace-workflow-run-dock.dockview-theme-light,
+.ace-workflow-run-dock.dockview-theme-dark {
+  --dv-tabs-and-actions-container-height: 32px;
+  --dv-separator-border: hsl(var(--border) / 0.72);
+  --ace-dock-tab-width: 7rem;
+}
+
+.ace-dashboard-dockview .dv-groupview,
+.ace-workflow-run-dock .dv-groupview,
+.ace-dashboard-dockview .dv-content-container,
+.ace-workflow-run-dock .dv-content-container,
+.ace-dashboard-dockview .dv-tabs-and-actions-container,
+.ace-workflow-run-dock .dv-tabs-and-actions-container,
+.ace-dashboard-dockview .dv-tabs-container,
+.ace-workflow-run-dock .dv-tabs-container,
+.ace-dashboard-dockview .dv-tabs-overflow-container,
+.ace-workflow-run-dock .dv-tabs-overflow-container,
+.ace-dashboard-dockview .dv-actions-container,
+.ace-workflow-run-dock .dv-actions-container,
+.ace-dashboard-dockview .dv-groupview-titlebar,
+.ace-workflow-run-dock .dv-groupview-titlebar,
+.ace-dashboard-dockview .dv-groupview-titlebar-container,
+.ace-workflow-run-dock .dv-groupview-titlebar-container,
+.ace-dashboard-dockview .dv-scrollable,
+.ace-workflow-run-dock .dv-scrollable,
+.ace-dashboard-dockview .dv-void-container {
+  background: hsl(var(--background)) !important;
+  background-color: hsl(var(--background)) !important;
+}
+
+.ace-dashboard-dockview .dv-groupview,
+.ace-workflow-run-dock .dv-groupview {
+  display: flex !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  flex-direction: column !important;
+}
+
+.ace-dashboard-dockview .dv-groupview-titlebar,
+.ace-dashboard-dockview .dv-groupview-titlebar-container,
+.ace-workflow-run-dock .dv-groupview-titlebar,
+.ace-workflow-run-dock .dv-groupview-titlebar-container {
+  flex: 0 0 36px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-content-container,
+.ace-workflow-run-dock .dv-content-container {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.ace-dashboard-chat-panel-content {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ace-dashboard-chat-secondary-sidebar {
+  width: 100%;
+  max-width: none;
+}
+
+.ace-dashboard-chat-panel-main {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container {
+  height: 36px !important;
+  min-height: 36px !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+  padding: 0 12px !important;
+  background: hsl(var(--background)) !important;
+  background-color: hsl(var(--background)) !important;
+}
+
+.ace-dashboard-dockview--single-panel .dv-tabs-and-actions-container {
+  display: none !important;
+}
+
+.ace-workflow-run-dock .dv-tabs-and-actions-container {
+  height: 32px !important;
+  min-height: 32px !important;
+  border-bottom: 1px solid hsl(var(--border) / 0.72) !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+  padding: 0 8px !important;
+  background: hsl(var(--background)) !important;
+  background-color: hsl(var(--background)) !important;
+}
+
+.ace-workflow-run-dock .dv-sash {
+  background: hsl(var(--border) / 0.68) !important;
+  z-index: 5 !important;
+}
+
+.ace-workflow-run-dock .dv-sash:hover,
+.ace-workflow-run-dock .dv-sash.active {
+  background: hsl(var(--muted-foreground) / 0.55) !important;
+  z-index: 6 !important;
+}
+
+.ace-workflow-run-dock .dv-sash-container,
+.ace-workflow-run-dock .dv-gridview,
+.ace-workflow-run-dock .dv-branch-node {
+  z-index: auto !important;
+}
+
+.ace-dashboard-dockview .dv-sash,
+.ace-dashboard-dockview .dv-sash-container {
+  z-index: 6 !important;
+}
+
+.ace-dashboard-dockview .dv-sash-container,
+.ace-workflow-run-dock .dv-sash-container {
+  pointer-events: none !important;
+}
+
+.ace-dashboard-dockview .dv-sash,
+.ace-workflow-run-dock .dv-sash {
+  pointer-events: auto !important;
+}
+
+.ace-workflow-run-dock .dv-overlay,
+.ace-workflow-run-dock .dv-drop-target-anchor,
+.ace-workflow-run-dock .dv-drop-target-dropzone,
+.ace-workflow-run-dock .dv-drop-target-selection,
+.ace-dashboard-dockview .dv-overlay,
+.ace-dashboard-dockview .dv-drop-target-anchor,
+.ace-dashboard-dockview .dv-drop-target-dropzone,
+.ace-dashboard-dockview .dv-drop-target-selection {
+  z-index: 6 !important;
+  pointer-events: none !important;
+}
+
+.ace-workflow-run-dock .dv-overlay.active,
+.ace-workflow-run-dock .dv-drop-target-anchor.active,
+.ace-workflow-run-dock .dv-drop-target-dropzone.active,
+.ace-workflow-run-dock .dv-drop-target-selection.active,
+.ace-dashboard-dockview .dv-overlay.active,
+.ace-dashboard-dockview .dv-drop-target-anchor.active,
+.ace-dashboard-dockview .dv-drop-target-dropzone.active,
+.ace-dashboard-dockview .dv-drop-target-selection.active {
+  pointer-events: auto !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container .dv-scrollable,
+.ace-workflow-run-dock .dv-tabs-and-actions-container .dv-scrollable {
+  height: 36px !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  overflow: visible !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-scrollable,
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-tabs-container {
+  flex-grow: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-tabs-container .dv-tab {
+  flex: 0 0 auto !important;
+  flex-grow: 0 !important;
+  padding: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-void-container {
+  flex-grow: 1 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container,
+.ace-workflow-run-dock .dv-tabs-container {
+  position: relative !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 1.25rem !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  padding: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container::before,
+.ace-workflow-run-dock .dv-tabs-container::before {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 1px;
+  background: hsl(var(--border));
+}
+
+.ace-dashboard-dockview .dv-tab,
+.ace-workflow-run-dock .dv-tab {
+  position: relative !important;
+  z-index: 1 !important;
+  width: var(--ace-dock-tab-width) !important;
+  min-width: var(--ace-dock-tab-width) !important;
+  max-width: var(--ace-dock-tab-width) !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  outline: none !important;
+  overflow: visible !important;
+  transform: none !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container > .dv-tab,
+.ace-workflow-run-dock .dv-tabs-container > .dv-tab {
+  margin-left: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container > .dv-tab:first-child,
+.ace-workflow-run-dock .dv-tabs-container > .dv-tab:first-child {
+  margin-left: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tab + .dv-tab,
+.ace-workflow-run-dock .dv-tab + .dv-tab {
+  margin-left: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tab:focus,
+.ace-workflow-run-dock .dv-tab:focus,
+.ace-dashboard-dockview .dv-tab:focus-visible,
+.ace-workflow-run-dock .dv-tab:focus-visible,
+.ace-dashboard-dockview .dv-tab:focus-within,
+.ace-workflow-run-dock .dv-tab:focus-within,
+.ace-dashboard-dockview .dv-active-tab,
+.ace-workflow-run-dock .dv-active-tab,
+.ace-dashboard-dockview .dv-tab.active-tab {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.ace-dashboard-dockview .dv-tab::after,
+.ace-workflow-run-dock .dv-tab::after,
+.ace-dashboard-dockview .dv-tab:focus::after,
+.ace-workflow-run-dock .dv-tab:focus::after,
+.ace-dashboard-dockview .dv-tab:focus-visible::after,
+.ace-workflow-run-dock .dv-tab:focus-visible::after,
+.ace-dashboard-dockview .dv-tab:focus-within::after,
+.ace-workflow-run-dock .dv-tab:focus-within::after,
+.ace-dashboard-dockview .dv-active-tab::after,
+.ace-workflow-run-dock .dv-active-tab::after,
+.ace-dashboard-dockview .dv-tab.active-tab::after {
+  display: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.ace-dock-tab {
+  position: relative;
+  display: flex;
+  width: var(--ace-dock-tab-width);
+  height: 36px;
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: hsl(var(--muted-foreground));
+  transition: color 160ms ease;
+}
+
+.ace-dock-tab::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 9999px;
+  background: transparent;
+  transition: background-color 160ms ease;
+}
+
+.ace-dashboard-dockview .dv-tab:not(.dv-active-tab):not(.active-tab) .ace-dock-tab:hover {
+  color: hsl(var(--foreground));
+}
+
+.ace-workflow-run-dock .dv-tab:not(.dv-active-tab):not(.active-tab) .ace-dock-tab:hover {
+  color: hsl(var(--foreground));
+}
+
+.ace-workflow-run-dock .ace-dock-tab,
+.ace-workflow-run-dock .ace-dock-tab__title {
+  height: 32px;
+  font-size: 0.75rem;
+}
+
+.dv-active-tab .ace-dock-tab,
+.dv-tab.active-tab .ace-dock-tab {
+  z-index: 2;
+  color: hsl(var(--foreground));
+  box-shadow: none;
+}
+
+.dv-active-tab .ace-dock-tab::after,
+.dv-tab.active-tab .ace-dock-tab::after {
+  background: hsl(var(--primary));
+}
+
+.ace-dock-tab__title {
+  min-width: 0;
+  max-width: none;
+  flex: 1 1 auto;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  height: 100%;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25;
+  outline: none;
+  padding: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ace-dock-tab__title:focus,
+.ace-dock-tab__title:focus-visible,
+.ace-dock-tab__close:focus,
+.ace-dock-tab__close:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.ace-dock-tab__close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.25rem;
+  width: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: hsl(var(--muted-foreground) / 0.65);
+  opacity: 0;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.ace-dock-tab:hover .ace-dock-tab__close,
+.dv-active-tab .ace-dock-tab__close,
+.dv-tab.active-tab .ace-dock-tab__close {
+  opacity: 1;
+}
+
+.ace-dock-tab__close:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.dv-active-tab .ace-dock-tab__close,
+.dv-tab.active-tab .ace-dock-tab__close {
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+
+.dv-active-tab .ace-dock-tab__close:hover,
+.dv-tab.active-tab .ace-dock-tab__close:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+/* Prevent layout shift when scrollbar appears/disappears */
+html {
+  overflow-y: scroll;
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+/* Override react-remove-scroll-bar's padding and margin since we have a permanent scrollbar */
+/* The library injects a <style> with body[data-scroll-locked] { margin-right: 15px !important } */
+/* We need higher specificity to override it */
+html body {
+  padding-right: 0px !important;
+  margin-right: 0px !important;
+}
+
+html body[data-scroll-locked] {
+  overflow: hidden !important;
+  padding-right: 0px !important;
+  margin-right: 0px !important;
+}
+
+/* Override the injected .width-before-scroll-bar and .right-scroll-bar-position */
+html body .width-before-scroll-bar {
+  margin-right: 0px !important;
+}
+
+html body .right-scroll-bar-position {
+  right: 0px !important;
+}
+
+@layer base {
+  :root {
+    --background: 60 12% 95%;
+    --foreground: 0 0% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 8%;
+    --primary: 258 90% 66%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 60 10% 92%;
+    --secondary-foreground: 0 0% 8%;
+    --muted: 60 12% 95%;
+    --muted-foreground: 60 3% 53%;
+    --accent: 258 100% 95%;
+    --accent-foreground: 258 64% 43%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 60 7% 88%;
+    --input: 60 7% 88%;
+    --ring: 258 90% 66%;
+    --radius: 0.5rem;
+
+    --sidebar-background: 60 10% 92%;
+    --sidebar-foreground: 0 0% 8%;
+    --sidebar-primary: 258 90% 66%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 100%;
+    --sidebar-accent-foreground: 0 0% 8%;
+    --sidebar-border: 60 7% 88%;
+    --sidebar-ring: 258 90% 66%;
+
+    --surface: 0 0% 100%;
+    --surface-muted: 60 16% 96%;
+    --surface-subtle: 60 12% 95%;
+    --emphasis: 258 90% 66%;
+    --emphasis-muted: 258 100% 95%;
+
+    /* Flow diagram semantic colors */
+    --flow-bg: 210 20% 96%;
+    --flow-success: 142 71% 35%;
+    --flow-error: 0 72% 51%;
+    --flow-warning: 25 95% 53%;
+    --flow-info: 217 91% 60%;
+    --flow-judge: 43 96% 56%;
+    --flow-defender: 0 72% 51%;
+    --flow-attacker: 217 91% 60%;
+    --flow-node-bg: 0 0% 98%;
+    --flow-node-border: 214 32% 91%;
+    --flow-step-bg: 0 0% 100%;
+    --flow-step-number: 215 16% 47%;
+    --flow-step-text: 222 47% 11%;
+    --flow-agent-text: 215 16% 47%;
+    --flow-group-bg: 217 91% 60% / 0.06;
+    --flow-group-border: 214 32% 91%;
+
+    --tour-bg: hsl(var(--popover));
+    --tour-text: hsl(var(--popover-foreground));
+    --tour-text-secondary: hsl(var(--muted-foreground));
+    --tour-text-muted: hsl(var(--muted-foreground));
+    --tour-primary: hsl(var(--primary));
+    --tour-primary-foreground: hsl(var(--primary-foreground));
+    --tour-secondary: hsl(var(--secondary));
+    --tour-secondary-foreground: hsl(var(--secondary-foreground));
+    --tour-secondary-hover: hsl(var(--accent));
+    --tour-border: hsl(var(--border));
+    --tour-overlay: hsl(var(--background) / 0.76);
+    --tour-radius: 8px;
+    --tour-tooltip-width: 340px;
+    --tour-shadow: 0 10px 15px -3px hsl(var(--foreground) / 0.12), 0 4px 6px -4px hsl(var(--foreground) / 0.12);
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 48%;
+
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 217.2 91.2% 59.8%;
+    --sidebar-primary-foreground: 222.2 47.4% 11.2%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 224.3 76.3% 48%;
+
+    --surface: 222.2 84% 4.9%;
+    --surface-muted: 217.2 32.6% 17.5%;
+    --surface-subtle: 217.2 32.6% 17.5%;
+    --emphasis: 217.2 91.2% 59.8%;
+    --emphasis-muted: 217.2 32.6% 17.5%;
+
+    /* Flow diagram semantic colors */
+    --flow-bg: 222 84% 5%;
+    --flow-success: 100 33% 40%;
+    --flow-error: 1 52% 55%;
+    --flow-warning: 25 60% 50%;
+    --flow-info: 213 53% 53%;
+    --flow-judge: 43 100% 71%;
+    --flow-defender: 1 52% 55%;
+    --flow-attacker: 213 53% 53%;
+    --flow-node-bg: 220 13% 24%;
+    --flow-node-border: 220 7% 32%;
+    --flow-step-bg: 220 10% 20%;
+    --flow-step-number: 220 7% 32%;
+    --flow-step-text: 213 32% 73%;
+    --flow-agent-text: 0 0% 50%;
+    --flow-group-bg: 213 53% 53% / 0.06;
+    --flow-group-border: 220 7% 32%;
+  }
+
+  html:root,
+  html:root[class~='dark'] {
+    --tour-bg: hsl(var(--popover));
+    --tour-text: hsl(var(--popover-foreground));
+    --tour-text-secondary: hsl(var(--muted-foreground));
+    --tour-text-muted: hsl(var(--muted-foreground));
+    --tour-primary: hsl(var(--primary));
+    --tour-primary-foreground: hsl(var(--primary-foreground));
+    --tour-secondary: hsl(var(--secondary));
+    --tour-secondary-foreground: hsl(var(--secondary-foreground));
+    --tour-secondary-hover: hsl(var(--accent));
+    --tour-border: hsl(var(--border));
+    --tour-overlay: hsl(var(--background) / 0.76);
+    --tour-radius: 8px;
+    --tour-tooltip-width: 340px;
+    --tour-shadow: 0 10px 15px -3px hsl(var(--foreground) / 0.12), 0 4px 6px -4px hsl(var(--foreground) / 0.12);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  .dark body {
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -20%, hsl(217 91% 60% / 0.08), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 50%, hsl(260 80% 50% / 0.05), transparent),
+      radial-gradient(ellipse 60% 40% at 0% 80%, hsl(200 80% 50% / 0.04), transparent),
+      linear-gradient(180deg, hsl(222 84% 4.9%) 0%, hsl(225 60% 6%) 100%);
+    background-attachment: fixed;
+  }
+  html, body {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
+  .thin-scrollbar { scrollbar-width: thin; scrollbar-color: hsl(var(--border)) transparent; }
+  .thin-scrollbar::-webkit-scrollbar { height: 6px; }
+  .thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .thin-scrollbar::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
+  .thin-scrollbar::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+  .tool-path-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--foreground) / 0.22) transparent;
+  }
+  .tool-path-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .tool-path-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .tool-path-scroll::-webkit-scrollbar-thumb {
+    background: hsl(var(--foreground) / 0.16);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+  }
+  .tool-path-scroll::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--foreground) / 0.28);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+}
+
+@layer utilities {
+  .chat-modal-rainbow {
+    --chat-rainbow-size: 1.95rem;
+    --chat-rainbow-rotate-radius: 0.03em;
+    position: relative;
+    z-index: 1;
+    display: block;
+    width: 1em;
+    height: 1em;
+    font-size: var(--chat-rainbow-size);
+    transform: rotate(0deg) translateZ(0);
+    transform-origin: center center;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 0.5em;
+    box-shadow:
+      0 0 0.3em 0.05em #2c116e,
+      inset var(--chat-rainbow-rotate-radius) 0 0.1em 0.02em #de66e4;
+    transform-style: preserve-3d;
+    perspective: 1em;
+    will-change: transform, box-shadow;
+    animation: chat-modal-rainbow-shell 3s infinite linear;
+  }
+
+  .chat-modal-rainbow__curve {
+    position: absolute;
+    top: 0.1em;
+    left: 0.1em;
+    width: 0.8em;
+    height: 0.8em;
+    border-radius: 50%;
+    will-change: transform;
+  }
+
+  .chat-modal-rainbow__curve--green {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0) 60%, rgba(115, 213, 186, 0.8) 100%);
+    transform: rotateY(0deg) skew(14deg) rotate3d(1.1, 1, 0.9, 0deg);
+    animation: chat-modal-rainbow-curve-green 6s infinite linear;
+  }
+
+  .chat-modal-rainbow__curve--pink {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0) 50%, rgba(215, 115, 229, 0.8) 100%);
+    transform: rotateY(180deg) skew(14deg) rotate3d(1.1, 1, 0.9, 0deg);
+    animation: chat-modal-rainbow-curve-pink 3s infinite linear;
+  }
+
+  .chat-modal-rainbow__curve--blue {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0) 55%, rgba(25, 179, 245, 0.8) 100%);
+    transform: rotateY(90deg) skew(14deg) rotate3d(1.1, 1, 0.9, 0deg);
+    animation: chat-modal-rainbow-curve-blue 4.5s infinite linear;
+  }
+
+  @keyframes chat-modal-rainbow-shell {
+    0% {
+      transform: rotate(0deg) translateZ(0);
+      box-shadow:
+        0 0 0.3em 0.05em #2c116e,
+        inset var(--chat-rainbow-rotate-radius) 0 0.1em 0.02em #de66e4;
+    }
+
+    25% {
+      transform: rotate(90deg) translateZ(0);
+      box-shadow:
+        0 0 0.3em 0.05em #28126a,
+        inset var(--chat-rainbow-rotate-radius) 0 0.1em 0.02em #34ceaa;
+    }
+
+    50% {
+      transform: rotate(180deg) translateZ(0);
+      box-shadow:
+        0 0 0.3em 0.05em #28126a,
+        inset var(--chat-rainbow-rotate-radius) 0 0.1em 0.02em #19b3f5;
+    }
+
+    75% {
+      transform: rotate(270deg) translateZ(0);
+      box-shadow:
+        0 0 0.3em 0.05em #28126a,
+        inset var(--chat-rainbow-rotate-radius) 0 0.1em 0.02em #3d52ac;
+    }
+
+    100% {
+      transform: rotate(360deg) translateZ(0);
+      box-shadow:
+        0 0 0.3em 0.05em #28126a,
+        inset var(--chat-rainbow-rotate-radius) 0 0.1em 0.02em #de66e4;
+    }
+  }
+
+  @keyframes chat-modal-rainbow-curve-green {
+    0% {
+      transform: rotateY(0deg) skew(14deg) rotate3d(1.1, 1, 0.9, 0deg);
+    }
+
+    50% {
+      transform: rotateY(0deg) skew(14deg) rotate3d(1.1, 1, 0.9, 180deg);
+    }
+
+    100% {
+      transform: rotateY(0deg) skew(14deg) rotate3d(1.1, 1, 0.9, 360deg);
+    }
+  }
+
+  @keyframes chat-modal-rainbow-curve-pink {
+    0% {
+      transform: rotateY(180deg) skew(14deg) rotate3d(1.1, 1, 0.9, 0deg);
+    }
+
+    50% {
+      transform: rotateY(180deg) skew(14deg) rotate3d(1.1, 1, 0.9, 180deg);
+    }
+
+    100% {
+      transform: rotateY(180deg) skew(14deg) rotate3d(1.1, 1, 0.9, 360deg);
+    }
+  }
+
+  @keyframes chat-modal-rainbow-curve-blue {
+    0% {
+      transform: rotateY(90deg) skew(14deg) rotate3d(1.1, 1, 0.9, 0deg);
+    }
+
+    50% {
+      transform: rotateY(90deg) skew(14deg) rotate3d(1.1, 1, 0.9, 180deg);
+    }
+
+    100% {
+      transform: rotateY(90deg) skew(14deg) rotate3d(1.1, 1, 0.9, 360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chat-modal-rainbow,
+    .chat-modal-rainbow__curve {
+      animation: none !important;
+    }
+  }
+
+  .werewolf-wood-bg {
+    background-color: #3f291d;
+    background-image:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(255, 246, 220, 0.06), rgba(26, 12, 6, 0.18)),
+      linear-gradient(90deg,
+        rgba(255, 255, 255, 0.03) 0%,
+        rgba(255, 255, 255, 0.01) 16%,
+        rgba(0, 0, 0, 0.09) 34%,
+        rgba(255, 255, 255, 0.02) 52%,
+        rgba(0, 0, 0, 0.1) 70%,
+        rgba(255, 255, 255, 0.03) 100%),
+      repeating-linear-gradient(102deg,
+        rgba(95, 58, 37, 0.34) 0 14px,
+        rgba(70, 41, 25, 0.18) 14px 34px,
+        rgba(126, 80, 52, 0.22) 34px 60px),
+      radial-gradient(circle at 22% 24%, rgba(255, 218, 162, 0.13) 0 2.4%, transparent 2.5%),
+      radial-gradient(circle at 71% 68%, rgba(32, 12, 4, 0.16) 0 2.1%, transparent 2.2%);
+    background-blend-mode: soft-light, soft-light, overlay, normal, normal, multiply;
+    background-size: cover, auto, auto, 260px 260px, 180px 180px, 220px 220px;
+    background-position: center;
+  }
+
+  .werewolf-wood-panel {
+    background-color: rgba(54, 34, 23, 0.76);
+    background-image:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(255, 239, 211, 0.08), rgba(0, 0, 0, 0.16)),
+      repeating-linear-gradient(94deg,
+        rgba(119, 75, 49, 0.16) 0 18px,
+        rgba(63, 40, 27, 0.08) 18px 40px,
+        rgba(146, 93, 62, 0.12) 40px 76px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: soft-light, normal, overlay;
+    border-color: rgba(91, 62, 44, 0.72);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 242, 217, 0.08),
+      inset 0 -1px 0 rgba(20, 10, 4, 0.18);
+    backdrop-filter: blur(14px);
+  }
+
+  .werewolf-wood-main {
+    background:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(255, 246, 225, 0.03), rgba(0, 0, 0, 0.08)),
+      radial-gradient(circle at top, rgba(255, 214, 155, 0.08), transparent 38%);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: soft-light, normal, screen;
+  }
+
+  .werewolf-parchment {
+    background:
+      url('/images/parchment.png'),
+      linear-gradient(180deg, rgba(255, 252, 242, 0.88), rgba(235, 219, 189, 0.88)),
+      repeating-linear-gradient(96deg,
+        rgba(140, 114, 72, 0.06) 0 24px,
+        rgba(255, 255, 255, 0.02) 24px 48px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: multiply, normal, soft-light;
+    border-color: rgba(141, 109, 70, 0.38);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      inset 0 -1px 0 rgba(120, 84, 46, 0.08),
+      0 8px 24px rgba(25, 10, 2, 0.08);
+  }
+
+  .dark .werewolf-parchment {
+    background:
+      url('/images/parchment.png'),
+      linear-gradient(180deg, rgba(75, 54, 35, 0.9), rgba(56, 38, 24, 0.92)),
+      repeating-linear-gradient(96deg,
+        rgba(191, 153, 100, 0.06) 0 24px,
+        rgba(255, 255, 255, 0.015) 24px 48px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: overlay, normal, soft-light;
+    border-color: rgba(153, 118, 74, 0.46);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 239, 213, 0.08),
+      inset 0 -1px 0 rgba(20, 10, 4, 0.16),
+      0 10px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .werewolf-wood-frame {
+    border-color: rgba(123, 86, 53, 0.72);
+    background:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(93, 63, 39, 0.76), rgba(52, 33, 22, 0.84)),
+      repeating-linear-gradient(94deg,
+        rgba(132, 93, 60, 0.18) 0 18px,
+        rgba(67, 42, 27, 0.08) 18px 40px,
+        rgba(163, 116, 74, 0.16) 40px 72px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: soft-light, normal, overlay;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 241, 214, 0.1),
+      inset 0 -1px 0 rgba(19, 8, 3, 0.24),
+      0 16px 30px rgba(25, 10, 2, 0.16);
+  }
+
+  .werewolf-copper-badge {
+    border-color: rgba(181, 133, 72, 0.48);
+    background-image:
+      linear-gradient(180deg, rgba(110, 77, 44, 0.2), rgba(69, 44, 25, 0.14));
+    color: #c18a46;
+  }
+
+  .dark .werewolf-copper-badge {
+    border-color: rgba(201, 154, 91, 0.42);
+    background-image:
+      linear-gradient(180deg, rgba(122, 81, 39, 0.24), rgba(77, 49, 25, 0.18));
+    color: #e7bc7a;
+  }
+
+  .werewolf-gold-button {
+    border-color: rgba(176, 128, 68, 0.62);
+    background-image:
+      linear-gradient(180deg, rgba(166, 114, 55, 0.94), rgba(114, 72, 33, 0.98));
+    color: #fff6e7;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 244, 215, 0.28),
+      0 8px 18px rgba(75, 42, 12, 0.26);
+  }
+
+  .werewolf-gold-button:hover {
+    background-image:
+      linear-gradient(180deg, rgba(181, 126, 63, 0.98), rgba(128, 81, 38, 1));
+  }
+
+  .werewolf-gold-button:disabled {
+    opacity: 0.55;
+    box-shadow: none;
+  }
+
+  .werewolf-ghost-button {
+    border-color: rgba(168, 125, 73, 0.46);
+    background-image:
+      linear-gradient(180deg, rgba(255, 246, 226, 0.14), rgba(104, 70, 42, 0.12));
+    color: #b47d42;
+  }
+
+  .werewolf-ghost-button:hover {
+    background-image:
+      linear-gradient(180deg, rgba(255, 244, 223, 0.2), rgba(115, 74, 39, 0.16));
+    color: #8b5a28;
+  }
+
+  .dark .werewolf-ghost-button {
+    color: #ddb374;
+    background-image:
+      linear-gradient(180deg, rgba(149, 102, 49, 0.18), rgba(60, 39, 21, 0.2));
+  }
+
+  .dark .werewolf-ghost-button:hover {
+    color: #f0cb92;
+    background-image:
+      linear-gradient(180deg, rgba(165, 114, 57, 0.24), rgba(77, 49, 25, 0.24));
+  }
+
+  .werewolf-copper-badge,
+  .werewolf-gold-button,
+  .werewolf-ghost-button {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .werewolf-copper-badge::before,
+  .werewolf-gold-button::before,
+  .werewolf-ghost-button::before {
+    content: '';
+    display: inline-block;
+    width: 0.9rem;
+    height: 0.9rem;
+    margin-right: 0.45rem;
+    border-radius: 9999px;
+    flex-shrink: 0;
+    background-image: url('/images/badge.png');
+    background-repeat: no-repeat;
+    background-size: 400% 300%;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 247, 222, 0.3),
+      0 1px 3px rgba(37, 18, 4, 0.22);
+    vertical-align: -0.12rem;
+  }
+
+  .werewolf-copper-badge::before {
+    background-position: 33.333% 50%;
+  }
+
+  .werewolf-gold-button::before {
+    background-position: 0% 50%;
+  }
+
+  .werewolf-ghost-button::before {
+    background-position: 66.666% 50%;
+  }
+
+  .dark .werewolf-copper-badge::before,
+  .dark .werewolf-gold-button::before,
+  .dark .werewolf-ghost-button::before {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 243, 214, 0.16),
+      0 1px 4px rgba(0, 0, 0, 0.28);
+  }
+}
+
+/* Tiptap task list styles */
+ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0!important;
+}
+
+ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  user-select: none;
+}
+
+ul[data-type="taskList"] li > label input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid hsl(var(--muted-foreground) / 0.4);
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+  background: transparent;
+  margin-top: 4px;
+}
+
+ul[data-type="taskList"] li > label input[type="checkbox"]:hover {
+  border-color: hsl(var(--primary));
+}
+
+ul[data-type="taskList"] li > label input[type="checkbox"]:checked {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+}
+
+ul[data-type="taskList"] li > label input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0px;
+  width: 6px;
+  height: 9px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+ul[data-type="taskList"] li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+ul[data-type="taskList"] > li > div > p:first-child {
+  margin: 0;
+}
+
+ul[data-type="taskList"] ul[data-type="taskList"] {
+  padding-left: 0!important;
+}
+
+/* Notebook drag handle (Notion-like) */
+.drag-handle {
+  position: absolute;
+  z-index: 50;
+}
+
+.notebook-rich-editor .drag-handle {
+  margin-left: -10px;
+}
+
+.notebook-drag-handle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.drag-handle[style*="visible"] .notebook-drag-handle,
+.drag-handle:not([style*="hidden"]) .notebook-drag-handle {
+  opacity: 1;
+}
+
+.notebook-drag-handle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.5rem;
+  border: none;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  border-radius: 0.25rem;
+  cursor: grab;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.notebook-drag-handle-btn:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.notebook-drag-handle-delete {
+  cursor: pointer;
+}
+
+.notebook-drag-handle-delete:hover {
+  color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.1);
+}
+
+/* Override react-resizable-panels cursor on handle button */
+button[data-resize-btn][data-resize-btn],
+button[data-resize-btn][data-resize-btn]:hover {
+  cursor: pointer !important;
+}
+
+/* Sci-fi grid overlay for dark mode */
+.dark .sci-fi-grid {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(hsl(217 91% 60% / 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(217 91% 60% / 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 80%);
+}
+
+/* Animated glow orb */
+.dark .sci-fi-grid::after {
+  content: '';
+  position: absolute;
+  width: 800px;
+  height: 800px;
+  border-radius: 50%;
+  background: radial-gradient(circle, hsl(217 91% 60% / 0.12), transparent 70%);
+  top: -300px;
+  left: 50%;
+  transform: translateX(-50%);
+  animation: glowDrift 12s ease-in-out infinite alternate;
+}
+
+@keyframes glowDrift {
+  0% { transform: translateX(-50%) translateY(0); opacity: 0.7; }
+  50% { transform: translateX(-30%) translateY(60px); opacity: 1; }
+  100% { transform: translateX(-70%) translateY(-30px); opacity: 0.6; }
+}
+
+/* Siri-style bottom glow bar */
+.dark .siri-glow {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 120px;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.dark .siri-glow .orb {
+  position: absolute;
+  bottom: -40px;
+  border-radius: 50%;
+  filter: blur(40px);
+}
+
+.dark .siri-glow .orb-1 {
+  width: 300px;
+  height: 120px;
+  left: 15%;
+  background: hsl(217 91% 60% / 0.25);
+  animation: siriPulse1 4s ease-in-out infinite;
+}
+
+.dark .siri-glow .orb-2 {
+  width: 250px;
+  height: 100px;
+  left: 35%;
+  background: hsl(280 80% 60% / 0.2);
+  animation: siriPulse2 5s ease-in-out infinite;
+}
+
+.dark .siri-glow .orb-3 {
+  width: 280px;
+  height: 110px;
+  left: 55%;
+  background: hsl(190 80% 55% / 0.22);
+  animation: siriPulse3 4.5s ease-in-out infinite;
+}
+
+.dark .siri-glow .orb-4 {
+  width: 220px;
+  height: 90px;
+  left: 72%;
+  background: hsl(330 70% 55% / 0.18);
+  animation: siriPulse4 5.5s ease-in-out infinite;
+}
+
+@keyframes siriPulse1 {
+  0%, 100% { opacity: 0.4; transform: translateX(0) scaleX(1); }
+  50% { opacity: 1; transform: translateX(20px) scaleX(1.2); }
+}
+
+@keyframes siriPulse2 {
+  0%, 100% { opacity: 0.8; transform: translateX(0) scaleX(1.1); }
+  50% { opacity: 0.3; transform: translateX(-30px) scaleX(0.9); }
+}
+
+@keyframes siriPulse3 {
+  0%, 100% { opacity: 0.3; transform: translateX(0) scaleX(0.9); }
+  50% { opacity: 0.9; transform: translateX(15px) scaleX(1.15); }
+}
+
+@keyframes siriPulse4 {
+  0%, 100% { opacity: 0.7; transform: translateX(0) scaleX(1); }
+  50% { opacity: 0.25; transform: translateX(-20px) scaleX(1.1); }
+}
+
+/* Material Symbols - prevent text fallback during font load */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  /* Hide text content until font loads */
+  font-display: block;
+  /* Prevent layout shift */
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  line-height: 1;
+  text-align: center;
+  vertical-align: middle;
+  /* Hide text fallback */
+  color: transparent;
+  background-clip: text;
+  -webkit-background-clip: text;
+}
+
+/* Show icon only when font is loaded */
+@supports (font-variation-settings: normal) {
+  .material-symbols-outlined {
+    color: inherit;
+  }
+}
+
+/* Dashboard animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+}
+
+@keyframes glow {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@keyframes botBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+
+@keyframes dotFade {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+
+@keyframes robotPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes robotGlow {
+  0%, 100% { filter: drop-shadow(0 0 2px rgba(99, 102, 241, 0.3)); }
+  50% { filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.8)); }
+}
+
+@keyframes deerInnerGlow {
+  0%, 100% {
+    filter:
+      drop-shadow(0 0 1px rgba(255, 255, 255, 0.38))
+      drop-shadow(0 0 4px rgba(125, 211, 252, 0.34));
+  }
+  50% {
+    filter:
+      drop-shadow(0 0 2px rgba(255, 255, 255, 0.82))
+      drop-shadow(0 0 8px rgba(125, 211, 252, 0.82))
+      drop-shadow(0 0 14px rgba(196, 181, 253, 0.58));
+  }
+}
+
+@keyframes deerRunSprite {
+  from { background-position: 0 0; }
+  to { background-position: -160px 0; }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-glow {
+  animation: glow 3s ease-in-out infinite;
+}
+
+.animate-robotPulse {
+  animation: robotPulse 2s ease-in-out infinite;
+}
+
+.animate-robotGlow {
+  animation: robotGlow 2s ease-in-out infinite;
+}
+
+.aceharness-deer-inner-glow {
+  animation: deerInnerGlow 2.4s ease-in-out infinite;
+}
+
+.deer-runner-sprite {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  background-image: url('/images/deer-sprite.png?v=4');
+  background-repeat: no-repeat;
+  background-size: 160px 40px;
+  animation: deerRunSprite 0.72s steps(4) infinite;
+}
+
+.animate-dotFade {
+  animation: dotFade 1.4s ease-in-out infinite;
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.animate-gradientShift {
+  animation: gradientShift 3s ease linear infinite;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.8s ease-out forwards;
+}
+
+.delay-1000 {
+  animation-delay: 1s;
+}
+
+.delay-2000 {
+  animation-delay: 2s;
+}
+
+@layer utilities {
+  .home-chat-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+    scroll-behavior: smooth;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar-thumb {
+    background: hsl(var(--border) / 0.9);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.55);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .home-chat-surface {
+    border: 1px solid hsl(var(--border) / 0.7);
+    background: hsl(var(--background) / 0.78);
+    backdrop-filter: blur(10px);
+  }
+
+  .dark .home-chat-surface {
+    background: hsl(var(--card) / 0.74);
+  }
+
+  .home-chat-bubble {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid hsl(var(--border) / 0.78);
+    backdrop-filter: blur(10px);
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .home-chat-bubble::before {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.46), transparent);
+  }
+
+  .home-chat-bubble:hover {
+    border-color: hsl(var(--primary) / 0.26);
+  }
+
+  .home-chat-bubble-assistant {
+    border-color: hsl(var(--border) / 0.88);
+    background:
+      linear-gradient(180deg, hsl(var(--muted) / 0.9), hsl(var(--background) / 0.92));
+  }
+
+  .dark .home-chat-bubble-assistant {
+    background:
+      linear-gradient(180deg, rgba(30, 41, 59, 0.76), rgba(15, 23, 42, 0.9));
+  }
+
+  .home-chat-bubble-user {
+    border-color: hsl(var(--primary) / 0.22);
+    background: hsl(var(--accent));
+    color: hsl(var(--accent-foreground));
+  }
+
+  .home-chat-bubble-user::before {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.56), transparent);
+  }
+
+  .home-chat-bubble-error {
+    border-color: hsl(var(--destructive) / 0.24);
+    background:
+      linear-gradient(180deg, hsl(var(--destructive) / 0.08), hsl(var(--background) / 0.92));
+  }
+
+  .home-chat-bubble-error::after {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    border-radius: 9999px;
+    background: hsl(var(--destructive) / 0.7);
+  }
+
+  .dark .home-chat-bubble-error {
+    background:
+      linear-gradient(180deg, rgba(127, 29, 29, 0.2), rgba(24, 24, 27, 0.94));
+  }
+
+  .home-chat-meta-pill {
+    border: 1px solid hsl(var(--border) / 0.72);
+    background: hsl(var(--background) / 0.76);
+    backdrop-filter: blur(8px);
+  }
+
+  .dark .home-chat-meta-pill {
+    background: hsl(var(--muted) / 0.72);
+  }
+
+  .home-chat-session-row {
+    transition:
+      background-color 160ms ease,
+      ring-color 160ms ease;
+  }
+
+  .home-chat-sidebar-card {
+    border-color: hsl(var(--border) / 0.72);
+    background: hsl(var(--background) / 0.72);
+    backdrop-filter: blur(10px);
+    transition:
+      border-color 160ms ease;
+  }
+
+  .dark .home-chat-sidebar-card {
+    background: hsl(var(--card) / 0.7);
+  }
+
+  .home-chat-input-tray {
+    border-color: hsl(var(--border) / 0.8);
+    background: hsl(var(--background) / 0.86);
+    backdrop-filter: blur(14px);
+  }
+
+  .dark .home-chat-input-tray {
+    background: hsl(var(--background) / 0.82);
+  }
+
+  .home-chat-composer .ProseMirror p.is-editor-empty:first-child::before {
+    color: rgb(100 116 139);
+    content: attr(data-placeholder);
+    display: block;
+    float: left;
+    font-size: 15px;
+    height: 0;
+    line-height: 1.55;
+    pointer-events: none;
+  }
+}

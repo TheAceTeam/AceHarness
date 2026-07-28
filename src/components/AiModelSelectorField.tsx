@@ -25,6 +25,7 @@ export interface AiModelSelectorOption {
   icon?: ReactNode;
   description?: string;
   keywords?: string[];
+  disabled?: boolean;
 }
 
 export interface AiModelSelectorGroup {
@@ -36,6 +37,8 @@ export interface AiModelSelectorGroup {
 interface AiModelSelectorFieldProps {
   value: string;
   onValueChange: (value: string) => void;
+  values?: string[];
+  onValuesChange?: (values: string[]) => void;
   groups?: AiModelSelectorGroup[];
   options?: AiModelSelectorOption[];
   placeholder?: string;
@@ -45,11 +48,14 @@ interface AiModelSelectorFieldProps {
   className?: string;
   triggerLabel?: string;
   triggerIcon?: ReactNode;
+  forceSidebar?: boolean;
 }
 
 export function AiModelSelectorField({
   value,
   onValueChange,
+  values,
+  onValuesChange,
   groups,
   options,
   placeholder = 'Select option',
@@ -59,6 +65,7 @@ export function AiModelSelectorField({
   className = '',
   triggerLabel,
   triggerIcon,
+  forceSidebar = false,
 }: AiModelSelectorFieldProps) {
   const [open, setOpen] = useState(false);
   const [activeGroupIndex, setActiveGroupIndex] = useState(0);
@@ -78,10 +85,23 @@ export function AiModelSelectorField({
     () => normalizedGroups.flatMap((group) => group.items).find((item) => item.value === value),
     [normalizedGroups, value],
   );
+  const selectedValues = useMemo(() => new Set(values || []), [values]);
+  const isMulti = Boolean(onValuesChange);
+  const selectedOptions = useMemo(
+    () => normalizedGroups.flatMap((group) => group.items).filter((item) => selectedValues.has(item.value)),
+    [normalizedGroups, selectedValues],
+  );
 
-  const resolvedLabel = triggerLabel || selectedOption?.label || placeholder;
-  const resolvedIcon = triggerIcon ?? selectedOption?.icon ?? null;
-  const showSidebar = normalizedGroups.length > 2;
+  const resolvedLabel = triggerLabel
+    || (isMulti
+      ? selectedOptions.length > 0
+        ? selectedOptions.length <= 2
+          ? selectedOptions.map((item) => item.label).join('、')
+          : `已选择 ${selectedOptions.length} 项`
+        : placeholder
+      : selectedOption?.label || placeholder);
+  const resolvedIcon = triggerIcon ?? (isMulti ? selectedOptions[0]?.icon : selectedOption?.icon) ?? null;
+  const showSidebar = forceSidebar ? normalizedGroups.length > 1 : normalizedGroups.length > 2;
 
   const scrollToGroup = useCallback((index: number) => {
     const el = groupElMap.current.get(index);
@@ -157,9 +177,18 @@ export function AiModelSelectorField({
         key={`${group.label}-${item.value}`}
         value={[item.label, item.value, ...(item.keywords || [])].join(' ')}
         onSelect={() => {
+          if (item.disabled) return;
+          if (isMulti && onValuesChange) {
+            const next = new Set(selectedValues);
+            if (next.has(item.value)) next.delete(item.value);
+            else next.add(item.value);
+            onValuesChange(Array.from(next));
+            return;
+          }
           onValueChange(item.value);
           setOpen(false);
         }}
+        disabled={item.disabled}
         className="flex items-center gap-2"
       >
         {item.icon ? <span className="shrink-0">{item.icon}</span> : null}
@@ -171,7 +200,7 @@ export function AiModelSelectorField({
             </span>
           ) : null}
         </div>
-        {item.value === value ? <CheckIcon className="h-4 w-4 shrink-0" /> : null}
+        {(isMulti ? selectedValues.has(item.value) : item.value === value) ? <CheckIcon className="h-4 w-4 shrink-0" /> : null}
       </ModelSelectorItem>
     ));
 
@@ -185,35 +214,37 @@ export function AiModelSelectorField({
         >
           <DialogTitle className="sr-only">{placeholder}</DialogTitle>
           <div className="flex" style={{ maxHeight: 'min(420px, 80vh)' }}>
-            <nav className="w-28 shrink-0 border-r overflow-y-auto py-1.5 space-y-0.5">
-              <div className="px-2.5 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">引擎</div>
-              <TooltipProvider delayDuration={300}>
-                {normalizedGroups.map((group, i) => (
-                  <Tooltip key={group.label} open={hoveredGroupIndex === i}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className={cn(
-                          'w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-left rounded-sm transition-colors hover:bg-accent',
-                          activeGroupIndex === i && 'bg-accent font-medium',
-                        )}
-                        onPointerEnter={() => setHoveredGroupIndex(i)}
-                        onPointerLeave={() => setHoveredGroupIndex((current) => (current === i ? null : current))}
-                        onBlur={() => setHoveredGroupIndex((current) => (current === i ? null : current))}
-                        onClick={() => scrollToGroup(i)}
-                      >
-                        {group.icon || group.items[0]?.icon ? (
-                          <span className="shrink-0">{group.icon || group.items[0]?.icon}</span>
-                        ) : null}
-                        <span className="truncate">{group.label}</span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" className="text-xs">
-                      {group.label}
-                    </TooltipContent>
-                  </Tooltip>
-                ))}
-              </TooltipProvider>
+            <nav className="flex w-36 shrink-0 flex-col border-r">
+              <div className="shrink-0 px-2.5 pb-1 pt-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">引擎</div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-1.5 space-y-0.5">
+                <TooltipProvider delayDuration={300}>
+                  {normalizedGroups.map((group, i) => (
+                    <Tooltip key={group.label} open={hoveredGroupIndex === i}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            'w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-left rounded-sm transition-colors hover:bg-accent',
+                            activeGroupIndex === i && 'bg-accent font-medium',
+                          )}
+                          onPointerEnter={() => setHoveredGroupIndex(i)}
+                          onPointerLeave={() => setHoveredGroupIndex((current) => (current === i ? null : current))}
+                          onBlur={() => setHoveredGroupIndex((current) => (current === i ? null : current))}
+                          onClick={() => scrollToGroup(i)}
+                        >
+                          {group.icon || group.items[0]?.icon ? (
+                            <span className="shrink-0">{group.icon || group.items[0]?.icon}</span>
+                          ) : null}
+                          <span className="truncate">{group.label}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="text-xs">
+                        {group.label}
+                      </TooltipContent>
+                    </Tooltip>
+                  ))}
+                </TooltipProvider>
+              </div>
             </nav>
             <Command className="flex-1 min-w-0 **:data-[slot=command-input-wrapper]:h-auto">
               <ModelSelectorInput placeholder={searchPlaceholder} />

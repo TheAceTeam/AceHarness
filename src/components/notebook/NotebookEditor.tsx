@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import dynamic from 'next/dynamic';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import dynamic from '@/lib/navigation/dynamic';
 import { Button } from '@/components/ui/button';
 import { Copy, Download, History, Loader2, Save } from 'lucide-react';
 import { workspaceApi, type NotebookScope, type NotebookSnapshotSummary } from '@/lib/core/api';
@@ -10,6 +11,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { copyText } from '@/lib/core/clipboard';
+import {
+  useCreateNotebookSnapshotMutation,
+  useNotebookSnapshotsQuery,
+  useRestoreNotebookSnapshotMutation,
+} from '@/client/query/workspace';
+import { queryKeys } from '@/client/query/query-keys';
 
 const RichNotebookEditor = dynamic(() => import('./RichNotebookEditor').then((mod) => mod.RichNotebookEditor), {
   ssr: false,
@@ -43,14 +50,17 @@ export function NotebookEditor({
 }: NotebookEditorProps) {
   const { toast } = useToast();
   const { confirm, dialogProps } = useConfirmDialog();
+  const queryClient = useQueryClient();
+  const notebookQueryParams = useMemo(() => ({
+    scope,
+    shareToken,
+  }), [scope, shareToken]);
   const [saving, setSaving] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
   const [autoSaveError, setAutoSaveError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [lastSnapshotAt, setLastSnapshotAt] = useState<number | null>(null);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
-  const [snapshotRows, setSnapshotRows] = useState<NotebookSnapshotSummary[]>([]);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotRestoringId, setSnapshotRestoringId] = useState<string | null>(null);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -65,6 +75,14 @@ export function NotebookEditor({
   const dependencyGraphOpen = dependencyGraphOpenProp ?? dependencyGraphOpenInner;
   const handleTocOpenChange = onTocOpenChange ?? setTocOpenInner;
   const handleDependencyGraphOpenChange = onDependencyGraphOpenChange ?? setDependencyGraphOpenInner;
+  const snapshotsQuery = useNotebookSnapshotsQuery(filePath, notebookQueryParams, { enabled: snapshotOpen && Boolean(filePath) });
+  const createSnapshotMutation = useCreateNotebookSnapshotMutation(filePath, notebookQueryParams);
+  const restoreSnapshotMutation = useRestoreNotebookSnapshotMutation(filePath, notebookQueryParams);
+  const snapshotRows = useMemo(
+    () => (Array.isArray(snapshotsQuery.data?.rows) ? snapshotsQuery.data.rows : []),
+    [snapshotsQuery.data?.rows],
+  );
+  const snapshotLoading = snapshotsQuery.isFetching;
 
   useEffect(() => {
     setEditorContent(content);
@@ -74,11 +92,9 @@ export function NotebookEditor({
   }, [content]);
 
   const loadSnapshots = useCallback(async () => {
-    setSnapshotLoading(true);
     try {
-      const data = await workspaceApi.listNotebookSnapshots(filePath, { scope, shareToken });
-      const rows = data.rows || [];
-      setSnapshotRows(rows);
+      const { data } = await snapshotsQuery.refetch();
+      const rows = data?.rows || [];
       if (rows[0]?.createdAt) setLastSnapshotAt(rows[0].createdAt);
       if (rows.length === 0) {
         setSelectedSnapshotId(null);
@@ -88,15 +104,13 @@ export function NotebookEditor({
       }
     } catch (error: any) {
       toast('error', error?.message || '加载快照列表失败');
-    } finally {
-      setSnapshotLoading(false);
     }
-  }, [filePath, scope, selectedSnapshotId, shareToken, toast]);
+  }, [selectedSnapshotId, snapshotsQuery, toast]);
 
   const createSnapshot = useCallback(async (source: 'manual' | 'auto') => {
     if (permission === 'read') return;
     try {
-      const result = await workspaceApi.createNotebookSnapshot(filePath, { scope, shareToken, source });
+      const result = await createSnapshotMutation.mutateAsync(source);
       if (result?.snapshot?.createdAt) setLastSnapshotAt(result.snapshot.createdAt);
       if (snapshotOpen) await loadSnapshots();
     } catch (error: any) {
@@ -104,7 +118,7 @@ export function NotebookEditor({
         toast('error', error?.message || '创建快照失败');
       }
     }
-  }, [filePath, loadSnapshots, permission, scope, shareToken, snapshotOpen, toast]);
+  }, [createSnapshotMutation, loadSnapshots, permission, snapshotOpen, toast]);
 
   const doSave = useCallback(async (nextContent: string, source: 'manual' | 'auto') => {
     if (source === 'manual') {
@@ -241,8 +255,16 @@ export function NotebookEditor({
     if (!ok) return;
     setSnapshotRestoringId(snapshotId);
     try {
-      await workspaceApi.restoreNotebookSnapshot(filePath, snapshotId, { scope, shareToken });
-      const data = await workspaceApi.getNotebookFile(filePath, { scope, shareToken });
+      await restoreSnapshotMutation.mutateAsync(snapshotId);
+      const keyParams = {
+        scope,
+        shareToken: shareToken || '',
+      };
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.notebook.file(filePath, keyParams),
+        queryFn: () => workspaceApi.getNotebookFile(filePath, { scope, shareToken }),
+        staleTime: 30_000,
+      });
       setEditorContent(data.content || '');
       setSavedContent(data.content || '');
       setLastSavedAt(Date.now());
@@ -253,16 +275,28 @@ export function NotebookEditor({
     } finally {
       setSnapshotRestoringId(null);
     }
-  }, [confirm, filePath, loadSnapshots, permission, scope, shareToken, toast]);
+  }, [confirm, filePath, loadSnapshots, permission, queryClient, restoreSnapshotMutation, scope, shareToken, toast]);
 
   const handlePreviewSnapshotDiff = useCallback(async (row: NotebookSnapshotSummary) => {
     setDiffLoading(true);
     setSelectedSnapshotId(row.id);
     setDiffTargetSnapshotId(row.id);
     try {
+      const keyParams = {
+        scope,
+        shareToken: shareToken || '',
+      };
       const [current, detail] = await Promise.all([
-        workspaceApi.getNotebookFile(filePath, { scope, shareToken }),
-        workspaceApi.getNotebookSnapshotDetail(filePath, row.id, { scope, shareToken }),
+        queryClient.fetchQuery({
+          queryKey: queryKeys.notebook.file(filePath, keyParams),
+          queryFn: () => workspaceApi.getNotebookFile(filePath, { scope, shareToken }),
+          staleTime: 30_000,
+        }),
+        queryClient.fetchQuery({
+          queryKey: queryKeys.notebook.snapshotDetail(filePath, row.id, keyParams),
+          queryFn: () => workspaceApi.getNotebookSnapshotDetail(filePath, row.id, { scope, shareToken }),
+          staleTime: 60_000,
+        }),
       ]);
       setDiffBaseContent(current.content || '');
       setDiffTargetContent(detail.snapshot?.content || '');
@@ -271,7 +305,7 @@ export function NotebookEditor({
     } finally {
       setDiffLoading(false);
     }
-  }, [filePath, scope, shareToken, toast]);
+  }, [filePath, queryClient, scope, shareToken, toast]);
 
   useEffect(() => {
     if (!snapshotOpen) return;

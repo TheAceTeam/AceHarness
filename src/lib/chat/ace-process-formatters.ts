@@ -30,6 +30,7 @@ const KNOWN_TOOLS = new Set([
   'websearch',
   'ls',
   'skill',
+  'context-compression',
   'multiedit',
   'patch',
 ]);
@@ -74,6 +75,7 @@ export function getAceToolTitle(toolName: string): string {
     webfetch: '🌐 获取网页',
     websearch: '🔎 搜索网页',
     skill: '技能文档',
+    'context-compression': '上下文压缩',
   };
   return titleMap[toolName] || `🔧 ${toolName}`;
 }
@@ -197,6 +199,8 @@ export function resolveAceToolName(titleOrName: string, rawInput?: UnknownRecord
   const input = rawInput || {};
   if (KNOWN_TOOLS.has(title)) return title;
 
+  if (isContextCompressionToolInput(input)) return 'context-compression';
+
   const command = typeof input.command === 'string' ? input.command : '';
   if (command) return inferCommandToolName(command);
   if ('content' in input && ('filePath' in input || 'path' in input) && !('oldString' in input) && !('old_string' in input)) return 'write';
@@ -212,6 +216,18 @@ export function resolveAceToolName(titleOrName: string, rawInput?: UnknownRecord
   if ('filePath' in input || 'file_path' in input) return 'read';
   if ('path' in input) return 'ls';
   return title || 'tool';
+}
+
+function isContextCompressionToolInput(input: UnknownRecord): boolean {
+  if (typeof input.topic !== 'string') return false;
+  if (!Array.isArray(input.content)) return false;
+  return input.content.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const record = item as UnknownRecord;
+    return typeof record.startId === 'string'
+      && typeof record.endId === 'string'
+      && typeof record.summary === 'string';
+  });
 }
 
 function stripPlanJsonFence(text: string): string {
@@ -283,43 +299,177 @@ export function inferCommandToolName(command: string): 'bash' | 'cmd' | 'powersh
   const normalized = String(command || '').trim().toLowerCase();
   if (!normalized) return 'bash';
 
-  const powerShellMarkers = [
-    'get-childitem',
-    'select-string',
-    'get-content',
-    'gc ',
-    'gc -',
-    'gci ',
-    'gci -',
-    'sls ',
-    'sls -',
-    'set-content',
-    'add-content',
-    'remove-item',
-    'move-item',
-    'copy-item',
-    '$env:',
-    'start-process',
-  ];
-  if (powerShellMarkers.some((marker) => normalized.includes(marker))) {
-    if (normalized.includes('get-content') || /^gc\b/.test(normalized)) return 'read';
-    if (normalized.includes('select-string') || /^sls\b/.test(normalized)) return 'grep';
-    if (normalized.includes('get-childitem') || /^gci\b/.test(normalized)) return 'ls';
-    return 'powershell';
-  }
+  const powershell = classifyPowerShellCommand(command);
+  if (powershell) return powershell;
 
-  if (/^(dir|type|more|findstr|copy|move|del|erase|ren|rename|where)\b/.test(normalized) || normalized.includes('cmd /c')) {
-    if (/^(type)\b/.test(normalized)) return 'read';
-    if (/^(more)\b/.test(normalized)) return 'read';
-    if (/^(findstr)\b/.test(normalized)) return 'grep';
-    if (/^(dir|where)\b/.test(normalized)) return 'ls';
-    return 'cmd';
-  }
+  const cmd = classifyCmdCommand(command);
+  if (cmd) return cmd;
+
+  if (isCompositeShellCommand(command)) return 'bash';
 
   if (/(\brg\b|\bgrep\b|\bag\b|\back\b|\bfd\b|findstr )/.test(normalized)) return 'grep';
   if (/(\bls\b|\bfind\b|\bdir\b|\bstat\b|\bpwd\b|\btree\b|\beza\b|\bexa\b)/.test(normalized)) return 'ls';
   if (/(\bcat\b|\bsed\b|\bhead\b|\btail\b|\bless\b|\bmore\b|\bbat\b)/.test(normalized)) return 'read';
   return 'bash';
+}
+
+function classifyPowerShellCommand(command: string): 'powershell' | 'read' | 'grep' | 'ls' | null {
+  const statements = splitShellStatements(command);
+  const firstCommand = firstShellCommand(statements[0] || '');
+  const hasPowerShellShape = statements.some((statement) => {
+    const name = firstShellCommand(statement);
+    return isPowerShellCommandName(name) || statement.includes('$');
+  });
+  if (!hasPowerShellShape) return null;
+  if (statements.length !== 1) return 'powershell';
+
+  const pipeline = splitPipeline(statements[0]);
+  const commands = pipeline.map(firstShellCommand).filter(Boolean);
+  if (commands.length === 0) return 'powershell';
+  if (!commands.every(isReadOnlyPowerShellPipelineCommand)) return 'powershell';
+
+  if (isPowerShellReadCommand(firstCommand)) return 'read';
+  if (isPowerShellSearchCommand(firstCommand)) return 'grep';
+  if (isPowerShellListCommand(firstCommand)) return 'ls';
+  return 'powershell';
+}
+
+function classifyCmdCommand(command: string): 'cmd' | 'read' | 'grep' | 'ls' | null {
+  const normalized = String(command || '').trim().toLowerCase();
+  const statements = splitShellStatements(command);
+  const commands = statements.map(firstShellCommand).filter(Boolean);
+  const hasCmdShape = normalized.includes('cmd /c') || commands.some((name) => [
+    'dir',
+    'type',
+    'more',
+    'findstr',
+    'copy',
+    'move',
+    'del',
+    'erase',
+    'ren',
+    'rename',
+    'where',
+  ].includes(name));
+  if (!hasCmdShape) return null;
+  if (statements.length !== 1 || isCompositeShellCommand(command)) return 'cmd';
+  const first = commands[0] || '';
+  if (first === 'type' || first === 'more') return 'read';
+  if (first === 'findstr') return 'grep';
+  if (first === 'dir' || first === 'where') return 'ls';
+  return 'cmd';
+}
+
+function splitShellStatements(command: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | '`' | null = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1];
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === ';' || char === '\n' || char === '\r' || (char === '&' && next === '&') || (char === '|' && next === '|')) {
+      if (current.trim()) parts.push(current.trim());
+      current = '';
+      if ((char === '&' && next === '&') || (char === '|' && next === '|')) index += 1;
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function splitPipeline(statement: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | '`' | null = null;
+  for (const char of statement) {
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '|') {
+      if (current.trim()) parts.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function firstShellCommand(statement: string): string {
+  const trimmed = statement.trim();
+  if (!trimmed) return '';
+  const withoutCall = trimmed.startsWith('& ') ? trimmed.slice(2).trim() : trimmed;
+  const match = withoutCall.match(/^([A-Za-z0-9_.:-]+)/);
+  return String(match?.[1] || '').toLowerCase();
+}
+
+function isCompositeShellCommand(command: string): boolean {
+  if (splitShellStatements(command).length > 1) return true;
+  let quote: '"' | "'" | '`' | null = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1];
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '>' || char === '<' || (char === '&' && next === '&') || (char === '|' && next === '|')) return true;
+  }
+  return false;
+}
+
+function isPowerShellCommandName(name: string): boolean {
+  return name.includes('-') || ['gc', 'gci', 'sls', 'select'].includes(name);
+}
+
+function isPowerShellReadCommand(name: string): boolean {
+  return name === 'get-content' || name === 'gc';
+}
+
+function isPowerShellSearchCommand(name: string): boolean {
+  return name === 'select-string' || name === 'sls';
+}
+
+function isPowerShellListCommand(name: string): boolean {
+  return name === 'get-childitem' || name === 'gci';
+}
+
+function isReadOnlyPowerShellPipelineCommand(name: string): boolean {
+  if (isPowerShellReadCommand(name) || isPowerShellSearchCommand(name) || isPowerShellListCommand(name)) return true;
+  return [
+    'select-object',
+    'sort-object',
+    'where-object',
+    'format-table',
+    'format-list',
+    'measure-object',
+    'convertto-json',
+    'out-string',
+  ].includes(name);
 }
 
 function normalizeFilePath(rawInput: UnknownRecord): string {
@@ -371,6 +521,19 @@ function extractExitCode(raw: UnknownRecord): number | undefined {
     if (match) return Number(match[1]);
   }
   return undefined;
+}
+
+function isFileMutationTool(toolName: string): boolean {
+  return ['write', 'edit', 'multiedit', 'patch'].includes(toolName);
+}
+
+function compactFileChange(change: AceNormalizedFileChange): AceNormalizedFileChange {
+  return {
+    toolName: change.toolName,
+    title: change.title,
+    filePath: change.filePath,
+    kind: change.kind,
+  };
 }
 
 export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange | null {
@@ -448,13 +611,15 @@ export function formatAceFileChangesResult(params: {
     .filter((change): change is AceNormalizedFileChange => Boolean(change));
   if (normalized.length === 0 && !params.output) return '';
 
-  const primary = normalized[0];
+  const mutationTool = isFileMutationTool(params.fallbackToolName || normalized[0]?.toolName || '');
+  const displayChanges = mutationTool ? normalized.map(compactFileChange) : normalized;
+  const primary = displayChanges[0];
   return wrapAceProcessBlock('tool-result', {
     toolName: primary?.toolName || params.fallbackToolName || 'edit',
     title: primary?.title || params.fallbackTitle || getAceToolTitle(params.fallbackToolName || 'edit'),
-    changes: normalized,
-    output: params.output ? safeToolResultText(params.output) : '',
-    ...(normalized.length === 1 ? primary : {}),
+    changes: displayChanges,
+    output: !mutationTool && params.output ? safeToolResultText(params.output) : '',
+    ...(displayChanges.length === 1 ? primary : {}),
   }, '');
 }
 
@@ -491,7 +656,6 @@ export function formatAceToolCall(params: {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
-        content: inputText(rawInput.content ?? rawInput.text ?? rawInput.new_string ?? rawInput.newString),
       }, '');
       break;
     case 'edit':
@@ -501,8 +665,6 @@ export function formatAceToolCall(params: {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
-        oldString: inputText(rawInput.old_string ?? rawInput.oldString),
-        newString: inputText(rawInput.new_string ?? rawInput.newString),
       }, '');
       break;
     case 'read':
@@ -631,8 +793,28 @@ export function formatAceToolResult(params: {
         changes: obj.changes,
         fallbackToolName: toolName,
         fallbackTitle: title,
-        output: extractTextFromUnknown(obj.output),
+        output: isFileMutationTool(toolName) ? '' : extractTextFromUnknown(obj.output),
       });
+    }
+    if (isFileMutationTool(toolName)) {
+      const filePath = normalizeFilePath(obj);
+      const exitCode = extractExitCode(obj);
+      return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+        toolName,
+        title,
+        ...(filePath ? { filePath } : {}),
+        ...(exitCode != null ? { exitCode } : {}),
+      }, ''), params.toolId);
+    }
+    if (toolName === 'read') {
+      const filePath = normalizeFilePath(obj);
+      const exitCode = extractExitCode(obj);
+      return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+        toolName,
+        title,
+        ...(filePath ? { filePath } : {}),
+        ...(exitCode != null ? { exitCode } : {}),
+      }, ''), params.toolId);
     }
     if (typeof obj.content === 'string' && toolName === 'skill') {
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
@@ -648,7 +830,6 @@ export function formatAceToolResult(params: {
         toolName,
         title,
         filePath: normalizeFilePath(obj),
-        content: safeToolResultText(obj.content),
       }, ''), params.toolId);
     }
     if (Array.isArray(obj.todos)) {
@@ -710,13 +891,21 @@ export function formatAceToolResult(params: {
       }, ''), params.toolId);
     }
     if (
-      typeof obj.output === 'string'
+      typeof obj.formatted_output === 'string'
+      || typeof obj.formattedOutput === 'string'
+      || typeof obj.output === 'string'
       || typeof obj.stdout === 'string'
       || typeof obj.stderr === 'string'
     ) {
       const stdout = typeof obj.stdout === 'string' ? obj.stdout : '';
       const stderr = typeof obj.stderr === 'string' ? obj.stderr : '';
-      const output = safeToolResultText(typeof obj.output === 'string' ? obj.output : [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : ''));
+      const formattedOutput = typeof obj.formatted_output === 'string'
+        ? obj.formatted_output
+        : (typeof obj.formattedOutput === 'string' ? obj.formattedOutput : '');
+      const output = safeToolResultText(
+        formattedOutput
+        || (typeof obj.output === 'string' ? obj.output : [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : '')),
+      );
       const exitCode = extractExitCode(obj);
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', { toolName, title, output, exitCode }, ''), params.toolId);
     }
@@ -724,6 +913,9 @@ export function formatAceToolResult(params: {
 
   const text = safeToolResultText(extractTextFromUnknown(raw).trim());
   if (!text) return '';
+  if (toolName === 'read') {
+    return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', { toolName, title }, ''), params.toolId);
+  }
   if (toolName === 'skill') {
     return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
       toolName,

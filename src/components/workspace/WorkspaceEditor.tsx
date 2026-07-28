@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useQueryClient } from "@tanstack/react-query"
+import { usePathname, useRouter, useSearchParams } from "@/lib/navigation/client"
 import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode, type WorkspaceTreeResponse } from "@/lib/core/api"
 import { X, ChevronLeft, ChevronRight } from "lucide-react"
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels"
@@ -16,7 +17,7 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable"
-import { FileTreeSidebar, type ClipboardItem } from "./FileTreeSidebar"
+import { FileTreeSidebar, type ClipboardItem, type TreeSortMode } from "./FileTreeSidebar"
 import { EditorPanel } from "./EditorPanel"
 import { FileSearchCommand } from "./FileSearchCommand"
 import AiAssistantSheet from "@/components/chat/AiAssistantSheet"
@@ -25,6 +26,20 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { useToast } from "@/components/ui/toast"
 import { cn } from "@/lib/core/utils"
 import { parseWorkspaceFileLocation } from "@/lib/workspace/link-target"
+import {
+  useNotebookFileQuery,
+  useNotebookFileBlobQuery,
+  useNotebookTreeQuery,
+  useWorkspaceFileBlobQuery,
+  useWorkspaceFileQuery,
+  useWorkspaceTreeQuery,
+} from "@/client/query/workspace"
+import { queryKeys } from "@/client/query/query-keys"
+import {
+  syncWorkspaceTreeToDb,
+  useSyncWorkspaceTreeToDb,
+  useWorkspaceTreeRows,
+} from "@/client/db/collections"
 
 interface WorkspaceEditorProps {
   open: boolean
@@ -39,6 +54,22 @@ interface WorkspaceEditorProps {
   notebookScope?: NotebookScope
   notebookShareToken?: string
   notebookPermission?: 'read' | 'write'
+  onNotebookInspectorChange?: (state: WorkspaceEditorInspectorState) => void
+  onFileLocationChange?: (filePath: string | null, lineNumber?: number | null, column?: number | null) => void
+  searchParamsSnapshot?: string
+  defaultTreeSortMode?: TreeSortMode
+}
+
+export interface WorkspaceEditorInspectorState {
+  selectedFile: string | null
+  fileSize: number | null
+  fileType?: string
+  loading: boolean
+  error: string | null
+  readOnly: boolean
+  oversize: boolean
+  node: TreeNode | null
+  treeCount: number
 }
 
 type NotebookBrowserView = "list" | "desktop"
@@ -61,15 +92,10 @@ function getWorkspaceTreePagination(data: WorkspaceTreeResponse): WorkspaceTreeP
   }
 }
 
-function appendUniqueTreeNodes(existing: TreeNode[], incoming: TreeNode[]): TreeNode[] {
-  const seen = new Set(existing.map((node) => node.path))
-  const next = [...existing]
-  for (const node of incoming) {
-    if (seen.has(node.path)) continue
-    seen.add(node.path)
-    next.push(node)
-  }
-  return next
+function getParentDir(filePath: string): string {
+  const normalized = String(filePath || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+  const parts = normalized.split("/").filter(Boolean)
+  return parts.length > 1 ? parts.slice(0, -1).join("/") : ""
 }
 
 function buildLineDiff(beforeText: string, afterText: string): DiffLine[] {
@@ -210,6 +236,10 @@ function findTreeNode(tree: TreeNode[], targetPath: string): TreeNode | null {
   return null
 }
 
+function countTreeNodes(tree: TreeNode[]): number {
+  return tree.reduce((total, node) => total + 1 + (node.children ? countTreeNodes(node.children) : 0), 0)
+}
+
 function splitSuggestionIntoLineHunks(payload: {
   action: 'review' | 'fixError' | 'addComment'
   sourceText: string
@@ -309,7 +339,8 @@ function formatErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
-function isFileTooLargeError(error: unknown): error is Error & { size?: number } {
+function isFileTooLargeError(error: unknown): error is Error & { status?: number; size?: number } {
+  if (error instanceof Error && (error as Error & { status?: number }).status === 413) return true
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
   return /[KM]B 限制/i.test(message)
 }
@@ -327,7 +358,12 @@ export function WorkspaceEditor({
   notebookScope = 'personal',
   notebookShareToken,
   notebookPermission = 'write',
+  onNotebookInspectorChange,
+  onFileLocationChange,
+  searchParamsSnapshot,
+  defaultTreeSortMode = "name",
 }: WorkspaceEditorProps) {
+  const queryClient = useQueryClient()
   const [tree, setTree] = React.useState<TreeNode[]>([])
   const [treeLoading, setTreeLoading] = React.useState(false)
   const [treeError, setTreeError] = React.useState<string | null>(null)
@@ -401,6 +437,10 @@ export function WorkspaceEditor({
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const effectiveSearchParams = React.useMemo(
+    () => new URLSearchParams(searchParamsSnapshot ?? searchParams.toString()),
+    [searchParams, searchParamsSnapshot],
+  )
   const { toast } = useToast()
   const fileParamKey = mode === "notebook" ? "notebookFile" : "workspaceFile"
   const panelParamKey = mode === "notebook" ? "notebook" : "workspace"
@@ -566,13 +606,25 @@ export function WorkspaceEditor({
 
   const layoutId = mode === "notebook" ? `workspace-editor-${notebookBrowserView}` : "workspace-editor"
   const isNotebookDesktop = mode === "notebook" && notebookBrowserView === "desktop"
+  const workspaceRootTreeParams = React.useMemo(
+    () => ({ depth: 0, offset: 0, limit: WORKSPACE_TREE_PAGE_SIZE, sort: defaultTreeSortMode }),
+    [defaultTreeSortMode],
+  )
+  const notebookRootTreeParams = React.useMemo(
+    () => ({ depth: 8, scope: notebookScope, shareToken: notebookShareToken || "" }),
+    [notebookScope, notebookShareToken],
+  )
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: layoutId,
   })
 
   const updateUrlFileState = React.useCallback((filePath: string | null, lineNumber?: number | null, column?: number | null) => {
-    const params = new URLSearchParams(searchParams.toString())
+    if (onFileLocationChange) {
+      onFileLocationChange(filePath, lineNumber, column)
+      return
+    }
+    const params = new URLSearchParams(effectiveSearchParams.toString())
     if (filePath) {
       params.set(fileParamKey, filePath)
       params.set(panelParamKey, "1")
@@ -590,29 +642,94 @@ export function WorkspaceEditor({
     }
     const query = params.toString()
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
-  }, [columnParamKey, fileParamKey, lineParamKey, mode, notebookScope, panelParamKey, pathname, router, scopeParamKey, searchParams])
+  }, [columnParamKey, effectiveSearchParams, fileParamKey, lineParamKey, mode, notebookScope, onFileLocationChange, panelParamKey, pathname, router, scopeParamKey])
+
+  const workspaceTreeQuery = useWorkspaceTreeQuery(
+    workspacePath,
+    { depth: workspaceRootTreeParams.depth, offset: workspaceRootTreeParams.offset, limit: workspaceRootTreeParams.limit, sort: workspaceRootTreeParams.sort },
+    { enabled: open && mode === "default" && Boolean(workspacePath) },
+  )
+  const notebookTreeQuery = useNotebookTreeQuery(
+    { depth: notebookRootTreeParams.depth, scope: notebookScope, shareToken: notebookShareToken },
+    { enabled: open && mode === "notebook" && Boolean(workspacePath) },
+  )
+  const shouldQueryTextFile = open && Boolean(selectedFile) && Boolean(workspacePath) && !isPreviewFile(selectedFile || "")
+  const workspaceFileQuery = useWorkspaceFileQuery(
+    workspacePath,
+    selectedFile || "",
+    { enabled: shouldQueryTextFile && mode === "default" },
+  )
+  const workspaceFileBlobQuery = useWorkspaceFileBlobQuery(
+    workspacePath,
+    selectedFile || "",
+    { enabled: Boolean(selectedFile && workspacePath && isPreviewFile(selectedFile) && mode === "default") },
+  )
+  const notebookFileQuery = useNotebookFileQuery(
+    selectedFile || "",
+    { scope: notebookScope, shareToken: notebookShareToken },
+    { enabled: shouldQueryTextFile && mode === "notebook" },
+  )
+  const notebookFileBlobQuery = useNotebookFileBlobQuery(
+    selectedFile || "",
+    { scope: notebookScope, shareToken: notebookShareToken },
+    { enabled: Boolean(selectedFile && isPreviewFile(selectedFile) && mode === "notebook") },
+  )
+  const treeSource = mode === "notebook" ? "notebook" : "workspace"
+  const treeSourceKey = mode === "notebook"
+    ? `${notebookScope}:${notebookShareToken || ""}`
+    : workspacePath
+  const dbRootTree = useWorkspaceTreeRows({
+    source: treeSource,
+    sourceKey: treeSourceKey,
+    parentPath: "",
+  })
+  useSyncWorkspaceTreeToDb({
+    source: "workspace",
+    sourceKey: workspacePath,
+    tree: mode === "default" ? workspaceTreeQuery.data?.tree : undefined,
+    orderOffset: mode === "default" ? (workspaceTreeQuery.data?.offset || 0) : 0,
+    replaceParents: mode === "default" && (workspaceTreeQuery.data?.offset || 0) === 0,
+  })
+  useSyncWorkspaceTreeToDb({
+    source: "notebook",
+    sourceKey: `${notebookScope}:${notebookShareToken || ""}`,
+    tree: mode === "notebook" ? notebookTreeQuery.data?.tree : undefined,
+    replaceParents: mode === "notebook",
+  })
 
   React.useEffect(() => {
     if (!open || !workspacePath) return
-    setTreeLoading(true)
-    const loadTree = mode === "notebook"
-      ? workspaceApi.getNotebookTree(8, { scope: notebookScope, shareToken: notebookShareToken })
-      : workspaceApi.getTree(workspacePath, { depth: 0, limit: WORKSPACE_TREE_PAGE_SIZE })
-    loadTree
-      .then((data) => {
-        setTree(data.tree)
-        setRootPagination(mode === "default" ? getWorkspaceTreePagination(data as WorkspaceTreeResponse) : { hasMore: false, nextOffset: null })
-        setTreeError(null)
-      })
-      .catch((error) => {
-        const message = formatErrorMessage(error, "加载文件树失败")
-        setTree([])
-        setRootPagination({ hasMore: false, nextOffset: null })
-        setTreeError(message)
-        toast("error", message)
-      })
-      .finally(() => setTreeLoading(false))
-  }, [mode, notebookScope, notebookShareToken, open, toast, workspacePath])
+    const activeQuery = mode === "notebook" ? notebookTreeQuery : workspaceTreeQuery
+    setTreeLoading(activeQuery.isFetching)
+    if (activeQuery.data) {
+      setRootPagination(mode === "default" ? getWorkspaceTreePagination(activeQuery.data as WorkspaceTreeResponse) : { hasMore: false, nextOffset: null })
+      setTreeError(null)
+      return
+    }
+    if (activeQuery.error && !activeQuery.isFetching) {
+      const message = formatErrorMessage(activeQuery.error, "加载文件树失败")
+      setTree([])
+      setRootPagination({ hasMore: false, nextOffset: null })
+      setTreeError(message)
+      toast("error", message)
+    }
+  }, [
+    mode,
+    notebookTreeQuery.data,
+    notebookTreeQuery.error,
+    notebookTreeQuery.isFetching,
+    open,
+    toast,
+    workspacePath,
+    workspaceTreeQuery.data,
+    workspaceTreeQuery.error,
+    workspaceTreeQuery.isFetching,
+  ])
+
+  React.useEffect(() => {
+    if (!open || !workspacePath) return
+    setTree(dbRootTree)
+  }, [dbRootTree, open, workspacePath])
 
   React.useEffect(() => {
     if (open) return
@@ -622,9 +739,9 @@ export function WorkspaceEditor({
 
   React.useEffect(() => {
     if (!open) return
-    const fileFromUrl = searchParams.get(fileParamKey)
-    const lineFromUrl = Number.parseInt(searchParams.get(lineParamKey) || "", 10)
-    const columnFromUrl = Number.parseInt(searchParams.get(columnParamKey) || "", 10)
+    const fileFromUrl = effectiveSearchParams.get(fileParamKey)
+    const lineFromUrl = Number.parseInt(effectiveSearchParams.get(lineParamKey) || "", 10)
+    const columnFromUrl = Number.parseInt(effectiveSearchParams.get(columnParamKey) || "", 10)
     const initialLocation = parseWorkspaceFileLocation(initialFilePath)
     const urlLocation = parseWorkspaceFileLocation(fileFromUrl)
     const nextLineNumber = initialLineNumber || initialLocation.lineNumber || urlLocation.lineNumber || (lineFromUrl > 0 ? lineFromUrl : null)
@@ -658,13 +775,13 @@ export function WorkspaceEditor({
     setSelectedFile(nextSelectedFile)
     setSelectedLineNumber(nextSelectedFile ? nextLineNumber : null)
     setSelectedColumn(nextSelectedFile ? nextColumn : null)
-  }, [columnParamKey, fileParamKey, initialColumn, initialFilePath, initialLineNumber, lineParamKey, mode, notebookScope, notebookShareToken, open, searchParams, workspacePath])
+  }, [columnParamKey, effectiveSearchParams, fileParamKey, initialColumn, initialFilePath, initialLineNumber, lineParamKey, mode, notebookScope, notebookShareToken, open, workspacePath])
 
   React.useEffect(() => {
     if (!open) return
-    const fileFromUrl = searchParams.get(fileParamKey)
-    const lineFromUrl = Number.parseInt(searchParams.get(lineParamKey) || "", 10)
-    const columnFromUrl = Number.parseInt(searchParams.get(columnParamKey) || "", 10)
+    const fileFromUrl = effectiveSearchParams.get(fileParamKey)
+    const lineFromUrl = Number.parseInt(effectiveSearchParams.get(lineParamKey) || "", 10)
+    const columnFromUrl = Number.parseInt(effectiveSearchParams.get(columnParamKey) || "", 10)
     const urlSelectionKey = [
       fileFromUrl || "",
       lineFromUrl > 0 ? lineFromUrl : "",
@@ -690,7 +807,7 @@ export function WorkspaceEditor({
       setSelectedLineNumber(null)
       setSelectedColumn(null)
     }
-  }, [columnParamKey, fileParamKey, lineParamKey, mode, open, searchParams, workspacePath])
+  }, [columnParamKey, effectiveSearchParams, fileParamKey, lineParamKey, mode, open, workspacePath])
 
   React.useEffect(() => {
     if (!selectedFile || !workspacePath) return
@@ -702,52 +819,77 @@ export function WorkspaceEditor({
     setSelectedFileReadOnly(false)
 
     if (isPreviewFile(selectedFile)) {
-      const loadBlob = mode === "notebook"
-        ? workspaceApi.getNotebookFileBlob(selectedFile, { scope: notebookScope, shareToken: notebookShareToken })
-        : workspaceApi.getFileBlob(workspacePath, selectedFile)
-      loadBlob
-        .then((blob) => {
-          setFileBlob(blob)
-          setFileError(null)
-        })
-        .catch((error) => {
-          const message = formatErrorMessage(error, "预览文件失败")
-          setFileBlob(null)
-          setFileError(message)
-          toast("error", message)
-        })
-        .finally(() => setFileLoading(false))
-      return
-    }
-
-    const loadFile = mode === "notebook"
-      ? workspaceApi.getNotebookFile(selectedFile, { scope: notebookScope, shareToken: notebookShareToken })
-      : workspaceApi.getFile(workspacePath, selectedFile)
-    loadFile
-      .then((data) => {
-        setFileContent(data.content)
-        setFileSize(data.size)
+      const activeBlobQuery = mode === "notebook" ? notebookFileBlobQuery : workspaceFileBlobQuery
+      setFileLoading(activeBlobQuery.isFetching)
+      if (activeBlobQuery.data) {
+        setFileBlob(activeBlobQuery.data)
         setFileError(null)
-        setSelectedFileReadOnly(Boolean((data as { readOnly?: boolean }).readOnly) || Boolean(findTreeNode(tree, selectedFile)?.readOnly))
-      })
-        .catch((err: Error & { size?: number }) => {
-          if (isFileTooLargeError(err)) {
-            setOversize(true)
-            if (err.size != null) setFileSize(err.size)
-            setFileError(null)
-            setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
-          return
-        }
-        const message = formatErrorMessage(err, "读取文件失败")
+        setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
+        setFileLoading(false)
+        return
+      }
+      if (activeBlobQuery.error && !activeBlobQuery.isFetching) {
+        const message = formatErrorMessage(activeBlobQuery.error, "预览文件失败")
+        setFileBlob(null)
         setFileError(message)
         setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
         toast("error", message)
-      })
-      .finally(() => setFileLoading(false))
-  }, [mode, notebookScope, notebookShareToken, selectedFile, toast, tree, workspacePath])
+        setFileLoading(false)
+      }
+      return
+    }
+
+    const activeQuery = mode === "notebook" ? notebookFileQuery : workspaceFileQuery
+    setFileLoading(activeQuery.isFetching)
+    if (activeQuery.data) {
+      setFileContent(activeQuery.data.content)
+      setFileSize(activeQuery.data.size)
+      setFileError(null)
+      setSelectedFileReadOnly(Boolean((activeQuery.data as { readOnly?: boolean }).readOnly) || Boolean(findTreeNode(tree, selectedFile)?.readOnly))
+      setFileLoading(false)
+      return
+    }
+    if (activeQuery.error && !activeQuery.isFetching) {
+      const err = activeQuery.error as Error & { size?: number }
+      if (isFileTooLargeError(err)) {
+        setOversize(true)
+        if (err.size != null) setFileSize(err.size)
+        setFileError(null)
+        setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
+        setFileLoading(false)
+        return
+      }
+      const message = formatErrorMessage(err, "读取文件失败")
+      setFileError(message)
+      setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
+      toast("error", message)
+      setFileLoading(false)
+    }
+  }, [
+    mode,
+    notebookFileQuery.data,
+    notebookFileQuery.error,
+    notebookFileQuery.isFetching,
+    notebookFileBlobQuery.data,
+    notebookFileBlobQuery.error,
+    notebookFileBlobQuery.isFetching,
+    notebookScope,
+    notebookShareToken,
+    selectedFile,
+    toast,
+    tree,
+    workspaceFileQuery.data,
+    workspaceFileQuery.error,
+    workspaceFileQuery.isFetching,
+    workspaceFileBlobQuery.data,
+    workspaceFileBlobQuery.error,
+    workspaceFileBlobQuery.isFetching,
+    workspacePath,
+  ])
 
   React.useEffect(() => {
     if (!selectedFile) return
+    if (onFileLocationChange) return
     if (treeLoading || treeError) return
     if (treeCanResolvePath(tree, selectedFile)) return
     if (mode === "default" && rootPagination.hasMore) return
@@ -768,7 +910,7 @@ export function WorkspaceEditor({
     setApplyAiSuggestionRequest(null)
     setApplyAiSuggestionQueue([])
     updateUrlFileState(null)
-  }, [mode, rootPagination.hasMore, selectedFile, tree, treeError, treeLoading, updateUrlFileState])
+  }, [mode, onFileLocationChange, rootPagination.hasMore, selectedFile, tree, treeError, treeLoading, updateUrlFileState])
 
   React.useEffect(() => {
     if (!open) return
@@ -793,11 +935,39 @@ export function WorkspaceEditor({
           throw new Error('当前分享链接为只读权限，无法保存')
         }
         await workspaceApi.saveNotebookFile(selectedFile, content, { scope: notebookScope, shareToken: notebookShareToken })
+        queryClient.setQueryData(queryKeys.notebook.file(selectedFile, {
+          scope: notebookScope,
+          shareToken: notebookShareToken || "",
+        }), {
+          content,
+          path: selectedFile,
+          size: content.length,
+          readOnly: selectedFileReadOnly,
+        })
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["notebook", "tree"] }),
+          queryClient.invalidateQueries({ queryKey: ["notebook", "subtree", getParentDir(selectedFile)] }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.notebook.fileBlob(selectedFile, {
+            scope: notebookScope,
+            shareToken: notebookShareToken || "",
+          }) }),
+        ])
         return
       }
       await workspaceApi.saveFile(workspacePath, selectedFile, content)
+      queryClient.setQueryData(queryKeys.workspace.file(workspacePath, selectedFile), {
+        content,
+        path: selectedFile,
+        size: content.length,
+      })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace", "tree", workspacePath] }),
+        queryClient.invalidateQueries({ queryKey: ["workspace", "subtree", workspacePath, getParentDir(selectedFile)] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspace.fileBlob(workspacePath, selectedFile) }),
+        queryClient.invalidateQueries({ queryKey: ["workspace", "gitBrowser", workspacePath] }),
+      ])
     },
-    [mode, notebookPermission, notebookScope, notebookShareToken, selectedFile, selectedFileReadOnly, workspacePath]
+    [mode, notebookPermission, notebookScope, notebookShareToken, queryClient, selectedFile, selectedFileReadOnly, workspacePath]
   )
 
   const handleSelectFile = React.useCallback((filePath: string) => {
@@ -821,38 +991,57 @@ export function WorkspaceEditor({
     updateUrlFileState(null)
   }, [selectedFile, updateUrlFileState])
 
-  const handleTreeRefresh = React.useCallback(() => {
+  const handleTreeRefresh = React.useCallback(async () => {
     if (!workspacePath) return
     setTreeLoading(true)
-    const loadTree = mode === "notebook"
-      ? workspaceApi.getNotebookTree(8, { scope: notebookScope, shareToken: notebookShareToken })
-      : workspaceApi.getTree(workspacePath, { depth: 0, limit: WORKSPACE_TREE_PAGE_SIZE })
-    loadTree
-      .then((data) => {
-        setTree(data.tree)
-        setRootPagination(mode === "default" ? getWorkspaceTreePagination(data as WorkspaceTreeResponse) : { hasMore: false, nextOffset: null })
-        setTreeError(null)
+    try {
+      const result = mode === "notebook"
+        ? await notebookTreeQuery.refetch()
+        : await workspaceTreeQuery.refetch()
+      if (result.error) throw result.error
+      const data = result.data
+      if (!data) return
+      syncWorkspaceTreeToDb({
+        source: mode === "notebook" ? "notebook" : "workspace",
+        sourceKey: mode === "notebook" ? `${notebookScope}:${notebookShareToken || ""}` : workspacePath,
+        tree: data.tree || [],
+        orderOffset: mode === "default" ? ((data as WorkspaceTreeResponse).offset || 0) : 0,
+        replaceParents: mode === "notebook" || ((data as WorkspaceTreeResponse).offset || 0) === 0,
       })
-      .catch((error) => {
-        const message = formatErrorMessage(error, "刷新文件树失败")
-        setTree([])
-        setRootPagination({ hasMore: false, nextOffset: null })
-        setTreeError(message)
-        toast("error", message)
-      })
-      .finally(() => setTreeLoading(false))
-  }, [mode, notebookScope, notebookShareToken, toast, workspacePath])
+      setRootPagination(mode === "default" ? getWorkspaceTreePagination(data as WorkspaceTreeResponse) : { hasMore: false, nextOffset: null })
+      setTreeError(null)
+    } catch (error) {
+      const message = formatErrorMessage(error, "刷新文件树失败")
+      setTree([])
+      setRootPagination({ hasMore: false, nextOffset: null })
+      setTreeError(message)
+      toast("error", message)
+    } finally {
+      setTreeLoading(false)
+    }
+  }, [mode, notebookScope, notebookShareToken, notebookTreeQuery, toast, workspacePath, workspaceTreeQuery])
 
   const handleLoadMoreRoot = React.useCallback(async () => {
     if (mode !== "default" || rootLoadingMore || rootPagination.nextOffset == null || !rootPagination.hasMore) return
     setRootLoadingMore(true)
     try {
-      const data = await workspaceApi.getTree(workspacePath, {
+      const pageParams = {
         depth: 0,
         offset: rootPagination.nextOffset,
         limit: WORKSPACE_TREE_PAGE_SIZE,
+        sort: defaultTreeSortMode,
+      }
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.workspace.tree(workspacePath, pageParams),
+        queryFn: () => workspaceApi.getTree(workspacePath, pageParams),
+        staleTime: 30_000,
       })
-      setTree((prev) => appendUniqueTreeNodes(prev, data.tree || []))
+      syncWorkspaceTreeToDb({
+        source: "workspace",
+        sourceKey: workspacePath,
+        tree: data.tree || [],
+        orderOffset: pageParams.offset,
+      })
       setRootPagination(getWorkspaceTreePagination(data))
       setTreeError(null)
     } catch (error) {
@@ -862,7 +1051,7 @@ export function WorkspaceEditor({
     } finally {
       setRootLoadingMore(false)
     }
-  }, [mode, rootLoadingMore, rootPagination.hasMore, rootPagination.nextOffset, toast, workspacePath])
+  }, [defaultTreeSortMode, mode, queryClient, rootLoadingMore, rootPagination.hasMore, rootPagination.nextOffset, toast, workspacePath])
 
   const handleOpenChange = React.useCallback(
     (newOpen: boolean) => {
@@ -896,6 +1085,32 @@ export function WorkspaceEditor({
 
   const showToolbar = presentation === "drawer"
   const showCloseButton = presentation === "drawer"
+
+  React.useEffect(() => {
+    if (mode !== "notebook" || !onNotebookInspectorChange) return
+    const node = selectedFile ? findTreeNode(tree, selectedFile) : null
+    onNotebookInspectorChange({
+      selectedFile,
+      fileSize,
+      fileType: selectedFile ? getFileType(selectedFile) : undefined,
+      loading: fileLoading,
+      error: fileError,
+      readOnly: selectedFileReadOnly,
+      oversize,
+      node,
+      treeCount: countTreeNodes(tree),
+    })
+  }, [
+    fileError,
+    fileLoading,
+    fileSize,
+    mode,
+    onNotebookInspectorChange,
+    oversize,
+    selectedFile,
+    selectedFileReadOnly,
+    tree,
+  ])
 
   const editorBody = (
     <div className="flex flex-col h-full bg-background">
@@ -994,6 +1209,7 @@ export function WorkspaceEditor({
             notebookPermission={selectedFileReadOnly ? 'read' : notebookPermission}
             notebookView={notebookBrowserView}
             onNotebookViewChange={handleNotebookViewChange}
+            defaultSortMode={defaultTreeSortMode}
           />
         </ResizablePanel>
         <ResizableHandle

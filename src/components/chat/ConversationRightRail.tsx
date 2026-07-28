@@ -16,7 +16,7 @@ import { cn } from '@/lib/core/utils';
 export interface ConversationRightRailProps {
   session: ChatSession | null;
   className?: string;
-  legacyPanel?: ReactNode;
+  fallbackPanel?: ReactNode;
   onCollapse?: () => void;
   setSessionWorkbenchState?: (state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => void;
 }
@@ -24,7 +24,7 @@ export interface ConversationRightRailProps {
 export default function ConversationRightRail({
   session,
   className,
-  legacyPanel,
+  fallbackPanel,
   onCollapse,
   setSessionWorkbenchState,
 }: ConversationRightRailProps) {
@@ -36,7 +36,7 @@ export default function ConversationRightRail({
     live,
     setSessionWorkbenchState,
   }), [live, mode, session, setSessionWorkbenchState]);
-  const plugins = useMemo(() => createBuiltInConversationRightRailPlugins(legacyPanel), [legacyPanel]);
+  const plugins = useMemo(() => createBuiltInConversationRightRailPlugins(fallbackPanel), [fallbackPanel]);
   const activePlugins = useMemo(
     () => plugins
       .filter((plugin) => plugin.modes.includes(mode) && plugin.shouldActivate(context))
@@ -47,7 +47,7 @@ export default function ConversationRightRail({
   const [localPluginId, setLocalPluginId] = useState<string | null>(persistedPluginId || null);
   const activePlugin = activePlugins.find((plugin) => plugin.id === (localPluginId || persistedPluginId))
     || activePlugins[0];
-  const shouldRenderLegacyPanel = Boolean(legacyPanel) && activePlugins.length === 0;
+  const shouldRenderFallbackPanel = Boolean(fallbackPanel) && activePlugins.length === 0;
 
   useEffect(() => {
     if (!activePlugin) return;
@@ -72,8 +72,8 @@ export default function ConversationRightRail({
     <aside className={cn('flex h-full min-h-0 flex-col border-l bg-card/30', className)}>
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b px-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{activePlugin?.title || (shouldRenderLegacyPanel ? '创建工作流' : '工作流侧栏')}</div>
-          <div className="truncate text-[10px] text-muted-foreground">{activePlugin ? '对话内工作流能力' : shouldRenderLegacyPanel ? '创建、启动和管理工作流' : '当前对话暂无可用面板'}</div>
+          <div className="truncate text-sm font-medium">{activePlugin?.title || (shouldRenderFallbackPanel ? '创建工作流' : '工作流侧栏')}</div>
+          <div className="truncate text-[10px] text-muted-foreground">{activePlugin ? '对话内工作流能力' : shouldRenderFallbackPanel ? '创建、启动和管理工作流' : '当前对话暂无可用面板'}</div>
         </div>
         <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={onCollapse} title="收起右侧边栏">
           <span className="material-symbols-outlined text-[18px]">right_panel_close</span>
@@ -104,8 +104,8 @@ export default function ConversationRightRail({
       <div className="home-chat-scroll min-h-0 flex-1 overflow-auto p-3">
         {activePlugin
           ? <div key={activePlugin.id} className="h-full min-h-0">{activePlugin.render(context)}</div>
-          : shouldRenderLegacyPanel
-            ? legacyPanel
+          : shouldRenderFallbackPanel
+            ? fallbackPanel
             : <ConversationRightRailEmptyState text="当前对话没有可用右侧面板" />}
       </div>
     </aside>

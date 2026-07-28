@@ -2,6 +2,7 @@
 import React from 'react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { AgoraChatPanel } from '@/components/collaboration/agora/AgoraChatPanel';
 import { CollaborationRoomSurface } from '@/components/collaboration/CollaborationRoomSurface';
@@ -110,7 +111,21 @@ function renderPanelWithCallAgent(
     );
   }
 
-  return render(<Harness />);
+  return renderWithQuery(<Harness />);
+}
+
+function renderWithQuery(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>,
+  );
 }
 
 async function addMember(user: ReturnType<typeof userEvent.setup>, name: string) {
@@ -124,6 +139,31 @@ async function addMember(user: ReturnType<typeof userEvent.setup>, name: string)
 describe('built-in agora chat panel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/models')) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/engine/availability')) {
+        return new Response(JSON.stringify({ available: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/engine')) {
+        return new Response(JSON.stringify({ engine: 'codex', driver: 'stdio', defaultModel: '' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }));
     window.scrollTo = vi.fn();
     if (!Element.prototype.hasPointerCapture) {
       Element.prototype.hasPointerCapture = () => false;

@@ -2,6 +2,7 @@
 
 import { ActionState, getStreamingResultDisplay, parseActions, stripMachineResultBlocks } from '@/lib/chat/actions';
 import Markdown from '@/components/Markdown';
+import markdownStyles from '@/components/Markdown.module.css';
 import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useMemo, useState } from 'react';
@@ -12,7 +13,6 @@ import { RobotLogo } from '@/components/brand/RobotLogo';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
-import { Shimmer } from '@/components/ai-elements/shimmer';
 import { Message, MessageContent, MessageActions, MessageAction } from '@/components/ai-elements/message';
 import { Tool, ToolHeader, ToolContent } from '@/components/ai-elements/tool';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai-elements/reasoning';
@@ -21,7 +21,8 @@ import { Queue, QueueList, QueueItem, QueueItemContent, QueueItemDescription, Qu
 import { Terminal, TerminalContent } from '@/components/ai-elements/terminal';
 import { Artifact, ArtifactActions, ArtifactContent, ArtifactCopyButton, ArtifactHeader, ArtifactTitle } from '@/components/ai-elements/artifact';
 import { CodeBlock } from '@/components/ai-elements/code-block';
-import { BookOpenIcon, ChevronDownIcon, Eye, MessageSquareQuote, WrenchIcon } from 'lucide-react';
+import { Shimmer } from '@/components/ai-elements/shimmer';
+import { BookOpenIcon, ChevronDownIcon, Eye, Loader2, MessageSquareQuote, WrenchIcon } from 'lucide-react';
 import {
   extractAceProcessBlocks,
   getStreamingAceProcessReadyContent,
@@ -31,6 +32,7 @@ import {
   type AceToolCallPayload,
   type AceToolResultPayload,
 } from '@/lib/chat/ai-process-blocks';
+import { getAceToolTitle } from '@/lib/chat/ace-process-formatters';
 import { workspaceApi } from '@/lib/core/api';
 import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
 import type { BundledLanguage } from 'shiki';
@@ -538,9 +540,10 @@ function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
     if (block.kind !== 'tool-result') continue;
 
     const meta = block.meta as AceToolResultPayload;
-    const toolName = String(meta.toolName || '').trim() || 'tool';
+    const rawToolName = String(meta.toolName || '').trim() || 'tool';
     const toolId = String(meta.toolId || '').trim();
     const resultBody = normalizeProcessBody(block.body);
+    const toolName = normalizeResultToolName(rawToolName, meta as Record<string, unknown>, resultBody);
     const toolFingerprint = buildToolFingerprint(toolName, meta, resultBody);
     const targetIndex = toolId && entryIndexesByToolId.has(toolId)
       ? entryIndexesByToolId.get(toolId)!
@@ -548,13 +551,18 @@ function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
         ? pendingEntryIndexesByFingerprint.get(toolFingerprint)!
         : (() => {
           const uniquePending = findUniquePendingToolIndex(entries, toolName);
-          return uniquePending >= 0 ? uniquePending : findFirstPendingToolIndex(entries, toolName);
+          if (uniquePending >= 0) return uniquePending;
+          const firstPending = findFirstPendingToolIndex(entries, toolName);
+          if (firstPending >= 0) return firstPending;
+          return rawToolName !== toolName ? findFirstPendingToolIndex(entries, rawToolName) : -1;
         })();
 
     if (targetIndex >= 0) {
       const target = entries[targetIndex];
       clearPendingToolIdentity(targetIndex, target);
       target.result = mergeProcessText(target.result, resultBody);
+      target.toolName = toolName;
+      target.title = toolName === 'skill' ? getAceToolTitle('skill') : target.title;
       target.toolId = target.toolId || toolId;
       target.toolFingerprint = target.toolFingerprint || toolFingerprint;
       target.resultMeta = meta;
@@ -588,7 +596,7 @@ function isProcessEntryRunning(state: ProcessEntryState, isStreaming: boolean): 
 }
 
 function isCollapsedByDefaultTool(entry: ToolProcessEntry): boolean {
-  return ['bash', 'cmd', 'powershell', 'read', 'glob', 'grep', 'ls', 'skill'].includes(entry.toolName);
+  return entry.state === 'output-available';
 }
 
 function shouldOpenProcessCard({
@@ -604,8 +612,8 @@ function shouldOpenProcessCard({
   hasResult: boolean;
   defaultCollapsed?: boolean;
 }): boolean {
-  if (defaultCollapsed) return false;
   if (isProcessEntryRunning(state, isStreaming)) return true;
+  if (defaultCollapsed) return false;
   return hasRequest || hasResult;
 }
 
@@ -769,6 +777,16 @@ function extractSkillDocument(entry: ToolProcessEntry): null | { name: string; b
   body = body.trim();
   if (!body) return null;
   return { name, body };
+}
+
+function containsSkillContentBlock(text: string): boolean {
+  return /<skill_content\b[\s\S]*?<\/skill_content>/i.test(String(text || ''));
+}
+
+function normalizeResultToolName(toolName: string, meta: Record<string, unknown> | null, resultBody: string): string {
+  if (toolName === 'skill') return toolName;
+  const output = asString(meta?.output) || asString(meta?.content) || asString(meta?.message);
+  return containsSkillContentBlock(resultBody) || containsSkillContentBlock(output) ? 'skill' : toolName;
 }
 
 function getReadFilePath(entry: ToolProcessEntry): string {
@@ -1124,7 +1142,7 @@ function ProcessCodeBlock({
                 ) : null}
                 {runResult?.stderr ? (
                   <div>
-                    <div className="mb-1 text-xs text-muted-foreground">stderr</div>
+                    <div className="mb-1 text-xs text-muted-foreground">错误输出</div>
                     <ProcessTerminalBlock text={runResult.stderr} />
                   </div>
                 ) : null}
@@ -1260,7 +1278,7 @@ function WriteFileMetaLine({ filePath, stats }: { filePath: string; stats?: stri
         <Eye className="size-3" />
         <span>预览</span>
       </button>
-      <FilePreviewDialog absolutePath={filePath} open={previewOpen} onOpenChange={setPreviewOpen} />
+      {previewOpen ? <FilePreviewDialog absolutePath={filePath} open={previewOpen} onOpenChange={setPreviewOpen} /> : null}
     </div>
   );
 }
@@ -1434,9 +1452,11 @@ function renderStructuredToolResult(entry: ToolProcessEntry) {
     case 'plan': {
       if (entry.toolName === 'skill') {
         const skillDoc = extractSkillDocument(entry);
+        const skillFilePath = asString((entry.resultMeta as any)?.filePath) || asString((entry.requestMeta as any)?.filePath) || extractPathFromCommand(asString((entry.requestMeta as any)?.command), 'read');
         if (skillDoc) {
           return (
             <div className="space-y-3">
+              {skillFilePath ? <WriteFileMetaLine filePath={skillFilePath} /> : null}
               {skillDoc.name ? (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <BookOpenIcon className="size-3.5 text-violet-600" />
@@ -1537,7 +1557,7 @@ function renderToolEntryCard(
 
   return (
     <Tool
-      key={key}
+      key={`${key}-${entry.state}`}
       className="overflow-hidden rounded-xl border-border/70 bg-background/70 shadow-sm"
       defaultOpen={shouldOpen}
       data-testid="ace-tool-card"
@@ -1707,7 +1727,7 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
                   <WrapperProcessBlocks content={entry.internalText} isStreaming={isStreaming && entry.state !== 'output-available'} />
                 </div>
               ) : null}
-              {(entry.agent || entry.sessionId) ? (
+              {entry.agent || entry.sessionId ? (
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                   {entry.agent ? (
                     <span className="inline-flex items-center rounded-full border px-2 py-0.5">
@@ -1821,9 +1841,10 @@ interface ChatMessageProps {
 
 export function ThinkingBot() {
   return (
-    <div className="inline-flex items-center gap-2 px-1 py-1 text-muted-foreground">
+    <div className={markdownStyles.thinkingBot} aria-live="polite">
       <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
-      <Shimmer as="span" className="text-[13px]">思考中...</Shimmer>
+      <Shimmer as="span" className={markdownStyles.thinkingText}>思考中</Shimmer>
+      <span className={markdownStyles.thinkingDots}><span>.</span><span>.</span><span>.</span></span>
     </div>
   );
 }
@@ -1917,11 +1938,18 @@ function formatTokenUsage(usage?: ChatMessageProps['message']['usage']): string 
   if (values.length === 0 || values.every((value) => value === 0)) {
     return 'Token 未返回';
   }
+  const cacheHitBase = (input || 0) + (cacheRead || 0);
+  const cacheHitRate = cacheRead && cacheHitBase > 0
+    ? Math.round((cacheRead / cacheHitBase) * 100)
+    : 0;
+  const cacheParts = [
+    cacheRead ? `缓存命中 ${cacheRead.toLocaleString()} (${cacheHitRate}%)` : '',
+    cacheWrite ? `缓存写入 ${cacheWrite.toLocaleString()}` : '',
+  ].filter(Boolean);
   const parts = [
     input !== undefined ? `${input.toLocaleString()} 输入` : '',
     output !== undefined ? `${output.toLocaleString()} 输出` : '',
-    cacheRead ? `${cacheRead.toLocaleString()} 缓存读` : '',
-    cacheWrite ? `${cacheWrite.toLocaleString()} 缓存写` : '',
+    ...cacheParts,
   ].filter(Boolean);
   return parts.join(' / ');
 }
@@ -2040,7 +2068,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
         </div>
       )}
       <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
-        <div className={`relative overflow-hidden rounded-[28px] rounded-tl-[16px] border px-4 py-3 text-sm ${bubbleShellClass}`}>
+        <div className={`relative overflow-hidden rounded-xl rounded-tl-md border px-4 py-3 text-sm ${bubbleShellClass}`}>
           <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
           <span className="pointer-events-none absolute -left-1 top-8 h-4 w-4 rotate-45 border-b border-l border-current/10 bg-inherit" />
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -2203,7 +2231,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     toast(ok ? 'success' : 'error', ok ? '已复制消息内容' : '复制失败');
   };
   const actionBarClass = 'h-7 opacity-0 transition-opacity duration-150 flex items-center gap-0.5 group-hover:opacity-100 group-focus-within:opacity-100';
-  const actionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-background/80 hover:text-foreground';
+  const actionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground';
   const destructiveActionButtonClass = 'p-1 rounded-md text-destructive transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive';
 
   if (message.role === 'user') {
@@ -2293,8 +2321,8 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
               </span>
             </div>
           ) : null}
-          <div className="home-chat-bubble home-chat-bubble-user rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm text-primary-foreground">
-            <div className="[&_a]:text-white [&_a]:underline [&_a:hover]:text-blue-200 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-white/25 [&_img]:object-contain">
+          <div className="rounded-xl rounded-tr-sm border border-border bg-card px-4 py-2.5 text-sm text-foreground transition-colors duration-150 hover:border-[#8B5CF6]/30">
+            <div className="[&_a]:text-[#8B5CF6] [&_a]:underline [&_a:hover]:text-[#6D45D8] [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain">
               <Markdown>{message.content}</Markdown>
             </div>
           </div>
@@ -2423,7 +2451,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     return (
       <div className="group flex items-start gap-2">
         <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
-          <div className="home-chat-bubble home-chat-bubble-error rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-destructive">
+          <div className="rounded-xl rounded-tl-sm border border-destructive/20 bg-destructive/5 px-4 py-2.5 text-sm text-destructive">
             <span className="material-symbols-outlined text-sm mr-1 align-middle">{isTimeout ? 'schedule' : 'error'}</span>
             {message.content}
             {isTimeout && onContinue && (
@@ -2558,7 +2586,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
           </div>
         ) : null}
         {hasAssistantBubbleContent && (
-          <div className="home-chat-bubble home-chat-bubble-assistant rounded-2xl rounded-tl-sm px-4 py-2.5">
+          <div className="rounded-xl rounded-tl-sm border border-border bg-card px-4 py-2.5 transition-colors duration-150 hover:border-[#8B5CF6]/30">
             <div className="space-y-3">
               {processTimelineState.timelineItems.length ? (
                 <WrapperProcessBlocks content={processSource} isStreaming={isStreaming} />
@@ -2592,14 +2620,9 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
         {!isWorkflowThinkingMessage && (sentAt || message.engine || message.model || message.usage || message.costUsd !== undefined || message.durationMs !== undefined) && (
           <div className="flex flex-wrap items-center gap-1 px-1 text-[11px] text-muted-foreground opacity-70">
             {sentAt && <span>{sentAt}</span>}
-            {message.engine && (
+            {(message.engine || message.model) && (
               <MetadataPill>
-                {getEngineDisplayName(message.engine)}
-              </MetadataPill>
-            )}
-            {message.model && (
-              <MetadataPill>
-                {modelLabel}
+                模型：{[message.engine ? getEngineDisplayName(message.engine) : '', message.model ? modelLabel : ''].filter(Boolean).join(' / ')}
               </MetadataPill>
             )}
             <span>{formatTokenUsage(message.usage)}</span>

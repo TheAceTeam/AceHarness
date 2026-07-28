@@ -1,71 +1,54 @@
 'use client';
 
 import { useState, useEffect, useRef, type ChangeEvent } from 'react';
-import Link from 'next/link';
-import { agentApi } from '@/lib/core/api';
+import Link from '@/lib/navigation/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { Download, FolderOpen, Search, Upload } from 'lucide-react';
+import { Columns3, Download, Edit, FolderOpen, Loader2, RefreshCw, Search, Sparkles, Trash2, Upload } from 'lucide-react';
 import AgentEditModal from '@/components/AgentEditModal';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
-import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
-import { ClipLoader } from 'react-spinners';
-import ConfirmDialog from '@/components/ConfirmDialog';
-import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useToast } from '@/components/ui/toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import SpriteAvatar from '@/components/SpriteAvatar';
+import { BulkActionBar } from '@/components/ui/bulk-action-bar';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
+import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { ActionMenu, type ActionMenuGroup } from '@/components/ui/action-menu';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+  DataCard,
+  DataCardActions,
+  DataCardDescription,
+  DataCardHeader,
+  DataCardMeta,
+  DataCardTitle,
+} from '@/components/ui/data-card';
+import { PageHeader } from '@/components/ui/page-header';
+import { PageToolbar } from '@/components/ui/page-toolbar';
+import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/core/utils';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import type { ReturnTarget } from '@/lib/navigation/return-target';
-
-interface AgentConfig {
-  name: string;
-  team: 'blue' | 'red' | 'judge' | 'black-gold';
-  roleType?: 'normal' | 'supervisor';
-  avatar?: any;
-  category?: string;
-  tags?: string[];
-  engineModels: Record<string, string>;
-  activeEngine: string;
-  temperature?: number;
-  systemPrompt?: string;
-  iterationPrompt?: string;
-  capabilities?: string[];
-  constraints?: string[];
-  skills?: string[];
-  description?: string;
-  alwaysAvailableForChat?: boolean;
-  workspaceProfile?: {
-    nickname?: string;
-    officeRole?: string;
-    residency?: {
-      office?: boolean;
-      meetingRoom?: boolean;
-      defaultDirectRoom?: boolean;
-    };
-    roomPresence?: {
-      recommendForMeetingRoom?: boolean;
-      autoShowInOffice?: boolean;
-    };
-  };
-}
+import {
+  useAgentsQuery,
+  useBatchDeleteAgentsMutation,
+  useDeleteAgentMutation,
+  useExportAgentsMutation,
+  useImportAgentZipMutation,
+  useSaveAgentMutation,
+  type AgentConfig,
+} from '@/client/query/agents';
+import { useEngineConfigQuery } from '@/client/query/engines';
+import { useAgentConfigRows, useSyncAgentConfigsToDb } from '@/client/db/collections';
 
 const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
+const EMPTY_AGENTS: AgentConfig[] = [];
 type DisplayTeam = 'blue' | 'red' | 'judge' | 'black-gold';
+type AgentSortKey = 'name' | 'team' | 'category' | 'temperature';
 
 interface AgentsManagerProps {
   embedded?: boolean;
@@ -79,8 +62,6 @@ export default function AgentsManager({
   const VIEW_MODE_STORAGE_KEY = 'aceharness:agents:view-mode';
   const { toast } = useToast();
   useDocumentTitle(embedded ? null : 'Agent 管理');
-  const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [embeddedSearchDraft, setEmbeddedSearchDraft] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
@@ -96,20 +77,44 @@ export default function AgentsManager({
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [viewMode, setViewMode] = useState<'gallery' | 'table'>('gallery');
   const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
-  const [runtimeAgentsDir, setRuntimeAgentsDir] = useState('');
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [archiveImporting, setArchiveImporting] = useState(false);
   const [archiveExporting, setArchiveExporting] = useState(false);
+  const [deleteTargetAgentName, setDeleteTargetAgentName] = useState<string | null>(null);
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
+  const [agentSortKey, setAgentSortKey] = useState<AgentSortKey>('name');
+  const [agentSortDirection, setAgentSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [visibleAgentColumnIds, setVisibleAgentColumnIds] = useState<string[]>(['agent', 'team', 'category', 'temperature', 'tags']);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
-  const { confirm, dialogProps } = useConfirmDialog();
+  const agentsQuery = useAgentsQuery();
+  const engineConfigQuery = useEngineConfigQuery();
+  const saveAgentMutation = useSaveAgentMutation();
+  const deleteAgentMutation = useDeleteAgentMutation();
+  const batchDeleteAgentsMutation = useBatchDeleteAgentsMutation();
+  const importAgentZipMutation = useImportAgentZipMutation();
+  const exportAgentsMutation = useExportAgentsMutation();
+  const agents = agentsQuery.data?.agents || EMPTY_AGENTS;
+  useSyncAgentConfigsToDb(agents);
+  const dbAgents = useAgentConfigRows({
+    keyword: '',
+    group: 'all',
+    team: 'all',
+    category: 'all',
+    tags: [],
+  }) as AgentConfig[];
+  const runtimeAgentsDir = agentsQuery.data?.runtimeAgentsDir || '';
+  const loading = agentsQuery.isLoading && dbAgents.length === 0;
+  const agentError = agentsQuery.error instanceof Error ? agentsQuery.error.message : null;
+  const refreshAgents = async () => {
+    await agentsQuery.refetch();
+  };
 
   useEffect(() => {
-    loadAgents();
-    fetch('/api/engine').then(r => r.json()).then(d => {
-      if (d.engine) setGlobalEngine(d.engine);
-      setGlobalDefaultModel(d.defaultModel || '');
-    }).catch(() => {});
-  }, []);
+    const data = engineConfigQuery.data;
+    if (!data) return;
+    if (data.engine) setGlobalEngine(data.engine);
+    setGlobalDefaultModel(typeof data.defaultModel === 'string' ? data.defaultModel : '');
+  }, [engineConfigQuery.data]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -124,22 +129,13 @@ export default function AgentsManager({
     window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
   }, [viewMode]);
 
-  const loadAgents = async () => {
-    try {
-      setLoading(true);
-      const data = await agentApi.listAgents();
-      setAgents(data.agents || []);
-      setRuntimeAgentsDir(data.runtimeAgentsDir || '');
-    } catch (error) {
-      console.error('Failed to load agents:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    setSelectedAgentNames((prev) => prev.filter((name) => agents.some((agent) => agent.name === name)));
-  }, [agents]);
+    setSelectedAgentNames((prev) => {
+      const next = prev.filter((name) => dbAgents.some((agent) => agent.name === name));
+      if (next.length === prev.length && next.every((name, index) => name === prev[index])) return prev;
+      return next;
+    });
+  }, [dbAgents]);
 
   const handleCreateAgent = () => {
       setEditingAgent({
@@ -205,8 +201,7 @@ export default function AgentsManager({
   const handleSaveAgent = async (agent: AgentConfig) => {
     try {
       const targetName = isNewAgent ? agent.name : (editingAgent?.name || agent.name);
-      await agentApi.saveAgent(targetName, agent);
-      await loadAgents();
+      await saveAgentMutation.mutateAsync({ name: targetName, agent });
       setEditingAgent(null);
       toast('success', 'Agent 配置已保存');
     } catch (error: any) {
@@ -214,18 +209,16 @@ export default function AgentsManager({
     }
   };
 
-  const handleDeleteAgent = async (name: string) => {
-    const confirmed = await confirm({
-      title: '确认删除',
-      description: `确定要删除 Agent "${name}" 吗？`,
-      confirmLabel: '删除',
-      cancelLabel: '取消',
-      variant: 'destructive',
-    });
-    if (!confirmed) return;
+  const handleDeleteAgent = (name: string) => {
+    setDeleteTargetAgentName(name);
+  };
+
+  const confirmDeleteAgent = async () => {
+    if (!deleteTargetAgentName) return;
     try {
-      await agentApi.deleteAgent(name);
-      await loadAgents();
+      await deleteAgentMutation.mutateAsync(deleteTargetAgentName);
+      setSelectedAgentNames((prev) => prev.filter((item) => item !== deleteTargetAgentName));
+      setDeleteTargetAgentName(null);
     } catch (error) {
       console.error('Failed to delete agent:', error);
       setAlertMessage('删除失败: ' + (error as Error).message);
@@ -263,18 +256,15 @@ export default function AgentsManager({
       toast('warning', '请先选择要删除的 Agent');
       return;
     }
-    const confirmed = await confirm({
-      title: '确认批量删除',
-      description: `确定要删除这 ${selectedAgentNames.length} 个 Agent 吗？`,
-      confirmLabel: '批量删除',
-      cancelLabel: '取消',
-      variant: 'destructive',
-    });
-    if (!confirmed) return;
+    setBatchDeleteConfirmOpen(true);
+  };
+
+  const confirmBatchDeleteAgents = async () => {
+    if (selectedAgentNames.length === 0) return;
     try {
-      const result = await agentApi.batchDeleteAgents(selectedAgentNames);
+      const result = await batchDeleteAgentsMutation.mutateAsync(selectedAgentNames);
       setSelectedAgentNames([]);
-      await loadAgents();
+      setBatchDeleteConfirmOpen(false);
       toast('success', result.message || `已删除 ${result.updatedCount} 个 Agent`);
     } catch (error: any) {
       toast('error', error.message || '批量删除 Agent 失败');
@@ -286,8 +276,7 @@ export default function AgentsManager({
     if (!file) return;
     setArchiveImporting(true);
     try {
-      const result = await agentApi.importAgentZip(file);
-      await loadAgents();
+      const result = await importAgentZipMutation.mutateAsync(file);
       toast('success', result.message || `导入了 ${result.imported.length} 个 Agent`);
     } catch (error: any) {
       toast('error', error.message || '导入 Agent 失败');
@@ -304,7 +293,7 @@ export default function AgentsManager({
     }
     setArchiveExporting(true);
     try {
-      const blob = await agentApi.exportAgents(selectedAgentNames);
+      const blob = await exportAgentsMutation.mutateAsync(selectedAgentNames);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -320,7 +309,7 @@ export default function AgentsManager({
   };
 
   // Get all unique tags
-  const allTags = Array.from(new Set(agents.flatMap(a => a.tags || [])));
+  const allTags = Array.from(new Set(dbAgents.flatMap(a => a.tags || [])));
 
   // Determine agent group by name prefix or first tag
   const getAgentGroup = (agent: AgentConfig): string => {
@@ -338,41 +327,44 @@ export default function AgentsManager({
   const normalizeTeam = (team: AgentConfig['team']): DisplayTeam => team as DisplayTeam;
 
   // Filter agents
-  const filteredAgents = agents.filter(agent => {
-    if (selectedGroup !== 'all' && getAgentGroup(agent) !== selectedGroup) {
-      return false;
-    }
-    if (searchQuery && !agent.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-      return false;
-    }
-    if (selectedTeam !== 'all' && normalizeTeam(agent.team) !== selectedTeam) {
-      return false;
-    }
-    if (selectedCategory !== 'all' && agent.category !== selectedCategory) {
-      return false;
-    }
-    if (selectedTags.length > 0 && !selectedTags.some(tag => agent.tags?.includes(tag))) {
-      return false;
-    }
-    return true;
+  const filteredAgents = useAgentConfigRows({
+    keyword: searchQuery,
+    group: selectedGroup,
+    team: selectedTeam,
+    category: selectedCategory,
+    tags: selectedTags,
+  }) as AgentConfig[];
+  const sortedAgents = [...filteredAgents].sort((a, b) => {
+    const readValue = (agent: AgentConfig) => {
+      if (agentSortKey === 'name') return agent.name || '';
+      if (agentSortKey === 'team') return agent.team || '';
+      if (agentSortKey === 'category') return agent.category || '';
+      return agent.temperature ?? Number.NEGATIVE_INFINITY;
+    };
+    const aValue = readValue(a);
+    const bValue = readValue(b);
+    const result = typeof aValue === 'number' && typeof bValue === 'number'
+      ? aValue - bValue
+      : String(aValue).localeCompare(String(bValue), 'zh-CN');
+    return agentSortDirection === 'asc' ? result : -result;
   });
 
   // Group agents by team
   const TEAM_ORDER: DisplayTeam[] = ['black-gold', 'red', 'blue', 'judge'];
   const groupedAgents = Object.fromEntries(
-    TEAM_ORDER.map((team) => [team, filteredAgents.filter((agent) => normalizeTeam(agent.team) === team)])
+    TEAM_ORDER.map((team) => [team, sortedAgents.filter((agent) => normalizeTeam(agent.team) === team)])
   ) as Record<DisplayTeam, AgentConfig[]>;
 
   const teamCounts = Object.fromEntries(
-    TEAM_ORDER.map((team) => [team, agents.filter((agent) => normalizeTeam(agent.team) === team).length])
+    TEAM_ORDER.map((team) => [team, dbAgents.filter((agent) => normalizeTeam(agent.team) === team).length])
   ) as Record<DisplayTeam, number>;
 
   // Group agents by first tag (for sidebar counts)
   const groupCounts = {
-    all: agents.length,
-    common: agents.filter(a => getAgentGroup(a) === 'common').length,
-    compiler: agents.filter(a => getAgentGroup(a) === 'compiler').length,
-    openharmony: agents.filter(a => getAgentGroup(a) === 'openharmony').length,
+    all: dbAgents.length,
+    common: dbAgents.filter(a => getAgentGroup(a) === 'common').length,
+    compiler: dbAgents.filter(a => getAgentGroup(a) === 'compiler').length,
+    openharmony: dbAgents.filter(a => getAgentGroup(a) === 'openharmony').length,
   };
 
   const teamLabels: Record<string, string> = {
@@ -387,14 +379,20 @@ export default function AgentsManager({
     red: '防守方，负责实现、修复与稳定推进',
     judge: '裁判席，负责裁定、复核与形成结论',
   };
-  const teamPanelClass: Record<DisplayTeam, string> = {
-    'black-gold': 'border-amber-500/25 bg-[linear-gradient(180deg,rgba(245,158,11,0.06),rgba(245,158,11,0.02))]',
-    blue: 'border-sky-500/25 bg-[linear-gradient(180deg,rgba(14,165,233,0.06),rgba(14,165,233,0.02))]',
-    red: 'border-rose-500/25 bg-[linear-gradient(180deg,rgba(244,63,94,0.06),rgba(244,63,94,0.02))]',
-    judge: 'border-yellow-500/25 bg-[linear-gradient(180deg,rgba(234,179,8,0.06),rgba(234,179,8,0.02))]',
+  const teamDotClass: Record<DisplayTeam, string> = {
+    'black-gold': 'bg-amber-500',
+    blue: 'bg-sky-500',
+    red: 'bg-rose-500',
+    judge: 'bg-yellow-500',
+  };
+  const teamTone: Record<DisplayTeam, 'warning' | 'info' | 'danger' | 'neutral'> = {
+    'black-gold': 'warning',
+    blue: 'info',
+    red: 'danger',
+    judge: 'neutral',
   };
   const groupLabels: Record<string, string> = { all: '全部', common: '通用', compiler: '编译器', openharmony: '仓颉' };
-  const supervisorAgents = agents.filter((agent) => agent.roleType === 'supervisor');
+  const supervisorAgents = dbAgents.filter((agent) => agent.roleType === 'supervisor');
   const allFilteredSelected = filteredAgents.length > 0 && filteredAgents.every((agent) => selectedAgentNames.includes(agent.name));
   const hasPartialFilteredSelection = filteredAgents.some((agent) => selectedAgentNames.includes(agent.name));
 
@@ -427,9 +425,103 @@ export default function AgentsManager({
     }
     return badges;
   };
+
+  const agentTableColumns: DataTableColumn<AgentConfig>[] = [
+    {
+      id: 'agent',
+      header: '角色',
+      width: '32%',
+      render: (agent) => {
+        const { avatarSrc } = getAgentRuntimeMeta(agent);
+        return (
+          <div className="flex min-w-[220px] items-center gap-3">
+            <SpriteAvatar
+              avatar={avatarSrc}
+              seed={agent.name}
+              category="agent-default"
+              alt={agent.name}
+              fallback={agent.name.slice(0, 2).toUpperCase()}
+              className="h-11 w-11 ring-1 ring-border/60"
+            />
+            <div className="min-w-0">
+              <div className="truncate font-medium">{agent.name}</div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {agent.roleType === 'supervisor' ? <StatusPill tone="warning">Supervisor</StatusPill> : null}
+                {getWorkspaceProfileBadges(agent).map((badge) => (
+                  <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
+                    {badge.label}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'team',
+      header: '阵营',
+      accessor: (agent) => teamLabels[agent.team] || agent.team || '未分配',
+      priority: 2,
+    },
+    {
+      id: 'category',
+      header: '分类',
+      accessor: (agent) => agent.category || '未分类',
+      priority: 2,
+    },
+    {
+      id: 'temperature',
+      header: '温度',
+      accessor: (agent) => agent.temperature !== undefined ? agent.temperature : '默认',
+      priority: 3,
+    },
+    {
+      id: 'tags',
+      header: '标签',
+      priority: 3,
+      render: (agent) => (
+        <div className="flex min-w-[180px] flex-wrap gap-1.5">
+          {(agent.tags || []).slice(0, 4).map((tag) => (
+            <Badge key={tag} variant="outline">{tag}</Badge>
+          ))}
+          {(agent.tags || []).length > 4 ? <Badge variant="outline">+{(agent.tags || []).length - 4}</Badge> : null}
+          {(agent.tags || []).length === 0 ? <span className="text-sm text-muted-foreground">无</span> : null}
+        </div>
+      ),
+    },
+  ];
+  const visibleAgentTableColumns = agentTableColumns.filter((column) => visibleAgentColumnIds.includes(column.id));
+
+  const getAgentRowActions = (agent: AgentConfig): ActionMenuGroup[] => [
+    {
+      actions: [
+        {
+          id: 'edit',
+          label: '编辑',
+          icon: <Edit className="h-4 w-4" />,
+          primary: true,
+          onSelect: () => handleEditAgent(agent),
+        },
+        {
+          id: 'ai-revise',
+          label: 'AI 修订',
+          icon: <Sparkles className="h-4 w-4" />,
+          onSelect: () => handleReviseAgent(agent),
+        },
+        {
+          id: 'delete',
+          label: '删除',
+          icon: <Trash2 className="h-4 w-4" />,
+          destructive: true,
+          onSelect: () => handleDeleteAgent(agent.name),
+        },
+      ],
+    },
+  ];
   const { isDashboardShell } = useDashboardShellHeader({
     title: 'Agent 管理',
-    subtitle: `管理 ${agents.length} 个可调度角色与运行时 Agent 编队`,
+    subtitle: `管理 ${dbAgents.length} 个可调度角色与 Agent 编队`,
     actions: (
       <>
         <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
@@ -464,7 +556,7 @@ export default function AgentsManager({
         </Button>
       </>
     ),
-  }, [agents.length, runtimeAgentsDir, archiveImporting, archiveExporting, selectedAgentNames.length]);
+  }, [dbAgents.length, runtimeAgentsDir, archiveImporting, archiveExporting, selectedAgentNames.length]);
 
   return (
     <div
@@ -478,7 +570,7 @@ export default function AgentsManager({
           open={workspaceOpen}
           onOpenChange={setWorkspaceOpen}
           workspacePath={runtimeAgentsDir}
-          title="Runtime Agents"
+          title="Agent 配置目录"
         />
       ) : null}
       <input
@@ -489,40 +581,47 @@ export default function AgentsManager({
         onChange={handleImportAgentZip}
       />
       {!embedded && !isDashboardShell ? (
-        <div className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="sm" asChild>
+        <PageHeader
+          className="sticky top-0 z-20 bg-card/95 supports-[backdrop-filter]:bg-card/90"
+          title="Agent 管理"
+          subtitle={`管理 ${dbAgents.length} 个可调度角色与 Agent 编队`}
+          status={<StatusPill tone={agentError ? 'danger' : 'accent'}>{agentError ? '加载异常' : `${filteredAgents.length} 可见`}</StatusPill>}
+          leading={(
+            <Button variant="ghost" size="icon" asChild>
               <Link href={returnTarget.href} aria-label={returnTarget.label} title={returnTarget.label}>
                 <span className="material-symbols-outlined text-lg">arrow_back</span>
               </Link>
             </Button>
-            <h1 className="text-lg font-semibold">Agent 管理</h1>
-          </div>
-          <div className="flex items-center gap-2" data-tour-step-id="agent-create">
-            <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
-              <FolderOpen className="w-4 h-4 mr-1" />
-              打开工作目录
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => archiveInputRef.current?.click()}
-              disabled={archiveImporting}
-            >
-              <Upload className="w-4 h-4 mr-1" />
-              {archiveImporting ? '导入中...' : '导入 ZIP'}
-            </Button>
-            <Button size="sm" onClick={() => { setAiRevisionAgent(null); setShowAICreateModal(true); }} variant="outline">
-              <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
-              AI 创建
-            </Button>
-            <Button size="sm" onClick={handleCreateAgent}>
-              <span className="material-symbols-outlined text-sm mr-1">add</span>
+          )}
+          secondaryActions={(
+            <>
+              <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                工作目录
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => archiveInputRef.current?.click()}
+                disabled={archiveImporting}
+              >
+                <Upload className={cn('mr-2 h-4 w-4', archiveImporting && 'animate-bounce')} />
+                {archiveImporting ? '导入中' : '导入 ZIP'}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => { setAiRevisionAgent(null); setShowAICreateModal(true); }}>
+                <span className="material-symbols-outlined mr-1 text-sm">auto_awesome</span>
+                AI 创建
+              </Button>
+              <ThemeToggle />
+            </>
+          )}
+          primaryAction={(
+            <Button size="sm" variant="outline" onClick={handleCreateAgent} data-tour-step-id="agent-create">
+              <span className="material-symbols-outlined mr-1 text-sm">add</span>
               新建 Agent
             </Button>
-            <ThemeToggle />
-          </div>
-        </div>
+          )}
+        />
       ) : null}
 
       <div
@@ -532,358 +631,229 @@ export default function AgentsManager({
           embedded && 'min-h-0 flex-1 gap-3 overflow-auto px-4 py-4 pb-24',
         )}
       >
-        {!embedded ? (
-        <section data-tour-step-id="agent-hall" className="relative overflow-hidden rounded-[32px] border border-white/10 bg-[linear-gradient(135deg,rgba(8,11,21,0.98),rgba(19,19,20,0.94))] px-8 py-8 text-white shadow-[0_32px_120px_rgba(2,6,23,0.28)]">
-          <div className="absolute inset-y-0 right-0 w-[32rem] bg-[radial-gradient(circle_at_center,_rgba(251,191,36,0.18),_transparent_52%)]" />
-          <div className="absolute -left-12 top-10 h-48 w-48 rounded-full bg-sky-400/10 blur-3xl" />
-          <div className="absolute bottom-0 right-24 h-56 w-56 rounded-full bg-rose-500/10 blur-3xl" />
-          <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent_0,rgba(255,255,255,0.04)_49%,transparent_100%)] opacity-50" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-tour-step-id="agent-hall">
+          <DataCard>
+            <DataCardTitle>角色总数</DataCardTitle>
+            <div className="mt-3 text-2xl font-semibold">{dbAgents.length}</div>
+            <DataCardDescription>全部可调度 Agent</DataCardDescription>
+          </DataCard>
+          <DataCard>
+            <DataCardTitle>当前筛选</DataCardTitle>
+            <div className="mt-3 text-2xl font-semibold">{filteredAgents.length}</div>
+            <DataCardDescription>可直接编辑、导出或批量整理</DataCardDescription>
+          </DataCard>
+          <DataCard>
+            <DataCardTitle>Supervisor</DataCardTitle>
+            <div className="mt-3 text-2xl font-semibold">{supervisorAgents.length}</div>
+            <DataCardDescription>承担统筹、复核与阶段指挥</DataCardDescription>
+          </DataCard>
+          <DataCard>
+            <DataCardTitle>工作目录</DataCardTitle>
+            <DataCardDescription>{runtimeAgentsDir ? 'Agent 配置目录已连接' : '暂无可打开目录'}</DataCardDescription>
+            <DataCardActions className="mt-3 justify-start">
+              <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                打开
+              </Button>
+            </DataCardActions>
+          </DataCard>
+        </div>
 
-          <div className="relative flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
-            <div className="max-w-3xl space-y-4">
-              <Badge className="border-amber-300/30 bg-amber-400/10 px-3 py-1 text-amber-100">
-                角色大厅
-              </Badge>
-              <div className="space-y-3">
-                <h1 className="text-3xl font-semibold tracking-tight md:text-5xl">像选角色一样管理你的 Agent 编队</h1>
-                <p className="max-w-2xl text-sm leading-7 text-white/72 md:text-base">
-                  这里不再只是配置列表。每个 Agent 都应该像可被调度、被记住、被协作的角色实体，拥有稳定头像、鲜明阵营和可感知的职责定位。
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
+        <PageToolbar
+          className={cn(
+            'sticky z-40 rounded-xl border border-border bg-card px-4 shadow-none',
+            embedded ? 'top-0' : 'top-[4.5rem]',
+          )}
+          search={(
+            <div className="flex items-center gap-2">
+              <Input
+                placeholder="搜索 Agent..."
+                value={embeddedSearchDraft}
+                onChange={(e) => handleSearchInputChange(e.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    handleApplySearch();
+                  }
+                }}
+                className="h-10"
+              />
+              <Button size="sm" variant="outline" onClick={handleApplySearch} className="h-10 shrink-0">
+                <Search className="mr-2 h-4 w-4" />
+                搜索
+              </Button>
+            </div>
+          )}
+          filters={(
+            <>
+              <div className="flex flex-wrap items-center gap-2">
                 {(['all', 'common', 'compiler', 'openharmony'] as const).map((group) => (
                   <Button
                     key={group}
                     size="sm"
-                    variant={selectedGroup === group ? 'default' : 'secondary'}
-                    className={selectedGroup === group ? 'bg-white text-slate-950 hover:bg-white/90' : 'border-white/10 bg-white/10 text-white hover:bg-white/15'}
+                    variant={selectedGroup === group ? 'secondary' : 'outline'}
                     onClick={() => setSelectedGroup(group)}
                   >
                     {groupLabels[group]}
-                    <span className="ml-2 rounded-full bg-black/20 px-1.5 py-0.5 text-[11px]">
-                      {groupCounts[group]}
-                    </span>
+                    <span className="ml-2 text-xs text-muted-foreground">{groupCounts[group]}</span>
                   </Button>
                 ))}
               </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 xl:w-[34rem] xl:grid-cols-3">
-              {[
-                { label: '角色总数', value: agents.length, tone: 'from-white/18 to-white/5' },
-                { label: '当前筛选', value: filteredAgents.length, tone: 'from-sky-400/22 to-sky-400/5' },
-                { label: '指挥官', value: teamCounts['black-gold'], tone: 'from-amber-400/22 to-amber-400/5' },
-              ].map((item) => (
-                <div key={item.label} className={`rounded-2xl border border-white/10 bg-gradient-to-br ${item.tone} px-4 py-4 backdrop-blur`}>
-                  <div className="text-xs uppercase tracking-[0.24em] text-white/50">{item.label}</div>
-                  <div className="mt-3 text-3xl font-semibold">{item.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-        ) : null}
-
-        {!embedded ? (
-        <section
-          className={cn(
-            'z-10 rounded-[28px] border border-border/70 bg-card/85 p-5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/75',
-            'sticky top-[4.5rem]',
-          )}
-        >
-          <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-            <div className="rounded-[26px] border border-border/60 bg-background/80 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold">推荐入口链路</div>
-                  <p className="mt-1 text-xs leading-6 text-muted-foreground">
-                    先明确角色定位，再决定是进入首页协作、继续精修配置，还是把它编入 workflow。
-                  </p>
-                </div>
-                <Badge variant="outline">5.1</Badge>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-auto min-h-[124px] whitespace-normal rounded-[24px] border border-border/60 bg-muted/30 p-4 text-left hover:bg-muted/60 hover:text-foreground"
-                  onClick={() => { setAiRevisionAgent(null); setShowAICreateModal(true); }}
-                >
-                  <div className="w-full break-words">
-                    <div className="text-sm font-medium">AI 创建 Agent</div>
-                    <div className="mt-2 text-xs leading-6 text-muted-foreground">从职责和风格出发生成角色草案，再继续精修。</div>
-                  </div>
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-auto min-h-[124px] whitespace-normal rounded-[24px] border border-border/60 bg-muted/30 p-4 text-left hover:bg-muted/60 hover:text-foreground"
-                  onClick={handleCreateAgent}
-                >
-                  <div className="w-full break-words">
-                    <div className="text-sm font-medium">手动建模</div>
-                    <div className="mt-2 text-xs leading-6 text-muted-foreground">直接配置模型、系统提示词和常驻对话属性。</div>
-                  </div>
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-auto min-h-[124px] whitespace-normal rounded-[24px] border border-border/60 bg-muted/30 p-4 text-left hover:bg-muted/60 hover:text-foreground"
-                  onClick={() => setWorkspaceOpen(true)}
-                  disabled={!runtimeAgentsDir}
-                >
-                  <div className="w-full break-words">
-                    <div className="text-sm font-medium">查看运行目录</div>
-                    <div className="mt-2 text-xs leading-6 text-muted-foreground">直接检查 runtime agents 文件结构和落地结果。</div>
-                  </div>
-                </Button>
-              </div>
-            </div>
-
-            <div className="rounded-[26px] border border-border/60 bg-background/80 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold">编队总览</div>
-                  <div className="mt-1 text-xs text-muted-foreground">当前大厅中的角色数量、席位分布与管理视图概览。</div>
-                </div>
-                <Badge variant="secondary">{agents.length}</Badge>
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <div className="rounded-[24px] border border-emerald-500/20 bg-emerald-500/5 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-600">可管理角色</div>
-                  <div className="mt-2 text-2xl font-semibold">{filteredAgents.length}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">当前筛选结果可直接编辑、删除或批量整理</div>
-                </div>
-                <div className="rounded-[24px] border border-amber-500/20 bg-amber-500/5 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-amber-600">Supervisor</div>
-                  <div className="mt-2 text-2xl font-semibold">{supervisorAgents.length}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">负责设计收口、审阅、修订和阶段指挥</div>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-5 gap-2">
-                {TEAM_ORDER.map((team) => (
-                  <div key={team} className="rounded-[20px] border border-border/60 bg-muted/30 px-3 py-3 text-center">
-                    <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{teamLabels[team]}</div>
-                    <div className="mt-2 text-xl font-semibold">{teamCounts[team]}</div>
-                  </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {(['all', 'black-gold', 'blue', 'red', 'judge'] as const).map((team) => (
+                  <Button
+                    key={team}
+                    size="sm"
+                    variant={selectedTeam === team ? 'secondary' : 'outline'}
+                    onClick={() => setSelectedTeam(team)}
+                  >
+                    {team === 'all' ? '全部阵营' : teamLabels[team]}
+                  </Button>
                 ))}
               </div>
+            </>
+          )}
+          sort={(
+            <div className="inline-flex items-center gap-2">
+              <select
+                className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
+                value={agentSortKey}
+                onChange={(event) => setAgentSortKey(event.target.value as AgentSortKey)}
+                aria-label="Agent 排序字段"
+              >
+                <option value="name">名称</option>
+                <option value="team">阵营</option>
+                <option value="category">分类</option>
+                <option value="temperature">温度</option>
+              </select>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9"
+                onClick={() => setAgentSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+              >
+                {agentSortDirection === 'asc' ? '升序' : '降序'}
+              </Button>
             </div>
-          </div>
-        </section>
-        ) : null}
-
-        {embedded ? (
-          <>
-            <section className="sticky top-0 z-20 rounded-[24px] border border-border/70 bg-card/95 p-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/95">
-              <div className="flex items-center gap-3">
-                <Input
-                  placeholder="搜索 Agent..."
-                  value={embeddedSearchDraft}
-                  onChange={(e) => handleSearchInputChange(e.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      handleApplySearch();
-                    }
-                  }}
-                  className="h-10 min-w-0 flex-1"
-                />
+          )}
+          viewToggle={(
+            <div className="inline-flex rounded-lg border border-border bg-background p-1">
+              <Button
+                size="sm"
+                variant={viewMode === 'gallery' ? 'secondary' : 'ghost'}
+                className="h-8 px-3"
+                onClick={() => setViewMode('gallery')}
+              >
+                角色墙
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'secondary' : 'ghost'}
+                className="h-8 px-3"
+                onClick={() => setViewMode('table')}
+              >
+                表格
+              </Button>
+            </div>
+          )}
+          refresh={(
+            <Button size="icon" variant="outline" onClick={() => void refreshAgents()} disabled={agentsQuery.isFetching} title="刷新 Agent">
+              <RefreshCw className={cn('h-4 w-4', agentsQuery.isFetching && 'animate-spin')} />
+            </Button>
+          )}
+          actions={(
+            <>
+              <ActionMenu
+                triggerLabel="Agent 列显示"
+                trigger={(
+                  <Button size="icon" variant="outline" title="列显示" onClick={(event) => event.stopPropagation()}>
+                    <Columns3 className="h-4 w-4" />
+                  </Button>
+                )}
+                actions={[{
+                  label: '列显示',
+                  actions: agentTableColumns.map((column) => ({
+                    id: column.id,
+                    label: visibleAgentColumnIds.includes(column.id) ? `隐藏 ${String(column.header)}` : `显示 ${String(column.header)}`,
+                    disabled: column.id === 'agent',
+                    disabledReason: '主列必须显示',
+                    onSelect: () => {
+                      if (column.id === 'agent') return;
+                      setVisibleAgentColumnIds((prev) => (
+                        prev.includes(column.id)
+                          ? prev.filter((id) => id !== column.id)
+                          : [...prev, column.id]
+                      ));
+                    },
+                  })),
+                }]}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportAgents}
+                disabled={archiveExporting || selectedAgentNames.length === 0}
+              >
+                <Download className={cn('mr-2 h-4 w-4', archiveExporting && 'animate-bounce')} />
+                {archiveExporting ? '导出中' : '导出 ZIP'}
+              </Button>
+            </>
+          )}
+          activeFilters={(
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">分类</span>
                 <Button
                   size="sm"
-                  onClick={handleApplySearch}
-                  className="h-10 shrink-0"
+                  variant={selectedCategory === 'all' ? 'secondary' : 'outline'}
+                  onClick={() => setSelectedCategory('all')}
                 >
-                  <Search className="mr-1 h-4 w-4" />
-                  搜索
+                  全部分类
                 </Button>
-              </div>
-            </section>
-
-            <section className="rounded-[28px] border border-border/70 bg-card/70 p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="min-w-0 flex-1 rounded-[24px] border border-border/60 bg-background/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm text-muted-foreground">标签筛选</span>
-                    {allTags.length > 0 ? (
-                      allTags.map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant={selectedTags.includes(tag) ? 'default' : 'outline'}
-                          className="shrink-0 cursor-pointer whitespace-nowrap px-3 py-1"
-                          onClick={() => toggleTag(tag)}
-                        >
-                          {tag}
-                        </Badge>
-                      ))
-                    ) : (
-                      <span className="shrink-0 text-xs text-muted-foreground">暂无标签</span>
-                    )}
-                  </div>
-                </div>
-                <div className="inline-flex shrink-0 rounded-full border border-border/60 bg-muted/40 p-1">
-                  <Button
-                    size="sm"
-                    variant={viewMode === 'gallery' ? 'default' : 'ghost'}
-                    className="h-8 rounded-full px-3"
-                    onClick={() => setViewMode('gallery')}
-                  >
-                    <span className="material-symbols-outlined text-sm">grid_view</span>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={viewMode === 'table' ? 'default' : 'ghost'}
-                    className="h-8 rounded-full px-3"
-                    onClick={() => setViewMode('table')}
-                  >
-                    <span className="material-symbols-outlined text-sm">table_rows</span>
-                  </Button>
-                </div>
-              </div>
-            </section>
-          </>
-        ) : null}
-
-        {!embedded ? (
-          <>
-            <section
-              className="sticky top-[4.5rem] z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
-            >
-              <div>
-                <div className="relative rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
-                <div className="pointer-events-none absolute inset-0 rounded-[24px] bg-[linear-gradient(180deg,rgba(255,255,255,0.06),transparent_55%)]" />
-                <div className="relative flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">
-                  <div className="flex w-full max-w-md items-center gap-2">
-                    <Input
-                      placeholder="搜索 Agent..."
-                      value={embeddedSearchDraft}
-                      onChange={(e) => handleSearchInputChange(e.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          handleApplySearch();
-                        }
-                      }}
-                      className="h-11 w-full"
-                    />
-                    <Button
-                      size="sm"
-                      onClick={handleApplySearch}
-                      className="h-11 shrink-0"
-                    >
-                      <Search className="mr-1 h-4 w-4" />
-                      搜索
-                    </Button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(['all', 'blue', 'red', 'judge'] as const).map((team) => (
-                      <Button
-                        key={team}
-                        size="sm"
-                        variant={selectedTeam === team ? 'default' : 'outline'}
-                        className={cn(
-                          'rounded-full',
-                          selectedTeam === team && team !== 'all' && team === 'blue' && 'bg-sky-500 text-slate-950 hover:bg-sky-400',
-                          selectedTeam === team && team !== 'all' && team === 'red' && 'bg-rose-500 text-white hover:bg-rose-400',
-                          selectedTeam === team && team !== 'all' && team === 'judge' && 'bg-yellow-400 text-slate-950 hover:bg-yellow-300'
-                        )}
-                        onClick={() => setSelectedTeam(team)}
-                      >
-                        {team === 'all' ? '全部' : teamLabels[team]}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  当前显示 {filteredAgents.length} / {agents.length} 名角色
-                </div>
-              </div>
-              </div>
-              </div>
-            </section>
-          </>
-        ) : null}
-
-        {!embedded ? (
-        <section className="rounded-[28px] border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-              <div className="flex-1 rounded-[24px] border border-border/60 bg-background/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="flex flex-col gap-3">
-                  {allTags.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm text-muted-foreground">标签筛选</span>
-                      {allTags.map(tag => (
-                        <Badge
-                          key={tag}
-                          variant={selectedTags.includes(tag) ? 'default' : 'outline'}
-                          className="cursor-pointer px-3 py-1"
-                          onClick={() => toggleTag(tag)}
-                        >
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="rounded-[24px] border border-border/60 bg-background/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:min-w-[320px]">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs uppercase tracking-[0.24em] text-muted-foreground">编队筛选</div>
-                  <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
-                    <Button
-                      size="sm"
-                      variant={viewMode === 'gallery' ? 'default' : 'ghost'}
-                      className="h-8 rounded-full px-3"
-                      onClick={() => setViewMode('gallery')}
-                    >
-                      角色墙
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={viewMode === 'table' ? 'default' : 'ghost'}
-                      className="h-8 rounded-full px-3"
-                      onClick={() => setViewMode('table')}
-                    >
-                      表格
-                    </Button>
-                  </div>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
                 {CATEGORIES.map((cat) => (
                   <Button
                     key={cat}
                     size="sm"
-                    variant={selectedCategory === cat ? 'default' : 'outline'}
-                    className="rounded-full"
+                    variant={selectedCategory === cat ? 'secondary' : 'outline'}
                     onClick={() => setSelectedCategory(selectedCategory === cat ? 'all' : cat)}
                   >
                     {cat}
                   </Button>
                 ))}
-                <Button
-                  size="sm"
-                  variant={selectedCategory === 'all' ? 'default' : 'outline'}
-                  className="rounded-full"
-                  onClick={() => setSelectedCategory('all')}
-                >
-                  全部分类
-                </Button>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">标签</span>
+                {allTags.length > 0 ? (
+                  allTags.map((tag) => (
+                    <Badge
+                      key={tag}
+                      variant={selectedTags.includes(tag) ? 'secondary' : 'outline'}
+                      className="cursor-pointer px-3 py-1"
+                      onClick={() => toggleTag(tag)}
+                    >
+                      {tag}
+                    </Badge>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted-foreground">暂无标签</span>
+                )}
               </div>
-            </div>
-          </div>
-        </section>
-        ) : null}
+            </>
+          )}
+        />
 
         <section className={cn('flex-1', embedded ? 'pb-20' : 'pb-28')}>
           <div className="space-y-10">
             {loading ? (
               <div className="flex items-center justify-center h-64">
-                <ClipLoader color="hsl(var(--primary))" size={40} />
+                <Loader2 className="h-10 w-10 animate-spin text-primary" aria-label="加载中" />
               </div>
-            ) : filteredAgents.length === 0 ? (
+            ) : agentError ? (
+              <div className="flex flex-col items-center justify-center h-64 gap-4">
+                <p className="text-destructive">{agentError || '获取 Agent 列表失败'}</p>
+                <Button onClick={() => void agentsQuery.refetch()}>重试</Button>
+              </div>
+            ) : sortedAgents.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
                 <span className="material-symbols-outlined text-5xl mb-4">smart_toy</span>
                 <p>没有找到匹配的 Agent</p>
@@ -893,40 +863,34 @@ export default function AgentsManager({
                 <div className="space-y-8">
                   {TEAM_ORDER.map(team => (
                     groupedAgents[team].length > 0 && (
-                      <div key={team} className={cn('relative overflow-hidden rounded-xl border p-4 shadow-sm', teamPanelClass[team])}>
+                      <div key={team} className="relative overflow-hidden rounded-xl border border-border bg-card p-4 shadow-none">
                         <div className="relative flex flex-wrap items-end justify-between gap-3">
                           <div>
                             <div className="flex items-center gap-3">
-                              <span className={`h-3 w-3 rounded-full ${
-                                team === 'blue' ? 'bg-blue-500' :
-                                team === 'red' ? 'bg-red-500' :
-                                team === 'judge' ? 'bg-yellow-400' :
-                                team === 'black-gold' ? 'bg-amber-400' :
-                                'bg-stone-200'
-                              }`} />
-                              <h2 className="text-2xl font-semibold">{teamLabels[team]}</h2>
+                              <span className={cn('h-2.5 w-2.5 rounded-full', teamDotClass[team])} />
+                              <h2 className="text-lg font-semibold">{teamLabels[team]}</h2>
                               <span className="text-sm text-muted-foreground">({groupedAgents[team].length})</span>
                             </div>
                             <p className="mt-1 text-sm text-muted-foreground">{teamDescriptions[team]}</p>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="px-3 py-1 text-xs">
-                              阵营名册
-                            </Badge>
-                            <Badge variant="outline" className="px-3 py-1 text-xs">
+                            <StatusPill tone={teamTone[team]}>
                               {groupedAgents[team].length} 名角色
-                            </Badge>
+                            </StatusPill>
                           </div>
                         </div>
                         <div className="relative mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                           {groupedAgents[team].map(agent => {
                             const isSelected = selectedAgentNames.includes(agent.name);
+                            const { avatarSrc } = getAgentRuntimeMeta(agent);
                             return (
-                              <div
+                              <DataCard
                                 key={agent.name}
-                                className="group relative min-w-0"
+                                selected={isSelected}
+                                className="group relative min-w-0 cursor-pointer"
+                                onClick={() => handleEditAgent(agent)}
                               >
-                                <div className="absolute right-3 top-3 z-20 rounded-md border border-border bg-background/95 p-1.5 shadow-[0_2px_10px_rgba(0,0,0,0.25)] opacity-40 group-hover:opacity-100 transition-opacity duration-200 hover:opacity-100">
+                                <div className="absolute right-3 top-3 z-10 rounded-md border border-border bg-background p-1.5 opacity-70 transition-opacity duration-150 group-hover:opacity-100">
                                   <Checkbox
                                     checked={isSelected}
                                     onCheckedChange={() => toggleAgentSelection(agent.name)}
@@ -935,67 +899,73 @@ export default function AgentsManager({
                                     className="h-4 w-4 rounded-[4px]"
                                   />
                                 </div>
-                                <AgentHeroCard
-                                  agent={agent as any}
-                                  className="h-full"
-                                  selected={isSelected}
-                                  meta={
-                                    <div className="space-y-1">
-                                      <div className="truncate">{agent.temperature !== undefined ? `温度 ${agent.temperature}` : '默认温度'}</div>
-                                      <div className="truncate text-muted-foreground">{agent.category || '未分类'} · {(agent.tags || []).length} 个标签</div>
-                                      {getWorkspaceProfileBadges(agent).length > 0 ? (
-                                        <div className="flex flex-wrap gap-1 pt-1">
-                                          {getWorkspaceProfileBadges(agent).map((badge) => (
-                                            <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
-                                              {badge.label}
-                                            </Badge>
-                                          ))}
-                                        </div>
-                                      ) : null}
+                                <DataCardHeader className="pr-9">
+                                  <div className="flex min-w-0 items-center gap-3">
+                                    <SpriteAvatar
+                                      avatar={avatarSrc}
+                                      seed={agent.name}
+                                      category="agent-default"
+                                      alt={agent.name}
+                                      fallback={agent.name.slice(0, 2).toUpperCase()}
+                                      className="h-11 w-11 ring-1 ring-border/60"
+                                    />
+                                    <div className="min-w-0">
+                                      <DataCardTitle>{agent.name}</DataCardTitle>
+                                      <DataCardDescription className="truncate">
+                                        {agent.category || '未分类'} · {agent.temperature !== undefined ? `温度 ${agent.temperature}` : '默认温度'}
+                                      </DataCardDescription>
                                     </div>
-                                  }
-                                  actions={
-                                    <>
-                                      <Button
-                                        size="sm"
-                                        variant="secondary"
-                                        className="h-7 rounded-full border border-border/60 bg-background px-2.5 text-[11px] text-foreground hover:bg-muted"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          handleEditAgent(agent);
-                                        }}
-                                      >
-                                        <span className="material-symbols-outlined text-sm mr-1">edit</span>
-                                        编辑
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="secondary"
-                                        className="h-7 rounded-full border border-border/60 bg-background px-2.5 text-[11px] text-foreground hover:bg-muted"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          handleReviseAgent(agent);
-                                        }}
-                                      >
-                                        <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
-                                        AI 修订
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="destructive"
-                                        className="h-7 rounded-full px-2.5 text-[11px]"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          handleDeleteAgent(agent.name);
-                                        }}
-                                      >
-                                        <span className="material-symbols-outlined text-sm mr-1">delete</span>
-                                        删除
-                                      </Button>
-                                    </>
-                                  }
-                                />
-                              </div>
+                                  </div>
+                                </DataCardHeader>
+                                <DataCardMeta>
+                                  {agent.roleType === 'supervisor' ? <StatusPill tone="warning">Supervisor</StatusPill> : null}
+                                  <StatusPill tone={teamTone[team]}>{teamLabels[team]}</StatusPill>
+                                  {(agent.tags || []).slice(0, 3).map((tag) => (
+                                    <Badge key={tag} variant="outline">{tag}</Badge>
+                                  ))}
+                                  {(agent.tags || []).length > 3 ? (
+                                    <Badge variant="outline">+{(agent.tags || []).length - 3}</Badge>
+                                  ) : null}
+                                  {getWorkspaceProfileBadges(agent).map((badge) => (
+                                    <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
+                                      {badge.label}
+                                    </Badge>
+                                  ))}
+                                </DataCardMeta>
+                                <DataCardActions>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handleEditAgent(agent);
+                                    }}
+                                  >
+                                    编辑
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handleReviseAgent(agent);
+                                    }}
+                                  >
+                                    AI 修订
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="text-destructive hover:text-destructive"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handleDeleteAgent(agent.name);
+                                    }}
+                                  >
+                                    删除
+                                  </Button>
+                                </DataCardActions>
+                              </DataCard>
                             );
                           })}
                         </div>
@@ -1004,157 +974,80 @@ export default function AgentsManager({
                   ))}
                 </div>
               ) : (
-                <div className="overflow-hidden rounded-[28px] border border-border/70 bg-card/80 shadow-sm">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12">
-                          <Checkbox
-                            checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
-                            onCheckedChange={toggleSelectAllFiltered}
-                          />
-                        </TableHead>
-                        <TableHead>角色</TableHead>
-                        <TableHead>阵营</TableHead>
-                        <TableHead>分类</TableHead>
-                        <TableHead>温度</TableHead>
-                        <TableHead>标签</TableHead>
-                        <TableHead className="text-right">操作</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredAgents.map((agent) => {
-                        const { avatarSrc } = getAgentRuntimeMeta(agent);
-                        return (
-                          <TableRow key={agent.name}>
-                            <TableCell>
-                              <Checkbox
-                                checked={selectedAgentNames.includes(agent.name)}
-                                onCheckedChange={() => toggleAgentSelection(agent.name)}
-                              />
-                            </TableCell>
-                            <TableCell className="min-w-[220px]">
-                              <div className="flex items-center gap-3">
-                                <SpriteAvatar
-                                  avatar={avatarSrc}
-                                  seed={agent.name}
-                                  category="agent-default"
-                                  alt={agent.name}
-                                  fallback={agent.name.slice(0, 2).toUpperCase()}
-                                  className="h-11 w-11 ring-1 ring-border/60"
-                                />
-                                <div className="min-w-0">
-                                  <div className="truncate font-medium">{agent.name}</div>
-                                  <div className="mt-1 flex flex-wrap gap-1.5">
-                                    {agent.roleType === 'supervisor' ? (
-                                      <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-200">Supervisor</Badge>
-                                    ) : null}
-                                    {getWorkspaceProfileBadges(agent).map((badge) => (
-                                      <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
-                                        {badge.label}
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            </TableCell>
-                            <TableCell>{teamLabels[agent.team]}</TableCell>
-                            <TableCell>{agent.category || '未分类'}</TableCell>
-                            <TableCell className="min-w-[120px]">
-                              <div className="text-sm">
-                                {agent.temperature !== undefined ? agent.temperature : '默认'}
-                              </div>
-                            </TableCell>
-                            <TableCell className="min-w-[220px]">
-                              <div className="flex flex-wrap gap-1.5">
-                                {(agent.tags || []).slice(0, 4).map((tag) => (
-                                  <Badge key={tag} variant="outline">{tag}</Badge>
-                                ))}
-                                {(agent.tags || []).length === 0 ? (
-                                  <span className="text-sm text-muted-foreground">无</span>
-                                ) : null}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex justify-end gap-2">
-                                <Button size="sm" variant="secondary" onClick={() => handleEditAgent(agent)}>
-                                  编辑
-                                </Button>
-                                <Button size="sm" variant="secondary" onClick={() => handleReviseAgent(agent)}>
-                                  AI 修订
-                                </Button>
-                                <Button size="sm" variant="destructive" onClick={() => handleDeleteAgent(agent.name)}>
-                                  删除
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
+                <DataTable
+                  aria-label="Agent 列表"
+                  columns={visibleAgentTableColumns}
+                  rows={sortedAgents}
+                  rowKey="name"
+                  density="comfortable"
+                  onRowClick={handleEditAgent}
+                  rowActions={(agent) => getAgentRowActions(agent)}
+                  selection={{
+                    selectedKeys: selectedAgentNames,
+                    onSelectedKeysChange: (keys) => setSelectedAgentNames(keys.map(String)),
+                    ariaLabel: allFilteredSelected ? '取消全选 Agent' : '选择全部 Agent',
+                  }}
+                  emptyState={{
+                    title: '没有找到匹配的 Agent',
+                    description: '尝试调整搜索、阵营、分类或标签过滤条件。',
+                  }}
+                />
               )
             )}
           </div>
         </section>
 
         {filteredAgents.length > 0 ? (
-          <div
+          <BulkActionBar
+            selectedCount={selectedAgentNames.length}
+            onClear={() => setSelectedAgentNames([])}
             className={cn(
-              'pointer-events-none left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4',
-              embedded ? 'absolute bottom-4' : 'fixed bottom-6',
+              'bg-card/95',
+              embedded && 'absolute bottom-4',
             )}
-          >
-            <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
-              <div
-                className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
-                role="button"
-                tabIndex={0}
-                onClick={toggleSelectAllFilteredByContainer}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    toggleSelectAllFilteredByContainer();
-                  }
-                }}
-              >
-                <Checkbox
-                  checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
-                  onCheckedChange={toggleSelectAllFiltered}
-                  className="mr-2 h-4 w-4 border-border bg-background"
-                  aria-label={allFilteredSelected ? '取消全选' : '选择全部'}
-                />
-                {allFilteredSelected ? '取消全选' : '选择全部'}
-              </div>
-              <div className="px-3 text-sm font-medium text-foreground/80">
-                已选 {selectedAgentNames.length} 项
-              </div>
-              {selectedAgentNames.length > 0 ? (
+            actions={(
+              <>
+                <div
+                  className="flex cursor-pointer items-center rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  role="button"
+                  tabIndex={0}
+                  onClick={toggleSelectAllFilteredByContainer}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      toggleSelectAllFilteredByContainer();
+                    }
+                  }}
+                >
+                  <Checkbox
+                    checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
+                    onCheckedChange={toggleSelectAllFiltered}
+                    className="mr-2 h-4 w-4 border-border bg-background"
+                    aria-label={allFilteredSelected ? '取消全选' : '选择全部'}
+                  />
+                  {allFilteredSelected ? '取消全选' : '选择全部'}
+                </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="rounded-full px-4"
                   onClick={handleExportAgents}
                   disabled={archiveExporting}
                 >
                   <Download className="mr-2 h-4 w-4" />
-                  {archiveExporting ? '导出中...' : '导出 ZIP'}
+                  {archiveExporting ? '导出中' : '导出 ZIP'}
                 </Button>
-              ) : null}
-              {selectedAgentNames.length > 0 ? (
                 <Button
                   size="sm"
-                  variant="destructive"
-                  className="rounded-full px-4"
+                  variant="ghost"
+                  className="text-destructive hover:text-destructive"
                   onClick={handleBatchDeleteAgents}
                 >
                   <span className="material-symbols-outlined mr-2 text-base">delete</span>
                   批量删除
                 </Button>
-              ) : null}
-            </div>
-          </div>
+              </>
+            )}
+          />
         ) : null}
       </div>
 
@@ -1180,11 +1073,13 @@ export default function AgentsManager({
         onCreate={async (agent) => {
           try {
             const targetName = aiRevisionAgent?.name || agent.name;
-            await agentApi.saveAgent(targetName, {
+            await saveAgentMutation.mutateAsync({
+              name: targetName,
+              agent: {
               ...agent,
               name: aiRevisionAgent?.name || agent.name,
+              },
             });
-            await loadAgents();
             toast('success', aiRevisionAgent ? 'Agent 修订已保存' : 'Agent 配置已保存');
             return true;
           } catch (error: any) {
@@ -1195,20 +1090,46 @@ export default function AgentsManager({
         onContinueEdit={aiRevisionAgent ? handleContinueEditAIRevisionAgent : handleContinueEditAIAgent}
       />
 
-      {dialogProps && <ConfirmDialog {...dialogProps} />}
+      <ConfirmModal
+        open={Boolean(deleteTargetAgentName)}
+        variant="delete"
+        title="删除 Agent"
+        objectName={deleteTargetAgentName}
+        consequence="删除后将移除该 Agent 配置，此操作无法撤销。"
+        confirmLabel="删除"
+        loading={deleteAgentMutation.isPending}
+        onConfirm={confirmDeleteAgent}
+        onCancel={() => setDeleteTargetAgentName(null)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTargetAgentName(null);
+        }}
+      />
 
-      {alertMessage && (
-        <ConfirmDialog
-          open={true}
-          title="提示"
-          description={alertMessage}
-          confirmLabel="确定"
-          cancelLabel=""
-          variant="default"
-          onConfirm={() => setAlertMessage('')}
-          onCancel={() => setAlertMessage('')}
-        />
-      )}
+      <ConfirmModal
+        open={batchDeleteConfirmOpen}
+        variant="delete"
+        title="批量删除 Agent"
+        objectName={`${selectedAgentNames.length} 个 Agent`}
+        consequence="删除后将移除所选 Agent 配置，此操作无法撤销。"
+        confirmLabel={`删除 ${selectedAgentNames.length} 个`}
+        loading={batchDeleteAgentsMutation.isPending}
+        affectedItems={selectedAgentNames.map((name) => ({ id: name, label: name }))}
+        onConfirm={confirmBatchDeleteAgents}
+        onCancel={() => setBatchDeleteConfirmOpen(false)}
+        onOpenChange={setBatchDeleteConfirmOpen}
+      />
+
+      <ConfirmModal
+        open={Boolean(alertMessage)}
+        title="提示"
+        consequence={alertMessage}
+        confirmLabel="确定"
+        onConfirm={() => setAlertMessage('')}
+        onCancel={() => setAlertMessage('')}
+        onOpenChange={(open) => {
+          if (!open) setAlertMessage('');
+        }}
+      />
     </div>
   );
 }

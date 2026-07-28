@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback, useMemo, type ClipboardEvent, type DragEvent } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from '@/lib/navigation/client';
 import { motion } from 'framer-motion';
-import dynamic from 'next/dynamic';
+import dynamic from '@/lib/navigation/dynamic';
 import { FolderOpen, GitBranch, MessageSquareText, Settings2 } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ChatSessionMenu } from '@/components/chat/ChatSessionMenu';
 import {
   PromptInputCommand,
   PromptInputCommandEmpty,
@@ -35,8 +36,9 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
 import ChatSidebar, { readStoredSessionDirectoryOrder, type SessionDirectoryView } from '@/components/chat/ChatSidebar';
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
-import ChatMessage, { ThinkingBot } from '@/components/chat/ChatMessage';
+import ChatMessage from '@/components/chat/ChatMessage';
 import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
+import { apiFetch } from '@/client/query/api-client';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
@@ -52,9 +54,11 @@ import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
   inferHomeSidebarTab,
+  isCreationAssistantSidebarHint,
   isWorkflowSidebarHint,
   normalizeHomeSidebarTab,
   normalizeHomeSidebarTabs,
+  resolveCreationAssistantEnabled,
   type HomeSidebarHint,
   type HomeSidebarMode,
   type HomeSidebarTab,
@@ -65,16 +69,23 @@ import {
 import { dispatchHomeAction } from '@/lib/sidebar-plugins/intent-handlers';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/ui/page-header';
+import { PageToolbar } from '@/components/ui/page-toolbar';
+import { StatusPill } from '@/components/ui/status-pill';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
 import { createPlainConversationRoomState, extractAgentMentions, useCollaborationRoom } from '@/lib/collaboration/room-core';
 import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
+import { buildForkSessionOptions, createForkedCollaborationWorkbenchState } from '@/lib/chat/fork-session';
 import { cn } from '@/lib/core/utils';
+import { fetchRuntimeCommandMetadataCompat } from '@/client/query/engines';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
-import { formatLegacyProductPathForDisplay, PRODUCT_DISPLAY_NAME } from '@/lib/core/branding';
+import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, storeWorkflowSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
+import { useAgentMessageRows } from '@/client/db/collections';
 import {
   WORKFLOW_CLARIFICATION_FACTS_KIND,
   WORKFLOW_CLARIFICATION_GAPS_KIND,
@@ -166,7 +177,7 @@ const MIN_HOME_SIDEBAR_SIZE = 20;
 const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
 const CHAT_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
-const CHAT_ATTACHMENT_UPLOAD_DIR = '.csiharness/chat-attachments';
+const CHAT_ATTACHMENT_UPLOAD_DIR = '.aceharness/chat-attachments';
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 export function isChatAiBusy(input: {
   loading?: boolean;
@@ -220,7 +231,7 @@ const WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE = 'workflow-lightweight-planning';
 const MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS = 2;
 const SPEC_LANGUAGE_RULE = '语言一致性规则：先判断用户原始需求、补充说明和澄清回答的主语言；所有 summary、clarification、requirements.md、design.md、tasks.md 必须统一使用该主语言。';
 
-function normalizeBackendSessionId(value: unknown): string | undefined {
+function normalizeRuntimeSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
@@ -445,7 +456,7 @@ export function buildWorkflowConversationContext(messages: Array<{ role?: string
 
 function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, baseContext: string): string {
   return [
-    `你正在 ${PRODUCT_DISPLAY_NAME} 的分步工作流创建向导中工作。`,
+    '你正在 ACEHarness 的分步工作流创建向导中工作。',
     `当前小点名称：${step.name}`,
     `当前小点类型：${step.kind}`,
     '请完成当前小点，并在回复末尾输出机器可读结果。',
@@ -952,20 +963,20 @@ async function runLightweightWorkflowCreationItem(input: {
   message: string;
   systemPrompt: string;
   frontendSessionId: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
   workingDirectory?: string;
   engine?: string;
   model?: string;
   maxAttempts?: number;
   validationContext?: WorkflowCreationItemValidationContext;
   onRetry?: (notice: { title: string; attempt: number; maxAttempts: number; reason: string }) => Promise<void> | void;
-}): Promise<{ result: WorkflowCreationItemResult; finalContent: string; backendSessionId?: string }> {
-  let activeBackendSessionId = input.backendSessionId;
+}): Promise<{ result: WorkflowCreationItemResult; finalContent: string; runtimeSessionId?: string }> {
+  let activeRuntimeSessionId = input.runtimeSessionId;
   const maxAttempts = input.maxAttempts ?? MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS;
 
-  const runAttempt = async (message: string, attempt: number): Promise<{ result: WorkflowCreationItemResult; finalContent: string; backendSessionId?: string }> => {
+  const runAttempt = async (message: string, attempt: number): Promise<{ result: WorkflowCreationItemResult; finalContent: string; runtimeSessionId?: string }> => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const startRes = await fetch('/api/chat/stream', {
+    const startRes = await apiFetch('/api/chat/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -975,7 +986,7 @@ async function runLightweightWorkflowCreationItem(input: {
         message,
         model: input.model,
         engine: input.engine,
-        sessionId: activeBackendSessionId || undefined,
+        sessionId: activeRuntimeSessionId || undefined,
         frontendSessionId: input.frontendSessionId,
         streamScope: WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE,
         mode: 'dashboard',
@@ -991,11 +1002,27 @@ async function runLightweightWorkflowCreationItem(input: {
     return new Promise((resolve, reject) => {
       const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
       let accumulated = '';
+      let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
 
       es.addEventListener('delta', (event) => {
         try {
-          const data = JSON.parse(event.data);
-          accumulated += data.content || '';
+          const data = parseAceSseEventData(event.data);
+          const content = data.content || '';
+          accumulated += content;
+          const row = storeWorkflowSseEventAsAgentMessage({
+            type: 'chat-stream-delta',
+            data: {
+              ...data,
+              id: startData.chatId,
+              chatId: startData.chatId,
+              delta: content,
+              frontendSessionId: input.frontendSessionId,
+              stepKey: input.step.name,
+              provider: input.engine,
+              model: input.model,
+            },
+          }, aiPrevious);
+          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
         } catch (error) {
           es.close();
           reject(error);
@@ -1004,11 +1031,25 @@ async function runLightweightWorkflowCreationItem(input: {
 
       es.addEventListener('done', async (event) => {
         try {
-          const data = JSON.parse(event.data);
+          const data = parseAceSseEventData(event.data);
           es.close();
           const finalContent = data.result || accumulated;
+          const row = storeWorkflowSseEventAsAgentMessage({
+            type: 'done',
+            data: {
+              ...data,
+              id: startData.chatId,
+              chatId: startData.chatId,
+              content: aiPrevious ? '' : finalContent,
+              frontendSessionId: input.frontendSessionId,
+              stepKey: input.step.name,
+              provider: input.engine,
+              model: input.model,
+            },
+          }, aiPrevious);
+          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
           if (Object.prototype.hasOwnProperty.call(data, 'sessionId')) {
-            activeBackendSessionId = normalizeBackendSessionId(data.sessionId);
+            activeRuntimeSessionId = normalizeRuntimeSessionId(data.sessionId);
           }
           const decision = resolveWorkflowCreationItemAttempt({
             finalContent,
@@ -1035,7 +1076,7 @@ async function runLightweightWorkflowCreationItem(input: {
           resolve({
             result: decision.result,
             finalContent,
-            backendSessionId: activeBackendSessionId,
+            runtimeSessionId: activeRuntimeSessionId,
           });
         } catch (error) {
           reject(error);
@@ -1067,9 +1108,9 @@ async function generateLightweightWorkflowClarification(input: {
     state: WorkflowCreationState;
     clarification: ClarificationFormResult;
   }) => Promise<void> | void;
-}): Promise<{ clarification: ClarificationFormResult; backendSessionId?: string; creationContextSummary: string }> {
+}): Promise<{ clarification: ClarificationFormResult; runtimeSessionId?: string; creationContextSummary: string }> {
   let creationState = createEmptyWorkflowCreationState();
-  let backendSessionId: string | undefined;
+  let runtimeSessionId: string | undefined;
   const completedSteps: WorkflowCreationItemStep[] = [];
   const baseContext = [
     `工作流名称：${input.workflowName}`,
@@ -1134,14 +1175,14 @@ async function generateLightweightWorkflowClarification(input: {
     const output = await runLightweightWorkflowCreationItem({
       step,
       frontendSessionId: input.frontendSessionId,
-      backendSessionId,
+      runtimeSessionId,
       systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
       message: buildWorkflowCreationItemUserMessage(step, creationState),
       workingDirectory: input.workingDirectory,
       engine: input.engine,
       model: input.model,
     });
-    backendSessionId = output.backendSessionId;
+    runtimeSessionId = output.runtimeSessionId;
     creationState = applyWorkflowCreationItem(creationState, output.result);
     completedSteps.push(step);
     await input.onProgress?.({
@@ -1162,7 +1203,7 @@ async function generateLightweightWorkflowClarification(input: {
     clarification.missingFields?.length ? `待补信息：\n${clarification.missingFields.map((item) => `- ${item}`).join('\n')}` : '',
     clarification.questions?.length ? `澄清问题：\n${clarification.questions.map((item) => `- ${item.label || item.id}: ${item.question}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
-  return { clarification, backendSessionId, creationContextSummary };
+  return { clarification, runtimeSessionId, creationContextSummary };
 }
 
 function extractWorkflowStepPlan(configDraft: any): NonNullable<LightweightWorkflowDraft['stepPlan']> {
@@ -1267,7 +1308,7 @@ function buildWorkflowAgoraRoom(input: {
 async function generateLightweightWorkflowDraft(input: {
   answers: LightweightWorkflowAnswers;
   frontendSessionId: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
   creationContextSummary?: string;
   conversationContext?: string;
   workingDirectory: string;
@@ -1278,7 +1319,7 @@ async function generateLightweightWorkflowDraft(input: {
   onProgress?: (progress: LightweightWorkflowDraftProgress) => Promise<void> | void;
 }): Promise<LightweightWorkflowDraft> {
   const fallbackDraft = buildLightweightWorkflowDraft(input.answers);
-  let backendSessionId: string | undefined = normalizeBackendSessionId(input.backendSessionId);
+  let runtimeSessionId: string | undefined = normalizeRuntimeSessionId(input.runtimeSessionId);
   const requirements = fallbackDraft.requirements;
   const availableStepAgents = (input.availableAgents || [])
     .map((name) => String(name || '').trim())
@@ -1325,7 +1366,7 @@ async function generateLightweightWorkflowDraft(input: {
     const outlineOutput = await runLightweightWorkflowCreationItem({
       step: outlineStep,
       frontendSessionId: input.frontendSessionId,
-      backendSessionId,
+      runtimeSessionId,
       systemPrompt: buildWorkflowCreationItemSystemPrompt(outlineStep, baseContext),
       message: buildWorkflowCreationItemUserMessage(outlineStep, creationState),
       workingDirectory: input.workingDirectory,
@@ -1338,7 +1379,7 @@ async function generateLightweightWorkflowDraft(input: {
         retryNotice,
       }),
     });
-    backendSessionId = outlineOutput.backendSessionId;
+    runtimeSessionId = outlineOutput.runtimeSessionId;
     creationState = applyWorkflowCreationItem(creationState, outlineOutput.result);
     completedTitles.push(outlineStep.title);
     await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
@@ -1356,7 +1397,7 @@ async function generateLightweightWorkflowDraft(input: {
       const output = await runLightweightWorkflowCreationItem({
         step,
         frontendSessionId: input.frontendSessionId,
-        backendSessionId,
+        runtimeSessionId,
         systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
         message: [buildWorkflowCreationItemUserMessage(step, creationState), '', `当前必须补全的 stateName：${stateName}`].join('\n'),
         workingDirectory: input.workingDirectory,
@@ -1369,7 +1410,7 @@ async function generateLightweightWorkflowDraft(input: {
         },
         onRetry: (retryNotice) => input.onProgress?.({ activeTitle: step.title, completedTitles, state: creationState, retryNotice }),
       });
-      backendSessionId = output.backendSessionId;
+      runtimeSessionId = output.runtimeSessionId;
       creationState = applyWorkflowCreationItem(creationState, output.result);
       completedTitles.push(step.title);
       await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
@@ -1751,14 +1792,14 @@ function AgoraZenCover({
     <div className="relative flex h-full min-h-[520px] items-center justify-center overflow-hidden px-4 py-8 md:px-8 lg:px-16">
       <AgoraForumBackdrop className="inset-0" />
       <div className="relative z-10 w-full max-w-5xl overflow-visible">
-        <section className="relative overflow-hidden rounded-[40px] border border-stone-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,246,241,0.82))] px-8 py-12 shadow-[0_26px_80px_rgba(71,85,105,0.12)] backdrop-blur-[2px] dark:border-white/10 dark:bg-[linear-gradient(180deg,rgba(22,26,34,0.94),rgba(12,15,22,0.9))] dark:shadow-[0_30px_90px_rgba(2,6,23,0.52)] sm:px-12 sm:py-16">
+        <section className="relative overflow-hidden rounded-xl border border-stone-200/80 bg-white/88 px-8 py-12 shadow-none backdrop-blur-[2px] dark:border-white/10 dark:bg-[#161a22]/95 sm:px-12 sm:py-16">
           <div className="absolute inset-x-0 bottom-0 h-48 bg-[repeating-linear-gradient(180deg,transparent_0,transparent_12px,rgba(148,163,184,0.08)_12px,rgba(148,163,184,0.08)_13px)] opacity-80 dark:bg-[repeating-linear-gradient(180deg,transparent_0,transparent_12px,rgba(148,163,184,0.06)_12px,rgba(148,163,184,0.06)_13px)] dark:opacity-70" />
           <div className="absolute inset-x-10 top-10 h-px bg-gradient-to-r from-transparent via-stone-300/70 to-transparent dark:via-slate-500/45" />
           <div className="absolute inset-x-16 top-16 h-px bg-gradient-to-r from-transparent via-stone-200/80 to-transparent dark:via-slate-600/35" />
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.08),transparent_34%)] opacity-90 dark:bg-[radial-gradient(circle_at_top,rgba(167,139,250,0.14),transparent_38%)]" />
 
           <div className="relative mx-auto flex max-w-3xl flex-col items-center text-center">
-            <div className="mb-8 flex h-24 w-24 items-center justify-center rounded-full border border-violet-300/40 bg-violet-50/70 text-violet-500 shadow-[0_0_0_12px_rgba(139,92,246,0.06)] dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-300 dark:shadow-[0_0_0_12px_rgba(139,92,246,0.12)]">
+            <div className="mb-8 flex h-20 w-20 items-center justify-center rounded-lg border border-violet-200/70 bg-[#EEE7FF] text-[#8B5CF6] shadow-none dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-300">
               <AgoraZenMark className="h-12 w-12" />
             </div>
 
@@ -1775,7 +1816,7 @@ function AgoraZenCover({
 
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
               <Button
-                className="h-11 rounded-full bg-stone-900 px-6 text-sm text-stone-50 hover:bg-stone-800 dark:bg-violet-500 dark:text-white dark:hover:bg-violet-400"
+                className="h-10 rounded-md px-5 text-sm"
                 onClick={onCreate}
               >
                 <span className="material-symbols-outlined mr-2 text-[18px]">add_circle</span>
@@ -1783,7 +1824,7 @@ function AgoraZenCover({
               </Button>
               <button
                 type="button"
-                className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-sm text-stone-500 shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:border-violet-400/40 dark:hover:bg-violet-500/10 dark:hover:text-violet-200"
+                className="rounded-md border border-stone-200 bg-white/80 px-4 py-2 text-sm text-stone-500 shadow-none transition-colors hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:border-violet-400/40 dark:hover:bg-violet-500/10 dark:hover:text-violet-200"
                 onClick={onCreateGuest}
               >
                 <span className="material-symbols-outlined mr-2 align-[-3px] text-[16px]">gesture</span>
@@ -1822,12 +1863,32 @@ export function ChatPageContent({
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model, setModel, engine, effectiveEngine, isModelSelectionReady, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
-    skillSettings, mcpSettings, setSessionWorkbenchState,
+    skillSettings, mcpSettings, setSessionWorkbenchState, updateSessionWorkbenchState,
     appendSessionMessage,
     updateSessionMessage,
     workingDirectory,
     setWorkingDirectory,
   } = useChat();
+  const chatAgentMessageRows = useAgentMessageRows(activeSession?.id ? { frontendSessionId: activeSession.id } : undefined);
+  const dbBackedActiveSession = useMemo(() => {
+    if (!activeSession || chatAgentMessageRows.length === 0) return activeSession;
+    const latestRow = [...chatAgentMessageRows].reverse().find((row) => String(row.content || '').trim());
+    if (!latestRow) return activeSession;
+    const lastAssistant = [...activeSession.messages].reverse().find((message) => message.role === 'assistant');
+    if (!lastAssistant) return activeSession;
+    return {
+      ...activeSession,
+      messages: activeSession.messages.map((message) => (
+        message.id === lastAssistant.id
+          ? {
+              ...message,
+              content: message.content || latestRow.content,
+              rawContent: latestRow.content || message.rawContent,
+            }
+          : message
+      )),
+    };
+  }, [activeSession, chatAgentMessageRows]);
   const { toast } = useToast();
   const [input, setInput] = useState('');
   const [fileDropActive, setFileDropActive] = useState(false);
@@ -1881,6 +1942,20 @@ export function ChatPageContent({
   const [sessionDirectoryView, setSessionDirectoryView] = useState<SessionDirectoryView>(() => (
     readStoredSessionDirectoryView() || readStoredSessionDirectoryOrder()[0] || 'conversation'
   ));
+  const createAndActivateSession = useCallback((options?: Parameters<typeof createSession>[0]) => {
+    const sessionId = createSession(options);
+    setActiveSessionId(sessionId);
+    setSessionDirectoryView('conversation');
+    return sessionId;
+  }, [createSession, setActiveSessionId]);
+  const handleCreateNewConversation = useCallback(() => {
+    const sessionId = createAndActivateSession({ title: '新对话' });
+    if (embedded && hideSidebar && !secondarySidebarPinned) {
+      onOpenSecondarySidebar?.();
+    }
+    toast('success', '已新建对话');
+    return sessionId;
+  }, [createAndActivateSession, embedded, hideSidebar, onOpenSecondarySidebar, secondarySidebarPinned, toast]);
   const [origin, setOrigin] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
@@ -2333,16 +2408,9 @@ export function ChatPageContent({
   const getInputMarkdown = useCallback(() => {
     return editorRef.current?.getMarkdown().trim() || input.trim();
   }, [input]);
+  const canSubmitMessage = Boolean(input.trim() || pendingAttachment);
 
   const homepageSlashCommands = useMemo<HomepageSlashCommand[]>(() => ([
-    {
-      id: 'compact',
-      command: '/compact',
-      title: '压缩上下文',
-      subtext: '刷新当前会话的 session 上下文容量',
-      icon: 'compress',
-      aliases: ['compact', 'context'],
-    },
     {
       id: 'workflow',
       command: '/workflow',
@@ -2350,6 +2418,14 @@ export function ChatPageContent({
       subtext: '在当前对话里启动 AI 引导的工作流创建',
       icon: 'account_tree',
       aliases: ['workflow', '工作流', 'plan'],
+    },
+    {
+      id: 'compact',
+      command: '/compact',
+      title: '压缩上下文',
+      subtext: '压缩当前会话上下文，保留关键信息继续对话',
+      icon: 'compress',
+      aliases: ['compact', '压缩', '上下文'],
     },
     ...engineSlashCommands,
   ]), [engineSlashCommands]);
@@ -2393,13 +2469,10 @@ export function ChatPageContent({
     }
 
     let cancelled = false;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const params = new URLSearchParams({ engine: activeEngine });
-    if (effectiveWorkingDirectory) params.set('cwd', effectiveWorkingDirectory);
-    fetch(`/api/engine/commands?${params.toString()}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    fetchRuntimeCommandMetadataCompat({
+      engine: activeEngine,
+      cwd: effectiveWorkingDirectory,
     })
-      .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (cancelled) return;
         const rows = Array.isArray(data?.commands) ? data.commands : [];
@@ -2513,9 +2586,9 @@ export function ChatPageContent({
     const finalFilePath = normalizedDir ? `${normalizedDir}/${normalizedFileName}` : normalizedFileName;
 
     const exportPayload = pendingExport.type === 'conversation'
-      ? (activeSession ? { filePath: finalFilePath, content: buildNotebookFromConversation(activeSession) } : null)
+      ? (dbBackedActiveSession ? { filePath: finalFilePath, content: buildNotebookFromConversation(dbBackedActiveSession) } : null)
       : (() => {
-          const message = activeSession?.messages.find((item) => item.id === pendingExport.messageId && item.role === 'assistant');
+          const message = dbBackedActiveSession?.messages.find((item) => item.id === pendingExport.messageId && item.role === 'assistant');
           if (!message) return null;
           const contentText = (message.rawContent || message.content || '').trim();
           if (!contentText) return null;
@@ -2540,11 +2613,11 @@ export function ChatPageContent({
     } finally {
       setNotebookExporting(false);
     }
-  }, [pendingExport, normalizeNotebookFileName, exportFileName, exportDirectory, toast, activeSession, saveNotebookFile, exportScope, createDefaultNotebookBaseName]);
+  }, [pendingExport, normalizeNotebookFileName, exportFileName, exportDirectory, toast, dbBackedActiveSession, saveNotebookFile, exportScope, createDefaultNotebookBaseName]);
 
   const handleSaveConversationAsNotebook = useCallback(async () => {
-    if (!activeSession) return;
-    const exportableMessages = activeSession.messages.filter((message) => {
+    if (!dbBackedActiveSession) return;
+    const exportableMessages = dbBackedActiveSession.messages.filter((message) => {
       if (message.role === 'error') return false;
       return Boolean((message.rawContent || message.content || '').trim());
     });
@@ -2554,10 +2627,10 @@ export function ChatPageContent({
     }
 
     openNotebookExportDialog({ type: 'conversation' });
-  }, [activeSession, openNotebookExportDialog, toast]);
+  }, [dbBackedActiveSession, openNotebookExportDialog, toast]);
 
   const handleSaveAssistantMessageAsNotebook = useCallback(async (messageId: string) => {
-    const message = activeSession?.messages.find((item) => item.id === messageId && item.role === 'assistant');
+    const message = dbBackedActiveSession?.messages.find((item) => item.id === messageId && item.role === 'assistant');
     if (!message) return;
 
     const contentText = (message.rawContent || message.content || '').trim();
@@ -2567,7 +2640,7 @@ export function ChatPageContent({
     }
 
     openNotebookExportDialog({ type: 'assistant', messageId });
-  }, [activeSession, openNotebookExportDialog, toast]);
+  }, [dbBackedActiveSession, openNotebookExportDialog, toast]);
 
   const unlockAutoScroll = useCallback(() => {
     autoScrollLockedRef.current = false;
@@ -3035,7 +3108,7 @@ export function ChatPageContent({
           ...(prev?.lightweightWorkflowDraft || {}),
           stage: 'clarification',
           busy: false,
-          backendSessionId: clarificationResult.backendSessionId,
+          runtimeSessionId: clarificationResult.runtimeSessionId,
           creationContextSummary: clarificationResult.creationContextSummary,
           clarificationForm: clarification,
           clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
@@ -3230,7 +3303,7 @@ export function ChatPageContent({
           ...(prev?.lightweightWorkflowDraft || {}),
           stage: 'generating',
           busy: true,
-          backendSessionId: currentDraftState?.backendSessionId,
+          runtimeSessionId: currentDraftState?.runtimeSessionId,
           creationContextSummary: currentDraftState?.creationContextSummary,
           clarificationForm: currentDraftState?.clarificationForm,
           draft: currentDraftState?.draft,
@@ -3259,7 +3332,7 @@ export function ChatPageContent({
         draft = await generateLightweightWorkflowDraft({
           answers,
           frontendSessionId: sessionId,
-          backendSessionId: currentDraftState?.backendSessionId,
+          runtimeSessionId: currentDraftState?.runtimeSessionId,
           creationContextSummary: [
             currentDraftState?.creationContextSummary,
             answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
@@ -3294,7 +3367,7 @@ export function ChatPageContent({
             ...(prev?.lightweightWorkflowDraft || {}),
             stage: 'clarification',
             busy: false,
-            backendSessionId: currentDraftState?.backendSessionId,
+            runtimeSessionId: currentDraftState?.runtimeSessionId,
             creationContextSummary: currentDraftState?.creationContextSummary,
             clarificationForm: currentDraftState?.clarificationForm,
             clarificationAnswers: answers,
@@ -3328,7 +3401,7 @@ export function ChatPageContent({
           ...(prev?.lightweightWorkflowDraft || {}),
           stage: 'draft',
           busy: false,
-          backendSessionId: currentDraftState?.backendSessionId,
+          runtimeSessionId: currentDraftState?.runtimeSessionId,
           creationContextSummary: [
             currentDraftState?.creationContextSummary,
             answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
@@ -3754,6 +3827,7 @@ export function ChatPageContent({
           let accumulated = '';
           let accumulatedRawStream = '';
           let settled = false;
+          let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
           const close = () => {
             try { stream.events.close(); } catch {}
           };
@@ -3777,19 +3851,37 @@ export function ChatPageContent({
           };
 
           stream.events.addEventListener('thinking', ((event: MessageEvent) => {
-            const data = JSON.parse(event.data || '{}');
+            const data = parseAceSseEventData(event.data);
             const content = String(data?.content || '');
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', data, {
+              chatId: stream.streamId,
+              stepKey: agentName,
+              provider: data?.engine || participant?.engine,
+              model: data?.model || participant?.model,
+              sessionId: data?.sessionId,
+              streamScope: 'agent-chat',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             if (content) applyPartial(content);
           }) as EventListener);
 
           stream.events.addEventListener('delta', ((event: MessageEvent) => {
-            const data = JSON.parse(event.data || '{}');
+            const data = parseAceSseEventData(event.data);
             const content = String(data?.content || '');
+            const row = storeChatStreamSseEventAsAgentMessage('delta', data, {
+              chatId: stream.streamId,
+              stepKey: agentName,
+              provider: data?.engine || participant?.engine,
+              model: data?.model || participant?.model,
+              sessionId: data?.sessionId,
+              streamScope: 'agent-chat',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             if (content) applyPartial(content);
           }) as EventListener);
 
           stream.events.addEventListener('done', ((event: MessageEvent) => {
-            const data = JSON.parse(event.data || '{}');
+            const data = parseAceSseEventData(event.data);
             const resultText = String(data?.rawOutput || data?.output || data?.error || '');
             const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, resultText);
             const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
@@ -3810,6 +3902,18 @@ export function ChatPageContent({
               engine: data?.engine || participant?.engine || undefined,
               model: data?.model || participant?.model || undefined,
             });
+            const row = storeChatStreamSseEventAsAgentMessage('done', {
+              ...data,
+              content: fullRawContent || data?.output || data?.error || accumulated || '',
+            }, {
+              chatId: stream.streamId,
+              stepKey: agentName,
+              provider: data?.engine || participant?.engine,
+              model: data?.model || participant?.model,
+              sessionId: data?.sessionId,
+              streamScope: 'agent-chat',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             if (latestSidebarHint) {
               setSessionWorkbenchState((prev) => ({
                 ...(prev || {}),
@@ -3820,7 +3924,7 @@ export function ChatPageContent({
           }) as EventListener);
 
           stream.events.addEventListener('failed', ((event: MessageEvent) => {
-            const data = JSON.parse(event.data || '{}');
+            const data = parseAceSseEventData(event.data);
             const messageText = String(data?.message || 'Agent 发言失败');
             void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
               role: 'error',
@@ -3831,7 +3935,7 @@ export function ChatPageContent({
           }) as EventListener);
 
           stream.events.addEventListener('engine_error', ((event: MessageEvent) => {
-            const data = JSON.parse(event.data || '{}');
+            const data = parseAceSseEventData(event.data);
             const messageText = String(data?.message || 'Agent 发言失败');
             void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
               role: 'error',
@@ -3933,6 +4037,12 @@ export function ChatPageContent({
       toast('warning', '模型配置加载中，请稍候再发送');
       return;
     }
+    const targetSessionId = activeSessionId || activeSession?.id || createAndActivateSession({ title: '新对话' });
+    if (!activeSessionId && !activeSession?.id) {
+      setSidebarOpen(true);
+      setSessionDirectoryView('conversation');
+    }
+
     if (editingMessageId) {
       deleteMessage(editingMessageId);
       setEditingMessageId(null);
@@ -3947,7 +4057,7 @@ export function ChatPageContent({
       editorRef.current?.focus();
       return;
     }
-    // Route to legacy collaboration handler only when one is explicitly mounted.
+    // Route to the collaboration handler only when one is explicitly mounted.
     if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
       collaborationMessageHandlerRef.current(messageToSend);
       editorRef.current?.focus();
@@ -3958,13 +4068,9 @@ export function ChatPageContent({
       stopStreaming();
       await Promise.resolve();
     }
-    if (!activeSessionId && !activeSession) {
-      setSidebarOpen(true);
-      setSessionDirectoryView('conversation');
-    }
-    await sendMessage(messageToSend, { displayText: displayMessage });
+    await sendMessage(messageToSend, { displayText: displayMessage, targetSessionId });
     editorRef.current?.focus();
-  }, [activeSession, activeSessionId, attachmentUploading, compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, pendingAttachment, sendMessage, sendUnifiedAgentChatMessage, startLightweightWorkflowDraft, stopStreaming, toast, unlockAutoScroll]);
+  }, [activeSession?.id, activeSessionId, attachmentUploading, compactActiveSession, createAndActivateSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, pendingAttachment, sendMessage, sendUnifiedAgentChatMessage, startLightweightWorkflowDraft, stopStreaming, toast, unlockAutoScroll]);
 
   const applySlashCommand = useCallback(async (commandId: string) => {
     if (commandId === 'compact') {
@@ -4122,19 +4228,20 @@ export function ChatPageContent({
     }
 
     if (prompt === '__HOME_ACTION__:create_workflow') {
-      openHomeSidebar('workflow', 'create-workflow', 'clarifying', { shouldOpenModal: true });
       unlockAutoScroll();
       setInput('');
       editorRef.current?.clear();
       if (loading) stopStreaming();
+      void startLightweightWorkflowDraft('');
       return;
     }
 
     if (prompt === '__HOME_ACTION__:create_agent') {
-      openHomeSidebar('agent', 'create-agent', 'clarifying', { shouldOpenModal: true });
       unlockAutoScroll();
-      setInput('');
-      editorRef.current?.clear();
+      const agentPrompt = '我想创建一个负责【职责】的 Agent，服务于【场景】，请先帮我定义它的职责、风格、能力边界和输入输出。';
+      setInput(agentPrompt);
+      editorRef.current?.setContent(agentPrompt);
+      editorRef.current?.focus();
       if (loading) stopStreaming();
       return;
     }
@@ -4195,6 +4302,7 @@ export function ChatPageContent({
     unlockAutoScroll,
     effectiveWorkingDirectory,
     handleLightweightWorkflowDraftAction,
+    startLightweightWorkflowDraft,
   ]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
@@ -4266,7 +4374,7 @@ export function ChatPageContent({
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
   }, [createSession, handleQuickAction, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
 
-  const messages = activeSession?.messages || [];
+  const messages = dbBackedActiveSession?.messages || [];
   const isCurrentSessionLoading = Boolean(activeSessionId && sessionLoadingId === activeSessionId);
   const activeAiBusy = isChatAiBusy({
     loading,
@@ -4371,12 +4479,12 @@ export function ChatPageContent({
   const ensureChatSessionForComposer = useCallback((): string => {
     const existing = activeSessionId || activeSession?.id || autoCreatedSessionIdRef.current;
     if (existing) return existing;
-    const nextSessionId = createSession({ title: '新对话' });
+    const nextSessionId = createAndActivateSession({ title: '新对话' });
     autoCreatedSessionIdRef.current = nextSessionId;
     setSidebarOpen(true);
     setSessionDirectoryView('conversation');
     return nextSessionId;
-  }, [activeSession?.id, activeSessionId, createSession]);
+  }, [activeSession?.id, activeSessionId, createAndActivateSession]);
 
   const ensureAttachmentWorkspace = useCallback(async (): Promise<string> => {
     const targetSessionId = ensureChatSessionForComposer();
@@ -4514,7 +4622,7 @@ export function ChatPageContent({
   }), [handleComposerDragEnter, handleComposerDragLeave, handleComposerDragOver, handleComposerDrop, handleComposerFocus, handleComposerPaste]);
 
   const fileDropOverlay = fileDropActive ? (
-    <div className="pointer-events-none absolute inset-0 z-[140] flex items-center justify-center gap-2 rounded-[28px] border border-primary/45 bg-primary/10 text-sm font-medium text-primary backdrop-blur-[2px]">
+    <div className="pointer-events-none absolute inset-0 z-[140] flex items-center justify-center gap-2 rounded-xl border border-[#8B5CF6]/30 bg-[#EEE7FF]/80 text-sm font-medium text-[#151515] dark:bg-violet-500/15 dark:text-violet-100">
       <span className="material-symbols-outlined text-[22px]">drive_folder_upload</span>
       松开后添加附件
     </div>
@@ -4651,7 +4759,6 @@ export function ChatPageContent({
   const pinnedChatWorkspacePath = activeChatWorkspacePath;
   const defaultChatWorkspacePath = fallbackWorkingDirectory;
   const resolvedChatWorkspacePath = pinnedChatWorkspacePath;
-  const displayedChatWorkspacePath = formatLegacyProductPathForDisplay(resolvedChatWorkspacePath);
   const chatWorkspaceShellEnabled = Boolean(activeSessionId || activeSession);
   const chatWorkspaceTitle = activeSession?.title?.trim() || '新对话';
   const chatWorkspaceSyncKey = useMemo(() => JSON.stringify({
@@ -4839,6 +4946,47 @@ export function ChatPageContent({
         roleType: activeAgentBinding.roleType || 'normal',
       })
     : null;
+  const handleForkFromSessionMenu = useCallback(() => {
+    if (!activeSession) return;
+    if (loading) {
+      toast('warning', '当前正在生成，请稍后创建 Fork');
+      return;
+    }
+    const sourceWorkbenchState = activeSession.sessionWorkbenchState;
+    const forkOptions = {
+      ...buildForkSessionOptions(activeSession),
+      ...(sourceWorkbenchState?.collaborationRoom
+        ? { sessionWorkbenchState: createForkedCollaborationWorkbenchState(sourceWorkbenchState) }
+        : {}),
+    };
+    const sessionId = createAndActivateSession(forkOptions);
+    toast('success', '已创建 Fork');
+    return sessionId;
+  }, [activeSession, createAndActivateSession, loading, toast]);
+  const creationAssistantEnabled = resolveCreationAssistantEnabled(activeSession);
+  const creationAssistantAvailable = Boolean(
+    activeSession
+    && !activeSession.agentBinding
+    && !activeSession.workflowBinding
+    && !activeSession.sessionWorkbenchState?.collaborationRoom
+  );
+  const handleCreationAssistantChange = useCallback((enabled: boolean) => {
+    if (!creationAssistantAvailable) return;
+    setSessionWorkbenchState((prev) => ({
+      ...(prev || {}),
+      creationAssistantEnabled: enabled,
+      homeSidebar: !enabled && isCreationAssistantSidebarHint(prev?.homeSidebar)
+        ? null
+        : prev?.homeSidebar,
+    }));
+  }, [creationAssistantAvailable, setSessionWorkbenchState]);
+  const chatHeaderStatus = activeAiBusy || isCurrentSessionLoading
+    ? <StatusPill tone="neutral">生成中</StatusPill>
+    : activeWeChatBinding
+      ? <StatusPill tone="success">微信已绑定</StatusPill>
+      : activeSession
+        ? <StatusPill tone="neutral">{messages.length} 消息</StatusPill>
+        : <StatusPill tone="neutral">未选择会话</StatusPill>;
   const { isDashboardShell } = useDashboardShellHeader({
     title: chatTitle === '首页' ? '对话' : chatTitle,
     subtitle: activeAgentBinding
@@ -4866,7 +5014,7 @@ export function ChatPageContent({
               size="sm"
               variant="ghost"
               className="h-7 rounded-full px-2 text-xs"
-              onClick={() => createSession({ title: '新对话' })}
+              onClick={handleCreateNewConversation}
             >
               退出角色
             </Button>
@@ -4897,6 +5045,14 @@ export function ChatPageContent({
           <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
           <span className="hidden xl:inline">保存为 Notebook</span>
         </Button>
+        <ChatSessionMenu
+          disabled={!activeSession}
+          creationAssistantEnabled={creationAssistantEnabled}
+          creationAssistantDisabled={!creationAssistantAvailable || loading}
+          forkDisabled={!activeSession || loading}
+          onCreationAssistantChange={handleCreationAssistantChange}
+          onFork={handleForkFromSessionMenu}
+        />
       </>
     ),
   }, [
@@ -4906,12 +5062,235 @@ export function ChatPageContent({
     activeAgentBinding?.team,
     activeSession?.id,
     activeWeChatBinding?.externalConversationId,
+    activeAiBusy,
     chatTitle,
-    createSession,
+    creationAssistantAvailable,
+    creationAssistantEnabled,
+    handleCreationAssistantChange,
+    handleCreateNewConversation,
+    handleForkFromSessionMenu,
     handleSaveConversationAsNotebook,
+    isCurrentSessionLoading,
+    loading,
     messages.length,
     notebookExporting,
   ]);
+
+  const agentPickerPanel = (
+    <div
+      className={cn(
+        'hidden min-h-0 overflow-hidden rounded-xl border border-border bg-card transition-[width,height] duration-200 xl:flex',
+        agentPickerOpen
+          ? 'fixed bottom-24 right-6 top-20 z-[90] w-[22rem] flex-col shadow-lg'
+          : 'absolute right-4 top-4 z-50 h-48 w-12 items-stretch shadow-none'
+      )}
+    >
+      {agentPickerOpen ? (
+        <>
+          <div className="shrink-0 border-b border-border/60 bg-muted/25 px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">{agentPickerAdding ? '添加 Agent' : 'Agent'}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {agentPickerAdding ? '选择运行模型并加入当前对话' : `默认助手 + ${collaborationRoomCore.participants.length} 个 Agent`}
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                {agentPickerAdding ? (
+                  <Button type="button" size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={() => setAgentPickerAdding(false)} title="返回成员">
+                    <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                  </Button>
+                ) : null}
+                <Button type="button" size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={() => {
+                  setAgentPickerOpen(false);
+                  setAgentPickerAdding(false);
+                }} title="收起 Agent 面板">
+                  <span className="material-symbols-outlined text-[18px]">right_panel_close</span>
+                </Button>
+              </div>
+            </div>
+            {agentPickerAdding ? (
+              <div className="mt-3 space-y-2">
+                <EngineModelSelect
+                  engine={agentPickerRuntime.engine}
+                  model={agentPickerRuntime.model}
+                  onEngineChange={(nextEngine) => setAgentPickerRuntime((prev) => ({ ...prev, engine: nextEngine }))}
+                  onModelChange={(nextModel) => setAgentPickerRuntime((prev) => ({ ...prev, model: nextModel }))}
+                  className="h-9"
+                />
+                {!agentPickerCanAdd ? (
+                  <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                    模型配置加载完成后才能添加 Agent。
+                  </div>
+                ) : null}
+                <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-background px-3 py-2">
+                  <span className="material-symbols-outlined text-[17px] text-muted-foreground">search</span>
+                  <input
+                    value={agentPickerQuery}
+                    onChange={(event) => setAgentPickerQuery(event.target.value)}
+                    placeholder="搜索 Agent"
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="home-chat-scroll min-h-0 flex-1 overflow-y-auto p-2">
+            {agentPickerAdding ? (
+              <div className="space-y-1">
+                {filteredAgentPickerAgents.length ? filteredAgentPickerAgents.map((agent) => {
+                  const name = String(agent.name || '').trim();
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      disabled={!agentPickerCanAdd}
+                      className="group flex w-full items-center gap-2 rounded-xl p-2 text-left transition-colors hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent"
+                      onClick={() => addAgentToConversation(agent)}
+                    >
+                      <SpriteAvatar
+                        avatar={resolveAgentAvatarSrc(undefined, name)}
+                        seed={name}
+                        category="agent-default"
+                        alt={name}
+                        fallback={getChatAgentInitials(name)}
+                        className="h-8 w-8 shrink-0"
+                        fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium">{name}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">{agent.description || 'Agent'}</div>
+                      </div>
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                        <span className={cn('material-symbols-outlined text-[17px]', !agentPickerCanAdd && 'animate-spin')}>{agentPickerCanAdd ? 'add' : 'progress_activity'}</span>
+                      </span>
+                    </button>
+                  );
+                }) : (
+                  <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
+                    没有可加入的 Agent
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="rounded-xl border border-primary/15 bg-primary/5 p-2.5">
+                  <div className="flex items-center gap-2">
+                    <RobotLogo size={28} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-semibold">默认助手</div>
+                      <div className="truncate text-[11px] text-muted-foreground">单人议场默认 Agent，普通对话能力完整保留</div>
+                    </div>
+                    <Badge variant="secondary" className="rounded-full text-[10px]">默认</Badge>
+                  </div>
+                </div>
+                {collaborationRoomCore.participants.length ? collaborationRoomCore.participants.map((participant) => (
+                  <div key={participant.id || participant.name} className="group flex items-center gap-2 rounded-xl bg-muted/35 p-2">
+                    <SpriteAvatar
+                      avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
+                      seed={participant.runtimeAgentName || participant.name}
+                      category="agent-default"
+                      alt={participant.name}
+                      fallback={getChatAgentInitials(participant.name)}
+                      className="h-8 w-8 shrink-0"
+                      fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium">{participant.name}</div>
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {participant.model ? [participant.engine, participant.model].filter(Boolean).join(' / ') : '跟随默认模型'}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                      title="移除 Agent"
+                      aria-label={`移除 ${participant.name}`}
+                      onClick={() => removeAgentFromConversation(participant.name)}
+                    >
+                      <span className="material-symbols-outlined text-[16px]">close</span>
+                    </Button>
+                  </div>
+                )) : (
+                  <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
+                    还没有额外 Agent
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {!agentPickerAdding ? (
+            <div className="shrink-0 border-t border-border/60 bg-background/95 p-2.5">
+              <button
+                type="button"
+                disabled={!agentPickerCanAdd}
+                className="group flex h-14 w-full items-center justify-between gap-3 overflow-hidden rounded-lg border border-border bg-card px-3 text-left shadow-none transition-colors hover:bg-muted/20 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-card"
+                onClick={() => setAgentPickerAdding(true)}
+                title="添加成员"
+                aria-label="添加成员"
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground/80 shadow-none transition-transform group-hover:scale-105">
+                    <span className={cn('material-symbols-outlined text-[18px]', !agentPickerCanAdd && 'animate-spin')}>
+                      {agentPickerCanAdd ? 'group_add' : 'progress_activity'}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium leading-none text-foreground">添加成员</div>
+                    <div className="mt-1 truncate text-xs leading-none text-muted-foreground">
+                      {agentPickerCanAdd ? `${filteredAgentPickerAgents.length} 个可加入 Agent` : '模型配置加载中...'}
+                    </div>
+                  </div>
+                </div>
+                <div className="ml-2 flex shrink-0 -space-x-2.5">
+                  {filteredAgentPickerAgents.slice(0, 3).map((agent) => {
+                    const name = String(agent.name || '').trim();
+                    return (
+                      <div key={`agent-picker-preview-${name}`} className="h-8 w-8 overflow-hidden rounded-full bg-muted shadow-sm ring-1 ring-background">
+                        <SpriteAvatar
+                          avatar={resolveAgentAvatarSrc(undefined, name)}
+                          seed={name}
+                          category="agent-default"
+                          alt={name}
+                          fallback={getChatAgentInitials(name)}
+                          className="h-full w-full"
+                          fallbackClassName="text-[10px] font-semibold text-muted-foreground"
+                        />
+                      </div>
+                    );
+                  })}
+                  {filteredAgentPickerAgents.length > 3 ? (
+                    <div className="relative z-0 flex h-8 w-8 items-center justify-center rounded-full bg-muted shadow-sm ring-1 ring-background">
+                      <span className="text-xs font-normal leading-none text-muted-foreground">
+                        +{filteredAgentPickerAgents.length - 3}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              </button>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <button
+          type="button"
+          className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground"
+          onClick={() => setAgentPickerOpen(true)}
+          title="展开 Agent 面板"
+        >
+          <span className="material-symbols-outlined text-[22px]">group_add</span>
+          <Badge variant="secondary" className="h-6 min-w-6 justify-center rounded-full px-1 text-[10px]">
+            {collaborationRoomCore.participants.length + 1}
+          </Badge>
+          <span className="text-[11px] font-medium tracking-[0.18em]" style={{ writingMode: 'vertical-rl' }}>
+            Agent
+          </span>
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div
@@ -4966,20 +5345,24 @@ export function ChatPageContent({
         <ResizablePanel id="chat-primary-main-panel" defaultSize={100} minSize={35} className="min-w-0">
       <div className={cn('flex h-full min-w-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
         {!isDashboardShell ? (
-          <div
+          <PageHeader
             className={cn(
-              'flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur shrink-0',
+              'shrink-0 bg-card px-4 py-3',
               isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-900/35'
             )}
-          >
-            <div className="flex items-center gap-2">
-              {!hideSidebar ? (
-                <Button size="icon" variant="ghost" onClick={() => setSidebarOpen(p => !p)} title="切换侧边栏">
-                  <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>menu</span>
-                </Button>
-              ) : null}
+            eyebrow="Start"
+            title={chatTitle === '首页' ? '对话' : chatTitle}
+            subtitle={activeAgentBinding ? `当前角色：${activeAgentBinding.agentName}` : activeWeChatBinding ? `微信 Bot：${activeWeChatBinding.externalConversationId}` : '首页对话、议场与工作流协作'}
+            status={chatHeaderStatus}
+            leading={!hideSidebar ? (
+              <Button size="icon" variant="outline" onClick={() => setSidebarOpen(p => !p)} title="切换侧边栏">
+                <span className="material-symbols-outlined" style={{ fontSize: '22px' }}>menu</span>
+              </Button>
+            ) : undefined}
+            secondaryActions={(
+              <>
               {activeAgentBinding ? (
-                <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5">
+                <div className="hidden sm:flex items-center gap-3 rounded-lg border border-border bg-background px-2 py-1.5">
                   <SpriteAvatar
                     avatar={activeAgentAvatarSrc}
                     seed={activeAgentBinding.agentName}
@@ -4999,8 +5382,8 @@ export function ChatPageContent({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-8 rounded-full px-3 text-xs"
-                    onClick={() => createSession({ title: '新对话' })}
+                    className="h-8 rounded-md px-3 text-xs"
+                    onClick={handleCreateNewConversation}
                   >
                     退出角色
                   </Button>
@@ -5008,8 +5391,7 @@ export function ChatPageContent({
               ) : null}
               <Button
                 size="sm"
-                variant={activeWeChatBinding ? 'default' : 'outline'}
-                className="rounded-full"
+                variant={activeWeChatBinding ? 'secondary' : 'outline'}
                 onClick={() => setWeChatBindDialogOpen(true)}
                 title="绑定当前首页对话到微信 Bot"
               >
@@ -5021,8 +5403,6 @@ export function ChatPageContent({
                   </span>
                 ) : null}
               </Button>
-            </div>
-            <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
@@ -5041,8 +5421,9 @@ export function ChatPageContent({
                 </Button>
               ) : null}
               <UserMenu user={currentUser} />
-            </div>
-          </div>
+              </>
+            )}
+          />
         ) : null}
 
         <div className="flex-1 min-h-0" data-tour-step-id="home-chat-main">
@@ -5057,15 +5438,16 @@ export function ChatPageContent({
                   appendSessionMessage={appendSessionMessage}
                   workingDirectory={effectiveWorkingDirectory}
                   onInsertIntoMainInput={handleInsertIntoMainInput}
-                  onRegisterMainInputHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
+                  onRegisterMainInputHandler={(handler: ((text: string) => void) | null) => { collaborationMessageHandlerRef.current = handler; }}
                   defaultMemberPanelCollapsed={!hasCollaborationParticipants}
+                  fixedGuestPanel={embedded || hasWorkflowSidebarContext}
                   currentUser={currentUser}
                 />
               </div>
-              <div className="home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16">
+              <div className="home-chat-input-tray shrink-0 border-t bg-[#F7F7F4] px-4 py-3 dark:bg-[#11111A] md:px-8 lg:px-16">
                 <div className="mx-auto max-w-5xl">
                   <div
-                    className="home-chat-composer relative overflow-hidden rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]"
+                    className="home-chat-composer relative overflow-hidden rounded-xl border border-border bg-card shadow-none"
                     data-tour-step-id="home-chat-composer"
                     {...composerDropProps}
                   >
@@ -5088,7 +5470,7 @@ export function ChatPageContent({
                       ref={editorRef}
                       content={input}
                       onEnter={handleEditorEnter}
-                      onChange={(markdown) => setInput(markdown)}
+                      onChange={(markdown: string) => setInput(markdown)}
                       preferMarkdownPaste
                       placeholder="和群里的 Agent 继续聊"
                       minHeight={116}
@@ -5101,23 +5483,19 @@ export function ChatPageContent({
                       mentionItems={mainInputMentionItems}
                       trimPastedTrailingNewlines
                       footerInside
-                      surfaceClassName="rounded-[28px] border-0 bg-transparent shadow-none"
+                      surfaceClassName="rounded-xl border-0 bg-transparent shadow-none"
                       contentAreaClassName="min-h-[68px] items-start px-6 pb-2 pt-4"
                       footerClassName="justify-end gap-4 border-border/60 px-6 pb-3 pt-3"
                       footerAfterCountContent={(
                         <div className="ml-5 flex items-center gap-3">
                           <Button
-                            className={cn(
-                              'h-11 w-11 rounded-2xl px-0 shadow-sm transition-colors duration-150',
-                              activeAiBusy
-                                ? 'border border-destructive/20 bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                                : 'bg-[#1f6fff] hover:bg-[#1a61de]'
-                            )}
+                            variant={activeAiBusy ? 'destructive' : 'default'}
+                            className="h-10 w-10 rounded-lg px-0 shadow-none transition-colors duration-150"
                             onClick={activeAiBusy ? stopActiveAiAction : handleSend}
-                            disabled={!activeAiBusy && (attachmentUploading || (!getInputMarkdown() && !pendingAttachment) || !isModelSelectionReady)}
+                            disabled={!activeAiBusy && (attachmentUploading || !canSubmitMessage)}
                             title={activeAiBusy ? '停止生成' : '发送'}
                           >
-                            <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>
+                            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
                               {activeAiBusy ? 'stop' : 'subdirectory_arrow_left'}
                             </span>
                           </Button>
@@ -5129,35 +5507,41 @@ export function ChatPageContent({
               </div>
             </div>
           ) : (
-          <div className="flex h-full min-h-0 flex-col bg-background">
+          <div className="flex h-full min-h-0 flex-col bg-[#F7F7F4] dark:bg-[#0D0E14]">
             {chatWorkspaceShellEnabled ? (
-            <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/70 bg-background px-5">
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <span className="text-xl font-semibold leading-none text-muted-foreground">#</span>
-                <h2 className="min-w-0 truncate text-base font-semibold text-foreground">{chatWorkspaceTitle}</h2>
-                <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline-flex">
-                  {messages.length} 消息
-                </span>
-                {activeAgentBinding ? (
-                  <span className="hidden truncate text-xs text-muted-foreground lg:block">
-                    {activeAgentBinding.agentName}
-                  </span>
-                ) : null}
+            <PageHeader
+              className="h-auto shrink-0 bg-card px-5 py-3"
+              title={chatWorkspaceTitle}
+              status={chatHeaderStatus}
+              leading={<span className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-[#EEE7FF] text-[#8B5CF6] dark:bg-violet-500/10 dark:text-violet-300">#</span>}
+              secondaryActions={(
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 rounded-md px-2.5 text-xs"
+                  title="切换工作区"
+                  aria-label="切换工作区"
+                  onClick={() => {
+                    setChatWorkspaceDraft(pinnedChatWorkspacePath || defaultChatWorkspacePath);
+                    setChatWorkspaceDialogOpen(true);
+                  }}
+                >
+                  <Settings2 className="mr-1.5 h-4 w-4" />
+                  切换工作区
+                </Button>
+                <ChatSessionMenu
+                  compact
+                  disabled={!activeSession}
+                  creationAssistantEnabled={creationAssistantEnabled}
+                  creationAssistantDisabled={!creationAssistantAvailable || loading}
+                  forkDisabled={!activeSession || loading}
+                  onCreationAssistantChange={handleCreationAssistantChange}
+                  onFork={handleForkFromSessionMenu}
+                />
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-md"
-                title="设置工作区"
-                aria-label="设置工作区"
-                onClick={() => {
-                  setChatWorkspaceDraft(pinnedChatWorkspacePath || defaultChatWorkspacePath);
-                  setChatWorkspaceDialogOpen(true);
-                }}
-              >
-                <Settings2 className="h-4 w-4" />
-              </Button>
-            </div>
+              )}
+            />
             ) : null}
 
             <Tabs
@@ -5169,29 +5553,34 @@ export function ChatPageContent({
               className="flex min-h-0 flex-1 flex-col"
             >
               {chatWorkspaceShellEnabled ? (
-              <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/60 bg-background px-5">
+              <PageToolbar
+                className="shrink-0 bg-card px-5 py-0"
+                actions={(
+                  <div className="hidden max-w-[44%] truncate text-xs text-muted-foreground md:block">
+                    {resolvedChatWorkspacePath || '准备工作区...'}
+                  </div>
+                )}
+              >
                 <TabsList className="h-11 gap-5 rounded-none bg-transparent p-0">
-                  <TabsTrigger value="chat" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                  <TabsTrigger value="chat" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-[#8B5CF6] data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
                     <MessageSquareText className="h-4 w-4" />
                     聊天
                   </TabsTrigger>
-                  <TabsTrigger value="workspace" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                  <TabsTrigger value="workspace" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-[#8B5CF6] data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
                     <FolderOpen className="h-4 w-4" />
                     工作区
                   </TabsTrigger>
-                  <TabsTrigger value="changes" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                  <TabsTrigger value="changes" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-[#8B5CF6] data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
                     <GitBranch className="h-4 w-4" />
                     变更
                   </TabsTrigger>
                 </TabsList>
-                <div className="hidden max-w-[44%] truncate text-xs text-muted-foreground md:block">
-                  {displayedChatWorkspacePath || '准备工作区...'}
-                </div>
-              </div>
+              </PageToolbar>
               ) : null}
 
-              <TabsContent value="chat" className="mt-0 min-h-0 flex-1">
+              <TabsContent value="chat" className="relative mt-0 min-h-0 flex-1 overflow-visible">
           {(!chatWorkspaceShellEnabled || chatWorkspaceActiveTab === 'chat') ? (
+          <>
           <ResizablePanelGroup
             orientation="horizontal"
             className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}
@@ -5218,13 +5607,13 @@ export function ChatPageContent({
                   <div
                     ref={scrollContainerRef}
                     className={cn(
-                      'home-chat-scroll absolute inset-0 overflow-y-auto px-4 pb-6 pt-10 md:px-8 lg:px-16',
+                      'home-chat-scroll absolute inset-0 overflow-y-auto px-4 pb-6 pt-8 md:px-8 lg:px-16',
                       isWerewolfLabMode && 'werewolf-wood-main'
                     )}
                   >
                     {messages.length === 0 && isCurrentSessionLoading ? (
                       <div className="flex h-full items-center justify-center">
-                        <div className="home-chat-surface flex items-center gap-3 rounded-2xl px-4 py-3 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
                           <span className="material-symbols-outlined animate-spin text-base text-primary">progress_activity</span>
                           <span>正在加载对话...</span>
                         </div>
@@ -5236,37 +5625,13 @@ export function ChatPageContent({
                         onCreateGuest={handleCreateAgoraGuest}
                       />
                     ) : messages.length === 0 && !loading && (
-                      <div className="flex h-full flex-col items-center justify-center gap-8 pt-14">
-                        <div className="text-center">
-                          <div className="inline-flex p-3 mb-4">
-                            <RobotLogo size={56} className="animate-robotPulse" />
-                          </div>
-                          <motion.h2
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="text-2xl font-bold bg-gradient-to-r from-primary via-blue-500 to-purple-500 bg-clip-text text-transparent mb-2"
-                          >
-                            {PRODUCT_DISPLAY_NAME}
-                          </motion.h2>
-                          <motion.p
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            transition={{ delay: 0.1 }}
-                            className="text-sm text-muted-foreground"
-                          >
-                            {activeAgentBinding?.agentName
-                              ? `当前正在与 Agent「${activeAgentBinding.agentName}」对话`
-                              : '重构你的 Agent 生产力 | Your team of AI'}
-                          </motion.p>
-                          <motion.span
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            transition={{ delay: 0.2 }}
-                            className="mt-1 text-xs text-muted-foreground/60"
-                          >
-                            v{pkgJson.version}
-                          </motion.span>
-                        </div>
+                      <div className="flex h-full flex-col items-center justify-center gap-6 pt-14">
+                        <EmptyState
+                          className="w-full max-w-2xl border-border bg-card"
+                          icon={<RobotLogo size={26} />}
+                          title={activeAgentBinding?.agentName ? `与 ${activeAgentBinding.agentName} 对话` : '开始一个任务对话'}
+                          description={activeAgentBinding?.agentName ? '当前会话已绑定 Agent，发送消息即可继续协作。' : `描述需求、附加文件，或从下方工具区创建 workflow / agent。v${pkgJson.version}`}
+                        />
                         <QuickActions onAction={handleQuickAction} skillSettings={skillSettings} slashCommands={engineSlashCommands} />
                       </div>
                     )}
@@ -5288,254 +5653,34 @@ export function ChatPageContent({
                       }
                       recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={scrollContainerRef} itemGap={0} />}
                     />
-                    {activeAiBusy ? (
-                      <div className="flex justify-start pb-4 pl-10">
-                        <div className="home-chat-surface rounded-2xl border border-border/60 bg-background/90 px-3 py-2 shadow-sm">
-                          <ThinkingBot />
-                        </div>
-                      </div>
-                    ) : null}
                     <div ref={messagesEndRef} />
                   </div>
                   {showScrollBtn && (
                     <button
                       onClick={scrollToBottom}
-                      className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-primary/20 bg-background/92 px-3 py-1.5 text-xs text-foreground backdrop-blur-md transition-colors duration-150 hover:bg-background"
+                    className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground transition-colors duration-150 hover:bg-muted"
                     >
                       <span className="material-symbols-outlined text-primary" style={{ fontSize: '16px' }}>arrow_downward</span>
                       新消息
                     </button>
                   )}
-                  <div
-                    className={cn(
-                      'absolute right-4 top-4 z-20 hidden min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/94 shadow-2xl backdrop-blur transition-[width,height] duration-200 xl:flex',
-                      agentPickerOpen ? 'bottom-4 w-[22rem] flex-col' : 'h-48 w-12 items-stretch'
-                    )}
-                  >
-                    {agentPickerOpen ? (
-                      <>
-                        <div className="shrink-0 border-b border-border/60 bg-muted/25 px-3 py-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="text-sm font-semibold">{agentPickerAdding ? '添加 Agent' : 'Agent'}</div>
-                              <div className="truncate text-xs text-muted-foreground">
-                                {agentPickerAdding ? '选择运行模型并加入当前对话' : `默认助手 + ${collaborationRoomCore.participants.length} 个 Agent`}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              {agentPickerAdding ? (
-                                <Button type="button" size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={() => setAgentPickerAdding(false)} title="返回成员">
-                                  <span className="material-symbols-outlined text-[18px]">arrow_back</span>
-                                </Button>
-                              ) : null}
-                              <Button type="button" size="icon" variant="ghost" className="h-8 w-8 rounded-full" onClick={() => {
-                                setAgentPickerOpen(false);
-                                setAgentPickerAdding(false);
-                              }} title="收起 Agent 面板">
-                                <span className="material-symbols-outlined text-[18px]">right_panel_close</span>
-                              </Button>
-                            </div>
-                          </div>
-                          {agentPickerAdding ? (
-                            <div className="mt-3 space-y-2">
-                              <EngineModelSelect
-                                engine={agentPickerRuntime.engine}
-                                model={agentPickerRuntime.model}
-                                onEngineChange={(nextEngine) => setAgentPickerRuntime((prev) => ({ ...prev, engine: nextEngine }))}
-                                onModelChange={(nextModel) => setAgentPickerRuntime((prev) => ({ ...prev, model: nextModel }))}
-                                className="h-9"
-                              />
-                              {!agentPickerCanAdd ? (
-                                <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                                  模型配置加载完成后才能添加 Agent。
-                                </div>
-                              ) : null}
-                              <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-background px-3 py-2">
-                                <span className="material-symbols-outlined text-[17px] text-muted-foreground">search</span>
-                                <input
-                                  value={agentPickerQuery}
-                                  onChange={(event) => setAgentPickerQuery(event.target.value)}
-                                  placeholder="搜索 Agent"
-                                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                                />
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="home-chat-scroll min-h-0 flex-1 overflow-y-auto p-2">
-                          {agentPickerAdding ? (
-                            <div className="space-y-1">
-                              {filteredAgentPickerAgents.length ? filteredAgentPickerAgents.map((agent) => {
-                                const name = String(agent.name || '').trim();
-                                return (
-                                  <button
-                                    key={name}
-                                    type="button"
-                                    disabled={!agentPickerCanAdd}
-                                    className={cn(
-                                      'group flex w-full items-center gap-2 rounded-xl p-2 text-left transition-colors hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent',
-                                    )}
-                                    onClick={() => addAgentToConversation(agent)}
-                                  >
-                                    <SpriteAvatar
-                                      avatar={resolveAgentAvatarSrc(undefined, name)}
-                                      seed={name}
-                                      category="agent-default"
-                                      alt={name}
-                                      fallback={getChatAgentInitials(name)}
-                                      className="h-8 w-8 shrink-0"
-                                      fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
-                                    />
-                                    <div className="min-w-0 flex-1">
-                                      <div className="truncate text-xs font-medium">{name}</div>
-                                      <div className="truncate text-[11px] text-muted-foreground">{agent.description || 'Agent'}</div>
-                                    </div>
-                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
-                                      <span className={cn('material-symbols-outlined text-[17px]', !agentPickerCanAdd && 'animate-spin')}>{agentPickerCanAdd ? 'add' : 'progress_activity'}</span>
-                                    </span>
-                                  </button>
-                                );
-                              }) : (
-                                <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
-                                  没有可加入的 Agent
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              <div className="rounded-xl border border-primary/15 bg-primary/5 p-2.5">
-                                <div className="flex items-center gap-2">
-                                  <RobotLogo size={28} />
-                                  <div className="min-w-0 flex-1">
-                                    <div className="truncate text-xs font-semibold">默认助手</div>
-                                    <div className="truncate text-[11px] text-muted-foreground">单人议场默认 Agent，普通对话能力完整保留</div>
-                                  </div>
-                                  <Badge variant="secondary" className="rounded-full text-[10px]">默认</Badge>
-                                </div>
-                              </div>
-                              {collaborationRoomCore.participants.length ? collaborationRoomCore.participants.map((participant) => (
-                                <div key={participant.id || participant.name} className="group flex items-center gap-2 rounded-xl bg-muted/35 p-2">
-                                  <SpriteAvatar
-                                    avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
-                                    seed={participant.runtimeAgentName || participant.name}
-                                    category="agent-default"
-                                    alt={participant.name}
-                                    fallback={getChatAgentInitials(participant.name)}
-                                    className="h-8 w-8 shrink-0"
-                                    fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
-                                  />
-                                  <div className="min-w-0 flex-1">
-                                    <div className="truncate text-xs font-medium">{participant.name}</div>
-                                    <div className="truncate text-[11px] text-muted-foreground">
-                                      {participant.model ? [participant.engine, participant.model].filter(Boolean).join(' / ') : '跟随默认模型'}
-                                    </div>
-                                  </div>
-                                  <Button
-                                    type="button"
-                                    size="icon"
-                                    variant="ghost"
-                                    className="h-7 w-7 rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                                    title="移除 Agent"
-                                    aria-label={`移除 ${participant.name}`}
-                                    onClick={() => removeAgentFromConversation(participant.name)}
-                                  >
-                                    <span className="material-symbols-outlined text-[16px]">close</span>
-                                  </Button>
-                                </div>
-                              )) : (
-                                <div className="rounded-xl border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
-                                  还没有额外 Agent
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        {!agentPickerAdding ? (
-                          <div className="shrink-0 border-t border-border/60 bg-background/95 p-2.5">
-                            <button
-                              type="button"
-                              disabled={!agentPickerCanAdd}
-                              className="group flex h-14 w-full items-center justify-between gap-3 overflow-hidden rounded-2xl border border-border bg-card px-3 text-left shadow-sm transition-colors hover:bg-muted/20 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-card"
-                              onClick={() => setAgentPickerAdding(true)}
-                              title="添加成员"
-                              aria-label="添加成员"
-                            >
-                              <div className="flex min-w-0 items-center gap-2.5">
-                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)] transition-transform group-hover:scale-105">
-                                  <span className={cn('material-symbols-outlined text-[18px]', !agentPickerCanAdd && 'animate-spin')}>
-                                    {agentPickerCanAdd ? 'group_add' : 'progress_activity'}
-                                  </span>
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-medium leading-none text-foreground">添加成员</div>
-                                  <div className="mt-1 truncate text-xs leading-none text-muted-foreground">
-                                    {agentPickerCanAdd ? `${filteredAgentPickerAgents.length} 个可加入 Agent` : '模型配置加载中...'}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="ml-2 flex shrink-0 -space-x-2.5">
-                                {filteredAgentPickerAgents.slice(0, 3).map((agent) => {
-                                  const name = String(agent.name || '').trim();
-                                  return (
-                                    <div key={`agent-picker-preview-${name}`} className="h-8 w-8 overflow-hidden rounded-full bg-muted shadow-sm ring-1 ring-background">
-                                      <SpriteAvatar
-                                        avatar={resolveAgentAvatarSrc(undefined, name)}
-                                        seed={name}
-                                        category="agent-default"
-                                        alt={name}
-                                        fallback={getChatAgentInitials(name)}
-                                        className="h-full w-full"
-                                        fallbackClassName="text-[10px] font-semibold text-muted-foreground"
-                                      />
-                                    </div>
-                                  );
-                                })}
-                                {filteredAgentPickerAgents.length > 3 ? (
-                                  <div className="relative z-0 flex h-8 w-8 items-center justify-center rounded-full bg-muted shadow-sm ring-1 ring-background">
-                                    <span className="text-xs font-normal leading-none text-muted-foreground">
-                                      +{filteredAgentPickerAgents.length - 3}
-                                    </span>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </button>
-                          </div>
-                        ) : null}
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground"
-                        onClick={() => setAgentPickerOpen(true)}
-                        title="展开 Agent 面板"
-                      >
-                        <span className="material-symbols-outlined text-[22px]">group_add</span>
-                        <Badge variant="secondary" className="h-6 min-w-6 justify-center rounded-full px-1 text-[10px]">
-                          {collaborationRoomCore.participants.length + 1}
-                        </Badge>
-                        <span className="text-[11px] font-medium tracking-[0.18em]" style={{ writingMode: 'vertical-rl' }}>
-                          Agent
-                        </span>
-                      </button>
-                    )}
-                  </div>
                 </div>
 
                 {!showAgoraZenCover ? (
                   <div
                     className={cn(
-                      'home-chat-input-tray relative z-30 shrink-0 isolate border-t px-4 py-3 md:px-8 lg:px-16',
+                      'home-chat-input-tray relative z-30 shrink-0 isolate border-t bg-[#F7F7F4] px-4 py-3 dark:bg-[#11111A] md:px-8 lg:px-16',
                       isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
                     )}
                   >
                     {messages.length > 0 && (
-                      <div className="mx-auto mb-0.5 max-w-5xl rounded-2xl bg-background/70 px-1 py-1 backdrop-blur-sm">
+                      <div className="mx-auto mb-2 max-w-5xl rounded-lg border border-border bg-card px-1 py-1">
                         <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} slashCommands={engineSlashCommands} />
                       </div>
                     )}
                     <div className="mx-auto max-w-5xl">
                       <div
-                        className="home-chat-composer relative z-10 rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]"
+                        className="home-chat-composer relative z-10 rounded-xl border border-border bg-card shadow-none"
                         data-tour-step-id="home-chat-composer"
                         {...composerDropProps}
                       >
@@ -5597,7 +5742,7 @@ export function ChatPageContent({
                           ref={editorRef}
                           content={input}
                           onEnter={handleEditorEnter}
-                          onChange={(markdown) => setInput(markdown)}
+                          onChange={(markdown: string) => setInput(markdown)}
                           preferMarkdownPaste
                           placeholder="描述你的需求或问题"
                           minHeight={116}
@@ -5610,13 +5755,13 @@ export function ChatPageContent({
                           mentionItems={mainInputMentionItems}
                           trimPastedTrailingNewlines
                           footerInside
-                          surfaceClassName="rounded-[28px] border-0 bg-transparent shadow-none"
+                          surfaceClassName="rounded-xl border-0 bg-transparent shadow-none"
                           contentAreaClassName="min-h-[68px] items-start px-6 pb-2 pt-4"
                           footerClassName="gap-4 border-border/60 px-6 pb-3 pt-3"
                           footerContent={(
                             <>
                               {isMultiAgentConversation ? (
-                                <div className="flex items-center gap-1 rounded-full border border-border/60 bg-background/70 p-0.5">
+                                <div className="flex items-center gap-1 rounded-lg border border-border bg-background p-0.5">
                                   {COLLABORATION_MODE_OPTIONS.map((option) => (
                                     <button
                                       key={option.value}
@@ -5624,7 +5769,7 @@ export function ChatPageContent({
                                       className={cn(
                                         'h-7 rounded-full px-2 text-[11px] transition-colors',
                                         collaborationRoomCore.responseMode === option.value
-                                          ? 'bg-primary text-primary-foreground'
+                                          ? 'bg-[#EEE7FF] text-[#151515] dark:bg-violet-500/15 dark:text-violet-100'
                                           : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                                       )}
                                       title={option.title}
@@ -5643,7 +5788,7 @@ export function ChatPageContent({
                                 <span className="material-symbols-outlined text-[16px]">bug_report</span>
                                 调试
                               </button>
-                              <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-[0.82] data-[state=unchecked]:bg-slate-200 data-[state=checked]:bg-primary/85" />
+                              <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-[0.82] data-[state=unchecked]:bg-slate-200 data-[state=checked]:bg-[#8B5CF6]" />
                               <div className="ml-2 w-[9.5rem] shrink-0 sm:w-[10.5rem]">
                                 <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-9 rounded-full border-0 bg-transparent px-0.5 text-sm shadow-none" />
                               </div>
@@ -5653,16 +5798,16 @@ export function ChatPageContent({
                             <div className="ml-5 flex items-center gap-3">
                               <Button
                                 className={cn(
-                                  'h-11 w-11 rounded-2xl px-0 shadow-sm transition-colors duration-150',
+                                  'h-10 w-10 rounded-lg px-0 shadow-none transition-colors duration-150',
                                   activeAiBusy
                                     ? 'border border-destructive/20 bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                                    : 'bg-[#1f6fff] hover:bg-[#1a61de]'
+                                    : 'bg-foreground text-background hover:bg-foreground/90'
                                 )}
                                 onClick={activeAiBusy ? stopActiveAiAction : handleSend}
-                                disabled={!activeAiBusy && (attachmentUploading || (!getInputMarkdown() && !pendingAttachment) || !isModelSelectionReady)}
+                                disabled={!activeAiBusy && (attachmentUploading || !canSubmitMessage)}
                                 title={activeAiBusy ? '停止生成' : '发送'}
                               >
-                                <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>
+                                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
                                   {activeAiBusy ? 'stop' : 'subdirectory_arrow_left'}
                                 </span>
                               </Button>
@@ -5695,7 +5840,7 @@ export function ChatPageContent({
                     session={activeSession}
                     setSessionWorkbenchState={setSessionWorkbenchState}
                     onCollapse={closeHomeSidebar}
-                    legacyPanel={hasWorkflowRuntimeRightRailContext ? null : (
+                    fallbackPanel={hasWorkflowRuntimeRightRailContext ? null : (
                       <HomeCommandSidebar
                         engine={effectiveEngine || engine}
                         model={model}
@@ -5729,18 +5874,20 @@ export function ChatPageContent({
                 <button
                   type="button"
                   className={cn(
-                    'm-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/82 px-2 py-4 text-[12px] text-muted-foreground backdrop-blur-sm transition-colors duration-150 hover:text-foreground',
+                    'm-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-lg border bg-background/82 px-2 py-4 text-[12px] text-muted-foreground backdrop-blur-sm transition-colors duration-150 hover:bg-muted/30 hover:text-foreground',
                     isWerewolfLabMode && 'border-stone-600/70 bg-stone-950/35 text-stone-300 hover:text-stone-100'
                   )}
                   onClick={() => openHomeSidebar(homeSidebarTab)}
-                  title="展开右侧插件边栏"
+                  title="展开右侧上下文与指挥区"
                 >
                   <span className="material-symbols-outlined text-3xl">right_panel_open</span>
-                  <span className="[writing-mode:vertical-rl] tracking-[0.2em]">插件</span>
+                  <span className="[writing-mode:vertical-rl] tracking-[0.14em]">上下文</span>
                 </button>
               </div>
             ) : null}
           </ResizablePanelGroup>
+          {agentPickerPanel}
+          </>
           ) : null}
               </TabsContent>
 
@@ -5836,7 +5983,7 @@ export function ChatPageContent({
                 新目录：<span className="break-all font-mono">{chatWorkspaceCleanupConfirm?.nextPath || '默认工作目录'}</span>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">
-                只会删除 {PRODUCT_DISPLAY_NAME} 自动创建并绑定到该会话的工作目录；用户手动选择的目录不会出现这个选项。
+                只会删除 ACEHarness 自动创建并绑定到该会话的工作目录；用户手动选择的目录不会出现这个选项。
               </p>
             </div>
             <DialogFooter>
@@ -5896,7 +6043,7 @@ export function ChatPageContent({
                 <RichTextEditor
                   ref={editEditorRef}
                   content={editContent}
-                  onChange={(markdown) => setEditContent(markdown)}
+                  onChange={(markdown: string) => setEditContent(markdown)}
                   placeholder="输入消息内容..."
                   minHeight={280}
                   maxHeight={340}
@@ -6037,3 +6184,4 @@ export function ChatPageContent({
     </div>
   );
 }
+

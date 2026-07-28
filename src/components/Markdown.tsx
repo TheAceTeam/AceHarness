@@ -477,6 +477,7 @@ const components = {
       return (
         <button
           type="button"
+          data-workspace-absolute-path={workspaceAbsolutePath}
           className="inline-flex items-center gap-0.5 text-primary font-medium underline decoration-primary/40 underline-offset-4 hover:decoration-primary/80 hover:opacity-90 transition-opacity"
           onClick={() => {
             if (typeof window === 'undefined') return;

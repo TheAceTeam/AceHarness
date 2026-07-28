@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { roleConfigSchema } from '@/lib/core/schemas';
@@ -10,10 +10,12 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { EngineSelect } from '@/components/EngineSelect';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { resolveAgentSelection } from '@/lib/agent/engine-selection';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
+import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 
 interface AgentConfigPanelProps {
   agents: RoleConfig[];
@@ -36,19 +38,10 @@ const teamBadgeClass: Record<string, string> = {
 export default function AgentConfigPanel({ agents, onSaveAgent, onDeleteAgent }: AgentConfigPanelProps) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [isAdding, setIsAdding] = useState(false);
-  const [globalEngine, setGlobalEngine] = useState('');
-  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
+  const globalEngine = runtimeSelectionQuery.data?.engine || '';
+  const globalDefaultModel = runtimeSelectionQuery.data?.defaultModel || '';
   const { confirm, dialogProps } = useConfirmDialog();
-
-  useEffect(() => {
-    fetch('/api/engine')
-      .then((res) => res.json())
-      .then((data) => {
-        setGlobalEngine(data.engine || '');
-        setGlobalDefaultModel(data.defaultModel || '');
-      })
-      .catch(() => {});
-  }, []);
 
   const handleSave = (data: RoleConfig) => {
     onSaveAgent(data);
@@ -162,7 +155,7 @@ function RoleEditForm({
   onCancel: () => void;
   onDelete?: () => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<RoleConfig>({
+  const { register, handleSubmit, formState: { errors }, setValue, watch } = useForm<RoleConfig>({
     resolver: zodResolver(roleConfigSchema),
     defaultValues: role || {
       name: '',
@@ -179,6 +172,7 @@ function RoleEditForm({
   const [capInput, setCapInput] = useState(role?.capabilities.join(', ') || '');
   const [constraintsInput, setConstraintsInput] = useState(role?.constraints?.join('\n') || '');
   const [keywordsInput, setKeywordsInput] = useState(role?.keywords?.join(', ') || '');
+  const activeEngine = watch('activeEngine') || '';
 
   const onSubmit = (data: any) => {
     data.capabilities = capInput.split(',').map((s: string) => s.trim()).filter(Boolean);
@@ -208,7 +202,11 @@ function RoleEditForm({
       </div>
       <div className="space-y-1">
         <Label>引擎</Label>
-        <Input {...register('activeEngine')} placeholder="留空跟随全局" />
+        <EngineSelect
+          value={activeEngine}
+          onChange={(value) => setValue('activeEngine', value, { shouldDirty: true, shouldValidate: true })}
+          allowGlobal
+        />
       </div>
       <div className="space-y-1">
         <Label>Temperature</Label>

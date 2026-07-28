@@ -1,6 +1,6 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import dynamic from "@/lib/navigation/dynamic";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTheme } from "next-themes";
 import type { ReactNode } from "react";
@@ -26,15 +26,22 @@ import {
   type ImperativePanelHandle,
 } from "@/components/ui/resizable";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  useGitBrowserCommitDetailQuery,
+  useGitBrowserCommitFileQuery,
+  useGitBrowserScopeFileQuery,
+  useGitBrowserSummaryPageMutation,
+  useGitBrowserSummaryQuery,
+  useWorkflowGitDiffFileQuery,
+  useWorkflowGitDiffQuery,
+} from "@/client/query/workspace";
 import { registerCangjieLanguage } from "@/lib/cangjie/language";
 import {
-  workspaceApi,
   type GitBrowserCommitDetailResponse,
   type GitBrowserFileDetail,
   type GitBrowserScope,
   type GitBrowserSummaryResponse,
   type GitDiffSummaryFile,
-  type WorkflowGitDiffResponse,
   type WorkflowGitStepDiff,
 } from "@/lib/core/api";
 import { cn } from "@/lib/core/utils";
@@ -364,7 +371,6 @@ export function GitWorkspaceDiffPanel({
   const { resolvedTheme } = useTheme();
   const [topMode, setTopMode] = useState<PanelTopMode>(runId ? "workflow" : "git");
   const [summary, setSummary] = useState<GitBrowserSummaryResponse | null>(null);
-  const [workflowDiff, setWorkflowDiff] = useState<WorkflowGitDiffResponse | null>(null);
   const [mode, setMode] = useState<BrowserMode>("commits");
   const [workflowRange, setWorkflowRange] = useState<WorkflowDiffRange>("step");
   const [diffLayoutMode, setDiffLayoutMode] = useState<DiffLayoutMode>("side-by-side");
@@ -374,86 +380,104 @@ export function GitWorkspaceDiffPanel({
   const [detailViewMode, setDetailViewMode] = useState<DetailViewMode>("commit-patch");
   const [commitDetail, setCommitDetail] = useState<GitBrowserCommitDetailResponse | null>(null);
   const [detail, setDetail] = useState<GitBrowserFileDetail | null>(null);
-  const [loadingSummary, setLoadingSummary] = useState(false);
-  const [loadingCommit, setLoadingCommit] = useState(false);
-  const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingMoreCommits, setLoadingMoreCommits] = useState(false);
-  const [loadingWorkflowDiff, setLoadingWorkflowDiff] = useState(false);
   const [error, setError] = useState<string>("");
   const [open, setOpen] = useState(false);
   const lastWorkflowSelectionRef = useRef("");
 
-  const loadWorkflowDiff = useCallback(async (options?: { stepDiffId?: string; range?: WorkflowDiffRange }) => {
-    const targetRunId = String(runId || "").trim();
-    if (!targetRunId) return;
-    const requestedStepDiffId = options?.stepDiffId || selectedStepDiffId || undefined;
-    const requestedRange = options?.range || workflowRange;
-    setLoadingWorkflowDiff(true);
-    try {
-      const next = await workspaceApi.getWorkflowGitDiff(targetRunId, {
-        stepDiffId: requestedStepDiffId,
-        range: requestedRange,
-      });
-      setWorkflowDiff(next);
-      setError("");
-      const nextStepId = requestedStepDiffId || next.selectedStepDiffId || next.stepDiffs?.[next.stepDiffs.length - 1]?.id || "";
-      if (nextStepId && nextStepId !== selectedStepDiffId) setSelectedStepDiffId(nextStepId);
-      const selectionKey = `${nextStepId || ""}:${requestedRange}`;
-      const stepChanged = selectionKey !== lastWorkflowSelectionRef.current;
-      lastWorkflowSelectionRef.current = selectionKey;
-      if (stepChanged || !selectedFile || !(next.files || []).some((item) => item.path === selectedFile)) {
-        setSelectedFile(next.files?.[0]?.path || "");
-      }
-    } catch (nextError: any) {
-      setError(nextError?.message || "获取工作流步骤变更失败");
-      setWorkflowDiff(null);
-    } finally {
-      setLoadingWorkflowDiff(false);
-    }
-  }, [runId, selectedFile, selectedStepDiffId, workflowRange]);
-
-  const loadSummary = useCallback(async (options?: { appendCommits?: boolean; commitOffset?: number; commitLimit?: number }) => {
-    const targetWorkspace = String(workspacePath || "").trim();
-    if (!targetWorkspace) return;
-    const appendCommits = !!options?.appendCommits;
-    if (appendCommits) {
-      setLoadingMoreCommits(true);
-    } else {
-      setLoadingSummary(true);
-    }
-    try {
-      const next = await workspaceApi.getGitBrowserSummary(targetWorkspace, {
-        commitOffset: options?.commitOffset,
-        commitLimit: options?.commitLimit ?? INITIAL_COMMIT_LIMIT,
-      });
-      setSummary((prev) => {
-        if (!appendCommits || !prev) return next;
-        return {
-          ...next,
-          commits: [...prev.commits, ...next.commits],
-          commitOffset: next.commitOffset,
-        };
-      });
-      setError("");
-    } catch (nextError: any) {
-      setError(nextError?.message || "获取 Git 浏览数据失败");
-      if (!appendCommits) setSummary(null);
-    } finally {
-      if (appendCommits) {
-        setLoadingMoreCommits(false);
-      } else {
-        setLoadingSummary(false);
-      }
-    }
-  }, [workspacePath]);
+  const targetRunId = String(runId || "").trim();
+  const workflowDiffQuery = useWorkflowGitDiffQuery(
+    targetRunId,
+    {
+      stepDiffId: selectedStepDiffId || undefined,
+      range: workflowRange,
+    },
+    {
+      enabled: topMode === "workflow" && Boolean(targetRunId),
+      refetchInterval: isRunning && topMode === "workflow" && targetRunId ? 5000 : false,
+    },
+  );
+  const workflowDiff = workflowDiffQuery.data ?? null;
+  const workflowFileDetailQuery = useWorkflowGitDiffFileQuery(
+    targetRunId,
+    selectedFile,
+    {
+      stepDiffId: selectedStepDiffId || undefined,
+      range: workflowRange,
+    },
+    {
+      enabled: topMode === "workflow" && Boolean(targetRunId && selectedFile),
+      refetchInterval: isRunning && topMode === "workflow" && targetRunId && selectedFile ? 5000 : false,
+    },
+  );
+  const loadingWorkflowDiff = workflowDiffQuery.isFetching;
+  const targetWorkspace = String(workspacePath || "").trim();
+  const gitSummaryQuery = useGitBrowserSummaryQuery(
+    targetWorkspace,
+    { commitLimit: INITIAL_COMMIT_LIMIT },
+    {
+      enabled: topMode === "git" && Boolean(targetWorkspace),
+      refetchInterval: isRunning && topMode === "git" && targetWorkspace ? 5000 : false,
+    },
+  );
+  const gitCommitDetailQuery = useGitBrowserCommitDetailQuery(
+    targetWorkspace,
+    selectedCommit,
+    { enabled: topMode === "git" && mode === "commits" && Boolean(targetWorkspace && selectedCommit) },
+  );
+  const gitCommitFileDetailQuery = useGitBrowserCommitFileQuery(
+    targetWorkspace,
+    selectedCommit,
+    selectedFile,
+    { enabled: topMode === "git" && mode === "commits" && Boolean(targetWorkspace && selectedCommit && selectedFile) },
+  );
+  const gitScopeFileDetailQuery = useGitBrowserScopeFileQuery(
+    targetWorkspace,
+    mode === "commits" ? "unstaged" : mode,
+    selectedFile,
+    { enabled: topMode === "git" && mode !== "commits" && Boolean(targetWorkspace && selectedFile) },
+  );
+  const gitSummaryPageMutation = useGitBrowserSummaryPageMutation(targetWorkspace);
+  const loadingSummary = gitSummaryQuery.isFetching;
+  const loadingCommit = gitCommitDetailQuery.isFetching;
+  const activeLoadingDetail = topMode === "workflow"
+    ? workflowFileDetailQuery.isFetching
+    : mode === "commits"
+      ? gitCommitFileDetailQuery.isFetching
+      : gitScopeFileDetailQuery.isFetching;
 
   useEffect(() => {
-    if (topMode === "git") void loadSummary();
-  }, [loadSummary, topMode]);
+    if (topMode !== "git") return;
+    if (gitSummaryQuery.data) {
+      setSummary(gitSummaryQuery.data);
+      setError("");
+      return;
+    }
+    if (gitSummaryQuery.error) {
+      setError(gitSummaryQuery.error instanceof Error ? gitSummaryQuery.error.message : "获取 Git 浏览数据失败");
+      setSummary(null);
+    }
+  }, [gitSummaryQuery.data, gitSummaryQuery.error, topMode]);
 
   useEffect(() => {
-    if (topMode === "workflow" && runId) void loadWorkflowDiff();
-  }, [loadWorkflowDiff, runId, topMode]);
+    if (topMode !== "workflow") return;
+    if (workflowDiffQuery.error) {
+      setError(workflowDiffQuery.error instanceof Error ? workflowDiffQuery.error.message : "获取工作流步骤变更失败");
+    }
+  }, [topMode, workflowDiffQuery.error]);
+
+  useEffect(() => {
+    if (topMode !== "workflow" || !workflowDiff) return;
+    setError("");
+    const nextStepId = selectedStepDiffId || workflowDiff.selectedStepDiffId || workflowDiff.stepDiffs?.[workflowDiff.stepDiffs.length - 1]?.id || "";
+    if (nextStepId && nextStepId !== selectedStepDiffId) setSelectedStepDiffId(nextStepId);
+    const selectionKey = `${nextStepId || ""}:${workflowRange}`;
+    const stepChanged = selectionKey !== lastWorkflowSelectionRef.current;
+    lastWorkflowSelectionRef.current = selectionKey;
+    if (stepChanged || !selectedFile || !(workflowDiff.files || []).some((item) => item.path === selectedFile)) {
+      setSelectedFile(workflowDiff.files?.[0]?.path || "");
+    }
+  }, [selectedFile, selectedStepDiffId, topMode, workflowDiff, workflowRange]);
 
   useEffect(() => {
     if (!runId && topMode === "workflow") setTopMode("git");
@@ -481,160 +505,109 @@ export function GitWorkspaceDiffPanel({
   }, [mode, selectedCommit, selectedFile, summary, topMode]);
 
   useEffect(() => {
-    const targetWorkspace = String(workspacePath || "").trim();
-    if (topMode !== "git" || !targetWorkspace || mode !== "commits" || !selectedCommit) {
+    if (topMode !== "git" || mode !== "commits" || !selectedCommit) {
       setCommitDetail(null);
       return;
     }
-    let cancelled = false;
-    setLoadingCommit(true);
-    workspaceApi.getGitBrowserCommitDetail(targetWorkspace, selectedCommit)
-      .then((next) => {
-        if (cancelled) return;
-        setCommitDetail(next);
-        setError("");
-        if (!selectedFile || !next.files.some((item) => item.path === selectedFile)) {
-          setSelectedFile(next.files[0]?.path || "");
-        }
-      })
-      .catch((nextError: any) => {
-        if (cancelled) return;
-        setError(nextError?.message || "获取提交详情失败");
-        setCommitDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingCommit(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, selectedCommit, selectedFile, topMode, workspacePath]);
+    if (gitCommitDetailQuery.data) {
+      const next = gitCommitDetailQuery.data;
+      setCommitDetail(next);
+      setError("");
+      if (!selectedFile || !next.files.some((item) => item.path === selectedFile)) {
+        setSelectedFile(next.files[0]?.path || "");
+      }
+      return;
+    }
+    if (gitCommitDetailQuery.error) {
+      setError(gitCommitDetailQuery.error instanceof Error ? gitCommitDetailQuery.error.message : "获取提交详情失败");
+      setCommitDetail(null);
+    }
+  }, [gitCommitDetailQuery.data, gitCommitDetailQuery.error, mode, selectedCommit, selectedFile, topMode]);
 
   useEffect(() => {
-    const targetWorkspace = String(workspacePath || "").trim();
-    if (topMode !== "git" || !targetWorkspace) return;
+    if (topMode !== "git") return;
 
     if (mode === "commits") {
       if (!selectedCommit || !selectedFile) {
         setDetail(null);
         return;
       }
-      let cancelled = false;
-      setLoadingDetail(true);
-      workspaceApi.getGitBrowserCommitFileDetail(targetWorkspace, selectedCommit, selectedFile)
-        .then((next) => {
-          if (cancelled) return;
-          setDetail(next.file);
-          setError("");
-        })
-        .catch((nextError: any) => {
-          if (cancelled) return;
-          setError(nextError?.message || "获取提交文件差异失败");
-          setDetail(null);
-        })
-        .finally(() => {
-          if (!cancelled) setLoadingDetail(false);
-        });
-      return () => {
-        cancelled = true;
-      };
+      if (gitCommitFileDetailQuery.data) {
+        setDetail(gitCommitFileDetailQuery.data.file);
+        setError("");
+        return;
+      }
+      if (gitCommitFileDetailQuery.error) {
+        setError(gitCommitFileDetailQuery.error instanceof Error ? gitCommitFileDetailQuery.error.message : "获取提交文件差异失败");
+        setDetail(null);
+      }
+      return;
     }
 
     if (!selectedFile) {
       setDetail(null);
       return;
     }
-    let cancelled = false;
-    setLoadingDetail(true);
-    workspaceApi.getGitBrowserScopeFileDetail(targetWorkspace, mode, selectedFile)
-      .then((next) => {
-        if (cancelled) return;
-        setDetail(next.file);
-        setError("");
-      })
-      .catch((nextError: any) => {
-        if (cancelled) return;
-        setError(nextError?.message || "获取文件差异失败");
-        setDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingDetail(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, selectedCommit, selectedFile, topMode, workspacePath]);
-
-  useEffect(() => {
-    if (topMode !== "workflow" || !runId || !selectedFile) {
-      if (topMode === "workflow") setDetail(null);
+    if (gitScopeFileDetailQuery.data) {
+      setDetail(gitScopeFileDetailQuery.data.file);
+      setError("");
       return;
     }
-    let cancelled = false;
-    setLoadingDetail(true);
-    workspaceApi.getWorkflowGitDiffFile(runId, selectedFile, {
-      stepDiffId: selectedStepDiffId || undefined,
-      range: workflowRange,
-    })
-      .then((next) => {
-        if (cancelled) return;
-        setDetail(next.file);
-        setError("");
-      })
-      .catch((nextError: any) => {
-        if (cancelled) return;
-        setError(nextError?.message || "获取步骤文件差异失败");
-        setDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingDetail(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, selectedFile, selectedStepDiffId, topMode, workflowRange]);
+    if (gitScopeFileDetailQuery.error) {
+      setError(gitScopeFileDetailQuery.error instanceof Error ? gitScopeFileDetailQuery.error.message : "获取文件差异失败");
+      setDetail(null);
+    }
+  }, [
+    gitCommitFileDetailQuery.data,
+    gitCommitFileDetailQuery.error,
+    gitScopeFileDetailQuery.data,
+    gitScopeFileDetailQuery.error,
+    mode,
+    selectedCommit,
+    selectedFile,
+    topMode,
+  ]);
 
   useEffect(() => {
-    if (!isRunning) return;
-    if (topMode === "workflow" && runId) {
-      const timer = window.setInterval(() => {
-        void loadWorkflowDiff();
-      }, 5000);
-      return () => window.clearInterval(timer);
+    if (topMode !== "workflow") return;
+    if (!targetRunId || !selectedFile) {
+      setDetail(null);
+      return;
     }
-    const targetWorkspace = String(workspacePath || "").trim();
-    if (topMode !== "git" || !targetWorkspace) return;
-    const eventSource = workspaceApi.connectGitBrowserSummaryStream(
-      targetWorkspace,
-      { commitLimit: INITIAL_COMMIT_LIMIT },
-      (next) => {
-        setSummary((prev) => {
-          if (!prev || prev.commits.length <= next.commits.length) return next;
-          return {
-            ...next,
-            commits: prev.commits,
-            commitOffset: prev.commitOffset,
-            commitLimit: prev.commitLimit,
-            hasMoreCommits: prev.hasMoreCommits,
-          };
-        });
-        setError("");
-      },
-      (message) => {
-        setError(message || "获取 Git 浏览数据失败");
-      },
-    );
-    return () => eventSource.close();
-  }, [isRunning, loadWorkflowDiff, runId, topMode, workspacePath]);
+    if (workflowFileDetailQuery.data) {
+      setDetail(workflowFileDetailQuery.data.file);
+      setError("");
+      return;
+    }
+    if (workflowFileDetailQuery.error) {
+      setError(workflowFileDetailQuery.error instanceof Error ? workflowFileDetailQuery.error.message : "获取步骤文件差异失败");
+      setDetail(null);
+    }
+  }, [selectedFile, targetRunId, topMode, workflowFileDetailQuery.data, workflowFileDetailQuery.error]);
 
   const handleLoadMoreCommits = useCallback(() => {
     if (!summary?.hasMoreCommits || loadingMoreCommits) return;
-    void loadSummary({
-      appendCommits: true,
+    setLoadingMoreCommits(true);
+    gitSummaryPageMutation.mutateAsync({
       commitOffset: summary.commits.length,
       commitLimit: LOAD_MORE_COMMITS,
-    });
-  }, [loadSummary, loadingMoreCommits, summary]);
+    })
+      .then((next) => {
+        setSummary((prev) => {
+          if (!prev) return next;
+          return {
+            ...next,
+            commits: [...prev.commits, ...next.commits],
+            commitOffset: next.commitOffset,
+          };
+        });
+        setError("");
+      })
+      .catch((nextError: any) => {
+        setError(nextError?.message || "获取 Git 浏览数据失败");
+      })
+      .finally(() => setLoadingMoreCommits(false));
+  }, [gitSummaryPageMutation, loadingMoreCommits, summary]);
 
   const currentCommit = useMemo(
     () => summary?.commits.find((item) => item.hash === selectedCommit) || commitDetail?.commit || null,
@@ -765,7 +738,7 @@ export function GitWorkspaceDiffPanel({
           modified={detail.currentContent}
           language={inferLanguage(detail.path)}
           theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
-          onMount={(_editor, monaco) => ensureDiffEditorLanguages(monaco)}
+          onMount={(_editor: unknown, monaco: typeof import("monaco-editor")) => ensureDiffEditorLanguages(monaco)}
           options={{
             readOnly: true,
             renderSideBySide: diffLayoutMode === "side-by-side",
@@ -794,7 +767,6 @@ export function GitWorkspaceDiffPanel({
               setSelectedStepDiffId(stepDiff.id);
               setDetailViewMode("commit-patch");
               setSelectedFile("");
-              void loadWorkflowDiff({ stepDiffId: stepDiff.id, range: workflowRange });
             }}
             className={cn(
               "w-full rounded-lg border px-3 py-3 text-left transition-colors",
@@ -892,7 +864,6 @@ export function GitWorkspaceDiffPanel({
                 onClick={() => {
                   setWorkflowRange(item);
                   setDetailViewMode("commit-patch");
-                  void loadWorkflowDiff({ stepDiffId: selectedStepDiffId, range: item });
                 }}
                 className={cn(
                   "rounded px-2.5 py-1 text-[11px] transition-colors",
@@ -929,7 +900,7 @@ export function GitWorkspaceDiffPanel({
               {workflowDiff?.reason || "当前步骤没有可展示的 patch。"}
             </div>
           )
-        ) : loadingDetail && !detail ? (
+        ) : activeLoadingDetail && !detail ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在加载文件差异...</div>
         ) : error && !detail ? (
           <div className="p-4 text-sm text-red-500">{error}</div>
@@ -1190,7 +1161,7 @@ export function GitWorkspaceDiffPanel({
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">选择一个提交查看整次 patch。</div>
           )
-        ) : loadingDetail && !detail ? (
+        ) : activeLoadingDetail && !detail ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在加载文件差异...</div>
         ) : error && !detail ? (
           <div className="p-4 text-sm text-red-500">{error}</div>
@@ -1244,7 +1215,7 @@ export function GitWorkspaceDiffPanel({
             variant="outline"
             size="sm"
             className="h-8 text-xs"
-            onClick={() => topMode === "workflow" ? void loadWorkflowDiff() : void loadSummary()}
+            onClick={() => topMode === "workflow" ? void workflowDiffQuery.refetch() : void gitSummaryQuery.refetch()}
             disabled={topMode === "workflow" ? loadingWorkflowDiff : loadingSummary}
           >
             <span className="material-symbols-outlined text-sm">refresh</span>

@@ -8,12 +8,12 @@ describe('wechat official service', () => {
 
   beforeEach(() => {
     aceHome = mkdtempSync(join(tmpdir(), 'aceharness-wechat-service-'));
-    process.env.CSIHARNESS_HOME = aceHome;
+    process.env.ACE_HOME = aceHome;
   });
 
   afterEach(() => {
     rmSync(aceHome, { recursive: true, force: true });
-    delete process.env.CSIHARNESS_HOME;
+    delete process.env.ACE_HOME;
     vi.restoreAllMocks();
   });
 

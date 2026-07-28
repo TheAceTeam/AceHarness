@@ -32,7 +32,10 @@ interface ManagerEntry {
   manager: AnyWorkflowManager;
   isStateMachine: boolean;
   createdAt: number;
+  implementationVersion?: symbol;
 }
+
+const WORKFLOW_REGISTRY_IMPLEMENTATION_VERSION = Symbol('workflow-registry-implementation');
 
 function compactRegistryEventPayload(input: any): any {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
@@ -61,6 +64,15 @@ class WorkflowRegistry extends EventEmitter {
   private managers = new Map<string, ManagerEntry>();
   private pendingManagerCreations = new Map<string, Promise<AnyWorkflowManager>>();
   private managerKeysByRunId = new Map<string, string>();
+  private implementationVersion = WORKFLOW_REGISTRY_IMPLEMENTATION_VERSION;
+
+  refreshImplementation(): void {
+    this.implementationVersion = WORKFLOW_REGISTRY_IMPLEMENTATION_VERSION;
+    for (const [key, entry] of this.managers) {
+      if (this.isActiveStatus(entry.manager.getStatus().status)) continue;
+      this.removeManagerEntry(key, entry);
+    }
+  }
 
   private topLevelManagerKey(configFile: string): string {
     return `config:${configFile}`;
@@ -103,11 +115,10 @@ class WorkflowRegistry extends EventEmitter {
     const expectedIsStateMachine = await this.detectStateMachine(configFile);
     const existing = this.managers.get(managerKey);
     if (existing) {
-      if (existing.isStateMachine === expectedIsStateMachine && this.managerMatchesMode(existing.manager, expectedIsStateMachine)) {
+      if (this.canReuseManager(existing, expectedIsStateMachine)) {
         return existing.manager;
       }
-      this.managers.delete(managerKey);
-      existing.manager.removeAllListeners();
+      this.removeManagerEntry(managerKey, existing);
     }
     return this.createManagerOnce(configFile, expectedIsStateMachine, managerKey);
   }
@@ -116,11 +127,10 @@ class WorkflowRegistry extends EventEmitter {
     const expectedIsStateMachine = input.isStateMachine ?? await this.detectStateMachine(input.configFile);
     const existing = this.managers.get(input.managerKey);
     if (existing) {
-      if (existing.isStateMachine === expectedIsStateMachine && this.managerMatchesMode(existing.manager, expectedIsStateMachine)) {
+      if (this.canReuseManager(existing, expectedIsStateMachine)) {
         return existing.manager;
       }
-      this.managers.delete(input.managerKey);
-      existing.manager.removeAllListeners();
+      this.removeManagerEntry(input.managerKey, existing);
     }
     return this.createManagerOnce(input.configFile, expectedIsStateMachine, input.managerKey);
   }
@@ -142,7 +152,14 @@ class WorkflowRegistry extends EventEmitter {
   private async createManager(configFile: string, isSM?: boolean, managerKey = this.topLevelManagerKey(configFile)): Promise<AnyWorkflowManager> {
     const resolvedIsSM = isSM ?? await this.detectStateMachine(configFile);
     const manager = resolvedIsSM ? new StateMachineWorkflowManager() : new WorkflowManager();
-    const entry: ManagerEntry = { managerKey, configFile, manager, isStateMachine: resolvedIsSM, createdAt: Date.now() };
+    const entry: ManagerEntry = {
+      managerKey,
+      configFile,
+      manager,
+      isStateMachine: resolvedIsSM,
+      createdAt: Date.now(),
+      implementationVersion: this.implementationVersion,
+    };
     this.managers.set(managerKey, entry);
     const events = resolvedIsSM ? WorkflowRegistry.SM_EVENTS : WorkflowRegistry.PHASE_EVENTS;
     for (const evt of events) {
@@ -171,7 +188,13 @@ class WorkflowRegistry extends EventEmitter {
     const managerKey = this.managerKeysByRunId.get(runId);
     if (managerKey) {
       const entry = this.managers.get(managerKey);
-      if (entry) return entry.manager;
+      if (entry) {
+        const status = entry.manager.getStatus().status;
+        if (this.isActiveStatus(status) || entry.implementationVersion === this.implementationVersion) {
+          return entry.manager;
+        }
+        this.removeManagerEntry(managerKey, entry);
+      }
     }
 
     const runState = await loadRunState(runId);
@@ -182,9 +205,8 @@ class WorkflowRegistry extends EventEmitter {
     for (const [key, entry] of this.managers) {
       const s = entry.manager.getStatus();
       if (s.runId !== runId) continue;
-      if (runState && (entry.isStateMachine !== expectedIsStateMachine || !this.managerMatchesMode(entry.manager, expectedIsStateMachine))) {
-        this.managers.delete(key);
-        entry.manager.removeAllListeners();
+      if (runState && !this.canReuseManager(entry, expectedIsStateMachine)) {
+        this.removeManagerEntry(key, entry);
         break;
       }
       this.managerKeysByRunId.set(runId, key);
@@ -195,11 +217,10 @@ class WorkflowRegistry extends EventEmitter {
     const restoredManagerKey = runState.parentRunId ? `run:${runId}` : this.topLevelManagerKey(runState.configFile);
     const existing = this.managers.get(restoredManagerKey);
     if (existing) {
-      if (existing.isStateMachine === expectedIsStateMachine && this.managerMatchesMode(existing.manager, expectedIsStateMachine)) {
+      if (this.canReuseManager(existing, expectedIsStateMachine)) {
         return existing.manager;
       }
-      this.managers.delete(restoredManagerKey);
-      existing.manager.removeAllListeners();
+      this.removeManagerEntry(restoredManagerKey, existing);
     }
     const manager = await this.createManagerOnce(runState.configFile, expectedIsStateMachine, restoredManagerKey);
     this.managerKeysByRunId.set(runId, restoredManagerKey);
@@ -236,8 +257,7 @@ class WorkflowRegistry extends EventEmitter {
     for (const [key, entry] of this.managers) {
       const s = entry.manager.getStatus();
       if (!this.isActiveStatus(s.status) && Date.now() - entry.createdAt > 3600_000) {
-        entry.manager.removeAllListeners();
-        this.managers.delete(key);
+        this.removeManagerEntry(key, entry);
       }
     }
   }
@@ -264,7 +284,27 @@ class WorkflowRegistry extends EventEmitter {
   private managerMatchesMode(manager: AnyWorkflowManager, isStateMachine: boolean): boolean {
     return isStateMachine ? isStateMachineManagerLike(manager) : !isStateMachineManagerLike(manager);
   }
+
+  private canReuseManager(entry: ManagerEntry, expectedIsStateMachine: boolean): boolean {
+    if (entry.isStateMachine !== expectedIsStateMachine || !this.managerMatchesMode(entry.manager, expectedIsStateMachine)) {
+      return false;
+    }
+    return this.isActiveStatus(entry.manager.getStatus().status)
+      || entry.implementationVersion === this.implementationVersion;
+  }
+
+  private removeManagerEntry(key: string, entry: ManagerEntry): void {
+    this.managers.delete(key);
+    for (const [runId, managerKey] of this.managerKeysByRunId) {
+      if (managerKey === key) this.managerKeysByRunId.delete(runId);
+    }
+    entry.manager.removeAllListeners();
+  }
 }
 
 const g = globalThis as unknown as { __workflowRegistry?: WorkflowRegistry };
+if (g.__workflowRegistry) {
+  Object.setPrototypeOf(g.__workflowRegistry, WorkflowRegistry.prototype);
+  g.__workflowRegistry.refreshImplementation();
+}
 export const workflowRegistry = g.__workflowRegistry ??= new WorkflowRegistry();

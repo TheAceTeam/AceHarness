@@ -1,18 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { ObjectEditDrawer } from '@/components/ui/object-edit-drawer';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { ModelSelect } from '@/components/ModelSelect';
 import { EngineSelect } from '@/components/EngineSelect';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { MultiCombobox, SingleCombobox } from '@/components/ui/combobox';
-import { agentApi } from '@/lib/core/api';
 import {
   createDeterministicAvatarConfig,
   normalizeAgentAvatar,
@@ -20,6 +20,16 @@ import {
   type AgentAvatarConfig,
 } from '@/lib/agent/personas';
 import { useToast } from '@/components/ui/toast';
+import {
+  useAgentMemoryQuery,
+  useAgentsQuery,
+  useClearAgentMemoryMutation,
+  useGenerateAgentAvatarMutation,
+  useSaveAgentMemoryMutation,
+} from '@/client/query/agents';
+import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
+import { useSkillsQuery } from '@/client/query/skills';
+import { useRagKnowledgeBasesQuery } from '@/client/query/rag';
 
 interface SubAgent {
   description: string;
@@ -119,12 +129,6 @@ const TEAM_AGENT_SUGGESTIONS: Record<AgentConfig['team'], Partial<Record<ListFie
   },
 };
 
-function getAuthHeaders(): Record<string, string> {
-  if (typeof window === 'undefined') return {};
-  const token = localStorage.getItem('auth-token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 const SUPERVISOR_AGENT_SUGGESTIONS: Partial<Record<ListField, string[]>> = {
   capabilities: ['任务拆解', 'Agent 编排', '状态跟踪', '冲突协调'],
   keywords: ['指挥', '协同', '编排', '状态', '下一步'],
@@ -181,6 +185,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     workspaceProfile: agent.workspaceProfile || {},
   };
   const [formData, setFormData] = useState<AgentConfig>(normalizedAgent);
+  const [initialFormSnapshot] = useState(() => JSON.stringify(normalizedAgent));
   const [newTag, setNewTag] = useState('');
   const [newCapability, setNewCapability] = useState('');
   const [newConstraint, setNewConstraint] = useState('');
@@ -193,34 +198,22 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [availableMcpServers, setAvailableMcpServers] = useState<Array<{ name: string; command?: string }>>([]);
   const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<Array<{ id: string; name: string; description?: string; chunkCount?: number }>>([]);
   const [memoryDraft, setMemoryDraft] = useState('');
-  const [memoryLoading, setMemoryLoading] = useState(false);
-  const [memorySaving, setMemorySaving] = useState(false);
   const [memoryError, setMemoryError] = useState<string | null>(null);
+  const memoryMaxChars = Math.max(0, Math.min(50000, Number(formData.workspaceProfile?.memory?.baseBudget || 5000)));
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
+  const agentsQuery = useAgentsQuery();
+  const skillsQuery = useSkillsQuery();
+  const ragKnowledgeBasesQuery = useRagKnowledgeBasesQuery();
+  const agentMemoryQuery = useAgentMemoryQuery(agent.name, memoryMaxChars, { enabled: !isNew && Boolean(agent.name) });
+  const saveAgentMemoryMutation = useSaveAgentMemoryMutation(agent.name);
+  const clearAgentMemoryMutation = useClearAgentMemoryMutation(agent.name);
+  const generateAgentAvatarMutation = useGenerateAgentAvatarMutation();
+  const existingAgentNames = useMemo(
+    () => new Set((agentsQuery.data?.agents || []).map((item) => item.name).filter(Boolean)),
+    [agentsQuery.data?.agents],
+  );
 
   useEffect(() => {
-    fetch('/api/engine')
-      .then((res) => res.json())
-      .then((data) => {
-        setGlobalEngine(data.engine || '');
-        setGlobalDefaultModel(data.model || '');
-      })
-      .catch(() => {});
-    fetch('/api/skills')
-      .then((res) => res.json())
-      .then((data) => {
-        setAvailableSkills(Array.isArray(data.skills)
-          ? data.skills.map((skill: any) => ({ name: skill.name, description: skill.description || '' }))
-          : []);
-      })
-      .catch(() => {});
-    fetch('/api/rag/knowledge-bases', { headers: getAuthHeaders() })
-      .then((res) => res.json())
-      .then((data) => {
-        setAvailableKnowledgeBases(Array.isArray(data.knowledgeBases)
-          ? data.knowledgeBases.map((kb: any) => ({ id: kb.id, name: kb.name || kb.id, description: kb.description || '', chunkCount: kb.chunkCount || 0 }))
-          : []);
-      })
-      .catch(() => {});
     fetch('/api/mcp')
       .then((res) => res.json())
       .then((data) => {
@@ -232,31 +225,44 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   }, []);
 
   useEffect(() => {
-    if (isNew || !agent.name) return;
-    let cancelled = false;
-    setMemoryLoading(true);
-    setMemoryError(null);
-    agentApi.getMemory(agent.name, formData.workspaceProfile?.memory?.baseBudget || 5000)
-      .then((data) => {
-        if (cancelled) return;
-        setMemoryDraft(data.baseMemory || '');
-      })
-      .catch((error: any) => {
-        if (cancelled) return;
-        setMemoryError(error?.message || '读取 Agent 记忆失败');
-      })
-      .finally(() => {
-        if (!cancelled) setMemoryLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [agent.name, isNew]);
+    const data = runtimeSelectionQuery.data;
+    if (!data) return;
+    setGlobalEngine(data.engine || '');
+    setGlobalDefaultModel(data.defaultModel || '');
+  }, [runtimeSelectionQuery.data]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    setAvailableSkills(Array.isArray(skillsQuery.data?.skills)
+      ? skillsQuery.data.skills.map((skill: any) => ({ name: skill.name, description: skill.description || '' }))
+      : []);
+  }, [skillsQuery.data?.skills]);
+
+  useEffect(() => {
+    setAvailableKnowledgeBases(Array.isArray(ragKnowledgeBasesQuery.data?.knowledgeBases)
+      ? ragKnowledgeBasesQuery.data.knowledgeBases.map((kb: any) => ({ id: kb.id, name: kb.name || kb.id, description: kb.description || '', chunkCount: kb.chunkCount || 0 }))
+      : []);
+  }, [ragKnowledgeBasesQuery.data?.knowledgeBases]);
+
+  useEffect(() => {
+    if (isNew || !agent.name) return;
+    if (agentMemoryQuery.data) {
+      setMemoryDraft(agentMemoryQuery.data.baseMemory || '');
+      setMemoryError(null);
+      return;
+    }
+    if (agentMemoryQuery.error) {
+      setMemoryError(agentMemoryQuery.error instanceof Error ? agentMemoryQuery.error.message : '读取 Agent 记忆失败');
+    }
+  }, [agent.name, agentMemoryQuery.data, agentMemoryQuery.error, isNew]);
+
+  const handleSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!formData.name.trim()) {
       alert('请输入 Agent 名称');
+      return;
+    }
+    if (isNew && existingAgentNames.has(formData.name.trim())) {
+      alert('Agent 名称已存在');
       return;
     }
     if (!formData.systemPrompt?.trim()) {
@@ -419,9 +425,10 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     roleType: formData.roleType || 'normal',
   });
   const agentSuggestions = getAgentSuggestions(formData);
-  const memoryMaxChars = Math.max(0, Math.min(50000, Number(formData.workspaceProfile?.memory?.baseBudget || 5000)));
   const memoryCharCount = memoryDraft.trim().length;
   const memoryOverLimit = memoryCharCount > memoryMaxChars;
+  const memoryLoading = agentMemoryQuery.isFetching;
+  const memorySaving = saveAgentMemoryMutation.isPending || clearAgentMemoryMutation.isPending;
   const updateAgentRagKnowledgeBases = (ragKnowledgeBases: string[]) => {
     const nextSkills = ragKnowledgeBases.length > 0
       ? Array.from(new Set([...(formData.skills || []), 'aceharness-rag']))
@@ -435,10 +442,9 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       setMemoryError(`基础记忆不能超过 ${memoryMaxChars} 个字符`);
       return;
     }
-    setMemorySaving(true);
     setMemoryError(null);
     try {
-      const data = await agentApi.saveMemory(agent.name, {
+      const data = await saveAgentMemoryMutation.mutateAsync({
         baseMemory: memoryDraft,
         maxChars: memoryMaxChars,
       });
@@ -448,8 +454,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       const message = error?.message || '保存 Agent 记忆失败';
       setMemoryError(message);
       toast('error', message);
-    } finally {
-      setMemorySaving(false);
     }
   };
 
@@ -457,25 +461,22 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     if (isNew || !agent.name) return;
     const confirmed = window.confirm('确认清空该 Agent 的永久记忆吗？');
     if (!confirmed) return;
-    setMemorySaving(true);
     setMemoryError(null);
     try {
-      await agentApi.clearMemory(agent.name, memoryMaxChars);
+      await clearAgentMemoryMutation.mutateAsync(memoryMaxChars);
       setMemoryDraft('');
       toast('success', 'Agent 记忆已清空');
     } catch (error: any) {
       const message = error?.message || '清空 Agent 记忆失败';
       setMemoryError(message);
       toast('error', message);
-    } finally {
-      setMemorySaving(false);
     }
   };
 
   const refreshAvatar = async () => {
     try {
       setRefreshingAvatar(true);
-      const result = await agentApi.generateAvatar({
+      const result = await generateAgentAvatarMutation.mutateAsync({
         displayName: formData.name || 'agent',
         team: formData.team,
         mission: formData.description || formData.capabilities?.join('、') || '',
@@ -499,19 +500,34 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <form className="bg-card rounded-lg border w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
-        <div className="p-6 border-b flex items-center justify-between flex-shrink-0">
-          <h2 className="text-xl font-semibold">
-            {isNew ? '新建 Agent' : `编辑 Agent - ${agent.name}`}
-          </h2>
-          <Button type="button" variant="ghost" size="icon" onClick={onClose}>
-            <span className="material-symbols-outlined">close</span>
-          </Button>
-        </div>
+  const isDirty = JSON.stringify(formData) !== initialFormSnapshot;
+  const confirmDiscard = () => {
+    if (!isDirty) return true;
+    return window.confirm('放弃当前 Agent 编辑内容吗？');
+  };
+  const handleRequestClose = () => {
+    if (confirmDiscard()) onClose();
+  };
 
-        <div className="flex-1 overflow-auto p-6 space-y-6">
+  return (
+    <>
+      <ObjectEditDrawer
+        open
+        mode={isNew ? 'create' : 'edit'}
+        title={isNew ? '新建 Agent' : `编辑 Agent - ${agent.name}`}
+        subtitle={formData.description || formData.category || '配置 Agent 身份、模型、能力、记忆和专家子 Agent。'}
+        status={{ label: formData.roleType === 'supervisor' ? 'Supervisor' : 'Agent', tone: formData.roleType === 'supervisor' ? 'warning' : 'neutral' }}
+        dirty={isDirty}
+        widthClassName="w-[min(900px,calc(100vw-1rem))]"
+        bodyClassName="pb-8"
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+        onRequestDiscard={confirmDiscard}
+        cancelAction={{ label: '取消', onClick: handleRequestClose }}
+        saveAction={{ label: '保存', onClick: () => handleSubmit() }}
+      >
+        <form className="space-y-6" onSubmit={handleSubmit}>
           <div className="rounded-2xl border bg-muted/20 p-4">
             <div className="mb-4 text-sm font-medium">基础设定</div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -882,7 +898,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                 size="sm"
                 onClick={() => {
                   const usedEngines = Object.keys(formData.engineModels);
-                  const allEngines = ['claude-code', 'kiro-cli', 'opencode', 'nga', 'codegenie', 'codex', 'cursor', 'trae-cli', 'magic-cli'];
+                  const allEngines = ['claude-code', 'kiro-cli', 'opencode', 'nga', 'codeagent', 'codegenie', 'codex', 'cursor', 'trae-cli', 'magic-cli'];
                   const available = allEngines.find(e => !usedEngines.includes(e));
                   if (available === undefined) return;
                   const defaultModel = Object.values(formData.engineModels)[0] || '';
@@ -1095,13 +1111,8 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
               </div>
             </div>
           </div>
-        </div>
-
-        <div className="flex gap-3 justify-end p-6 border-t flex-shrink-0">
-          <Button type="button" variant="outline" onClick={onClose}>取消</Button>
-          <Button type="submit">保存</Button>
-        </div>
-      </form>
+        </form>
+      </ObjectEditDrawer>
 
       {editingSubAgent && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60]" onClick={() => setEditingSubAgent(null)}>
@@ -1210,6 +1221,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

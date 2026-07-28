@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { NextResponse } from 'next/server';
 import { makeRequest, responseJson } from './helpers/route-helpers';
 
 const routeMocks = vi.hoisted(() => ({
@@ -35,8 +34,8 @@ describe('/api/spec-coding/quality route', () => {
   });
 
   test('requires authentication before validating artifacts', async () => {
-    routeMocks.requireAuth.mockResolvedValue(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
-    const { POST } = await import('@/app/api/spec-coding/quality/route');
+    routeMocks.requireAuth.mockResolvedValue(Response.json({ error: 'Unauthorized' }, { status: 401 }));
+    const { POST } = await import('@/server/api-routes/spec-coding/quality/route');
 
     const response = await POST(makeRequest('/api/spec-coding/quality', {
       json: { artifacts: { requirements: '# requirements.md' } },
@@ -59,7 +58,7 @@ describe('/api/spec-coding/quality route', () => {
       },
     };
     routeMocks.validateSpecArtifactsQuality.mockReturnValue(report);
-    const { POST } = await import('@/app/api/spec-coding/quality/route');
+    const { POST } = await import('@/server/api-routes/spec-coding/quality/route');
 
     const artifacts = {
       requirements: '# requirements.md',

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import {
@@ -284,14 +284,25 @@ describe('sidebar plugin system', () => {
       await user.click(screen.getByRole('button', { name: /快捷操作/ }));
       expect(screen.getByText('CodeSpec')).toBeInTheDocument();
 
+      onAction.mockClear();
       await user.click(screen.getByRole('button', { name: /CodeSpec 同步/ }));
-      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync');
+      await waitFor(() => {
+        expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync');
+      });
 
+      await user.click(screen.getByRole('button', { name: /快捷操作/ }));
+      onAction.mockClear();
       await user.click(screen.getByRole('button', { name: /生成 CodeWiki/ }));
-      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync-generate');
+      await waitFor(() => {
+        expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync-generate');
+      });
 
+      await user.click(screen.getByRole('button', { name: /快捷操作/ }));
+      onAction.mockClear();
       await user.click(screen.getByRole('button', { name: /CodeSpec 创建 AR/ }));
-      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:start');
+      await waitFor(() => {
+        expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:start');
+      });
     });
   });
 });

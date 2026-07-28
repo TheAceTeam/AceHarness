@@ -125,17 +125,22 @@ export function LanguageSelectorDropdown({ className }: { className?: string }) 
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((value) => !value)}
+        aria-label="切换语言"
+        aria-expanded={open}
+        aria-haspopup="menu"
         className={cn(
-          "flex w-full items-center gap-2 rounded-full border px-3 py-1.5 text-sm",
+          "relative flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-full border py-1.5 pl-3 pr-9 text-sm",
           "border-sidebar-border bg-sidebar-accent text-sidebar-foreground shadow-sm backdrop-blur-md",
           "transition-colors hover:bg-sidebar hover:text-sidebar-foreground"
         )}
       >
-        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-sidebar px-1 text-[10px] font-semibold text-sidebar-foreground">
-          {selected.flag}
+        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-sidebar px-1 text-[10px] font-semibold text-sidebar-foreground">
+            {selected.flag}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-left">{selected.label}</span>
         </span>
-        <span className="min-w-0 flex-1 truncate text-left">{selected.label}</span>
-        <ChevronDown className="h-4 w-4 shrink-0" />
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 shrink-0 -translate-y-1/2" />
       </button>
 
       {open && menuPosition && typeof document !== "undefined" ? createPortal(
@@ -152,12 +157,15 @@ export function LanguageSelectorDropdown({ className }: { className?: string }) 
             "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-lg backdrop-blur-xl",
             "animate-fade-in"
           )}
+          role="menu"
         >
           {options.map((language) => (
             <button
               key={language.code}
               type="button"
               onClick={() => void selectLocale(language.code)}
+              role="menuitemradio"
+              aria-checked={selectedCode === language.code}
               className={cn(
                 "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
                 selectedCode === language.code

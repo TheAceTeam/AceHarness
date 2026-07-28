@@ -31,22 +31,20 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const idRef = useRef(0);
   const timeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
-  const scheduleAutoDismiss = useCallback((id: number) => {
+  const scheduleAutoDismiss = useCallback((id: number, delay = 3000) => {
     const existing = timeoutRef.current.get(id);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
       timeoutRef.current.delete(id);
-    }, 3000);
+    }, delay);
     timeoutRef.current.set(id, timer);
   }, []);
 
   const toast = useCallback((type: Toast['type'], message: string) => {
     const id = ++idRef.current;
     setToasts((prev) => [...prev, { id, type, message }]);
-    if (type === 'success' || type === 'info') {
-      scheduleAutoDismiss(id);
-    }
+    if (type !== 'loading') scheduleAutoDismiss(id, type === 'error' || type === 'warning' ? 6000 : 3000);
     return id;
   }, [scheduleAutoDismiss]);
 
@@ -68,9 +66,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     setToasts((prev) => prev.map((item) => (
       item.id === id ? { ...item, type, message } : item
     )));
-    if (type === 'success' || type === 'info') {
-      scheduleAutoDismiss(id);
-    }
+    if (type !== 'loading') scheduleAutoDismiss(id, type === 'error' || type === 'warning' ? 6000 : 3000);
   }, [scheduleAutoDismiss]);
 
   const clearToasts = useCallback(() => {

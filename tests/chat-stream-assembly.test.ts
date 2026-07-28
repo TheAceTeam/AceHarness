@@ -59,7 +59,7 @@ describe('chat stream assembly', () => {
     expect(streamedProcessBlock).toContain('"kind":"tool-result"');
   });
 
-  test('omits oversized tool result text while keeping a completed tool-result block', () => {
+  test('omits read file content while keeping a completed tool-result block with path', () => {
     const raw = formatAceToolResult({
       toolName: 'read',
       title: '📖 读取文件',
@@ -72,13 +72,32 @@ describe('chat stream assembly', () => {
 
     expect(parsed.blocks).toHaveLength(1);
     expect(parsed.blocks[0].kind).toBe('tool-result');
-    expect(raw).toContain('结果过大，已省略');
     expect(raw).toContain('FEATURE-RIDER-ORDER-HALL.yaml');
     expect(raw).not.toContain('UC-10-OPEN-RECEIVING-SETTINGS');
     expect(raw.length).toBeLessThan(5000);
   });
 
-  test('serializes object-array tool call content without leaking object Object text', () => {
+  test('omits ACPX read formatted_output from conversation payload', () => {
+    const raw = formatAceToolResult({
+      toolName: 'read',
+      title: '📖 读取文件',
+      rawOutput: {
+        formatted_output: '# Werewolf Tabletalk\n\n- `SKILL.md`\n- `references/speech-templates.md`',
+        exit_code: 0,
+      },
+      toolId: 'call_skill_read',
+    });
+    const parsed = extractAceProcessBlocks(raw);
+
+    expect(parsed.blocks).toHaveLength(1);
+    expect(parsed.blocks[0].kind).toBe('tool-result');
+    expect(raw).not.toContain('Werewolf Tabletalk');
+    expect(raw).not.toContain('speech-templates.md');
+    expect(raw).toContain('"exitCode":0');
+    expect(raw).toContain('"toolId":"call_skill_read"');
+  });
+
+  test('omits write file content from tool calls', () => {
     const raw = formatAceToolCall({
       toolName: 'write',
       rawInput: {
@@ -91,8 +110,9 @@ describe('chat stream assembly', () => {
     });
 
     expect(raw).not.toContain('[object Object]');
-    expect(raw).toContain('第一段');
-    expect(raw).toContain('第二段');
+    expect(raw).toContain('notes.md');
+    expect(raw).not.toContain('第一段');
+    expect(raw).not.toContain('第二段');
   });
 
   test('reproduces malformed nested ace-process leakage when final assistant text replays a broken file-change block', () => {

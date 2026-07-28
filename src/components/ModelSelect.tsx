@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Globe } from 'lucide-react';
-import { ModelOption } from '@/lib/core/models';
 import { AiModelSelectorField, type AiModelSelectorOption } from '@/components/AiModelSelectorField';
 import { useToast } from '@/components/ui/toast';
 import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
+import { useEngineConfigQuery, useModelsQuery } from '@/client/query/engines';
+import { queryKeys } from '@/client/query/query-keys';
 
 interface ModelSelectProps {
   value: string;
@@ -15,6 +17,8 @@ interface ModelSelectProps {
   engine?: string;
   /** Show a "use global" option */
   allowGlobal?: boolean;
+  /** Show an explicit empty option for optional model fields */
+  emptyOptionLabel?: string;
   /** Whether to show a toast when the selected model changes */
   showChangeToast?: boolean;
 }
@@ -25,37 +29,23 @@ export function ModelSelect({
   className = '',
   engine,
   allowGlobal = false,
+  emptyOptionLabel,
   showChangeToast = true,
 }: ModelSelectProps) {
-  const [allModels, setAllModels] = useState<ModelOption[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
+  const queryClient = useQueryClient();
+  const modelsQuery = useModelsQuery();
+  const engineConfigQuery = useEngineConfigQuery();
+  const allModels = modelsQuery.data?.models || [];
+  const loading = modelsQuery.isLoading || (allowGlobal && engineConfigQuery.isLoading);
+  const globalDefaultModel = typeof engineConfigQuery.data?.defaultModel === 'string' ? engineConfigQuery.data.defaultModel : '';
   const { toast } = useToast();
 
   useEffect(() => {
-    fetch('/api/models')
-      .then(res => res.json())
-      .then(data => {
-        setAllModels(data.models || []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
     if (!allowGlobal) return;
-    const refresh = () => {
-      fetch('/api/engine')
-        .then(res => res.json())
-        .then(data => {
-          setGlobalDefaultModel(data.defaultModel || '');
-        })
-        .catch(() => {});
-    };
-    refresh();
-    const onEngineUpdated = () => refresh();
+    const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.engines() });
+    const onEngineUpdated = () => { void refresh(); };
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'engine-config-updated-at') refresh();
+      if (e.key === 'engine-config-updated-at') void refresh();
     };
     window.addEventListener('engine:updated', onEngineUpdated as EventListener);
     window.addEventListener('storage', onStorage);
@@ -63,7 +53,7 @@ export function ModelSelect({
       window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
       window.removeEventListener('storage', onStorage);
     };
-  }, [allowGlobal]);
+  }, [allowGlobal, queryClient]);
 
   // Filter by engine if specified; models without engines field are shown for all engines
   const models = engine
@@ -82,6 +72,13 @@ export function ModelSelect({
           icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
         });
       }
+      if (emptyOptionLabel && !allowGlobal) {
+        items.push({
+          value: '__empty__',
+          label: emptyOptionLabel,
+          icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
+        });
+      }
       items.push(...models.map(m => ({
         value: m.value,
         label: m.label,
@@ -90,7 +87,7 @@ export function ModelSelect({
       })));
       return items;
     },
-    [allowGlobal, globalDefaultModel, models],
+    [allowGlobal, emptyOptionLabel, globalDefaultModel, models],
   );
 
   const handleChange = (newValue: string) => {
@@ -98,6 +95,13 @@ export function ModelSelect({
       onChange('');
       if (showChangeToast) {
         toast('info', globalDefaultModel ? `模型已切换: 跟随全局 (${globalDefaultModel})` : '模型已切换: 跟随全局');
+      }
+      return;
+    }
+    if (emptyOptionLabel && newValue === '__empty__') {
+      onChange('');
+      if (showChangeToast) {
+        toast('info', `模型已切换: ${emptyOptionLabel}`);
       }
       return;
     }
@@ -110,7 +114,7 @@ export function ModelSelect({
 
   return (
     <AiModelSelectorField
-      value={value || (allowGlobal ? '__global__' : '')}
+      value={value || (allowGlobal ? '__global__' : emptyOptionLabel ? '__empty__' : '')}
       onValueChange={handleChange}
       options={options}
       placeholder="选择模型"

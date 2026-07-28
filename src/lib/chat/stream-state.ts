@@ -6,7 +6,9 @@ export type EngineStreamStatus = 'running' | 'completed' | 'failed' | 'killed';
 export interface EngineStreamState {
   chatId: string;
   frontendSessionId?: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
+  turnId?: string;
+  traceId?: string;
   engine?: string;
   model?: string;
   status: EngineStreamStatus;
@@ -18,7 +20,9 @@ export interface EngineStreamState {
 export interface PublicEngineStreamState {
   chatId: string;
   frontendSessionId: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
+  turnId?: string;
+  traceId?: string;
   engine?: string;
   model?: string;
   status: EngineStreamStatus;
@@ -39,8 +43,8 @@ export type EngineStreamStateEvent =
 
 const chatsById = new Map<string, EngineStreamState>();
 const frontendToChatId = new Map<string, string>();
-const backendToChatId = new Map<string, string>();
-const frontendToBackendSessionId = new Map<string, { backendSessionId: string; expiresAt: number }>();
+const runtimeToChatId = new Map<string, string>();
+const frontendToRuntimeSessionId = new Map<string, { runtimeSessionId: string; expiresAt: number }>();
 const FRONTEND_SESSION_REUSE_TTL_MS = 9 * 60 * 1000;
 const globalForEngineStreamEvents = globalThis as unknown as {
   __engineStreamStateEvents?: EventEmitter;
@@ -60,7 +64,9 @@ function toPublicEngineStreamState(state: EngineStreamState): PublicEngineStream
   return {
     chatId: state.chatId,
     frontendSessionId,
-    backendSessionId: state.backendSessionId,
+    runtimeSessionId: state.runtimeSessionId,
+    turnId: state.turnId,
+    traceId: state.traceId,
     engine: state.engine,
     model: state.model,
     status: state.status,
@@ -101,48 +107,57 @@ export function appendEngineStreamContent(chatId: string, chunk: string): void {
   state.updatedAt = Date.now();
 }
 
-export function setEngineStreamSessionId(chatId: string, backendSessionId?: string): void {
+export function setEngineStreamSessionId(chatId: string, runtimeSessionId?: string): void {
   const state = chatsById.get(chatId);
   if (!state) return;
   state.updatedAt = Date.now();
-  if (!backendSessionId) {
-    const previousBackendSessionId = state.backendSessionId;
-    if (previousBackendSessionId) {
-      const mapped = backendToChatId.get(previousBackendSessionId);
-      if (mapped === chatId) backendToChatId.delete(previousBackendSessionId);
+  if (!runtimeSessionId) {
+    const previousRuntimeSessionId = state.runtimeSessionId;
+    if (previousRuntimeSessionId) {
+      const mapped = runtimeToChatId.get(previousRuntimeSessionId);
+      if (mapped === chatId) runtimeToChatId.delete(previousRuntimeSessionId);
     }
     if (state.frontendSessionId) {
-      const entry = frontendToBackendSessionId.get(state.frontendSessionId);
-      if (entry?.backendSessionId === previousBackendSessionId) {
-        frontendToBackendSessionId.delete(state.frontendSessionId);
+      const entry = frontendToRuntimeSessionId.get(state.frontendSessionId);
+      if (entry?.runtimeSessionId === previousRuntimeSessionId) {
+        frontendToRuntimeSessionId.delete(state.frontendSessionId);
       }
     }
-    state.backendSessionId = undefined;
+    state.runtimeSessionId = undefined;
     if (state.liveSession) {
       state.liveSession = {
         ...state.liveSession,
-        backendSessionId: undefined,
+        runtimeSessionId: undefined,
         updatedAt: Date.now(),
       };
     }
     emitEngineStreamState(state);
     return;
   }
-  state.backendSessionId = backendSessionId;
-  backendToChatId.set(backendSessionId, chatId);
+  state.runtimeSessionId = runtimeSessionId;
+  runtimeToChatId.set(runtimeSessionId, chatId);
   if (state.liveSession) {
     state.liveSession = {
       ...state.liveSession,
-      backendSessionId,
+      runtimeSessionId,
       updatedAt: Date.now(),
     };
   }
   if (state.frontendSessionId) {
-    frontendToBackendSessionId.set(state.frontendSessionId, {
-      backendSessionId,
+    frontendToRuntimeSessionId.set(state.frontendSessionId, {
+      runtimeSessionId,
       expiresAt: Date.now() + FRONTEND_SESSION_REUSE_TTL_MS,
     });
   }
+  emitEngineStreamState(state);
+}
+
+export function setEngineStreamTurn(chatId: string, turnId?: string, traceId?: string): void {
+  const state = chatsById.get(chatId);
+  if (!state) return;
+  state.turnId = turnId;
+  state.traceId = traceId;
+  state.updatedAt = Date.now();
   emitEngineStreamState(state);
 }
 
@@ -193,21 +208,21 @@ export function getEngineStreamByFrontendSessionId(frontendSessionId: string): E
   return chatsById.get(chatId);
 }
 
-export function getEngineStreamByBackendSessionId(backendSessionId: string): EngineStreamState | undefined {
-  const chatId = backendToChatId.get(backendSessionId);
+export function getEngineStreamByRuntimeSessionId(runtimeSessionId: string): EngineStreamState | undefined {
+  const chatId = runtimeToChatId.get(runtimeSessionId);
   if (!chatId) return undefined;
   return chatsById.get(chatId);
 }
 
-export function getBackendSessionIdByFrontendSessionId(frontendSessionId: string): string | undefined {
-  const entry = frontendToBackendSessionId.get(frontendSessionId);
+export function getRuntimeSessionIdByFrontendSessionId(frontendSessionId: string): string | undefined {
+  const entry = frontendToRuntimeSessionId.get(frontendSessionId);
   if (!entry) return undefined;
   if (entry.expiresAt <= Date.now()) {
-    frontendToBackendSessionId.delete(frontendSessionId);
+    frontendToRuntimeSessionId.delete(frontendSessionId);
     return undefined;
   }
   entry.expiresAt = Date.now() + FRONTEND_SESSION_REUSE_TTL_MS;
-  return entry.backendSessionId;
+  return entry.runtimeSessionId;
 }
 
 export function removeEngineStream(chatId: string): void {
@@ -219,9 +234,9 @@ export function removeEngineStream(chatId: string): void {
     const mapped = frontendToChatId.get(state.frontendSessionId);
     if (mapped === chatId) frontendToChatId.delete(state.frontendSessionId);
   }
-  if (state.backendSessionId) {
-    const mapped = backendToChatId.get(state.backendSessionId);
-    if (mapped === chatId) backendToChatId.delete(state.backendSessionId);
+  if (state.runtimeSessionId) {
+    const mapped = runtimeToChatId.get(state.runtimeSessionId);
+    if (mapped === chatId) runtimeToChatId.delete(state.runtimeSessionId);
   }
   if (publicFrontendSessionId) {
     engineStreamStateEvents.emit('change', {

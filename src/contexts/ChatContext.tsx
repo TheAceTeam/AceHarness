@@ -4,14 +4,23 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions, normalizeAssistantDisplay } from '@/lib/chat/actions';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import { extractLastChatPreview } from '@/lib/chat/message-preview';
-import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
-import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
+import {
+  isCreationAssistantSidebarHint,
+  resolveCreationAssistantEnabled,
+  type HomeSidebarHint,
+  type SessionWorkbenchState,
+} from '@/lib/core/home-sidebar-state';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
 import { isRunningWorkflowConversation } from '@/lib/workflow/run-status';
 import { resolveConversationMode, type HomeConversationMode } from '@/lib/chat/conversation-mode';
+import { storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
+import { agentMessagesCollection } from '@/client/db/collections';
+import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
+import { apiFetch } from '@/client/query/api-client';
 
 // --- Types ---
 
@@ -19,8 +28,38 @@ function hasOwnKey<T extends object>(value: T | null | undefined, key: PropertyK
   return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
 }
 
-function normalizeBackendSessionId(value: unknown): string | undefined {
+function normalizeRuntimeSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readRuntimeSessionIdFromPayload(value: any): string | undefined {
+  return normalizeRuntimeSessionId(value?.runtimeSessionId) || normalizeRuntimeSessionId(value?.sessionId);
+}
+
+function resolveLatestHomeSidebarHint(
+  sidebarHints: HomeSidebarHint[],
+  creationAssistantEnabled: boolean,
+): HomeSidebarHint | undefined {
+  const candidate = sidebarHints[sidebarHints.length - 1];
+  if (!creationAssistantEnabled && isCreationAssistantSidebarHint(candidate)) return undefined;
+  return candidate;
+}
+
+function normalizeChatSession(session: ChatSession | null | undefined): ChatSession | null {
+  if (!session) return null;
+  const oldFieldRecord = session as ChatSession & { backendSessionId?: unknown };
+  const runtimeSessionId = normalizeRuntimeSessionId(session.runtimeSessionId) || normalizeRuntimeSessionId(oldFieldRecord.backendSessionId);
+  const { backendSessionId: _oldField, ...publicSession } = oldFieldRecord;
+  return {
+    ...publicSession,
+    runtimeSessionId,
+  };
+}
+
+function serializeChatSession(session: ChatSession): ChatSession {
+  const oldFieldRecord = session as ChatSession & { backendSessionId?: unknown };
+  const { backendSessionId: _oldField, ...publicSession } = oldFieldRecord;
+  return publicSession;
 }
 
 function appendRequestFailureNotice(message: ChatMessage, errorMessage: string, fallbackContent = '', fallbackRawContent = ''): ChatMessage {
@@ -73,7 +112,7 @@ export interface ChatSession {
   id: string;
   title: string;
   conversationMode?: HomeConversationMode;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
   creationSession?: {
     creationSessionId: string;
     filename: string;
@@ -130,7 +169,7 @@ interface StreamCheckResponse {
   status?: 'running' | 'completed' | 'failed' | 'killed';
   engine?: string;
   model?: string;
-  backendSessionId?: string;
+  runtimeSessionId?: string;
   liveSession?: ChatSession | null;
 }
 
@@ -187,6 +226,33 @@ function hasReadableSessionMessages(session: Pick<ChatSession, 'messages'> | nul
   )));
 }
 
+function countReadableSessionMessages(session: Pick<ChatSession, 'messages'> | null | undefined): number {
+  return session?.messages.reduce((count, message) => (
+    String(message.content || message.rawContent || '').trim()
+    || (message.actions?.length ?? 0) > 0
+    || (message.cards?.length ?? 0) > 0
+      ? count + 1
+      : count
+  ), 0) || 0;
+}
+
+function isSessionMoreCompleteForRestore(
+  candidate: Pick<ChatSession, 'updatedAt' | 'messages'>,
+  baseline: Pick<ChatSession, 'updatedAt' | 'messages'>,
+): boolean {
+  const candidateReadableCount = countReadableSessionMessages(candidate);
+  const baselineReadableCount = countReadableSessionMessages(baseline);
+  if (candidateReadableCount !== baselineReadableCount) {
+    if (candidateReadableCount === 0) return false;
+    if (baselineReadableCount === 0) return true;
+    return candidateReadableCount > baselineReadableCount;
+  }
+  if (candidate.messages.length !== baseline.messages.length) {
+    return candidate.messages.length > baseline.messages.length;
+  }
+  return isSessionAhead(candidate, baseline);
+}
+
 function chooseLoadedSessionSnapshot(input: {
   liveSession: ChatSession | null;
   persistedSession: ChatSession | null;
@@ -206,12 +272,12 @@ function chooseLoadedSessionSnapshot(input: {
   const effectiveCandidates = nonEmptyCandidates.length > 0 ? nonEmptyCandidates : candidates;
   if ((input.summaryMessageCount || 0) > 0 && nonEmptyCandidates.length > 0) {
     return nonEmptyCandidates.reduce((best, candidate) => (
-      isSessionAhead(candidate, best) ? candidate : best
+      isSessionMoreCompleteForRestore(candidate, best) ? candidate : best
     ));
   }
 
   return effectiveCandidates.reduce((best, candidate) => (
-    isSessionAhead(candidate, best) ? candidate : best
+    isSessionMoreCompleteForRestore(candidate, best) ? candidate : best
   ));
 }
 
@@ -230,6 +296,7 @@ interface DashboardChatContextType {
   closeChat: () => void;
   toggleChat: () => void;
   sessions: SessionSummary[];
+  sessionsLoading: boolean;
   activeSessionId: string | null;
   activeSession: ChatSession | null;
   createSession: (options?: {
@@ -284,12 +351,16 @@ interface DashboardChatContextType {
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   setSessionWorkbenchState: (state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => void;
+  updateSessionWorkbenchState: (
+    sessionId: string,
+    state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)
+  ) => Promise<ChatSession | null>;
   updateSessionCreationBinding: (sessionId: string, creationSession: ChatSession['creationSession'] | null) => Promise<void>;
   appendVisibleSessionTag: (sessionId: string, label: string) => Promise<void>;
   appendSessionMessage: (
     sessionId: string,
     message: Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>,
-    options?: { backendSessionId?: string | null }
+    options?: { runtimeSessionId?: string | null }
   ) => Promise<void>;
   updateSessionMessage: (
     sessionId: string,
@@ -300,7 +371,7 @@ interface DashboardChatContextType {
 
 const DashboardChatContext = createContext<DashboardChatContextType>({
   isOpen: false, openChat: () => {}, closeChat: () => {}, toggleChat: () => {},
-  sessions: [], activeSessionId: null, activeSession: null,
+  sessions: [], sessionsLoading: true, activeSessionId: null, activeSession: null,
   createSession: () => '', deleteSession: () => {}, deleteSessions: () => {}, renameSession: () => {},
   setActiveSessionId: () => {},
   sendMessage: async () => {}, compactActiveSession: async () => {}, stopStreaming: () => {},
@@ -316,6 +387,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   capabilitySkills: {}, setCapabilitySkills: () => {},
   workingDirectory: '', setWorkingDirectory: () => {},
   setSessionWorkbenchState: () => {},
+  updateSessionWorkbenchState: async () => null,
   updateSessionCreationBinding: async () => {},
   appendVisibleSessionTag: async () => {},
   appendSessionMessage: async () => {},
@@ -337,8 +409,7 @@ function writeStoredActiveSessionId(sessionId: string | null): void {
     }
   } catch {}
 
-  // Remove the legacy shared-tab key so different browser windows stop
-  // competing over the same active session selection.
+  // 清理旧架构共享标签页 key，避免不同窗口竞争同一个当前会话。
   try {
     window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
   } catch {}
@@ -374,7 +445,7 @@ async function apiCreateSession(session: ChatSession): Promise<void> {
   await fetch('/api/chat/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(session),
+    body: JSON.stringify(serializeChatSession(session)),
   });
 }
 
@@ -384,7 +455,7 @@ async function apiLoadSession(id: string): Promise<ChatSession | null> {
   });
   if (!res.ok) return null;
   const data = await res.json();
-  return data.session || null;
+  return normalizeChatSession(data.session || null);
 }
 
 async function apiCheckStreamState(id: string): Promise<StreamCheckResponse | null> {
@@ -402,7 +473,7 @@ async function apiSaveSession(session: ChatSession): Promise<void> {
   await fetch(`/api/chat/sessions/${encodeURIComponent(session.id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(session),
+    body: JSON.stringify(serializeChatSession(session)),
   });
 }
 
@@ -483,7 +554,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return 'chat-working-directory';
     }
   }, []);
-  // Legacy modal state
+  // oldArchitecture modal state
   const [isOpen, setIsOpen] = useState(false);
   const openChat = useCallback(() => setIsOpen(true), []);
   const closeChat = useCallback(() => setIsOpen(false), []);
@@ -491,6 +562,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Dashboard chat state
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(false);
@@ -513,36 +585,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return '';
   });
   // Resolved global engine for when per-chat engine is empty
-  const [globalEngine, setGlobalEngine] = useState('');
-  const [globalDriver, setGlobalDriver] = useState('');
-  const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
+  const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
+  const globalEngine = typeof runtimeSelectionQuery.data?.engine === 'string' ? runtimeSelectionQuery.data.engine : '';
+  const globalDefaultModel = typeof runtimeSelectionQuery.data?.defaultModel === 'string' ? runtimeSelectionQuery.data.defaultModel : '';
+  const effectiveGlobalEngine = globalEngine;
   const effectiveEngine = engine || effectiveGlobalEngine;
-  const isModelSelectionReady = Boolean(model && effectiveEngine);
+  const isModelSelectionReady = Boolean(effectiveEngine) && !runtimeSelectionQuery.isLoading;
   const { chatStreamsBySessionId, chatSessionSignalsById, runStatusById } = useWorkflowLiveState();
 
-  const refreshGlobalEngineConfig = useCallback(() => {
-    fetch('/api/engine').then(r => r.json()).then(data => {
-      setGlobalEngine(typeof data.engine === 'string' ? data.engine : '');
-      setGlobalDriver(typeof data.driver === 'string' ? data.driver : '');
-      const savedModel = typeof window !== 'undefined' ? localStorage.getItem('chat-model') : null;
-      if (!savedModel && data.defaultModel) setModel(data.defaultModel);
-    }).catch(() => {});
-  }, []);
-
-  // Load global engine config and default model on mount, and keep it in sync with engine settings page
+  // Load global runtime selection and default model on mount.
   useEffect(() => {
-    refreshGlobalEngineConfig();
-    const onEngineUpdated = () => refreshGlobalEngineConfig();
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === 'engine-config-updated-at') refreshGlobalEngineConfig();
-    };
-    window.addEventListener('engine:updated', onEngineUpdated as EventListener);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, [refreshGlobalEngineConfig]);
+    const savedModel = typeof window !== 'undefined' ? localStorage.getItem('chat-model') : null;
+    if (!savedModel && globalDefaultModel) setModel(globalDefaultModel);
+  }, [globalDefaultModel]);
 
   const [skillSettings, setSkillSettings] = useState<Record<string, boolean>>({});
   const [discoveredSkills, setDiscoveredSkills] = useState<DiscoveredSkill[]>([]);
@@ -665,7 +720,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const hasHydratedStoredSessionRef = useRef(false);
   const skillSettingsRef = useRef(skillSettings);
   const mcpSettingsRef = useRef(mcpSettings);
-  const backendSessionStatusRef = useRef<Record<string, StreamCheckResponse['status'] | null>>({});
+  const runtimeSessionStatusRef = useRef<Record<string, StreamCheckResponse['status'] | null>>({});
   const handledChatSessionSignalsRef = useRef<Record<string, number>>({});
   const modelRef = useRef(model);
   const engineRef = useRef(engine);
@@ -693,28 +748,72 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     sessionCacheRef.current[activeSession.id] = activeSession;
   }, [activeSession, sessionLoadingId]);
 
-  // Load session list on mount
-  useEffect(() => {
-    let cancelled = false;
-    apiListSessions().then(list => {
-      if (cancelled) return;
-      setSessions(list);
+  const loadSessionSummaries = useCallback((isCancelled: () => boolean = () => false) => {
+    setSessionsLoading(true);
+    return apiListSessions().then(list => {
+      if (isCancelled()) return;
+      const mergedList = [...list];
+      const addLocalSession = (session: ChatSession | null | undefined) => {
+        if (!session || mergedList.some((item) => item.id === session.id)) return;
+        mergedList.unshift({
+          id: session.id,
+          title: session.title,
+          model: session.model,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messageCount: session.messages.length,
+          lastMessage: extractLastMessagePreview(session.messages),
+          conversationMode: session.conversationMode,
+          creationSession: session.creationSession,
+          workflowBinding: session.workflowBinding,
+          agentBinding: session.agentBinding,
+          sessionWorkbenchState: session.sessionWorkbenchState,
+        });
+      };
+      addLocalSession(activeSessionRef.current);
+      Object.values(sessionCacheRef.current).forEach(addLocalSession);
+      setSessions(mergedList);
 
       const storedActiveSessionId = readStoredActiveSessionId();
       if (!storedActiveSessionId) return;
 
-      const storedSessionExists = list.some((session) => session.id === storedActiveSessionId);
+      const storedSessionExists = mergedList.some((session) => session.id === storedActiveSessionId);
       if (!storedSessionExists) {
         writeStoredActiveSessionId(null);
       }
 
       setActiveSessionId((prev) => (prev ? prev : storedSessionExists ? storedActiveSessionId : null));
       hasHydratedStoredSessionRef.current = true;
+    }).finally(() => {
+      if (!isCancelled()) setSessionsLoading(false);
     });
+  }, []);
+
+  // Load session list on mount and after same-page login.
+  useEffect(() => {
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    void loadSessionSummaries(isCancelled);
+    const handleAuthChanged = () => {
+      void loadSessionSummaries(isCancelled);
+    };
+    window.addEventListener('auth:changed', handleAuthChanged);
     return () => {
       cancelled = true;
+      window.removeEventListener('auth:changed', handleAuthChanged);
     };
-  }, []);
+  }, [loadSessionSummaries]);
+
+  useEffect(() => {
+    const handleStorageAuthChange = (event: StorageEvent) => {
+      if (event.key !== 'auth-token') return;
+      void loadSessionSummaries();
+    };
+    window.addEventListener('storage', handleStorageAuthChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageAuthChange);
+    };
+  }, [loadSessionSummaries]);
 
   useEffect(() => {
     if (!hasHydratedStoredSessionRef.current && !activeSessionId) return;
@@ -723,6 +822,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Re-parse messages with unparsed action/card blocks in content
   const reparseSession = useCallback((s: ChatSession): ChatSession => {
+    const creationAssistantEnabled = resolveCreationAssistantEnabled(s);
     let changed = false;
     const messages = s.messages.map(m => {
       if (m.role !== 'assistant' || !m.content) return m;
@@ -748,7 +848,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     for (const message of assistantMessages) {
       const parsed = parseActions(message.rawContent || message.content || '');
       if (parsed.sidebarHints.length > 0) {
-        latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+        latestSidebarHint = resolveLatestHomeSidebarHint(parsed.sidebarHints, creationAssistantEnabled) || null;
         break;
       }
     }
@@ -767,8 +867,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const prepareLoadedSession = useCallback((session: ChatSession | null | undefined): ChatSession | null => {
     if (!session) return null;
+    const shouldClearCreationHint = !resolveCreationAssistantEnabled(session)
+      && isCreationAssistantSidebarHint(session.sessionWorkbenchState?.homeSidebar);
     const cleaned = {
       ...session,
+      sessionWorkbenchState: shouldClearCreationHint
+        ? {
+            ...(session.sessionWorkbenchState || {}),
+            homeSidebar: null,
+          }
+        : session.sessionWorkbenchState,
       messages: session.messages.filter((message) => !(
         message.role === 'assistant'
         && !message.content
@@ -821,27 +929,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const trackedSessionIds = new Set([
-      ...Object.keys(backendSessionStatusRef.current),
+      ...Object.keys(runtimeSessionStatusRef.current),
       ...Object.keys(chatStreamsBySessionId),
     ]);
 
     if (trackedSessionIds.size === 0) {
-      backendSessionStatusRef.current = {};
+      runtimeSessionStatusRef.current = {};
       return;
     }
 
     trackedSessionIds.forEach((sessionId) => {
       const streamState = chatStreamsBySessionId[sessionId];
-      const previousStatus = backendSessionStatusRef.current[sessionId] || null;
+      const previousStatus = runtimeSessionStatusRef.current[sessionId] || null;
       const nextStatus = streamState?.status || null;
 
       if (!nextStatus) {
-        delete backendSessionStatusRef.current[sessionId];
+        delete runtimeSessionStatusRef.current[sessionId];
         unmarkSessionStreaming(sessionId);
         return;
       }
 
-      backendSessionStatusRef.current[sessionId] = nextStatus;
+      runtimeSessionStatusRef.current[sessionId] = nextStatus;
 
       if (nextStatus === 'running') {
         markSessionStreaming(sessionId);
@@ -893,7 +1001,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setActiveSession({
           id: summary.id,
           title: summary.title,
-          backendSessionId: undefined,
+          runtimeSessionId: undefined,
           creationSession: summary.creationSession,
           workflowBinding: summary.workflowBinding,
           agentBinding: summary.agentBinding,
@@ -954,7 +1062,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const recoveredSession = lastAssistantMessage
             ? nextSession
             : { ...nextSession, messages: [...nextSession.messages, recoveryMsg] };
-          const initialStreamContent = String(recoveryMsg.rawContent || streamState.streamContent || '');
+          const cachedAgentMessage = agentMessagesCollection.get(streamState.chatId);
+          const cachedAgentContent = cachedAgentMessage?.content || cachedAgentMessage?.chunks?.join('') || '';
+          const initialStreamContent = String(recoveryMsg.rawContent || cachedAgentContent || streamState.streamContent || '');
           const initialCleanText = recoveryMsg.content || normalizeAssistantDisplay(initialStreamContent, true).visibleText || parseActions(initialStreamContent).text;
           const hydratedSession = initialStreamContent
             ? {
@@ -980,6 +1090,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           let accumulatedRawStream = initialStreamContent;
           let initialSnapshotReplayPending = Boolean(initialStreamContent);
           let hasConnected = false;
+          let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined = initialStreamContent
+            ? { id: streamState.chatId, content: initialStreamContent, toolCalls: cachedAgentMessage?.toolCalls || [] }
+            : undefined;
 
           es.addEventListener('connected', () => {
             hasConnected = true;
@@ -987,7 +1100,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             if (initialSnapshotReplayPending && content === initialStreamContent) {
               initialSnapshotReplayPending = false;
               return;
@@ -995,6 +1108,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             initialSnapshotReplayPending = false;
             accumulated += content;
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('delta', { content }, {
+              chatId: streamState.chatId,
+              sessionId: recoveredSession.runtimeSessionId,
+              frontendSessionId: activeSessionId,
+              streamScope: 'chat-recovery',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: parsedText } = parseActions(accumulated);
             const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
             setActiveSession(prev => {
@@ -1007,18 +1127,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           });
 
           es.addEventListener('session', (e) => {
-            const data = JSON.parse(e.data || '{}');
-            if (!data?.sessionId) return;
+            const data = parseSseJsonEventData(e.data);
+            const runtimeSessionId = readRuntimeSessionIdFromPayload(data);
+            if (!runtimeSessionId) return;
             setActiveSession(prev => prev ? {
               ...prev,
-              backendSessionId: data.sessionId,
+              runtimeSessionId,
             } : prev);
           });
 
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
+              chatId: streamState.chatId,
+              sessionId: recoveredSession.runtimeSessionId,
+              frontendSessionId: activeSessionId,
+              streamScope: 'chat-recovery',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             setActiveSession(prev => {
               if (!prev) return prev;
               return {
@@ -1029,18 +1157,32 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           });
 
           es.addEventListener('done', (e) => {
-            const data = JSON.parse(e.data);
+            const data = parseSseJsonEventData(e.data);
             es.close();
             activeEventSourceRef.current = null;
             activeChatIdRef.current = null;
             attachedStreamingSessionIdRef.current = null;
-            if (hasOwnKey(data, 'sessionId')) {
-              const nextBackendSessionId = normalizeBackendSessionId(data.sessionId);
-              setActiveSession(prev => prev ? { ...prev, backendSessionId: nextBackendSessionId } : prev);
+            const nextRuntimeSessionId = readRuntimeSessionIdFromPayload(data);
+            if (nextRuntimeSessionId || hasOwnKey(data, 'runtimeSessionId') || hasOwnKey(data, 'sessionId')) {
+              setActiveSession(prev => prev ? { ...prev, runtimeSessionId: nextRuntimeSessionId } : prev);
             }
             const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+            const row = storeChatStreamSseEventAsAgentMessage(data.isError ? 'error' : 'done', {
+              ...data,
+              content: fullRawContent || data.result || accumulated,
+              isError: data.isError,
+            }, {
+              chatId: streamState.chatId,
+              sessionId: nextRuntimeSessionId || recoveredSession.runtimeSessionId,
+              frontendSessionId: activeSessionId,
+              streamScope: 'chat-recovery',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
-            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            const latestSidebarHint = resolveLatestHomeSidebarHint(
+              sidebarHints,
+              resolveCreationAssistantEnabled(recoveredSession),
+            );
             setActiveSession(prev => {
               if (!prev) return prev;
               return {
@@ -1115,7 +1257,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     delete sessionCacheRef.current[sessionId];
     delete pendingSessionsRef.current[sessionId];
     delete handledChatSessionSignalsRef.current[sessionId];
-    delete backendSessionStatusRef.current[sessionId];
+    delete runtimeSessionStatusRef.current[sessionId];
     const timer = saveTimersRef.current[sessionId];
     if (timer) {
       clearTimeout(timer);
@@ -1389,7 +1531,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const previousWorkspace = String(current.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
         return {
           ...current,
-          backendSessionId: previousWorkspace === result.workspacePath ? current.backendSessionId : undefined,
+          runtimeSessionId: previousWorkspace === result.workspacePath ? current.runtimeSessionId : undefined,
           sessionWorkbenchState: {
             ...(current.sessionWorkbenchState || {}),
             chatWorkspace: {
@@ -1439,12 +1581,35 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const nextWorkspace = String(normalizedState?.chatWorkspace?.workingDirectory || '').trim();
       return {
         ...session,
-        backendSessionId: previousWorkspace !== nextWorkspace ? undefined : session.backendSessionId,
+        runtimeSessionId: previousWorkspace !== nextWorkspace ? undefined : session.runtimeSessionId,
         conversationMode,
         sessionWorkbenchState: normalizedState,
       };
     });
   }, [runStatusById, updateActiveSession]);
+
+  const updateSessionWorkbenchState = useCallback(async (
+    sessionId: string,
+    state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState),
+  ): Promise<ChatSession | null> => {
+    return updateSessionById(sessionId, (session) => {
+      const nextState = typeof state === 'function' ? state(session.sessionWorkbenchState) : state;
+      const conversationMode = resolveConversationMode({ ...session, sessionWorkbenchState: nextState }, { runStatusById });
+      const normalizedState = {
+        ...(nextState || {}),
+        conversationMode,
+      };
+      if (JSON.stringify(normalizedState || null) === JSON.stringify(session.sessionWorkbenchState || null)) return session;
+      const previousWorkspace = String(session.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
+      const nextWorkspace = String(normalizedState?.chatWorkspace?.workingDirectory || '').trim();
+      return {
+        ...session,
+        runtimeSessionId: previousWorkspace !== nextWorkspace ? undefined : session.runtimeSessionId,
+        conversationMode,
+        sessionWorkbenchState: normalizedState,
+      };
+    });
+  }, [runStatusById, updateSessionById]);
 
   const updateSessionCreationBinding = useCallback(async (
     sessionId: string,
@@ -1536,7 +1701,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const appendSessionMessage = useCallback(async (
     sessionId: string,
     message: Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>,
-    options?: { backendSessionId?: string | null }
+    options?: { runtimeSessionId?: string | null }
   ) => {
     const timestamp = message.timestamp || Date.now();
     const nextMessage: ChatMessage = {
@@ -1552,12 +1717,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return (item.rawContent || item.content || '').trim() === contentKey;
       });
       const messages = exists ? session.messages : [...session.messages, nextMessage];
-      const shouldUpdateBackendSessionId = Boolean(options && Object.prototype.hasOwnProperty.call(options, 'backendSessionId'));
+      const shouldUpdateRuntimeSessionId = Boolean(options && Object.prototype.hasOwnProperty.call(options, 'runtimeSessionId'));
       return {
         ...session,
-        backendSessionId: shouldUpdateBackendSessionId
-          ? (options?.backendSessionId || undefined)
-          : session.backendSessionId,
+        runtimeSessionId: shouldUpdateRuntimeSessionId
+          ? (options?.runtimeSessionId || undefined)
+          : session.runtimeSessionId,
         updatedAt: timestamp,
         messages,
       };
@@ -1667,6 +1832,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       conversationMode,
       sessionWorkbenchState: {
         ...(baseSession.sessionWorkbenchState || {}),
+        creationAssistantEnabled: resolveCreationAssistantEnabled(baseSession),
         conversationMode,
       },
     };
@@ -1900,27 +2066,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setStreamingMessageId(followUpMsgId);
 
       try {
-        const backendSid = getTargetSessionSnapshot()?.backendSessionId;
+        const runtimeSid = getTargetSessionSnapshot()?.runtimeSessionId;
         const frontendSid = targetSessionId;
         const targetSessionSnapshot = getTargetSessionSnapshot();
         let targetWorkingDirectory = resolveSessionWorkingDirectory(targetSessionSnapshot, '');
         if (!targetWorkingDirectory && targetSessionSnapshot) {
           targetWorkingDirectory = await ensureTargetSessionWorkspace(targetSessionId, targetSessionSnapshot);
         }
-        const startRes = await fetch('/api/chat/stream', {
+        const startRes = await apiFetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify({
             message: followUpPrompt,
             model,
             engine: followUpEngine || undefined,
-            sessionId: backendSid || undefined,
+            runtimeSessionId: runtimeSid || undefined,
             frontendSessionId: frontendSid || undefined,
             assistantMessageId: followUpMsgId,
             skipUserMessage: true,
             mode: 'dashboard',
             workingDirectory: targetWorkingDirectory || undefined,
             mcpServers: mcpSettingsRef.current,
+            creationAssistantEnabled: resolveCreationAssistantEnabled(targetSessionSnapshot),
           }),
         });
         const { chatId } = await startRes.json();
@@ -1934,6 +2101,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           let accumulatedRawStream = '';
           let reconnectAttempts = 0;
           const MAX_RECONNECTS = 3;
+          let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
 
         const connectSSE = () => {
           const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
@@ -1946,9 +2114,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
-              const { content } = JSON.parse(e.data);
+              const content = String(parseSseJsonEventData(e.data).content || '');
               accumulated += content;
               accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+              const row = storeChatStreamSseEventAsAgentMessage('delta', { content }, {
+                chatId,
+                sessionId: getTargetSessionSnapshot()?.runtimeSessionId,
+                frontendSessionId: targetSessionId,
+                streamScope: 'chat-follow-up',
+              }, aiPrevious);
+              aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
               const { text: parsedText } = parseActions(accumulated);
               const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
               void applyToTargetSession(s => ({
@@ -1958,18 +2133,32 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             });
 
             es.addEventListener('done', (e) => {
-              const data = JSON.parse(e.data);
+              const data = parseSseJsonEventData(e.data);
               es.close();
               activeEventSourceRef.current = null;
               activeChatIdRef.current = null;
               attachedStreamingSessionIdRef.current = null;
-              if (hasOwnKey(data, 'sessionId')) {
-                const nextBackendSessionId = normalizeBackendSessionId(data.sessionId);
-                void applyToTargetSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
+              const nextRuntimeSessionId = readRuntimeSessionIdFromPayload(data);
+              if (nextRuntimeSessionId || hasOwnKey(data, 'runtimeSessionId') || hasOwnKey(data, 'sessionId')) {
+                void applyToTargetSession(s => ({ ...s, runtimeSessionId: nextRuntimeSessionId }));
               }
               const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+              const row = storeChatStreamSseEventAsAgentMessage(data.isError ? 'error' : 'done', {
+                ...data,
+                content: fullRawContent || data.result || accumulated,
+                isError: data.isError,
+              }, {
+                chatId,
+                sessionId: nextRuntimeSessionId || getTargetSessionSnapshot()?.runtimeSessionId,
+                frontendSessionId: targetSessionId,
+                streamScope: 'chat-follow-up',
+              }, aiPrevious);
+              aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
               const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(fullRawContent);
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+              const latestSidebarHint = resolveLatestHomeSidebarHint(
+                sidebarHints,
+                resolveCreationAssistantEnabled(getTargetSessionSnapshot()),
+              );
               const newActionStates: ActionState[] = newActions.map(a => ({
                 id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
               }));
@@ -2016,15 +2205,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 reconnectAttempts++;
                 setTimeout(connectSSE, 1000 * reconnectAttempts);
               } else {
-                // Try recovery via backendSessionId
-                const backendSid = getTargetSessionSnapshot()?.backendSessionId;
-                if (backendSid) {
-                  fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`)
+                // 尝试按 runtimeSessionId 恢复已缓存内容。
+                const runtimeSid = getTargetSessionSnapshot()?.runtimeSessionId;
+                if (runtimeSid) {
+                  fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(runtimeSid)}`)
                     .then(r => r.json())
                     .then(recData => {
                       if (recData.content) {
+                        const row = storeChatStreamSseEventAsAgentMessage('done', {
+                          ...recData,
+                          content: recData.content,
+                        }, {
+                          chatId,
+                          sessionId: runtimeSid,
+                          frontendSessionId: targetSessionId,
+                          streamScope: 'chat-follow-up',
+                        }, aiPrevious);
+                        aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
                         const { text: cleanText, cards: newCards, sidebarHints } = parseActions(recData.content);
-                        const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+                        const latestSidebarHint = resolveLatestHomeSidebarHint(
+                          sidebarHints,
+                          resolveCreationAssistantEnabled(getTargetSessionSnapshot()),
+                        );
                         void applyToTargetSession(s => ({
                           ...s,
                           sessionWorkbenchState: latestSidebarHint ? {
@@ -2144,20 +2346,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
           frontendSessionId: targetSessionId,
-          sessionId: targetSession.backendSessionId || targetSession.workflowBinding?.supervisorSessionId || undefined,
+            runtimeSessionId: targetSession.runtimeSessionId || targetSession.workflowBinding?.supervisorSessionId || undefined,
           model: resolvedModel,
           engine: resolvedEngine || undefined,
           workingDirectory: targetWorkingDirectory || undefined,
           skills: skillSettingsRef.current,
           mcpServers: mcpSettingsRef.current,
+          creationAssistantEnabled: resolveCreationAssistantEnabled(targetSession),
         }),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok || data?.error) {
         throw new Error(data?.error || `HTTP ${response.status}`);
       }
-      const nextBackendSessionId = normalizeBackendSessionId(data?.sessionId);
-      if (!nextBackendSessionId) {
+      const nextRuntimeSessionId = readRuntimeSessionIdFromPayload(data);
+      if (!nextRuntimeSessionId) {
         throw new Error('上下文压缩未返回新的 session');
       }
       const completedAt = Date.now();
@@ -2165,10 +2368,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const tagLabel = `上下文压缩 · ${timeLabel} 已刷新 session 上下文容量`;
       await applyToTargetSession((session) => ({
         ...session,
-        backendSessionId: nextBackendSessionId,
+        runtimeSessionId: nextRuntimeSessionId,
         workflowBinding: session.workflowBinding?.supervisorAgent ? {
           ...session.workflowBinding,
-          supervisorSessionId: nextBackendSessionId,
+          supervisorSessionId: nextRuntimeSessionId,
           updatedAt: completedAt,
         } : session.workflowBinding,
         engine: typeof data?.engine === 'string' && data.engine ? data.engine : (resolvedEngine || session.engine),
@@ -2227,6 +2430,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!previousSession) {
       return;
     }
+    const creationAssistantEnabled = resolveCreationAssistantEnabled(previousSession);
     const applyToTargetSession = (updater: (session: ChatSession) => ChatSession) => updateSessionById(targetSessionId, updater);
     const getTargetSessionSnapshot = () => getCachedSessionSnapshot(targetSessionId);
     let targetWorkingDirectory = resolveSessionWorkingDirectory(previousSession, '');
@@ -2245,14 +2449,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const assistantMsgId = genId();
     const agentBinding = previousSession?.agentBinding;
     const previousEffectiveEngine = previousSession?.engine || globalEngineRef.current || '';
-    const shouldStartFresh = !!previousSession?.backendSessionId
+    const shouldStartFresh = !!previousSession?.runtimeSessionId
       && resolvedEngine !== previousEffectiveEngine;
     const assistantMsg: ChatMessage = { id: assistantMsgId, role: 'assistant', content: '', rawContent: '', engine: resolvedEngine, model: currentModel || undefined, timestamp: Date.now() };
     await applyToTargetSession(s => ({
       ...s,
       engine: resolvedEngine || undefined,
       model: currentModel,
-      backendSessionId: shouldStartFresh ? undefined : s.backendSessionId,
+      runtimeSessionId: shouldStartFresh ? undefined : s.runtimeSessionId,
     }));
     await applyToTargetSession(s => ({ ...s, updatedAt: Date.now(), messages: [...s.messages, assistantMsg] }));
     setLoading(true);
@@ -2267,7 +2471,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({
             message: text,
             mode: 'standalone-chat',
-            sessionId: shouldStartFresh ? undefined : (previousSession.backendSessionId || undefined),
+            runtimeSessionId: shouldStartFresh ? undefined : (previousSession.runtimeSessionId || undefined),
             workingDirectory: targetWorkingDirectory || undefined,
             requestedMcpServers: mcpSettingsRef.current,
           }),
@@ -2278,6 +2482,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
           return data as {
             output: string;
+            runtimeSessionId?: string | null;
             sessionId?: string | null;
             engine?: string;
             model?: string;
@@ -2285,10 +2490,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             error?: string | null;
           };
         });
+        const resultRuntimeSessionId = result.runtimeSessionId ?? result.sessionId;
 
         await applyToTargetSession((s) => ({
           ...s,
-          backendSessionId: result.sessionId ?? undefined,
+          runtimeSessionId: resultRuntimeSessionId ?? undefined,
           updatedAt: Date.now(),
           messages: s.messages.map((m) => m.id === assistantMsgId
             ? {
@@ -2315,7 +2521,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({
             message: text,
             mode: 'workflow-chat',
-            sessionId: shouldStartFresh ? undefined : (previousSession.backendSessionId || workflowBinding.supervisorSessionId || undefined),
+            runtimeSessionId: shouldStartFresh ? undefined : (previousSession.runtimeSessionId || workflowBinding.supervisorSessionId || undefined),
             workingDirectory: targetWorkingDirectory || undefined,
             workflowContext: {
               configFile: workflowBinding.configFile,
@@ -2332,6 +2538,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
           return data as {
             output: string;
+            runtimeSessionId?: string | null;
             sessionId?: string | null;
             engine?: string;
             model?: string;
@@ -2343,19 +2550,23 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             } | null;
           };
         });
+        const resultRuntimeSessionId = result.runtimeSessionId ?? result.sessionId;
 
         const responseContent = result.specCodingRevision?.applied
           ? `${result.output || result.error || '无输出'}\n\n---\n已由 Supervisor 刷新 Spec：${result.specCodingRevision.summary}`
           : (result.output || result.error || '无输出');
         const parsed = result.isError ? { text: responseContent, cards: [] as any[], sidebarHints: [] as HomeSidebarHint[] } : parseActions(responseContent);
-        const latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+        const latestSidebarHint = resolveLatestHomeSidebarHint(
+          parsed.sidebarHints,
+          creationAssistantEnabled,
+        );
 
         await applyToTargetSession((s) => ({
           ...s,
-          backendSessionId: result.sessionId ?? undefined,
+          runtimeSessionId: resultRuntimeSessionId ?? undefined,
           workflowBinding: s.workflowBinding ? {
             ...s.workflowBinding,
-            supervisorSessionId: result.sessionId ?? null,
+            supervisorSessionId: resultRuntimeSessionId ?? null,
             updatedAt: Date.now(),
           } : s.workflowBinding,
           sessionWorkbenchState: latestSidebarHint ? {
@@ -2382,9 +2593,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const backendSid = shouldStartFresh ? undefined : previousSession.backendSessionId;
+      const runtimeSid = shouldStartFresh ? undefined : previousSession.runtimeSessionId;
       const frontendSid = targetSessionId;
-      const startRes = await fetch('/api/chat/stream', {
+      const startRes = await apiFetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
@@ -2392,13 +2603,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           displayMessage: options?.displayText ?? text,
           model: currentModel,
           engine: resolvedEngine || undefined,
-          sessionId: backendSid || undefined,
+          runtimeSessionId: runtimeSid || undefined,
           frontendSessionId: frontendSid || undefined,
           userMessageId: userMsg.id,
           assistantMessageId: assistantMsgId,
           mode: 'dashboard',
           workingDirectory: targetWorkingDirectory || undefined,
           mcpServers: mcpSettingsRef.current,
+          creationAssistantEnabled,
         }),
       });
       const startData = await startRes.json();
@@ -2418,6 +2630,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       attachedStreamingSessionIdRef.current = targetSessionId;
       await new Promise<void>((resolve, reject) => {
         let accumulated = '';
+        let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
         let reconnectAttempts = 0;
         const MAX_RECONNECTS = 3;
         const INACTIVITY_TIMEOUT = 1_200_000; // 20 minutes without any data
@@ -2451,9 +2664,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
             resetInactivityTimer();
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             accumulatedRawContent = appendStreamChunk(accumulatedRawContent, content);
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: getTargetSessionSnapshot()?.runtimeSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             void applyToTargetSession(s => ({
               ...s, messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, rawContent: accumulatedRawStream } : m),
             }));
@@ -2461,11 +2683,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('session', (e) => {
             resetInactivityTimer();
-            const data = JSON.parse(e.data || '{}');
-            if (!data?.sessionId) return;
+            const data = parseSseJsonEventData(e.data);
+            const runtimeSessionId = readRuntimeSessionIdFromPayload(data);
+            if (!runtimeSessionId) return;
             void applyToTargetSession(s => ({
               ...s,
-              backendSessionId: data.sessionId,
+              runtimeSessionId,
               engine: resolvedEngine || s.engine,
               model: currentModel || s.model,
             }));
@@ -2474,9 +2697,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
             resetInactivityTimer();
-            const { content } = JSON.parse(e.data);
+            const content = String(parseSseJsonEventData(e.data).content || '');
             accumulated += content;
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const row = storeChatStreamSseEventAsAgentMessage('delta', { content }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: getTargetSessionSnapshot()?.runtimeSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: parsedText } = parseActions(accumulated);
             const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
             void applyToTargetSession(s => ({
@@ -2487,25 +2719,38 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('done', (e) => {
             if (inactivityTimer) clearTimeout(inactivityTimer);
-            const data = JSON.parse(e.data);
+            const data = parseSseJsonEventData(e.data);
             es.close();
             activeEventSourceRef.current = null;
             activeChatIdRef.current = null;
             attachedStreamingSessionIdRef.current = null;
-            if (hasOwnKey(data, 'sessionId')) {
-              const nextBackendSessionId = normalizeBackendSessionId(data.sessionId);
-              void applyToTargetSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
+            const nextRuntimeSessionId = readRuntimeSessionIdFromPayload(data);
+            if (nextRuntimeSessionId || hasOwnKey(data, 'runtimeSessionId') || hasOwnKey(data, 'sessionId')) {
+              void applyToTargetSession(s => ({ ...s, runtimeSessionId: nextRuntimeSessionId }));
             }
             if (data.isError) {
-              const failedBackendSessionId = hasOwnKey(data, 'sessionId') ? normalizeBackendSessionId(data.sessionId) : undefined;
+              const failedRuntimeSessionId = nextRuntimeSessionId;
               const message = String(data.error || '请求失败，请稍后重试');
               const partialRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
               const partialContent = normalizeAssistantDisplay(partialRawContent, false).visibleText
                 || parseActions(partialRawContent).text
                 || String(data.result || accumulated || '');
+              const row = storeChatStreamSseEventAsAgentMessage('error', {
+                ...data,
+                content: partialRawContent || partialContent || message,
+                isError: true,
+              }, {
+                chatId,
+                provider: resolvedEngine,
+                model: currentModel,
+                sessionId: nextRuntimeSessionId || getTargetSessionSnapshot()?.runtimeSessionId,
+                frontendSessionId: targetSessionId,
+                streamScope: 'chat-message',
+              }, aiPrevious);
+              aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
               void applyToTargetSession(s => ({
                 ...s,
-                backendSessionId: failedBackendSessionId || s.backendSessionId,
+                runtimeSessionId: failedRuntimeSessionId || s.runtimeSessionId,
                 updatedAt: Date.now(),
                 messages: s.messages.map(m => m.id === assistantMsgId
                   ? appendRequestFailureNotice(m, message, partialContent, partialRawContent)
@@ -2519,8 +2764,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               return;
             }
             const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+            const row = storeChatStreamSseEventAsAgentMessage('done', {
+              ...data,
+              content: fullRawContent || data.result || accumulated,
+            }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: nextRuntimeSessionId || getTargetSessionSnapshot()?.runtimeSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             const { text: cleanText, actions, cards, sidebarHints } = parseActions(fullRawContent);
-            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            const latestSidebarHint = resolveLatestHomeSidebarHint(sidebarHints, creationAssistantEnabled);
             const actionStates: ActionState[] = actions.map(a => ({
               id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
             }));
@@ -2553,12 +2810,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('engine_error', (e) => {
             if (inactivityTimer) clearTimeout(inactivityTimer);
-            const data = JSON.parse(e.data || '{}');
+            const data = parseSseJsonEventData(e.data);
             const message = String(data?.message || '执行失败，请稍后重试');
-            const failedBackendSessionId = normalizeBackendSessionId(data?.sessionId);
+            const failedRuntimeSessionId = readRuntimeSessionIdFromPayload(data);
+            const row = storeChatStreamSseEventAsAgentMessage('error', {
+              ...data,
+              content: accumulatedRawStream || accumulated || message,
+              isError: true,
+            }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: failedRuntimeSessionId || getTargetSessionSnapshot()?.runtimeSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             void applyToTargetSession(s => ({
               ...s,
-              backendSessionId: failedBackendSessionId || s.backendSessionId,
+              runtimeSessionId: failedRuntimeSessionId || s.runtimeSessionId,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
                 ? appendRequestFailureNotice(m, message, accumulated, accumulatedRawStream)
@@ -2577,12 +2847,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('failed', (e) => {
             if (inactivityTimer) clearTimeout(inactivityTimer);
-            const data = JSON.parse(e.data || '{}');
+            const data = parseSseJsonEventData(e.data);
             const message = String(data?.message || '执行失败，请稍后重试');
-            const failedBackendSessionId = normalizeBackendSessionId(data?.sessionId);
+            const failedRuntimeSessionId = readRuntimeSessionIdFromPayload(data);
+            const row = storeChatStreamSseEventAsAgentMessage('error', {
+              ...data,
+              content: accumulatedRawStream || accumulated || message,
+              isError: true,
+            }, {
+              chatId,
+              provider: resolvedEngine,
+              model: currentModel,
+              sessionId: failedRuntimeSessionId || getTargetSessionSnapshot()?.runtimeSessionId,
+              frontendSessionId: targetSessionId,
+              streamScope: 'chat-message',
+            }, aiPrevious);
+            aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
             void applyToTargetSession(s => ({
               ...s,
-              backendSessionId: failedBackendSessionId || s.backendSessionId,
+              runtimeSessionId: failedRuntimeSessionId || s.runtimeSessionId,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
                 ? appendRequestFailureNotice(m, message, accumulated, accumulatedRawStream)
@@ -2607,15 +2890,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               reconnectAttempts++;
               setTimeout(connectSSE, 1000 * reconnectAttempts);
             } else {
-              // All reconnects failed — try to recover full content from backend
-              const backendSid = getTargetSessionSnapshot()?.backendSessionId;
-              if (backendSid) {
-                fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`)
+              // 重连失败后尝试按 runtimeSessionId 恢复已缓存内容。
+              const runtimeSid = getTargetSessionSnapshot()?.runtimeSessionId;
+              if (runtimeSid) {
+                fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(runtimeSid)}`)
                   .then(r => r.json())
                   .then(recData => {
                     if (recData.content) {
+                      const row = storeChatStreamSseEventAsAgentMessage('done', {
+                        ...recData,
+                        content: recData.content,
+                      }, {
+                        chatId,
+                        provider: resolvedEngine,
+                        model: currentModel,
+                        sessionId: runtimeSid,
+                        frontendSessionId: targetSessionId,
+                        streamScope: 'chat-message',
+                      }, aiPrevious);
+                      aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
                       const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(recData.content);
-                      const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+                      const latestSidebarHint = resolveLatestHomeSidebarHint(sidebarHints, creationAssistantEnabled);
                       const newActionStates: ActionState[] = newActions.map(a => ({
                         id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
                       }));
@@ -2793,21 +3088,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const msg = session.messages.find(m => m.id === messageId);
     if (!msg || msg.role !== 'error') return;
 
-    // If engine has changed since the error, the old backendSessionId is invalid
-    const backendSid = session.backendSessionId;
+    // 如果引擎或模型已变更，之前的 runtimeSessionId 不再可复用。
+    const runtimeSid = session.runtimeSessionId;
     const sessionEngine = session.engine || globalEngineRef.current || '';
     const sessionModel = session.model || '';
-    if (!backendSid || (engineRef.current || globalEngineRef.current || '') !== sessionEngine || (modelRef.current || '') !== sessionModel) return;
+    if (!runtimeSid || (engineRef.current || globalEngineRef.current || '') !== sessionEngine || (modelRef.current || '') !== sessionModel) return;
 
     setLoading(true);
     try {
       // Try to recover content from the backend
-      const recRes = await fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`);
+      const recRes = await fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(runtimeSid)}`);
       const recData = await recRes.json();
 
       if (recData.content) {
         const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(recData.content);
-        const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+        const latestSidebarHint = resolveLatestHomeSidebarHint(
+          sidebarHints,
+          resolveCreationAssistantEnabled(session),
+        );
         const newActionStates: ActionState[] = newActions.map(a => ({
           id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
         }));
@@ -2865,7 +3163,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   return (
     <DashboardChatContext.Provider value={{
       isOpen, openChat, closeChat, toggleChat,
-      sessions, activeSessionId, activeSession,
+      sessions, sessionsLoading, activeSessionId, activeSession,
       createSession, deleteSession, deleteSessions, renameSession, setActiveSessionId,
       sendMessage, compactActiveSession, stopStreaming, deleteMessage, retryFromMessage, continueFromMessage,
       loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId,
@@ -2877,6 +3175,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       capabilitySkills, setCapabilitySkills,
       workingDirectory, setWorkingDirectory,
       setSessionWorkbenchState,
+      updateSessionWorkbenchState,
       updateSessionCreationBinding,
       appendVisibleSessionTag,
       appendSessionMessage,

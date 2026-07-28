@@ -5,13 +5,13 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const port = Number(process.env.PORT || 8787);
-const aceWebhookUrl = String(process.env.CSIHARNESS_WEBHOOK_URL || '').trim();
-const aceSecret = String(process.env.CSIHARNESS_SECRET || '').trim();
+const aceWebhookUrl = String(process.env.ACE_WEBHOOK_URL || '').trim();
+const aceSecret = String(process.env.ACE_SECRET || '').trim();
 const logFile = resolve(process.env.BRIDGE_LOG_FILE || '.aceharness/wechat-bridge-relay.ndjson');
 
 if (!aceWebhookUrl || !aceSecret) {
-  console.error('Missing CSIHARNESS_WEBHOOK_URL or CSIHARNESS_SECRET.');
-  console.error('Example: CSIHARNESS_WEBHOOK_URL=http://127.0.0.1:3000/api/channels/inbound/channel-xxx CSIHARNESS_SECRET=xxxx node scripts/wechat-bridge-relay.mjs');
+  console.error('Missing ACE_WEBHOOK_URL or ACE_SECRET.');
+  console.error('Example: ACE_WEBHOOK_URL=http://127.0.0.1:3000/api/channels/inbound/channel-xxx ACE_SECRET=xxxx node scripts/wechat-bridge-relay.mjs');
   process.exit(1);
 }
 

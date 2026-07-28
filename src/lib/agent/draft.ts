@@ -198,7 +198,7 @@ export function buildAgentSystemPrompt(form: Pick<AgentDraftState, 'displayName'
   const specialties = extractAgentDraftCapabilities(formatAgentDraftText(form.specialties));
 
   const lines = [
-    `你是 ${displayName}，这是你在 CSIHarness 中的角色身份。`,
+    `你是 ${displayName}，这是你在 ACEHarness 中的角色身份。`,
     '',
     '你的工作目标：',
     mission || '负责通用协作与问题推进。',

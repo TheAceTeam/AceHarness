@@ -380,6 +380,50 @@ export function getStreamingAceProcessReadyContent(content: string): string {
   return nextOpen >= 0 ? source.slice(0, nextOpen) : source;
 }
 
+function hasPendingAceProcessBlock(content: string): boolean {
+  const source = String(content || '');
+  if (!source) return false;
+  return getStreamingAceProcessReadyContent(source).length < source.length;
+}
+
+export function mergeAceProcessChunkItems<T extends { content: string }>(
+  items: T[],
+  _joiner = ACE_CHUNK_BOUNDARY,
+): T[] {
+  const merged: T[] = [];
+  let pending: T | null = null;
+
+  for (const item of items) {
+    const content = String(item.content || '');
+
+    if (!pending) {
+      if (hasPendingAceProcessBlock(content)) {
+        pending = { ...item, content } as T;
+      } else {
+        merged.push(item);
+      }
+      continue;
+    }
+
+    const nextContent = `${pending.content}${content}`;
+    pending = { ...pending, content: nextContent } as T;
+
+    if (!hasPendingAceProcessBlock(nextContent)) {
+      merged.push(pending);
+      pending = null;
+    }
+  }
+
+  if (pending) {
+    const readyContent = getStreamingAceProcessReadyContent(pending.content);
+    if (readyContent.trim()) {
+      merged.push({ ...pending, content: readyContent } as T);
+    }
+  }
+
+  return merged;
+}
+
 export function rewriteFirstAceProcessBlockPayload(
   content: string,
   rewrite: (payload: Record<string, unknown>) => Record<string, unknown>,
