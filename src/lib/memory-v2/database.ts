@@ -166,7 +166,11 @@ export function withMemoryV2ImmediateTransaction<T>(db: MemoryV2Database, fn: ()
     db.exec('COMMIT');
     return result;
   } catch (error) {
-    db.exec('ROLLBACK');
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Preserve the operation failure when best-effort rollback also fails.
+    }
     throw error;
   }
 }
