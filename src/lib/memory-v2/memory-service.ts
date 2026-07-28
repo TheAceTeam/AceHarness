@@ -798,7 +798,7 @@ export class MemoryService {
       return existing;
     }
     const normalized = this.normalizeWritableProposal(proposal, context);
-    const result = withMemoryV2ImmediateTransaction(this.db, () => {
+    const result = withMemoryV2ImmediateTransaction<MemoryProposalResult>(this.db, () => {
       const idempotent = this.getIdempotentResult('upsert', proposal, context);
       if (idempotent) return idempotent;
       const target = this.findMutationTarget(proposal, context);
@@ -889,7 +889,7 @@ export class MemoryService {
     if (proposal.retention === 'none') throw new MemoryServiceError('MEMORY_INVALID_INPUT', 'resolve cannot use retention none');
     const sourceEventId = requireText(proposal.sourceEventId, 'sourceEventId');
     const idempotencyKey = requireText(proposal.idempotencyKey, 'idempotencyKey');
-    const result = withMemoryV2ImmediateTransaction(this.db, () => {
+    const result = withMemoryV2ImmediateTransaction<MemoryProposalResult>(this.db, () => {
       const idempotent = this.getIdempotentResult('resolve', proposal, context);
       if (idempotent) return idempotent;
       const target = this.findMutationTarget(proposal, context);
@@ -957,7 +957,7 @@ export class MemoryService {
         return { action: 'resolve', memoryId: row.id, status: row.status as MemoryProposalResult['status'], detailVersion: row.detail_version, fingerprint: row.fingerprint, idempotent: true };
       }
     }
-    const result = withMemoryV2ImmediateTransaction(this.db, () => {
+    const result = withMemoryV2ImmediateTransaction<MemoryProposalResult>(this.db, () => {
       const target = this.requireMemoryRow(requireText(input.memoryId, 'memoryId'));
       this.assertOwned(target, input.context);
       if (input.expectedDetailVersion !== undefined && Number(input.expectedDetailVersion) !== Number(target.detail_version)) {
@@ -1194,7 +1194,7 @@ export class MemoryService {
 
   buildManifest(query: MemoryManifestQuery): MemoryManifest {
     assertContext(query.context);
-    if (query.trigger === 'explicit-search') {
+    if ((query.trigger as string) === 'explicit-search') {
       throw new MemoryServiceError('MEMORY_INVALID_INPUT', 'buildManifest cannot use explicit-search trigger');
     }
     const maxManifestChars = clampInteger(query.maxManifestChars, this.budgets.maxManifestChars, this.budgets.maxManifestChars);
@@ -2541,7 +2541,7 @@ export class MemoryService {
       return existing;
     }
     const normalized = this.normalizeWritableProposal(proposal, context);
-    const result = withMemoryV2ImmediateTransaction(this.db, () => {
+    const result = withMemoryV2ImmediateTransaction<MemoryProposalResult>(this.db, () => {
       const idempotent = this.getIdempotentResult('create', proposal, context);
       if (idempotent) return idempotent;
       const now = this.clock();
@@ -2637,7 +2637,7 @@ export class MemoryService {
       recordMemoryV2IdempotentReplay();
       return { action: 'discard', status: 'discarded', idempotent: true };
     }
-    const result = withMemoryV2ImmediateTransaction(this.db, () => {
+    const result = withMemoryV2ImmediateTransaction<MemoryProposalResult>(this.db, () => {
       const repeated = this.db.prepare(`
         SELECT 1 FROM memory_audit WHERE action = 'discard' AND source_event_id = ? AND idempotency_key = ?
       `).get(sourceEventId, idempotencyKey);
