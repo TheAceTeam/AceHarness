@@ -98,7 +98,7 @@ export class AiMemoryV2EngineAdapter implements ChatRuntimeEngine {
       execution.turn.assertRequiredReadsAcknowledged();
       const nativeExecute = this.inner.executeWithNativeTools;
       if (typeof nativeExecute === 'function') {
-        return this.executeWithNativeTools(execution, options, nativeExecute.bind(this.inner));
+        return this.executeWithMemoryNativeTools(execution, options, nativeExecute.bind(this.inner));
       }
       return this.executeWithStructuredFallback(execution, options);
     } finally {
@@ -200,7 +200,7 @@ export class AiMemoryV2EngineAdapter implements ChatRuntimeEngine {
     }
   }
 
-  private async executeWithNativeTools(
+  private async executeWithMemoryNativeTools(
     execution: AiMemoryV2EngineExecution,
     options: ChatRuntimeEngineOptions,
     executeWithNativeTools: NonNullable<ChatRuntimeEngine['executeWithNativeTools']>,

@@ -4,6 +4,7 @@ import { resolve } from 'path';
 import { parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import type { PersistedRunState } from '@/lib/run/state-persistence';
+import { getWorkflowTaskInputTitle, normalizeWorkflowTaskInput } from '@/lib/workflow/task-input';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 const SUMMARY_CACHE_FILE = 'summary.json';
@@ -34,6 +35,8 @@ export interface RunSummaryCache {
   parentStateName?: string;
   parentStepId?: string;
   parentStepName?: string;
+  taskTitle?: string;
+  taskIssueUrl?: string;
   childRunIds?: string[];
   subworkflowRuns?: Array<{
     runId: string;
@@ -221,6 +224,8 @@ function normalizeSummary(input: any): RunSummaryCache | null {
     parentStateName: stringValue(input.parentStateName) || undefined,
     parentStepId: stringValue(input.parentStepId) || undefined,
     parentStepName: stringValue(input.parentStepName) || undefined,
+    taskTitle: stringValue(input.taskTitle) || undefined,
+    taskIssueUrl: stringValue(input.taskIssueUrl) || undefined,
     childRunIds: Array.isArray(input.childRunIds) ? input.childRunIds.filter((item: any) => typeof item === 'string') : [],
     subworkflowRuns: Array.isArray(input.subworkflowRuns)
       ? input.subworkflowRuns.map((ref: any) => ({
@@ -276,6 +281,7 @@ export function buildRunSummaryCacheFromState(state: PersistedRunState): RunSumm
   const failedSteps = Array.isArray(state.failedSteps) ? state.failedSteps.length : 0;
   const ownerId = stringValue(state.runOwnerId) || stringValue(state.createdBy);
   const ownerName = stringValue(state.runOwnerName) || stringValue(state.createdByName);
+  const taskInput = normalizeWorkflowTaskInput(state.taskInput);
   return {
     version: SUMMARY_CACHE_VERSION,
     id: state.runId,
@@ -288,6 +294,8 @@ export function buildRunSummaryCacheFromState(state: PersistedRunState): RunSumm
     parentStateName: stringValue(state.parentStateName) || undefined,
     parentStepId: stringValue(state.parentStepId) || undefined,
     parentStepName: stringValue(state.parentStepName) || undefined,
+    taskTitle: getWorkflowTaskInputTitle(taskInput) || undefined,
+    taskIssueUrl: taskInput.issueUrl || undefined,
     childRunIds: Array.isArray(state.childRunIds) ? state.childRunIds : [],
     subworkflowRuns: Array.isArray(state.subworkflowRuns)
       ? state.subworkflowRuns.map((ref) => ({
@@ -327,6 +335,8 @@ export function buildRunSummaryCacheFromRecord(record: {
   endTime?: string | null;
   status?: string;
   currentPhase?: string | null;
+  taskTitle?: string;
+  taskIssueUrl?: string;
   totalSteps?: number;
   completedSteps?: number;
   inputTokens?: number;
@@ -356,6 +366,8 @@ export function buildRunSummaryCacheFromRecord(record: {
     endTime: stringValue(record.endTime) || null,
     status: stringValue(record.status) || 'preparing',
     currentPhase: stringValue(record.currentPhase) || null,
+    taskTitle: stringValue(record.taskTitle) || undefined,
+    taskIssueUrl: stringValue(record.taskIssueUrl) || undefined,
     totalSteps,
     completedSteps,
     failedSteps: Math.max(0, totalSteps - completedSteps),

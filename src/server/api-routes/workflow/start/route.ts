@@ -22,6 +22,11 @@ import { countWorkflowSteps } from '@/lib/workflow/step-counter';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { writeFile } from 'fs/promises';
 import { createWorkflowConfigSnapshot } from '@/lib/workflow/subworkflow-config';
+import {
+  getWorkflowTaskInputTitle,
+  normalizeWorkflowTaskInput,
+  type WorkflowTaskInput,
+} from '@/lib/workflow/task-input';
 
 export { countWorkflowSteps } from '@/lib/workflow/step-counter';
 
@@ -99,7 +104,7 @@ async function ensureWorkflowChatSession(input: {
   return { sessionId: id, sessionWorkbenchState };
 }
 
-function normalizeInitialContexts(input: any): { globalContext: string; phaseContexts: Record<string, string>; workingDirectory?: string } {
+function normalizeInitialContexts(input: any): { globalContext: string; phaseContexts: Record<string, string>; taskInput: WorkflowTaskInput; workingDirectory?: string } {
   const globalContext = typeof input?.globalContext === 'string' ? input.globalContext : '';
   const workingDirectory = typeof input?.workingDirectory === 'string' ? input.workingDirectory.trim() : '';
   const phaseEntries = Object.entries(input?.phaseContexts || {}).filter(
@@ -108,6 +113,7 @@ function normalizeInitialContexts(input: any): { globalContext: string; phaseCon
   return {
     globalContext,
     phaseContexts: Object.fromEntries(phaseEntries) as Record<string, string>,
+    taskInput: normalizeWorkflowTaskInput(input?.taskInput),
     workingDirectory: workingDirectory || undefined,
   };
 }
@@ -130,6 +136,7 @@ async function startRehearsalRun(input: {
   initialContexts?: {
     globalContext: string;
     phaseContexts: Record<string, string>;
+    taskInput?: WorkflowTaskInput;
     workingDirectory?: string;
   };
 }) {
@@ -165,6 +172,8 @@ async function startRehearsalRun(input: {
     id: runId,
     configFile: input.configFile,
     configName: config?.workflow?.name || input.configFile,
+    taskTitle: getWorkflowTaskInputTitle(input.initialContexts?.taskInput) || undefined,
+    taskIssueUrl: input.initialContexts?.taskInput?.issueUrl,
     startTime: now,
     endTime: now,
     status: 'completed',
@@ -200,6 +209,7 @@ async function startRehearsalRun(input: {
     workflowFrontendSessionId: input.frontendSessionId || null,
     globalContext: input.initialContexts?.globalContext || '',
     phaseContexts: input.initialContexts?.phaseContexts || {},
+    taskInput: input.initialContexts?.taskInput,
     qualityChecks: input.preflightChecks,
     stepTaskBindingsSnapshot: bindingValidation?.bindings,
     bindingValidation: bindingValidation as any,
@@ -236,7 +246,13 @@ async function startRehearsalRun(input: {
       sessionId: workflowSessionId,
       type: 'run-starting',
       title: '演练开始',
-      body: [`配置文件：${input.configFile}`, `协调嘉宾：${state.supervisorAgent || 'default-supervisor'}`].join('\n'),
+      body: [
+        `配置文件：${input.configFile}`,
+        `协调嘉宾：${state.supervisorAgent || 'default-supervisor'}`,
+        getWorkflowTaskInputTitle(input.initialContexts?.taskInput)
+          ? `本次任务：${getWorkflowTaskInputTitle(input.initialContexts?.taskInput)}`
+          : '',
+      ].filter(Boolean).join('\n'),
       speakerName: state.supervisorAgent || 'default-supervisor',
       dedupeKey: `workflow-rehearsal-starting-${runId}`,
       participants: input.participants,
@@ -421,7 +437,13 @@ export async function POST(request: Request) {
       sessionId: workflowChatSessionId,
       type: 'run-starting',
       title: '工作流开始启动',
-      body: [`配置文件：${configFile}`, `协调嘉宾：${supervisorAgent}`].join('\n'),
+      body: [
+        `配置文件：${configFile}`,
+        `协调嘉宾：${supervisorAgent}`,
+        getWorkflowTaskInputTitle(initialContexts.taskInput)
+          ? `本次任务：${getWorkflowTaskInputTitle(initialContexts.taskInput)}`
+          : '',
+      ].filter(Boolean).join('\n'),
       speakerName: supervisorAgent,
       dedupeKey: `workflow-run-starting-${runId}`,
       participants: workflowParticipants,

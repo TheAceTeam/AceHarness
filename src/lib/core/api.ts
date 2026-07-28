@@ -10,6 +10,7 @@ import type {
   WorkflowGitState,
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
+import type { WorkflowTaskInput } from '@/lib/workflow/task-input';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
 import { buildLoginHref, getCurrentAuthReturnTo } from '@/lib/navigation/return-target';
@@ -269,6 +270,7 @@ interface WorkflowStatusResponse {
   iterationStates: Record<string, any>;
   globalContext?: string;
   phaseContexts?: Record<string, string>;
+  taskInput?: WorkflowTaskInput;
   workingDirectory?: string | null;
   workspaceGit?: WorkflowGitState | null;
   persistMode?: 'none' | 'repository';
@@ -1877,6 +1879,7 @@ export const workflowApi = {
     initialContexts?: {
       globalContext?: string;
       phaseContexts?: Record<string, string>;
+      taskInput?: WorkflowTaskInput;
       workingDirectory?: string;
     };
     preflightChecks?: Array<{

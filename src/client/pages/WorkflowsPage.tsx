@@ -38,8 +38,10 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { MultiCombobox } from '@/components/ui/combobox';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
-import { Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown, History, Copy, Globe, Lock, Share2, Upload, Download, RefreshCw } from 'lucide-react';
+import { Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown, History, Copy, Globe, Lock, Share2, Upload, Download, RefreshCw, LayoutTemplate, PackagePlus } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
+import SaveWorkflowTemplateDialog from '@/components/workflow-templates/SaveWorkflowTemplateDialog';
+import WorkflowTemplatesPanel from '@/components/workflow-templates/WorkflowTemplatesPanel';
 import { useToast } from '@/components/ui/toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { PaginationBar } from '@/components/PaginationBar';
@@ -90,7 +92,7 @@ interface ShareableUser {
 type WorkflowSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
 type WorkflowModeFilter = 'all' | 'state-machine' | 'phase-based';
-type WorkflowsPageTab = 'workflows' | 'drafts';
+type WorkflowsPageTab = 'workflows' | 'templates' | 'drafts';
 type DraftViewMode = 'gallery' | 'table';
 type DraftSortDirection = 'desc' | 'asc';
 type StatusTone = 'neutral' | 'success' | 'warning' | 'info' | 'danger' | 'accent';
@@ -252,6 +254,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [activeWorkflow, setActiveWorkflow] = useState<WorkflowConfig | null>(null);
+  const [saveTemplateWorkflow, setSaveTemplateWorkflow] = useState<WorkflowConfig | null>(null);
   const [drawerWorkflow, setDrawerWorkflow] = useState<WorkflowConfig | null>(null);
   const [copyFilename, setCopyFilename] = useState('');
   const [copyWorkflowName, setCopyWorkflowName] = useState('');
@@ -842,6 +845,12 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
           onSelect: () => openAiCopyWorkflow(workflow),
         },
         {
+          id: 'save-template',
+          label: '另存为模板',
+          icon: <PackagePlus className="h-4 w-4" />,
+          onSelect: () => setSaveTemplateWorkflow(workflow),
+        },
+        {
           id: 'share',
           label: '分享',
           icon: <Share2 className="h-4 w-4" />,
@@ -1203,6 +1212,14 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
             </Button>
             <Button
               size="sm"
+              variant={activeTab === 'templates' ? 'secondary' : 'ghost'}
+              onClick={() => setActiveTab('templates')}
+            >
+              <LayoutTemplate className="mr-2 h-4 w-4" />
+              模板库
+            </Button>
+            <Button
+              size="sm"
               variant={activeTab === 'drafts' ? 'secondary' : 'ghost'}
               onClick={() => setActiveTab('drafts')}
             >
@@ -1219,6 +1236,14 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
               onClick={() => setActiveTab('workflows')}
             >
               工作流列表
+            </Button>
+            <Button
+              size="sm"
+              variant={activeTab === 'templates' ? 'secondary' : 'ghost'}
+              onClick={() => setActiveTab('templates')}
+            >
+              <LayoutTemplate className="mr-2 h-4 w-4" />
+              模板库
             </Button>
             <Button
               size="sm"
@@ -1463,6 +1488,9 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
                         打开设计工作台
                     </Button>
                     {renderCopyMenu(workflow)}
+                    <Button size="sm" variant="outline" title="另存为模板" onClick={() => setSaveTemplateWorkflow(workflow)}>
+                      <PackagePlus className="h-3 w-3" />
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => openShareDialog(workflow)}>
                       <Share2 className="w-3 h-3" />
                     </Button>
@@ -1491,6 +1519,14 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
               />
             ) : null}
           </>
+        ) : activeTab === 'templates' ? (
+          <WorkflowTemplatesPanel
+            onInstantiated={(filename) => {
+              setActiveTab('workflows');
+              void refreshWorkflows();
+              openWorkbench(filename, 'design');
+            }}
+          />
         ) : (
           <section className="rounded-xl border border-border bg-card p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1591,6 +1627,13 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
           focusRequirementsOnOpen={newWorkflowModalPreset?.focusRequirementsOnOpen}
         />
       )}
+
+      <SaveWorkflowTemplateDialog
+        open={Boolean(saveTemplateWorkflow)}
+        workflow={saveTemplateWorkflow}
+        onOpenChange={(open) => { if (!open) setSaveTemplateWorkflow(null); }}
+        onSaved={() => setActiveTab('templates')}
+      />
 
       <Dialog open={copyDialogOpen} onOpenChange={(open) => { if (!actionLoading) setCopyDialogOpen(open); }}>
         <DialogContent className="sm:max-w-xl">

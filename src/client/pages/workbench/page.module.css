@@ -356,9 +356,10 @@
   --workbench-soft: #f7f7f4;
   --workbench-accent: #8b5cf6;
   --workbench-accent-soft: #eee7ff;
+  --workbench-nav-width: 380px;
   position: relative;
   display: grid;
-  grid-template-columns: 310px minmax(520px, 1fr) minmax(300px, 360px);
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr) minmax(300px, 360px);
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -368,19 +369,19 @@
 }
 
 .runInspectorCollapsed {
-  grid-template-columns: 310px minmax(520px, 1fr) 44px;
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr) 44px;
 }
 
 .runDocumentsLayout {
-  grid-template-columns: 310px minmax(520px, 1fr);
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr);
 }
 
 .designDrawerLayout {
-  grid-template-columns: 310px minmax(520px, 1fr);
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr);
 }
 
 .runWorkbenchPreviewLayout {
-  grid-template-columns: 310px minmax(520px, 1fr);
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr);
 }
 
 .runListRail,
@@ -630,9 +631,10 @@
   --workbench-soft: #f7f7f4;
   --workbench-accent: #8b5cf6;
   --workbench-accent-soft: #eee7ff;
+  --workbench-nav-width: 380px;
   position: relative;
   display: grid;
-  grid-template-columns: 310px minmax(520px, 1fr) minmax(300px, 360px);
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr) minmax(300px, 360px);
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -642,7 +644,7 @@
 }
 
 .designInspectorCollapsed {
-  grid-template-columns: 310px minmax(520px, 1fr) 44px;
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr) 44px;
 }
 
 .designTopToolbar {
@@ -653,7 +655,9 @@
   display: flex;
   height: 100%;
   min-height: 0;
+  min-width: 0;
   flex-direction: column;
+  overflow: hidden;
   background: var(--workbench-sidebar, #f7f7f4);
   color: var(--workbench-text, #151515);
 }
@@ -667,16 +671,19 @@
 .workbenchNavBody {
   display: flex;
   min-height: 0;
+  min-width: 0;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
-  overflow: auto;
-  padding: 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 16px;
   scrollbar-color: var(--workbench-line-strong, #d4d4ce) transparent;
 }
 
 .workbenchNavSection {
   display: grid;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -688,6 +695,7 @@
   display: flex;
   height: 44px;
   width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 9px;
   border: 1px solid transparent;
@@ -722,15 +730,17 @@
 
 .workbenchSubList {
   display: grid;
+  min-width: 0;
   gap: 5px;
   margin-top: 2px;
-  padding-left: 14px;
+  padding-left: 12px;
 }
 
 .workbenchSubItem {
   display: flex;
   height: 32px;
   width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   border: 1px solid transparent;
@@ -742,6 +752,13 @@
   font-size: 12px;
   font-weight: 700;
   transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.workbenchSubItem > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workbenchSubItem:hover {
@@ -761,6 +778,7 @@
 
 .workbenchRunEntry {
   display: grid;
+  min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
@@ -772,6 +790,7 @@
 
 .workbenchHistoryPageButton {
   height: 36px;
+  min-width: 0;
   border: 1px solid var(--workbench-line, #e3e3df);
   border-radius: 9px;
   background: var(--workbench-paper, #ffffff);
@@ -779,6 +798,7 @@
   padding: 0 10px;
   font-size: 12px;
   font-weight: 750;
+  white-space: nowrap;
   transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
@@ -791,6 +811,7 @@
 .workbenchRunList,
 .workbenchRunDetailNav {
   display: grid;
+  min-width: 0;
   gap: 8px;
   margin-top: 2px;
 }
@@ -798,12 +819,19 @@
 .workbenchRunCard,
 .workbenchSelectedRunCard {
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--workbench-line, #e3e3df);
   border-radius: 11px;
   background: var(--workbench-paper, #ffffff);
   padding: 10px 12px;
   text-align: left;
   box-shadow: none;
+}
+
+.workbenchRunCard *,
+.workbenchSelectedRunCard * {
+  min-width: 0;
 }
 
 .workbenchRunCard {
@@ -824,6 +852,7 @@
 .workbenchBackButton {
   display: flex;
   height: 34px;
+  min-width: 0;
   align-items: center;
   gap: 7px;
   border: 1px solid var(--workbench-line, #e3e3df);
@@ -1286,7 +1315,8 @@
 
 @media (max-width: 1180px) {
   .runWorkbenchLayout {
-    grid-template-columns: minmax(240px, 300px) minmax(420px, 1fr);
+    --workbench-nav-width: 340px;
+    grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr);
   }
 
   .designWorkbenchLayout {
