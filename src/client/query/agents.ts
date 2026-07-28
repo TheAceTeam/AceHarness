@@ -47,19 +47,6 @@ export type AgentsListResponse = {
   runtimeAgentsDir?: string;
 };
 
-export type AgentMemoryResponse = {
-  agentName: string;
-  storageScope: 'role';
-  storageKey: string;
-  entries: any[];
-  baseMemory: string;
-  mergedContent: string;
-  charCount: number;
-  maxChars: number;
-  overLimit: boolean;
-  updatedAt: string;
-};
-
 export function useAgentsQuery() {
   return useQuery({
     queryKey: queryKeys.agents(),
@@ -137,35 +124,6 @@ export function useImportAgentZipMutation() {
 export function useExportAgentsMutation() {
   return useMutation({
     mutationFn: (names: string[]) => agentApi.exportAgents(names),
-  });
-}
-
-export function useAgentMemoryQuery(name: string, maxChars = 5000, options: { enabled?: boolean } = {}) {
-  return useQuery({
-    queryKey: queryKeys.agentMemory(name, maxChars),
-    queryFn: () => agentApi.getMemory(name, maxChars) as Promise<AgentMemoryResponse>,
-    enabled: options.enabled ?? Boolean(name),
-    staleTime: 15_000,
-  });
-}
-
-export function useSaveAgentMemoryMutation(name: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { baseMemory: string; maxChars?: number }) => agentApi.saveMemory(name, input),
-    onSuccess: (_data, variables) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.agentMemory(name, variables.maxChars ?? 5000) });
-    },
-  });
-}
-
-export function useClearAgentMemoryMutation(name: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (maxChars: number) => agentApi.clearMemory(name, maxChars),
-    onSuccess: (_data, maxChars) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.agentMemory(name, maxChars) });
-    },
   });
 }
 

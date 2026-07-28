@@ -4,18 +4,17 @@
  */
 
 import { EventEmitter } from 'events';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, copyFile, writeFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { cpus } from 'os';
 import { parse } from 'yaml';
-import { fenced } from '@/lib/core/markdown-utils';
 import { processManager } from '@/lib/core/process-manager';
 import { createRun, updateRun } from '@/lib/run/store';
 import type { RunRecord } from '@/lib/run/store';
 import {
-  saveRunState, saveProcessOutput, saveStreamContent, appendStreamContent, appendFeedbackToStream, loadStreamContent, loadStepOutputs, loadRunState, findRunningRuns, isProcessAlive,
+  saveRunState, saveProcessOutput, saveStreamContent, appendStreamContent, appendFeedbackToStream, loadStreamContent, loadRunState, findRunningRuns, isProcessAlive,
   type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog, type PersistedQualityCheck, type WorkflowGitState,
 } from '@/lib/run/state-persistence';
 import { appendRuntimeOutputPreview, compactRuntimeOutputPreview } from '@/lib/run/output-compaction';
@@ -65,6 +64,25 @@ import {
   resolveMcpServersByNames,
   type ManagedMcpServer,
 } from '@/lib/mcp/registry';
+import {
+  buildWorkflowMemoryV2FallbackContinuationPrompt,
+  buildWorkflowMemoryV2HandoffRepairPrompt,
+  createWorkflowMemoryV2Adapter,
+  createWorkflowMemoryV2StepAttemptId,
+  hasWorkflowMemoryV2FallbackContinuationBudget,
+  hasSuccessfulWorkflowMemoryV2FallbackRead,
+  parseWorkflowMemoryV2Handoff,
+  WORKFLOW_MEMORY_V2_MAX_FALLBACK_ROUNDS,
+  type WorkflowMemoryV2Adapter,
+  type WorkflowMemoryV2AiExecution,
+  type WorkflowMemoryV2Artifact,
+  type WorkflowMemoryV2Step,
+  type WorkflowMemoryV2Target,
+} from '@/lib/workflow/memory-v2-handoff';
+import {
+  ensureMemoryV2FreshStart,
+  type MemoryV2CutoverStatus,
+} from '@/lib/memory-v2-cutover/feature-flag';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
 export function resolveAgentEngineSelection(roleConfig: any, workflowContext?: any): { engine: string; model: string } {
@@ -224,32 +242,6 @@ type AgentPromptMemo = {
   skillContentSeen: Set<string>;
 };
 
-function buildAgentCompactSourceFromStepLogs(
-  stepLogs: PersistedStepLog[],
-  agentName: string,
-  currentPrompt: string,
-): string {
-  const recentLogs = stepLogs.filter((log) => log.agent === agentName).slice(-5);
-  if (recentLogs.length === 0) return currentPrompt;
-
-  const history = recentLogs.map((log) => {
-    const summarySource = log.output || log.error || '';
-    const summary = compactStepConclusion(summarySource).slice(0, 4000);
-    return [
-      `## ${log.stepName}`,
-      `状态: ${log.status}`,
-      summary ? `${log.output ? '输出摘要' : '错误摘要'}:\n${summary}` : '',
-    ].filter(Boolean).join('\n');
-  }).join('\n\n');
-
-  return [
-    '# 该 Agent 在当前工作流中的历史步骤摘要',
-    history,
-    '# 当前步骤请求',
-    currentPrompt,
-  ].join('\n\n');
-}
-
 export class WorkflowManager extends EventEmitter {
   private currentWorkflow: WorkflowConfig | null = null;
   private logs: any[] = [];
@@ -322,6 +314,9 @@ export class WorkflowManager extends EventEmitter {
   /** Current engine type */
   private engineType: WorkflowRuntimeType = 'claude-code';
   private workflowGit: WorkflowGitState | null = null;
+  private memoryV2: WorkflowMemoryV2Adapter | null = null;
+  private memoryV2Status: MemoryV2CutoverStatus | null = null;
+  private activeMemoryV2Steps: Map<string, WorkflowMemoryV2Step> = new Map();
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
@@ -411,7 +406,7 @@ export class WorkflowManager extends EventEmitter {
         appendSystemPrompt: true,
         runId: this.currentRunId || undefined,
       }, {
-        buildCompactSource: async () => buildAgentCompactSourceFromStepLogs(this.stepLogs, input.agentName, input.prompt),
+        buildCompactSource: async () => input.prompt,
       });
       replaceAgentSessionId(this.agentSessionIds, input.agentName, compacted.nextSessionId);
       const agent = this.agents.find((item) => item.name === input.agentName);
@@ -458,6 +453,178 @@ export class WorkflowManager extends EventEmitter {
     return createWorkflowParticipants([...names], {
       coordinatorAgent: this.getWorkflowSupervisorAgentName(),
     });
+  }
+
+  private async initializeMemoryV2(workflowConfig: WorkflowConfig): Promise<void> {
+    this.memoryV2?.close();
+    this.memoryV2 = null;
+    this.activeMemoryV2Steps.clear();
+
+    let status: MemoryV2CutoverStatus;
+    try {
+      status = await ensureMemoryV2FreshStart();
+    } catch (error) {
+      status = {
+        enabled: true,
+        ready: false,
+        reason: error instanceof Error ? error.message : 'Memory V2 fresh-start readiness check failed',
+      };
+    }
+    this.memoryV2Status = status;
+    if (!status.ready) {
+      this.emit('log', {
+        level: 'info',
+        message: `Memory V2 is unavailable; workflow memory handoff is disabled for this run: ${status.reason || 'not ready'}`,
+      });
+      return;
+    }
+
+    if (!this.currentRunId || !this.currentConfigFile) {
+      this.memoryV2Status = {
+        ...status,
+        ready: false,
+        reason: 'workflow run identity is unavailable',
+      };
+      this.emit('log', {
+        level: 'warning',
+        message: 'Memory V2 is ready but workflow memory handoff is disabled because the run identity is unavailable.',
+      });
+      return;
+    }
+
+    const participantIds = Array.from(new Set([
+      ...this.agents.map((agent) => agent.name).filter(Boolean),
+      this.getWorkflowSupervisorAgentName(),
+    ].filter((value): value is string => Boolean(value))));
+    if (!participantIds.length) {
+      this.memoryV2Status = {
+        ...status,
+        ready: false,
+        reason: 'workflow participant snapshot is empty',
+      };
+      this.emit('log', {
+        level: 'warning',
+        message: 'Memory V2 is ready but workflow memory handoff is disabled because no participants were resolved.',
+      });
+      return;
+    }
+
+    const channelMembers = new Map<string, Set<string>>();
+    for (const phase of workflowConfig.workflow.phases || []) {
+      for (const step of phase.steps || []) {
+        const agentId = String(step.agent || '').trim();
+        for (const channelId of Array.isArray(step.channelIds) ? step.channelIds : []) {
+          const normalized = String(channelId || '').trim();
+          if (!normalized || !agentId) continue;
+          const members = channelMembers.get(normalized) || new Set<string>();
+          members.add(agentId);
+          channelMembers.set(normalized, members);
+        }
+      }
+    }
+    let adapter: WorkflowMemoryV2Adapter | null = null;
+    try {
+      adapter = createWorkflowMemoryV2Adapter({
+        runId: this.currentRunId,
+        workflowId: `phase:${this.currentConfigFile}`,
+        ownerUserId: this._createdBy,
+        workspaceKey: this._userPersonalDir || getWorkspaceRoot(),
+        projectKey: this.currentProjectRoot || workflowConfig.context?.projectRoot || this.currentConfigFile,
+        participantIds,
+        channelMembers: Array.from(channelMembers, ([channelId, members]) => ({
+          channelId,
+          agentIds: Array.from(members),
+        })),
+      });
+      adapter.restoreRunState({ agentId: participantIds[0] });
+      this.memoryV2 = adapter;
+    } catch (error) {
+      adapter?.close();
+      const reason = error instanceof Error ? error.message : String(error);
+      this.memoryV2Status = { ...status, ready: false, reason };
+      this.emit('log', {
+        level: 'warning',
+        message: `Memory V2 workflow handoff initialization failed; continuing without workflow memory: ${reason}`,
+      });
+    }
+  }
+
+  private createMemoryV2Step(step: WorkflowStep, phase: WorkflowPhase): WorkflowMemoryV2Step {
+    const attempt = this.stepLogs.filter((log) => log.stepName === step.name).length + 1;
+    const attemptIdInput = {
+      runId: this.currentRunId || 'missing-run',
+      workflowId: `phase:${this.currentConfigFile || 'workflow'}`,
+      logicalStepId: `${phase.name}/${step.name}`,
+    };
+    return {
+      attemptId: createWorkflowMemoryV2StepAttemptId({ ...attemptIdInput, attempt }),
+      agentId: step.agent,
+      stepId: step.name,
+      workflowState: phase.name,
+      stepTags: Array.isArray((step as any).tags) ? (step as any).tags : [],
+      channelIds: Array.isArray(step.channelIds) ? step.channelIds : [],
+      isRetry: attempt > 1,
+      ...(attempt > 1 ? { retryOfAttemptId: createWorkflowMemoryV2StepAttemptId({ ...attemptIdInput, attempt: attempt - 1 }) } : {}),
+    };
+  }
+
+  private buildMemoryV2TargetPlan(
+    step: WorkflowStep,
+    phase: WorkflowPhase,
+    workflowConfig: WorkflowConfig,
+  ): { nextTarget?: WorkflowMemoryV2Target; candidateTargets: WorkflowMemoryV2Target[] } {
+    const iterationSuffix = step.name.match(/-\u8fed\u4ee3\d+$/)?.[0] || '';
+    const baseStepName = iterationSuffix ? step.name.slice(0, -iterationSuffix.length) : step.name;
+    const phaseIndex = workflowConfig.workflow.phases.findIndex((item) => item.name === phase.name);
+    const currentIndex = phase.steps.findIndex((item) => item === step || item.name === step.name || item.name === baseStepName);
+    const future: Array<{ phase: WorkflowPhase; step: WorkflowStep }> = [];
+    for (let index = Math.max(0, phaseIndex); index < workflowConfig.workflow.phases.length; index += 1) {
+      const candidatePhase = workflowConfig.workflow.phases[index];
+      const start = index === phaseIndex ? currentIndex + 1 : 0;
+      for (let stepIndex = Math.max(0, start); stepIndex < candidatePhase.steps.length; stepIndex += 1) {
+        const candidate = candidatePhase.steps[stepIndex];
+        const targetStep = index === phaseIndex && iterationSuffix
+          ? { ...candidate, name: `${candidate.name}${iterationSuffix}` }
+          : candidate;
+        future.push({ phase: candidatePhase, step: targetStep });
+      }
+    }
+    const targets = future.map(({ phase: targetPhase, step: targetStep }) => {
+      const target = this.createMemoryV2Step(targetStep, targetPhase);
+      return {
+        attemptId: target.attemptId,
+        agentId: target.agentId,
+        stepId: target.stepId,
+        workflowState: target.workflowState,
+        stepTags: target.stepTags,
+        channelIds: target.channelIds,
+      };
+    });
+    const immediate = future[0];
+    const nextTarget = !step.parallelGroup && immediate && !immediate.step.parallelGroup
+      ? targets[0]
+      : undefined;
+    return { nextTarget, candidateTargets: targets };
+  }
+
+  private recordMemoryV2Terminal(step: WorkflowMemoryV2Step | null | undefined, status: 'failed' | 'cancelled'): void {
+    const memoryV2 = this.memoryV2;
+    if (!memoryV2 || !step) return;
+    try {
+      if (status === 'failed') memoryV2.recordFailure(step);
+      else memoryV2.recordCancellation(step);
+    } catch (error) {
+      this.emit('log', {
+        level: 'warning',
+        message: `Memory V2 ${status} handoff persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  private recordActiveMemoryV2Cancellations(): void {
+    for (const step of this.activeMemoryV2Steps.values()) {
+      this.recordMemoryV2Terminal(step, 'cancelled');
+    }
   }
 
   private async appendWorkflowTranscriptEvent(input: {
@@ -928,10 +1095,15 @@ try {
       }
     };
 
+    const memoryV2Execution = options.memoryV2Execution as WorkflowMemoryV2AiExecution | undefined;
     let fullStreamContent = '';
 
     // Set up stream handler for the engine
     const streamHandler = (event: WorkflowRuntimeStreamEvent) => {
+      // Workflow runtimes expose no server-side native-tool callback. Retain
+      // no raw chunks for a V2 fallback turn because its private envelope can
+      // span arbitrary stream boundaries.
+      if (memoryV2Execution) return;
       if (event.type !== 'text' && event.type !== 'tool') return;
       fullStreamContent += event.content;
       const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
@@ -946,40 +1118,84 @@ try {
     this.currentRuntime.on('stream', streamHandler);
 
     try {
-      const result = await executeWorkflowRuntimeWithContextRecovery(this.currentRuntime, {
-        agent,
-        step,
-        prompt,
-        systemPrompt,
-        model,
-        workingDirectory: options.workingDirectory,
-        allowedTools: options.allowedTools,
-        timeoutMs: options.timeoutMs,
-        sessionId: options.resumeSessionId,
-        appendSystemPrompt: options.appendSystemPrompt,
-        runId: options.runId,
-        mcpServers: options.mcpServers,
-        userId: this._createdBy,
-        env: buildRuntimeDatabaseEnv(this.runtimeDatabaseGrant),
-      }, {
-        onContextReset: (event) => {
-          this.emit('log', {
-            agent,
-            level: 'warning',
-            message: `上下文超限，已清空 ${this.engineType} 会话并重试: ${event.method}`,
-          });
-        },
-      });
+      memoryV2Execution?.turn.assertRequiredReadsAcknowledged();
+      const executeRuntime = (runtimePrompt: string, sessionId: string | undefined, appendSystemPrompt: boolean | undefined) => (
+        executeWorkflowRuntimeWithContextRecovery(this.currentRuntime!, {
+          agent,
+          step,
+          prompt: runtimePrompt,
+          systemPrompt,
+          model,
+          workingDirectory: options.workingDirectory,
+          allowedTools: options.allowedTools,
+          timeoutMs: options.timeoutMs,
+          sessionId,
+          appendSystemPrompt,
+          runId: options.runId,
+          mcpServers: options.mcpServers,
+          userId: this._createdBy,
+          env: buildRuntimeDatabaseEnv(this.runtimeDatabaseGrant),
+        }, {
+          onContextReset: (event) => {
+            this.emit('log', {
+              agent,
+              level: 'warning',
+              message: `上下文超限，已清空 ${this.engineType} 会话并重试: ${event.method}`,
+            });
+          },
+        })
+      );
+      let result = await executeRuntime(prompt, options.resumeSessionId, options.appendSystemPrompt);
+      let visibleOutput = result.output || fullStreamContent || '';
 
-      // Mark process as completed
+      if (memoryV2Execution) {
+        visibleOutput = '';
+        for (let round = 0; round < WORKFLOW_MEMORY_V2_MAX_FALLBACK_ROUNDS; round += 1) {
+          const rawOutput = result.output || (round === 0 ? fullStreamContent : '');
+          if (!result.success) {
+            visibleOutput = memoryV2Execution.stripStructuredFallback(rawOutput);
+            break;
+          }
+          if (!hasWorkflowMemoryV2FallbackContinuationBudget(round)) {
+            // Keep the terminal response for consuming the previous tool
+            // result. Terminal mutations are persisted and recorded, while
+            // read/search requests fail closed because no model turn remains
+            // to consume their result.
+            visibleOutput = memoryV2Execution.executeTerminalStructuredFallback(rawOutput).visibleText;
+            break;
+          }
+          const fallback = memoryV2Execution.executeStructuredFallback(rawOutput);
+          if (fallback.visibleText) visibleOutput = fallback.visibleText;
+          if (!hasSuccessfulWorkflowMemoryV2FallbackRead(fallback.toolResults)) {
+            break;
+          }
+          result = await executeRuntime(
+            [
+              memoryV2Execution.turn.buildPromptBlock(),
+              buildWorkflowMemoryV2FallbackContinuationPrompt(fallback.toolResults, {
+                terminal: !hasWorkflowMemoryV2FallbackContinuationBudget(round + 1),
+              }),
+            ].join('\n\n'),
+            resolveRecoveredWorkflowRuntimeSessionId(result, options.resumeSessionId) || undefined,
+            true,
+          );
+        }
+      }
+
+      // Mark process as completed. A V2 turn persists only cleaned text, so a
+      // fallback envelope never reaches the frontend or stream files.
       const resolvedSessionId = resolveRecoveredWorkflowRuntimeSessionId(result, options.resumeSessionId);
+      const visibleError = memoryV2Execution
+        ? memoryV2Execution.stripStructuredFallback(result.error || '')
+        : (result.error || '');
+      const failureResult = visibleError || visibleOutput;
       const rawProc = processManager.getProcessRaw(processId);
       if (rawProc) {
         rawProc.status = result.success ? 'completed' : 'failed';
         rawProc.endTime = new Date();
-        processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
+        processManager.setProcessOutput(processId, visibleOutput || rawProc.streamContent);
         rawProc.sessionId = resolvedSessionId || undefined;
-        if (!result.success) processManager.setProcessError(processId, result.error || '');
+        if (!result.success) processManager.setProcessError(processId, failureResult);
       }
 
       const metadata = result.metadata;
@@ -987,7 +1203,7 @@ try {
 
       // Convert engine result to WorkflowRuntimeJsonResult format
       return {
-        result: result.success ? result.output : (result.error || result.output),
+        result: result.success ? visibleOutput : failureResult,
         runtimeSessionId: resolvedSessionId || '',
         stop_reason: result.stopReason,
         is_error: !result.success,
@@ -1280,6 +1496,10 @@ try {
     this.accumulatedWaitMs = 0;
     this.waitStartedAt = null;
     this.currentRunId = null;
+    this.memoryV2?.close();
+    this.memoryV2 = null;
+    this.memoryV2Status = null;
+    this.activeMemoryV2Steps.clear();
     this.agentSessionIds.clear();
     this.liveFeedback = [];
     this.globalContext = initialContexts?.globalContext || '';
@@ -1446,6 +1666,7 @@ try {
 
       await reportPreparingProgress('准备中：构建执行上下文...', '构建执行上下文');
       this.initializeAgents(workflowConfig);
+      await this.initializeMemoryV2(workflowConfig);
 
       // === Switch to running ===
       this.status = 'running';
@@ -1491,6 +1712,7 @@ try {
 
   private async finalizeRun(status: 'completed' | 'failed' | 'stopped') {
     if (!this.currentRunId) return;
+    try {
     this.runEndTime = new Date().toISOString();
     this.currentStep = null;
 
@@ -1521,6 +1743,20 @@ try {
       });
     }
     this.status = 'idle';
+    } finally {
+      this.releaseMemoryV2AfterRun();
+    }
+  }
+
+  private releaseMemoryV2AfterRun(): void {
+    const adapter = this.memoryV2;
+    this.memoryV2 = null;
+    this.activeMemoryV2Steps.clear();
+    try {
+      adapter?.close();
+    } catch {
+      // A final cleanup must not replace the terminal workflow result.
+    }
   }
 
   private cleanupCurrentEngine(): void {
@@ -1617,7 +1853,7 @@ try {
    * Falls back to parseBugCount if no JSON found.
    */
   parseStepVerdict(output: string): { verdict: 'pass' | 'conditional_pass' | 'fail'; remainingIssues: number; summary: string } {
-    const parsed = extractStructuredJsonObject(output);
+    const parsed = extractStructuredJsonObject(output.replace(/<memory-handoff>[\s\S]*?<\/memory-handoff>/gi, ''));
     if (parsed) {
       return {
         verdict: ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict) ? parsed.verdict : 'fail',
@@ -1708,8 +1944,12 @@ try {
     return `${ts}-${safePhase}-${safeStep}.md`;
   }
 
-  private async persistPhaseStepArtifacts(stepName: string, rawOutput: string, displayOutput?: string): Promise<void> {
-    if (!this.currentRunId) return;
+  private async persistPhaseStepArtifacts(
+    stepName: string,
+    rawOutput: string,
+    displayOutput?: string,
+  ): Promise<WorkflowMemoryV2Artifact | null> {
+    if (!this.currentRunId) return null;
 
     const summaryContent = (displayOutput || '').trim() || rawOutput;
     await saveProcessOutput(this.currentRunId, stepName, summaryContent).catch(() => {});
@@ -1721,6 +1961,11 @@ try {
       await mkdir(outputsDir, { recursive: true }).catch(() => {});
       await writeFile(detailFilePath, rawOutput || summaryContent, 'utf-8').catch(() => {});
     }
+    return {
+      artifactKind: 'run-output',
+      relativePath: detailFileName,
+      contentHash: createHash('sha256').update(rawOutput || summaryContent).digest('hex'),
+    };
   }
 
   async executeWorkflow(workflowConfig: WorkflowConfig): Promise<void> {
@@ -2096,6 +2341,9 @@ try {
     stepIndex: number
   ): Promise<string> {
     const stepId = randomUUID();
+    const memoryV2 = this.memoryV2;
+    const memoryStep = memoryV2 ? this.createMemoryV2Step(step, phase) : null;
+    if (memoryStep) this.activeMemoryV2Steps.set(memoryStep.attemptId, memoryStep);
     this.currentStep = step.name;
     this.updateAgentStatus(step.agent, 'running', step.task);
     const beforeSnapshotId = await this.recordStepGitBefore({
@@ -2128,11 +2376,30 @@ try {
       });
     }
 
+    let memoryV2Execution: WorkflowMemoryV2AiExecution | undefined;
     try {
       let resultText: string;
       let jsonResult: WorkflowRuntimeJsonResult;
-      jsonResult = await this.executeStep(step, workflowConfig);
+      let memoryContextPrompt: string | undefined;
+      if (memoryV2 && memoryStep) {
+        memoryV2.beginRetry(memoryStep);
+        const preparedMemory = memoryV2.prepareStep(memoryStep);
+        memoryContextPrompt = preparedMemory.prompt;
+        memoryV2Execution = preparedMemory.aiExecution;
+      }
+      jsonResult = await this.executeStep(step, workflowConfig, undefined, memoryContextPrompt, memoryV2Execution);
       resultText = jsonResult.result;
+
+      if (memoryV2 && memoryStep && !parseWorkflowMemoryV2Handoff(resultText).ok) {
+        const repair = await this.executeStep(
+          step,
+          workflowConfig,
+          buildWorkflowMemoryV2HandoffRepairPrompt(),
+          memoryContextPrompt,
+          memoryV2Execution,
+        );
+        resultText = [resultText, repair.result].filter(Boolean).join('\n\n');
+      }
 
       const tokenUsage: TokenUsage = toPersistedTokenUsage(jsonResult.usage);
       this.updateAgentTokenUsage(step.agent, tokenUsage);
@@ -2196,7 +2463,18 @@ try {
         durationMs: jsonResult.duration_ms,
       });
 
-      await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
+      const artifact = await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
+      if (memoryV2 && memoryStep) {
+        const targets = this.buildMemoryV2TargetPlan(step, phase, workflowConfig);
+        memoryV2.completeStep({
+          step: memoryStep,
+          output: resultText,
+          nextTarget: targets.nextTarget,
+          candidateTargets: targets.candidateTargets,
+          artifacts: artifact ? [artifact] : [],
+          eligibleProposalReferences: memoryV2Execution?.getEligibleProposalReferences() || [],
+        });
+      }
       await this.persistState();
       if (this._frontendSessionId) {
         await this.appendWorkflowTranscriptEvent({
@@ -2215,6 +2493,7 @@ try {
     } catch (error: any) {
       // If workflow was stopped, don't record this as a failure
       if (this.shouldStop) {
+        this.recordMemoryV2Terminal(memoryStep, 'cancelled');
         this.currentStep = null;
         return '';
       }
@@ -2278,7 +2557,25 @@ try {
           forceCompleted: true,
         });
 
-        await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
+        if (memoryV2 && memoryStep) {
+          const parsedHandoff = parseWorkflowMemoryV2Handoff(resultText);
+          if (!parsedHandoff.ok) {
+            this.recordMemoryV2Terminal(memoryStep, 'failed');
+            throw new Error(`强制完成步骤缺少有效 Memory V2 handoff: ${parsedHandoff.reason}`);
+          }
+        }
+        const artifact = await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
+        if (memoryV2 && memoryStep) {
+          const targets = this.buildMemoryV2TargetPlan(step, phase, workflowConfig);
+          memoryV2.completeStep({
+            step: memoryStep,
+            output: resultText,
+            nextTarget: targets.nextTarget,
+            candidateTargets: targets.candidateTargets,
+            artifacts: artifact ? [artifact] : [],
+            eligibleProposalReferences: memoryV2Execution?.getEligibleProposalReferences() || [],
+          });
+        }
         await this.persistState();
         if (this._frontendSessionId) {
           await this.appendWorkflowTranscriptEvent({
@@ -2296,6 +2593,7 @@ try {
       }
 
       const errorMsg = error.message || String(error);
+      this.recordMemoryV2Terminal(memoryStep, 'failed');
 
       this.updateAgentStatus(step.agent, 'failed');
       this.failedStepNames.push(step.name);
@@ -2353,6 +2651,8 @@ try {
         });
       }
       return '';
+    } finally {
+      if (memoryStep) this.activeMemoryV2Steps.delete(memoryStep.attemptId);
     }
   }
 
@@ -2367,7 +2667,13 @@ try {
     return !last || last.status !== 'failed';
   }
 
-  async executeStep(step: WorkflowStep, workflowConfig: WorkflowConfig, extraContext?: string): Promise<WorkflowRuntimeJsonResult> {
+  async executeStep(
+    step: WorkflowStep,
+    workflowConfig: WorkflowConfig,
+    extraContext?: string,
+    memoryContext?: string,
+    memoryV2Execution?: WorkflowMemoryV2AiExecution,
+  ): Promise<WorkflowRuntimeJsonResult> {
     const roleConfig = this.agentConfigs.find((r) => r.name === step.agent)
       || workflowConfig.roles?.find((r) => r.name === step.agent);
     if (!roleConfig) {
@@ -2379,37 +2685,25 @@ try {
 
     if (enableReviewPanel && roleConfig.reviewPanel?.subAgents) {
       // Execute review panel mode: run multiple sub-agents in parallel
-      return await this.executeReviewPanel(step, workflowConfig, roleConfig, extraContext);
+      return await this.executeReviewPanel(step, workflowConfig, roleConfig, extraContext, memoryContext, memoryV2Execution);
     }
 
     // Normal single-agent execution
-    return await this.executeSingleAgent(step, workflowConfig, roleConfig, extraContext);
+    return await this.executeSingleAgent(step, workflowConfig, roleConfig, extraContext, memoryContext, memoryV2Execution);
   }
 
   private async executeReviewPanel(
     step: WorkflowStep,
     workflowConfig: WorkflowConfig,
     roleConfig: RoleConfig,
-    extraContext?: string
+    extraContext?: string,
+    memoryContext?: string,
+    memoryV2Execution?: WorkflowMemoryV2AiExecution,
   ): Promise<WorkflowRuntimeJsonResult> {
     const subAgents = roleConfig.reviewPanel!.subAgents;
     const subAgentNames = Object.keys(subAgents);
 
     console.log(`[专家模式] 启动 ${subAgentNames.length} 个专家子 Agent 进行多角度分析...`);
-
-    // Load previous step outputs for context injection
-    let previousOutputs: Record<string, string> = {};
-    if (this.currentRunId) {
-      try {
-        const allOutputs = await loadStepOutputs(this.currentRunId);
-        const completedSet = new Set(this.completedStepNames);
-        for (const [name, content] of Object.entries(allOutputs)) {
-          if (completedSet.has(name)) {
-            previousOutputs[name] = content;
-          }
-        }
-      } catch { /* non-critical */ }
-    }
 
     // Build agents JSON for claude --agents flag
     const agentsJson: Record<string, any> = {};
@@ -2424,7 +2718,7 @@ try {
 
     // Build main prompt that coordinates sub-agents
     const model = resolveAgentModel(roleConfig, workflowConfig.context);
-    const mainPrompt = await this.buildPrompt(step, workflowConfig, roleConfig, previousOutputs);
+    const mainPrompt = await this.buildPrompt(step, workflowConfig, roleConfig, extraContext, memoryContext);
     const coordinatorPrompt = `${mainPrompt}\n\n# 专家模式说明\n你现在处于专家模式。你有 ${subAgentNames.length} 个专家子 Agent 可以调用：\n\n${subAgentNames.map(name => `- @${name}: ${subAgents[name].description}`).join('\n')}\n\n请使用 @agent-name 语法调用这些专家，收集他们的分析结果，最后汇总形成综合结论。`;
     const isIterationStep = step.name.includes('-迭代');
     const systemPromptToUse = isIterationStep && roleConfig.iterationPrompt
@@ -2493,6 +2787,7 @@ try {
           runId: this.currentRunId || undefined,
           agents: agentsJson, // Pass sub-agents configuration
           mcpServers: this.getEffectiveMcpServers(roleConfig),
+          memoryV2Execution,
         }
       );
 
@@ -2518,24 +2813,12 @@ try {
     step: WorkflowStep,
     workflowConfig: WorkflowConfig,
     roleConfig: RoleConfig,
-    extraContext?: string
+    extraContext?: string,
+    memoryContext?: string,
+    memoryV2Execution?: WorkflowMemoryV2AiExecution,
   ): Promise<WorkflowRuntimeJsonResult> {
-    // Load previous step outputs for context injection — only completed steps
-    let previousOutputs: Record<string, string> = {};
-    if (this.currentRunId) {
-      try {
-        const allOutputs = await loadStepOutputs(this.currentRunId);
-        const completedSet = new Set(this.completedStepNames);
-        for (const [name, content] of Object.entries(allOutputs)) {
-          if (completedSet.has(name)) {
-            previousOutputs[name] = content;
-          }
-        }
-      } catch { /* non-critical */ }
-    }
-
     const model = resolveAgentModel(roleConfig, workflowConfig.context);
-    const prompt = await this.buildPrompt(step, workflowConfig, roleConfig, previousOutputs, extraContext);
+    const prompt = await this.buildPrompt(step, workflowConfig, roleConfig, extraContext, memoryContext);
     const processId = `${step.agent}-${step.name}-${Date.now()}`;
 
     // Determine which system prompt to use: iterationPrompt for iteration steps, systemPrompt otherwise
@@ -2661,6 +2944,7 @@ try {
               timeoutMs,
               runId: this.currentRunId || undefined,
               mcpServers: this.getEffectiveMcpServers(roleConfig),
+              memoryV2Execution,
             }
           );
         } catch (err) {
@@ -2814,8 +3098,8 @@ try {
     step: WorkflowStep,
     workflowConfig: WorkflowConfig,
     roleConfig: RoleConfig,
-    previousOutputs?: Record<string, string>,
-    extraContext?: string
+    extraContext?: string,
+    memoryContext?: string,
   ): Promise<string> {
     const memo = this.getAgentPromptMemo(step.agent || roleConfig.name || 'default');
     const phaseName = this.currentPhase || '当前阶段';
@@ -2943,26 +3227,8 @@ try {
       prompt += '\n';
     }
 
-    // Inject previous step outputs as context (only completed steps are passed in)
-    if (previousOutputs && Object.keys(previousOutputs).length > 0) {
-      prompt += `## 前序步骤产出\n`;
-      prompt += `以下是已完成步骤的产出摘要。如需查看完整内容，请读取对应文件路径。\n\n`;
-      for (const [stepName, output] of Object.entries(previousOutputs)) {
-        const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-        // 与 loadStepOutputs / saveProcessOutput 一致：数据目录下 runs/{runId}/outputs/，非 projectRoot/.ace-outputs
-        const fullPath = this.currentRunId
-          ? join(getWorkspaceRunsDir(), this.currentRunId, 'outputs', `${safeName}.md`)
-          : '';
-        // Extract the tail of the output as summary (AI typically summarizes at the end)
-        const summary = output.length > 3000
-          ? output.substring(output.length - 3000)
-          : output;
-        prompt += `### ${stepName}\n`;
-        if (fullPath) {
-          prompt += `完整文档路径: \`${fullPath}\`\n\n`;
-        }
-        prompt += `${fenced(summary)}\n\n`;
-      }
+    if (memoryContext) {
+      prompt += `${memoryContext}\n`;
     }
 
     // Inject structured JSON output requirement for attacker/judge roles
@@ -3282,6 +3548,7 @@ try {
   async stop(): Promise<void> {
     this.shouldStop = true;
     this.status = 'stopped';
+    this.recordActiveMemoryV2Cancellations();
     // Unblock any pending waitForApproval
     this.emit('force-stop');
     // Mark the current running step as failed so it shows red in the flow diagram
@@ -3455,6 +3722,7 @@ try {
     }
 
     this.initializeAgents(workflowConfig);
+    await this.initializeMemoryV2(workflowConfig);
 
     // Restore agent state from persisted data
     for (const pa of (runState.agents || [])) {

@@ -84,11 +84,24 @@ vi.mock('@/components/chat/ChatMessage', () => ({
   RobotLogo: ({ size }: any) => <div data-testid="robot-logo" style={{ width: size, height: size }} />,
 }));
 
-import ChatSidebar from '@/components/chat/ChatSidebar';
+import ChatSidebar, { readStoredSessionTagFilters, SESSION_TAG_FILTER_STORAGE_KEY } from '@/components/chat/ChatSidebar';
 
 describe('ChatSidebar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
+    if (!Element.prototype.hasPointerCapture) {
+      Element.prototype.hasPointerCapture = () => false;
+    }
+    if (!Element.prototype.setPointerCapture) {
+      Element.prototype.setPointerCapture = () => {};
+    }
+    if (!Element.prototype.releasePointerCapture) {
+      Element.prototype.releasePointerCapture = () => {};
+    }
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = () => {};
+    }
     mockSessions = [
       { id: 'sess-1', title: 'Session One', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 5 },
       { id: 'sess-2', title: 'Session Two', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 3 },
@@ -224,7 +237,7 @@ describe('ChatSidebar', () => {
     expect(screen.getByText('Ready Workflow')).toBeTruthy();
     expect(screen.getAllByText('ready.yaml').length).toBeGreaterThan(0);
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('运行').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('协作议题').length).toBeGreaterThan(0);
   });
 
   test('shows creation or conversation mode alongside the session status', () => {
@@ -236,7 +249,7 @@ describe('ChatSidebar', () => {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         messageCount: 1,
-        sessionWorkbenchState: { creationAssistantEnabled: true },
+        sessionWorkbenchState: { creationAssistantEnabled: true, creationTag: true },
       },
       {
         id: 'conversation-mode',
@@ -272,7 +285,7 @@ describe('ChatSidebar', () => {
     expect(within(rowFor('Creation Mode')!).getByText('创建')).toBeTruthy();
     expect(within(rowFor('Conversation Mode')!).getByText('对话')).toBeTruthy();
     expect(within(rowFor('Workflow Mode')!).getByText('对话')).toBeTruthy();
-    expect(within(rowFor('Workflow Mode')!).getByText('运行')).toBeTruthy();
+    expect(within(rowFor('Workflow Mode')!).getByText('协作议题')).toBeTruthy();
   });
 
   test('shows workflow run sessions without loaded summary', async () => {
@@ -360,6 +373,144 @@ describe('ChatSidebar', () => {
 
     expect(screen.getByText('Docs Workflow')).toBeTruthy();
     expect(screen.queryByText('Release Workflow')).toBeNull();
+  });
+
+  test('filters sessions by their sidebar labels', async () => {
+    const user = userEvent.setup();
+    mockSessions = [
+      {
+        id: 'topic-1',
+        title: 'Workflow Topic',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        workflowBinding: {
+          configFile: 'topic.yaml',
+          runId: 'topic-run',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        sessionWorkbenchState: {
+          collaborationRoom: {
+            topic: 'Topic',
+            chatroom: { topic: 'Topic' },
+          },
+        },
+      },
+      {
+        id: 'agora-1',
+        title: 'Agora Topic',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: { collaborationRoom: { topic: 'Agora' } },
+      },
+      {
+        id: 'workflow-run-1',
+        title: 'Workflow Run',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        workflowBinding: {
+          configFile: 'workflow.yaml',
+          runId: 'workflow-run-1',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+      {
+        id: 'creation-1',
+        title: 'Creation Chat',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: { creationAssistantEnabled: false, creationTag: true },
+      },
+      {
+        id: 'plain-1',
+        title: 'Plain Chat',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: { creationAssistantEnabled: false },
+      },
+    ];
+
+    render(<ChatSidebar />);
+
+    const toggleTag = async (label: string) => {
+      const existingItem = screen.queryByRole('menuitemcheckbox', { name: label });
+      if (!existingItem) {
+        await user.click(screen.getByRole('button', { name: '按标签筛选对话' }));
+      }
+      await user.click(await screen.findByRole('menuitemcheckbox', { name: label }));
+    };
+
+    await toggleTag('协作议题');
+    expect(screen.getByText('Workflow Topic')).toBeTruthy();
+    expect(screen.getByText('Workflow Run')).toBeTruthy();
+    expect(screen.queryByText('Agora Topic')).toBeNull();
+
+    await toggleTag('议场');
+    expect(screen.getByText('Agora Topic')).toBeTruthy();
+    expect(screen.getByText('Workflow Topic')).toBeTruthy();
+    expect(screen.getByText('Workflow Run')).toBeTruthy();
+    expect(screen.queryByText('Creation Chat')).toBeNull();
+
+    await toggleTag('创建');
+    expect(screen.getByText('Creation Chat')).toBeTruthy();
+    expect(screen.getByText('Agora Topic')).toBeTruthy();
+
+    await toggleTag('普通对话');
+    expect(screen.getByText('Plain Chat')).toBeTruthy();
+    expect(screen.getByText('Creation Chat')).toBeTruthy();
+  });
+
+  test('restores the selected session label filter', async () => {
+    const user = userEvent.setup();
+    mockSessions = [
+      {
+        id: 'agora-1',
+        title: 'Remembered Agora Topic',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: { collaborationRoom: { topic: 'Agora' } },
+      },
+      {
+        id: 'plain-1',
+        title: 'Unrelated Plain Chat',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: { creationAssistantEnabled: false },
+      },
+    ];
+
+    const firstRender = render(<ChatSidebar />);
+    await user.click(screen.getByRole('button', { name: '按标签筛选对话' }));
+    await user.click(await screen.findByRole('menuitemcheckbox', { name: '议场' }));
+    expect(window.localStorage.getItem(SESSION_TAG_FILTER_STORAGE_KEY)).toBe('["agora"]');
+
+    firstRender.unmount();
+    render(<ChatSidebar />);
+
+    expect(screen.getByRole('button', { name: '按标签筛选对话' })).toHaveTextContent('议场');
+    expect(screen.getByText('Remembered Agora Topic')).toBeTruthy();
+    expect(screen.queryByText('Unrelated Plain Chat')).toBeNull();
+  });
+
+  test('migrates a remembered workflow filter to collaboration topics', () => {
+    window.localStorage.setItem(SESSION_TAG_FILTER_STORAGE_KEY, '["workflow"]');
+
+    expect(readStoredSessionTagFilters()).toEqual(['collaboration-topic']);
   });
 
   test('bulk deletes selected chat sessions', async () => {

@@ -52,7 +52,7 @@ export function ChatSessionMenu({
           onCheckedChange={(checked) => onCreationAssistantChange(checked === true)}
           onSelect={(event) => event.preventDefault()}
         >
-          创建助手
+          新对话创建助手
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onFork} disabled={forkDisabled}>

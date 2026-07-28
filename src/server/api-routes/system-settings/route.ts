@@ -6,6 +6,7 @@ import {
   normalizeWorkspaceExperienceSettings,
   saveSystemSettings,
 } from '@/lib/config/system-settings';
+import { setMemoryV2RuntimePolicy } from '@/lib/memory-v2-cutover/runtime-policy';
 import {
   defaultPermissionPolicy,
   type RuntimePermissionPolicyId,
@@ -198,10 +199,14 @@ export async function PUT(request: Request) {
     const nextAgentMemory = body.agentMemory && typeof body.agentMemory === 'object'
       ? normalizeAgentMemorySettings({
         ...currentAgentMemory,
-        runtimeEnabled: body.agentMemory.runtimeEnabled === true,
-        persistMode: body.agentMemory.persistMode,
+        captureEnabled: body.agentMemory.captureEnabled === undefined
+          ? body.agentMemory.runtimeEnabled === undefined
+            ? currentAgentMemory.captureEnabled
+            : body.agentMemory.runtimeEnabled === true
+          : body.agentMemory.captureEnabled === true,
+        governanceMode: body.agentMemory.governanceMode ?? body.agentMemory.persistMode,
       })
-      : settings.agentMemory;
+      : currentAgentMemory;
     const currentRuntimeControls = settings.runtimeControls || {};
     const nextRuntimeControls = body.runtimeControls && typeof body.runtimeControls === 'object'
       ? {
@@ -226,6 +231,7 @@ export async function PUT(request: Request) {
       runtimeDebug: nextRuntimeDebug,
       emailNotifications: nextEmailSettings,
     });
+    setMemoryV2RuntimePolicy(nextAgentMemory);
     return jsonOk({ success: true });
   } catch (error: any) {
     return jsonOk({ error: error?.message || '保存系统设置失败' }, { status: 500 });

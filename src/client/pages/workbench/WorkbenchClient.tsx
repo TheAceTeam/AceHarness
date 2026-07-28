@@ -95,6 +95,7 @@ import { RobotLogo } from '@/components/brand/RobotLogo';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import WorkflowSupervisorAgoraPanel from '@/components/workflow/WorkflowSupervisorAgoraPanel';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
+import { WorkflowMemoryHandoffPanel } from '@/components/memory-v2/WorkflowMemoryHandoffPanel';
 import { calculateWorkflowRunTiming } from '@/lib/workflow/run-timing';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
@@ -226,8 +227,8 @@ const MonacoEditor = dynamic(
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
-type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'conversation' | 'changes' | 'documents' | 'plan' | 'agents' | 'agora' | 'live' | 'spec';
-type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
+type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'conversation' | 'changes' | 'documents' | 'plan' | 'agents' | 'agora' | 'live' | 'spec' | 'handoffs';
+type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec' | 'handoffs';
 type RunLeftPanelTab = 'summary' | 'directory';
 type RunRightPanelTab = 'detail' | 'live' | 'context' | 'questions' | 'diff';
 const WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX = 'aceharness:workflow-run:panel-tabs';
@@ -526,6 +527,7 @@ function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailab
   if (tab === 'agents') return 'agents';
   if (tab === 'agora') return 'agora';
   if (tab === 'live') return 'live';
+  if (tab === 'handoffs') return 'handoffs';
   if (tab === 'spec' && runtimeSpecAvailable) return 'spec';
   return 'overview';
 }
@@ -572,7 +574,8 @@ function isRunWorkbenchTab(value: unknown): value is RunWorkbenchTab {
     || value === 'agents'
     || value === 'agora'
     || value === 'live'
-    || value === 'spec';
+    || value === 'spec'
+    || value === 'handoffs';
 }
 
 function normalizeViewMode(value: string | null): ViewMode {
@@ -603,6 +606,7 @@ function readWorkflowRunPanelTabs(configFile: string): {
           || parsed.center === 'agora'
           || parsed.center === 'live'
           || parsed.center === 'spec'
+          || parsed.center === 'handoffs'
             ? parsed.center
             : undefined,
     };
@@ -901,101 +905,6 @@ function formatQualityCheckCommandResults(check: QualityCheckRecord) {
   if (commands.length === 0) return '';
   return commands.map((command, index) => formatQualityCommandResult(command, commands.length > 1 ? index : undefined)).join('\n\n---\n\n');
 }
-
-type WorkflowMemoryLayers = {
-  schema?: {
-    scopes: string[];
-    rules: string[];
-  };
-  runtime: {
-    specCodingSummary?: {
-      id: string;
-      version: number;
-      summary?: string;
-      progressSummary?: string;
-    } | null;
-    qualityChecks: Array<{
-      id: string;
-      stateName: string;
-      stepName: string;
-      agent: string;
-      category: 'lint' | 'compile' | 'test' | 'custom';
-      status: 'passed' | 'failed' | 'warning';
-      summary: string;
-      createdAt: string;
-    }>;
-  };
-  review: {
-    summary: string;
-    nextFocus: string[];
-    experience: string[];
-    generatedAt: string;
-  } | null;
-  history: Array<{
-    runId: string;
-    status: 'completed' | 'failed' | 'stopped';
-    summary: string;
-    nextFocus: string[];
-    experience: string[];
-    generatedAt: string;
-  }>;
-  role?: {
-    agent: string;
-    memories: Array<{
-      id: string;
-      title: string;
-      kind: string;
-      content: string;
-      source: string;
-      createdAt: string;
-      tags: string[];
-    }>;
-  };
-  project?: {
-    key: string;
-    memories: Array<{
-      id: string;
-      title: string;
-      kind: string;
-      content: string;
-      source: string;
-      createdAt: string;
-      tags: string[];
-    }>;
-  };
-  workflow?: {
-    key: string;
-    memories: Array<{
-      id: string;
-      title: string;
-      kind: string;
-      content: string;
-      source: string;
-      createdAt: string;
-      tags: string[];
-    }>;
-  };
-  chat?: {
-    sessionId: string | null;
-    memories: Array<{
-      id: string;
-      title: string;
-      kind: string;
-      content: string;
-      source: string;
-      createdAt: string;
-      tags: string[];
-    }>;
-  };
-  recalledExperiences?: Array<{
-    runId: string;
-    status: 'completed' | 'failed' | 'stopped';
-    summary: string;
-    nextFocus: string[];
-    experience: string[];
-    generatedAt: string;
-  }>;
-};
 
 type SpecCodingArtifactKey = 'requirements' | 'design' | 'tasks';
 type SpecCodingArtifactDrafts = Record<SpecCodingArtifactKey, string>;
@@ -1437,10 +1346,16 @@ export default function WorkbenchPage({
   const focusQuestionId = effectiveSearchParams.get('questionId');
   const searchParamsString = effectiveSearchParams.toString();
   const { resolvedTheme } = useTheme();
+  const latestSearchParamsRef = useRef(searchParamsString);
+
+  useEffect(() => {
+    latestSearchParamsRef.current = searchParamsString;
+  }, [searchParamsString]);
 
   // Update URL query params without full navigation
-  const updateUrl = useCallback((updates: Record<string, string | null>) => {
-    const sp = new URLSearchParams(searchParamsString);
+  const updateUrl = useCallback(async (updates: Record<string, string | null>): Promise<void> => {
+    const currentSearchParams = latestSearchParamsRef.current;
+    const sp = new URLSearchParams(currentSearchParams);
     for (const [key, val] of Object.entries(updates)) {
       if (val === null) sp.delete(key);
       else sp.set(key, val);
@@ -1452,10 +1367,11 @@ export default function WorkbenchPage({
       sp.delete('run');
     }
     const qs = sp.toString();
-    if (qs === searchParamsString) {
+    if (qs === currentSearchParams) {
       return;
     }
     if (embeddedInDashboard) {
+      latestSearchParamsRef.current = qs;
       if (typeof window !== 'undefined') {
         const outerParams = new URLSearchParams(window.location.search);
         const currentRoute = outerParams.get('route') || '';
@@ -1472,19 +1388,28 @@ export default function WorkbenchPage({
         const nextOuterUrl = `${window.location.pathname}${outerParams.toString() ? `?${outerParams.toString()}` : ''}`;
         const currentOuterUrl = `${window.location.pathname}${window.location.search}`;
         if (nextOuterUrl !== currentOuterUrl) {
-          router.replace(nextOuterUrl, { scroll: false });
+          try {
+            await Promise.resolve(router.replace(nextOuterUrl, { scroll: false }));
+          } catch {
+            // Local UI state already reflects the requested section; a later route sync can retry.
+          }
         }
       }
       setEmbeddedSearchState(qs);
       dockWorkspace?.updateActiveWorkbenchSearch?.(configFile, qs);
       return;
     }
-    const currentUrl = `/workbench/${encodeURIComponent(configFile)}${searchParamsString ? `?${searchParamsString}` : ''}`;
+    const currentUrl = `/workbench/${encodeURIComponent(configFile)}${currentSearchParams ? `?${currentSearchParams}` : ''}`;
     const nextUrl = `/workbench/${encodeURIComponent(configFile)}${qs ? `?${qs}` : ''}`;
     if (nextUrl === currentUrl) {
       return;
     }
-    router.replace(nextUrl, { scroll: false });
+    latestSearchParamsRef.current = qs;
+    try {
+      await Promise.resolve(router.replace(nextUrl, { scroll: false }));
+    } catch {
+      // Preserve the latest local intent; route effects will reconcile on the next update.
+    }
   }, [dockWorkspace, embeddedInDashboard, searchParamsString, configFile, router]);
 
   const { toast } = useToast();
@@ -1605,6 +1530,10 @@ export default function WorkbenchPage({
           ? 'spec'
           : runWorkbenchTabToDetailSection(getRunWorkbenchTabFromSearchParams(effectiveSearchParams), true)
   ));
+  const [runDetailNavigationPending, setRunDetailNavigationPending] = useState<RunDetailSection | null>(null);
+  const runDetailNavigationTokenRef = useRef(0);
+  const runDetailNavigationPendingRef = useRef<RunDetailSection | null>(null);
+  const runStatusReasonLogRef = useRef<string | null>(null);
   const [workflowRunWindowVisibility, setWorkflowRunWindowVisibility] = useState<Partial<Record<WorkflowRunWindowId, boolean>>>({
     left: true,
     center: true,
@@ -2057,7 +1986,6 @@ export default function WorkbenchPage({
   } | null>(null);
   const [qualityChecks, setQualityChecks] = useState<QualityCheckRecord[]>([]);
   const [preflightChecks, setPreflightChecks] = useState<QualityCheckRecord[]>([]);
-  const [memoryLayers, setMemoryLayers] = useState<WorkflowMemoryLayers | null>(null);
   const [workflowFrontendSessionId, setWorkflowFrontendSessionId] = useState<string | null>(null);
   const [workbenchConversationSessionId, setWorkbenchConversationSessionId] = useState<string | null>(null);
   const liveStreamFeedbackRef = useRef<HTMLTextAreaElement>(null);
@@ -4570,9 +4498,11 @@ export default function WorkbenchPage({
   const selectedRunStatus = normalizeWorkflowStatusCode(selectedRun?.status);
   const detailRunStatus = normalizeWorkflowStatusCode(runDetail?.status || runDetail?.workflowStatus);
   const runtimeWorkflowStatus = normalizeWorkflowStatusCode(workflowStatus);
-  const actionWorkflowStatus = isWeakWorkflowStatus(selectedRunStatus)
-    ? (detailRunStatus || selectedRunStatus || runtimeWorkflowStatus)
-    : selectedRunStatus;
+  const runtimeStatusMatchesActionRun = !isWeakWorkflowStatus(runtimeWorkflowStatus)
+    && (!actionRunId || String(runId || '') === actionRunId);
+  const actionWorkflowStatus = runtimeStatusMatchesActionRun
+    ? runtimeWorkflowStatus
+    : (selectedRunStatus || detailRunStatus || runtimeWorkflowStatus);
   const actionIsRunning = actionWorkflowStatus === 'running' || actionWorkflowStatus === 'preparing' || (!actionWorkflowStatus && isRunning);
   const canStartWorkflow = isRunMode && Boolean(workflowConfig) && !starting && !startRequesting && !isRunning;
   const canStopWorkflow = isRunMode && !stopping && actionIsRunning;
@@ -5411,6 +5341,19 @@ export default function WorkbenchPage({
       data: payload,
     }, event.runId);
 
+    if (event.type === 'workflow.log') {
+      const message = String(payload.message || payload.error || '').trim();
+      if (message) {
+        const level = payload.level === 'error' || payload.level === 'warning' || payload.level === 'success'
+          ? payload.level
+          : 'info';
+        addLog(String(payload.agent || 'system'), level, message);
+        if (level === 'error') {
+          setRunStatusReason(String(payload.error || message));
+        }
+      }
+    }
+
     if (event.type === 'run.state.saved') {
       const status = String(payload.status || '');
       const statusIsTerminal = isTerminalWorkflowStatus(status);
@@ -5485,7 +5428,7 @@ export default function WorkbenchPage({
         });
       }
     }
-  }, [dispatch, shouldApplyRuntimePayload, syncRuntimePayloadToDb]);
+  }, [addLog, dispatch, shouldApplyRuntimePayload, syncRuntimePayloadToDb]);
 
   const syncWorkflowEventLogUntil = useCallback((runIdValue?: string | null, targetSeq?: number | null) => {
     const resolvedRunId = String(runIdValue || '').trim();
@@ -5534,6 +5477,7 @@ export default function WorkbenchPage({
       configFile,
       status: status.status,
       workflowStatus: status.status,
+      statusReason: status.statusReason || null,
       currentPhase: status.currentPhase || status.currentState || null,
       currentState: status.currentState || status.currentPhase || null,
       currentStep: status.currentStep || null,
@@ -5588,11 +5532,17 @@ export default function WorkbenchPage({
       }
 
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: status.status });
-      setRunStatusReason(status.statusReason || null);
+      const statusReason = String(status.statusReason || '').trim();
+      setRunStatusReason(statusReason || null);
       const statusIsActive = isRuntimeWorkflowStatusActive(status.status);
       const statusIsTerminal = isTerminalWorkflowStatus(status.status);
-      if (status.status === 'failed' && status.statusReason) {
-        addLog('system', 'error', `工作流启动失败: ${status.statusReason}`);
+      const normalizedStatus = normalizeWorkflowStatusCode(status.status);
+      const statusReasonLogKey = `${status.runId || requestedRunId || ''}:${normalizedStatus}:${statusReason}`;
+      if ((normalizedStatus === 'failed' || normalizedStatus === 'crashed') && statusReason && runStatusReasonLogRef.current !== statusReasonLogKey) {
+        runStatusReasonLogRef.current = statusReasonLogKey;
+        addLog('system', 'error', `工作流失败: ${statusReason}`);
+      } else if (!statusReason || (normalizedStatus !== 'failed' && normalizedStatus !== 'crashed')) {
+        runStatusReasonLogRef.current = null;
       }
       if (status.runId) dispatch({ type: 'SET_RUN_ID', payload: status.runId });
       setWorkflowFrontendSessionId((status as any).workflowFrontendSessionId || null);
@@ -5688,7 +5638,6 @@ export default function WorkbenchPage({
       setMasterSpecPath(status.masterSpecPath);
       setFinalReview((status as any).finalReview || null);
       setQualityChecks((status as any).qualityChecks || []);
-      setMemoryLayers((status as any).memoryLayers || null);
       const statusCurrentState = String((status as any).currentState || '');
       const statusPendingHumanQuestion = (status as any).pendingHumanQuestion || null;
       const statusHasActiveHumanApproval = statusCurrentState === '__human_approval__' || Boolean((status as any).pendingCheckpoint);
@@ -5820,21 +5769,12 @@ export default function WorkbenchPage({
     setHistoryLoaded(false);
     try {
       const { runs } = await runsApi.listByConfig(configFile);
-      setHistoryRuns((current: any[]) => runs.map((run: any) => {
-        const local = current.find((item: any) => item.id === run.id);
-        if (local?.status === 'stopped' && (run.status === 'running' || run.status === 'preparing')) {
-          return { ...run, status: 'stopped', endTime: run.endTime || local.endTime };
-        }
-        return run;
-      }));
+      setHistoryRuns(runs);
       setSelectedRun((current: any) => {
         if (!current?.id) return current;
         const latest = runs.find((item: any) => item.id === current.id);
         if (!latest) return null;
-        if (current.status === 'stopped' && (latest.status === 'running' || latest.status === 'preparing')) {
-          return { ...latest, status: 'stopped', endTime: latest.endTime || current.endTime };
-        }
-        return current;
+        return { ...current, ...latest };
       });
       if (selectedRun?.id && !runs.some((item: any) => item.id === selectedRun.id)) {
         setRunRecordDrilled(false);
@@ -6363,7 +6303,6 @@ export default function WorkbenchPage({
     setRunWaitStartedAt(null);
     setFinalReview(null);
     setQualityChecks([]);
-    setMemoryLayers(null);
     setLatestSupervisorReview(null);
     setSpecRevisionVote(null);
     setSpecRevisionVoteHistory([]);
@@ -6832,7 +6771,6 @@ export default function WorkbenchPage({
       }
       setFinalReview(detail.finalReview || null);
       setQualityChecks((detail as any).qualityChecks || []);
-      setMemoryLayers((detail as any).memoryLayers || null);
       if (detail.issueTracker) {
         setSmIssueTracker(detail.issueTracker);
       }
@@ -7683,6 +7621,29 @@ export default function WorkbenchPage({
     setForceTransitionModal({ targetState, instruction: '' });
   };
 
+  const patchRunStatusLocally = useCallback((targetRunId: string, status: string, statusReason: string | null = null) => {
+    if (!targetRunId) return;
+    const patch = {
+      id: targetRunId,
+      runId: targetRunId,
+      status,
+      workflowStatus: status,
+      statusReason,
+      endTime: status === 'running' || status === 'preparing' ? null : undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    setHistoryRuns((previous) => previous.map((item) => item.id === targetRunId ? { ...item, ...patch } : item));
+    setSelectedRun((previous: any) => previous?.id === targetRunId ? { ...previous, ...patch } : previous);
+    setRunDetail((previous: any) => {
+      const previousRunId = String(previous?.id || previous?.runId || '');
+      return previousRunId === targetRunId ? { ...previous, ...patch } : previous;
+    });
+    queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, targetRunId), (previous: any) => ({
+      ...(previous || {}),
+      ...patch,
+    }));
+  }, [configFile, queryClient]);
+
   const executeForceTransition = async () => {
     if (!forceTransitionModal) return;
     setForceTransitioning(true);
@@ -7693,6 +7654,7 @@ export default function WorkbenchPage({
         setViewingHistoryRun(false);
         dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
         dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
+        patchRunStatusLocally(rid, 'running');
         await workflowApi.forceTransition(
           forceTransitionModal.targetState,
           forceTransitionModal.instruction || undefined,
@@ -7711,6 +7673,10 @@ export default function WorkbenchPage({
       clearPendingHumanQuestion();
       setPendingCheckpointPhase(null);
     } catch (e: any) {
+      const rid = runId || selectedRun?.id;
+      if (rid) patchRunStatusLocally(rid, 'failed', e.message || '强制恢复失败');
+      setRunStatusReason(e.message || '强制恢复失败');
+      addLog('system', 'error', `强制恢复失败: ${e.message || '未知错误'}`);
       toast('error', e.message);
     } finally {
       setForceTransitioning(false);
@@ -7842,6 +7808,7 @@ export default function WorkbenchPage({
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
       dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
       dispatch({ type: 'SET_RUN_ID', payload: rid });
+      patchRunStatusLocally(rid, 'running');
       addLog('system', 'info', `正在恢复运行: ${rid}...`);
       await workflowApi.resume(rid);
       addLog('system', 'success', '工作流恢复成功，继续执行...');
@@ -7850,6 +7817,8 @@ export default function WorkbenchPage({
       fetchCurrentStatus();
     } catch (error: any) {
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
+      setRunStatusReason(error.message || '恢复失败');
+      patchRunStatusLocally(rid, 'failed', error.message || '恢复失败');
       addLog('system', 'error', `恢复失败: ${error.message}`);
     } finally {
       if (resumeRunId) setHistoryRunAction((current) => current && current.runId === rid && current.action === 'resume' ? null : current);
@@ -10297,8 +10266,7 @@ export default function WorkbenchPage({
   const renderRuntimeInsightPanels = () => {
     const hasSpecCodingTasks = !specCodingDisabled && Boolean(specCodingSummary && specCodingDetails?.tasks?.length);
     const hasQualityChecks = displayQualityChecks.length > 0;
-    const hasMemoryLayers = Boolean(memoryLayers);
-    if (!hasSpecCodingTasks && !hasQualityChecks && !hasMemoryLayers) return null;
+    if (!hasSpecCodingTasks && !hasQualityChecks) return null;
 
     return (
       <div className="mt-4 space-y-3">
@@ -10439,7 +10407,7 @@ export default function WorkbenchPage({
           </div>
         ) : null}
 
-        <div className={`grid gap-3 ${hasQualityChecks && memoryLayers ? 'xl:grid-cols-2' : ''}`}>
+        <div className="grid gap-3">
         {hasQualityChecks ? (
           <div className="rounded-2xl border bg-background/70 p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -10493,102 +10461,6 @@ export default function WorkbenchPage({
           </div>
         ) : null}
 
-        {memoryLayers ? (
-          <div className="rounded-2xl border bg-background/70 p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>memory</span>
-                <div className="text-sm font-semibold">记忆分层</div>
-              </div>
-              <Badge variant="outline" className="text-[10px]">
-                {memoryLayers.schema?.scopes?.join(' / ') || 'runtime / review / history'}
-              </Badge>
-            </div>
-            {memoryLayers.review ? (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-1">
-                <div className="text-[11px] font-medium text-foreground">复盘记忆</div>
-                <div className="text-[11px] leading-5 text-muted-foreground">{memoryLayers.review.summary}</div>
-              </div>
-            ) : (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-1">
-                <div className="text-[11px] font-medium text-foreground">复盘记忆</div>
-                <div className="text-[11px] leading-5 text-muted-foreground">暂无复盘内容</div>
-              </div>
-            )}
-            {memoryLayers.role?.memories?.length ? (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <div className="text-[11px] font-medium text-foreground">角色长期记忆 · {memoryLayers.role.agent}</div>
-                {memoryLayers.role.memories.slice(0, 2).map((item) => (
-                  <div key={item.id} className="space-y-1">
-                    <div className="text-[11px] font-medium text-foreground">{item.title}</div>
-                    <div className="text-[11px] leading-5 text-muted-foreground">{item.content}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <div className="text-[11px] font-medium text-foreground">角色长期记忆</div>
-                <div className="text-[11px] leading-5 text-muted-foreground">暂无角色长期记忆</div>
-              </div>
-            )}
-            {memoryLayers.project?.memories?.length ? (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <div className="text-[11px] font-medium text-foreground">项目级共享记忆</div>
-                {memoryLayers.project.memories.slice(0, 2).map((item) => (
-                  <div key={item.id} className="space-y-1">
-                    <div className="text-[11px] font-medium text-foreground">{item.title}</div>
-                    <div className="text-[11px] leading-5 text-muted-foreground">{item.content}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <div className="text-[11px] font-medium text-foreground">项目级共享记忆</div>
-                <div className="text-[11px] leading-5 text-muted-foreground">暂无项目共享记忆</div>
-              </div>
-            )}
-            {memoryLayers.workflow?.memories?.length ? (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <div className="text-[11px] font-medium text-foreground">Workflow 记忆</div>
-                {memoryLayers.workflow.memories.slice(0, 2).map((item) => (
-                  <div key={item.id} className="space-y-1">
-                    <div className="text-[11px] font-medium text-foreground">{item.title}</div>
-                    <div className="text-[11px] leading-5 text-muted-foreground">{item.content}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <div className="text-[11px] font-medium text-foreground">Workflow 记忆</div>
-                <div className="text-[11px] leading-5 text-muted-foreground">暂无 workflow 记忆</div>
-              </div>
-            )}
-            {(memoryLayers.history?.length || memoryLayers.recalledExperiences?.length) ? (
-              <div className="grid gap-2 md:grid-cols-2">
-                {memoryLayers.history?.length ? (
-                  <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                    <div className="text-[11px] font-medium text-foreground">长期经验</div>
-                    {memoryLayers.history.slice(0, 2).map((item) => (
-                      <div key={item.runId} className="text-[11px] leading-5 text-muted-foreground">
-                        {item.runId} · {item.status}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                {memoryLayers.recalledExperiences?.length ? (
-                  <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                    <div className="text-[11px] font-medium text-foreground">本次召回经验</div>
-                    {memoryLayers.recalledExperiences.slice(0, 2).map((item) => (
-                      <div key={`recalled-${item.runId}`} className="text-[11px] leading-5 text-muted-foreground">
-                        {item.runId} · {item.status}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         </div>
       </div>
     );
@@ -12013,6 +11885,7 @@ export default function WorkbenchPage({
     { key: 'documents' as const, label: '工作总结', icon: 'description' },
     { key: 'agora' as const, label: '对话', icon: 'forum' },
     { key: 'live' as const, label: '实时输出', icon: 'cell_tower' },
+    { key: 'handoffs' as const, label: '记忆交接', icon: 'arrow_split' },
     ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
   ];
 
@@ -12070,6 +11943,12 @@ export default function WorkbenchPage({
   };
 
   const openRunDetailSection = (section: RunDetailSection) => {
+    if (section === runDetailSection || runDetailNavigationPendingRef.current) return;
+    const navigationToken = runDetailNavigationTokenRef.current + 1;
+    runDetailNavigationTokenRef.current = navigationToken;
+    runDetailNavigationPendingRef.current = section;
+    setRunDetailNavigationPending(section);
+
     const tab = runDetailSectionToWorkbenchTab(section);
     returnedRunIdRef.current = null;
     setWorkbenchNavSection('runs');
@@ -12083,7 +11962,7 @@ export default function WorkbenchPage({
       setWorkspaceEditorLineNumber(null);
       setWorkspaceEditorColumn(null);
     }
-    updateUrl({
+    void updateUrl({
       mode: 'run',
       section: null,
       tab,
@@ -12093,6 +11972,10 @@ export default function WorkbenchPage({
       workspaceFile: null,
       workspaceLine: null,
       workspaceColumn: null,
+    }).finally(() => {
+      if (runDetailNavigationTokenRef.current !== navigationToken) return;
+      runDetailNavigationPendingRef.current = null;
+      setRunDetailNavigationPending(null);
     });
   };
 
@@ -12518,7 +12401,7 @@ export default function WorkbenchPage({
           ) : null}
 
           {workbenchNavSection === 'runs' && runRecordDrilled ? (
-            <div className={styles.workbenchRunDetailNav}>
+            <div className={styles.workbenchRunDetailNav} aria-busy={runDetailNavigationPending ? 'true' : undefined}>
               <button
                 type="button"
                 className={styles.workbenchBackButton}
@@ -12552,18 +12435,29 @@ export default function WorkbenchPage({
                 <div className="mt-1 truncate text-xs text-muted-foreground">{formatWorkflowLocation(currentPhase, currentStep, '运行摘要')}</div>
               </div>
               <div className={styles.workbenchSubList}>
-                {runDetailNavItems.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    disabled={(item.key === 'workspace' && !currentRunWorkspacePath) || (item.key === 'changes' && !currentRunWorkspacePath)}
-                    className={cn(styles.workbenchSubItem, runDetailSection === item.key && styles.workbenchSubItemActive)}
-                    onClick={() => openRunDetailSection(item.key)}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{item.icon}</span>
-                    <span>{item.label}</span>
-                  </button>
-                ))}
+                {runDetailNavItems.map((item) => {
+                  const unavailable = (item.key === 'workspace' && !currentRunWorkspacePath)
+                    || (item.key === 'changes' && !currentRunWorkspacePath);
+                  const navigationBlocked = Boolean(runDetailNavigationPending && runDetailNavigationPending !== item.key);
+                  const isNavigatingToItem = runDetailNavigationPending === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      disabled={unavailable || navigationBlocked}
+                      aria-busy={isNavigatingToItem ? 'true' : undefined}
+                      className={cn(styles.workbenchSubItem, runDetailSection === item.key && styles.workbenchSubItemActive)}
+                      onClick={() => openRunDetailSection(item.key)}
+                    >
+                      {isNavigatingToItem ? (
+                        <ClipLoader size={13} color="currentColor" />
+                      ) : (
+                        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{item.icon}</span>
+                      )}
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : null}
@@ -12727,6 +12621,14 @@ export default function WorkbenchPage({
     const totalTokenUsage = workflowTokenAnalytics.total;
     const cacheHitTokens = totalTokenUsage.cacheReadInputTokens;
     const cacheHitRatio = formatTokenPercent(cacheHitTokens, totalTokenUsage.inputTokens + cacheHitTokens);
+    const visibleStatusReason = String(
+      runStatusReason
+      || runDetail?.statusReason
+      || selectedRun?.statusReason
+      || ''
+    ).trim();
+    const showStatusReason = Boolean(visibleStatusReason)
+      && ['failed', 'crashed'].includes(normalizeWorkflowStatusCode(actionWorkflowStatus || workflowStatus));
     return (
     <div className={styles.workbenchPreviewPanel}>
       <div className={styles.workbenchPreviewCard}>
@@ -12737,6 +12639,17 @@ export default function WorkbenchPage({
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           汇总当前运行状态、当前位置和关键执行数据。状态图和工作区通过左侧运行记录子菜单进入。
         </p>
+        {showStatusReason ? (
+          <div role="alert" className="mt-4 border-l-2 border-destructive pl-3 text-sm leading-6 text-destructive">
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined mt-0.5 shrink-0" style={{ fontSize: 18 }}>error</span>
+              <div className="min-w-0 break-words">
+                <div className="font-semibold">运行失败原因</div>
+                <div>{visibleStatusReason}</div>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
           <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>状态</span><strong>{formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}</strong></div>
           <div className={`${styles.workbenchMetric} lg:col-span-3`}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
@@ -12999,6 +12912,8 @@ export default function WorkbenchPage({
                     renderRunAgoraPanel()
                   ) : runDetailSection === 'live' ? (
                     renderRunLiveOutputPanel()
+                  ) : runDetailSection === 'handoffs' ? (
+                    <WorkflowMemoryHandoffPanel runId={runId || selectedRun?.id || null} />
                   ) : runDetailSection === 'documents' ? (
                     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
                       <DocumentsPanel

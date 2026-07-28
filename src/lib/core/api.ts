@@ -15,7 +15,6 @@ import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
 import { buildLoginHref, getCurrentAuthReturnTo } from '@/lib/navigation/return-target';
 
 const API_BASE = '/api';
-
 function getAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
   const token = localStorage.getItem('auth-token');
@@ -457,100 +456,6 @@ interface WorkflowStatusResponse {
       weaknesses: string[];
     }>;
     generatedAt: string;
-  } | null;
-  memoryLayers?: {
-    schema?: {
-      scopes: string[];
-      rules: string[];
-    };
-    runtime: {
-      specCodingSummary?: {
-        id: string;
-        version: number;
-        summary?: string;
-        progressSummary?: string;
-      } | null;
-      qualityChecks: Array<{
-        id: string;
-        stateName: string;
-        stepName: string;
-        agent: string;
-        category: 'lint' | 'compile' | 'test' | 'custom';
-        status: 'passed' | 'failed' | 'warning';
-        summary: string;
-        createdAt: string;
-      }>;
-    };
-    review: {
-      summary: string;
-      nextFocus: string[];
-      experience: string[];
-      generatedAt: string;
-    } | null;
-    history: Array<{
-      runId: string;
-      status: 'completed' | 'failed' | 'stopped';
-      summary: string;
-      nextFocus: string[];
-      experience: string[];
-      generatedAt: string;
-    }>;
-    role?: {
-      agent: string;
-      memories: Array<{
-        id: string;
-        title: string;
-        kind: string;
-        content: string;
-        source: string;
-        createdAt: string;
-        tags: string[];
-      }>;
-    };
-    project?: {
-      key: string;
-      memories: Array<{
-        id: string;
-        title: string;
-        kind: string;
-        content: string;
-        source: string;
-        createdAt: string;
-        tags: string[];
-      }>;
-    };
-    workflow?: {
-      key: string;
-      memories: Array<{
-        id: string;
-        title: string;
-        kind: string;
-        content: string;
-        source: string;
-        createdAt: string;
-        tags: string[];
-      }>;
-    };
-    chat?: {
-      sessionId: string | null;
-      memories: Array<{
-        id: string;
-        title: string;
-        kind: string;
-        content: string;
-        source: string;
-        createdAt: string;
-        tags: string[];
-      }>;
-    };
-    recalledExperiences?: Array<{
-      runId: string;
-      status: 'completed' | 'failed' | 'stopped';
-      summary: string;
-      nextFocus: string[];
-      experience: string[];
-      generatedAt: string;
-    }>;
   } | null;
 }
 
@@ -1065,54 +970,6 @@ export const agentApi = {
       throw new Error(data?.error ? `${data.error}${details ? ` (${details})` : ''}` : '保存 Agent 协作空间配置失败');
     }
     return response.json();
-  },
-
-  async getMemory(name: string, maxChars = 5000): Promise<{
-    agentName: string;
-    storageScope: 'role';
-    storageKey: string;
-    entries: any[];
-    baseMemory: string;
-    mergedContent: string;
-    charCount: number;
-    maxChars: number;
-    overLimit: boolean;
-    updatedAt: string;
-  }> {
-    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/memory?maxChars=${encodeURIComponent(String(maxChars))}`);
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(data?.error || data?.message || '读取 Agent 记忆失败');
-    return data;
-  },
-
-  async saveMemory(name: string, input: { baseMemory: string; maxChars?: number }): Promise<ApiResponse & {
-    baseMemory: string;
-    charCount: number;
-    maxChars: number;
-    overLimit: boolean;
-  }> {
-    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/memory`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(data?.error || data?.message || '保存 Agent 记忆失败');
-    return data;
-  },
-
-  async clearMemory(name: string, maxChars = 5000): Promise<ApiResponse & {
-    baseMemory: string;
-    charCount: number;
-    maxChars: number;
-    overLimit: boolean;
-  }> {
-    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/memory?maxChars=${encodeURIComponent(String(maxChars))}`, {
-      method: 'DELETE',
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(data?.error || data?.message || '清空 Agent 记忆失败');
-    return data;
   },
 
   async deleteAgent(name: string): Promise<ApiResponse> {
@@ -2084,7 +1941,7 @@ export const workflowApi = {
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || '恢复工作流失败');
+      throw new Error(err.message ? `${err.error || '恢复工作流失败'}: ${err.message}` : (err.error || '恢复工作流失败'));
     }
     return response.json();
   },
@@ -2156,7 +2013,7 @@ export const workflowApi = {
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || '强制跳转失败');
+      throw new Error(err.message ? `${err.error || '强制跳转失败'}: ${err.message}` : (err.error || '强制跳转失败'));
     }
     return response.json();
   },
@@ -2596,8 +2453,8 @@ export const systemSettingsApi = {
       onePersonCompanyOnboardingSeen: boolean;
     };
     agentMemory?: {
-      runtimeEnabled: boolean;
-      persistMode: 'manual' | 'review' | 'auto';
+      captureEnabled: boolean;
+      governanceMode: 'manual' | 'review' | 'auto';
     };
     runtimeControls?: {
       defaultPermissionPolicyId: 'unrestricted' | 'approve-reads' | 'ask' | 'deny-destructive' | 'deny-all';
@@ -2657,8 +2514,8 @@ export const systemSettingsApi = {
       onePersonCompanyOnboardingSeen?: boolean;
     };
     agentMemory?: {
-      runtimeEnabled?: boolean;
-      persistMode?: 'manual' | 'review' | 'auto';
+      captureEnabled?: boolean;
+      governanceMode?: 'manual' | 'review' | 'auto';
     };
     runtimeControls?: {
       defaultPermissionPolicyId?: 'unrestricted' | 'approve-reads' | 'ask' | 'deny-destructive' | 'deny-all';

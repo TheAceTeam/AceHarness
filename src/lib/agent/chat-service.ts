@@ -1,6 +1,8 @@
 import { readFile } from 'fs/promises';
+import { randomUUID } from 'crypto';
 import { parse } from 'yaml';
 import { existsSync, readFileSync } from 'fs';
+import { loadOwnerBoundChatSession } from '@/lib/memory-v2-cutover/chat-session-identity';
 import { getRuntimeAgentConfigPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { resolveAgentSelection } from '@/lib/agent/engine-selection';
 import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
@@ -17,9 +19,30 @@ import {
   appendSpecCodingRevision,
 } from '@/lib/spec/coding-store';
 import {
-  appendMemoryEntries,
-} from '@/lib/workflow/memory-store';
-import { resolveAgentMemoryContext } from '@/lib/agent/memory-resolver';
+  buildMemoryV2RequestContext,
+  type MemoryV2ConsumerManifestResult,
+} from '@/lib/memory-v2-cutover/consumer-context';
+import { buildMemoryV2RecoverySource } from '@/lib/memory-v2-cutover/homepage-chat';
+import {
+  ensureMemoryV2FreshStart,
+  type MemoryV2CutoverStatus,
+} from '@/lib/memory-v2-cutover/feature-flag';
+import {
+  createMemoryService,
+  type MemoryRequestContext,
+  type MemoryService,
+} from '@/lib/memory-v2';
+import {
+  createAiMemoryContinuityIdentity,
+} from '@/lib/agent/ai-memory-session';
+import {
+  prepareAiMemoryEngineTurn,
+  type AiMemoryHandoffEligibleProposalReference,
+} from '@/lib/agent/ai-memory-protocol';
+import {
+  AiMemoryV2EngineAdapter,
+  type AiMemoryV2EnginePlan,
+} from '@/lib/agent/ai-memory-engine-adapter';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
 import { stripAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
@@ -54,6 +77,7 @@ export interface ExecuteAgentChatInput {
   message: string;
   mode?: ChatMode;
   sessionId?: string | null;
+  frontendSessionId?: string | null;
   workingDirectory?: string;
   workflowContext?: Record<string, any> | null;
   temporaryRoleConfig?: RoleConfig | null;
@@ -86,6 +110,7 @@ export interface PreparedAgentChat {
   roleConfig: RoleConfig;
   mode: ChatMode;
   resumeSessionId: string;
+  frontendSessionId: string;
   workingDirectory: string;
   workflowContext: Record<string, any> | null;
   engine: ChatRuntimeEngine;
@@ -97,6 +122,174 @@ export interface PreparedAgentChat {
   isTemporaryWerewolf: boolean;
   isTemporaryAgora: boolean;
   agoraExpectedResultType?: 'speech' | 'summary' | 'vote';
+  memoryV2: MemoryV2ConsumerManifestResult;
+  getLatestMemoryV2PromptBlock: () => string;
+  getMemoryV2HandoffEligibleProposals: () => readonly AiMemoryHandoffEligibleProposalReference[];
+  releaseMemoryV2: () => void;
+}
+
+export function buildAgentChatMemoryV2RecoverySource(
+  prepared: Pick<PreparedAgentChat, 'memoryV2' | 'getLatestMemoryV2PromptBlock'>,
+  currentRequest: string,
+): string {
+  if (!prepared.memoryV2.status.ready) {
+    return ['# Current request', currentRequest].join('\n\n');
+  }
+  return buildMemoryV2RecoverySource({
+    promptBlock: prepared.getLatestMemoryV2PromptBlock(),
+    currentRequest,
+  });
+}
+
+/**
+ * Workflow callers may only hand off references observed from this accessor;
+ * model-authored `<memory-handoff>` IDs are not persistence evidence.
+ */
+export function getPreparedAgentChatMemoryV2HandoffEligibleProposals(
+  prepared: Pick<PreparedAgentChat, 'getMemoryV2HandoffEligibleProposals'>,
+): readonly AiMemoryHandoffEligibleProposalReference[] {
+  return prepared.getMemoryV2HandoffEligibleProposals();
+}
+
+function isAgentChatExecutionStep(mode: ChatMode, step: string): boolean {
+  return step === mode || step.startsWith(`${mode}-`);
+}
+
+function textValue(value: unknown): string | undefined {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized || undefined;
+}
+
+async function resolveOwnerBoundFrontendSessionId(input: {
+  ownerUserId: string;
+  frontendSessionId: string;
+}): Promise<string> {
+  const frontendSessionId = textValue(input.frontendSessionId);
+  if (!frontendSessionId) return '';
+  const session = await loadOwnerBoundChatSession({
+    ownerUserId: input.ownerUserId,
+    frontendSessionId,
+  });
+  return session?.id || '';
+}
+
+async function assertWorkflowMemoryV2Authorization(input: {
+  context: MemoryRequestContext;
+  sourceEventId: string;
+  service: MemoryService;
+}): Promise<void> {
+  const runId = input.context.runId;
+  const workflowId = input.context.workflowId;
+  if (!runId || !workflowId || !input.context.agentId) {
+    throw new Error('workflow Memory V2 context requires a run, workflow, and agent identity');
+  }
+
+  // The browser may describe workflow context for display, but its run binding
+  // is not an authorization grant. Match the persisted run first, then force
+  // the Memory V2 service to check its server-owned participant snapshot.
+  const persistedRun = await loadRunState(runId);
+  if (!persistedRun || textValue(persistedRun.configFile) !== workflowId) {
+    throw new Error('workflow Memory V2 context is not bound to the persisted run');
+  }
+  input.service.getRequiredReadStatus({
+    context: input.context,
+    targetStepAttemptId: `agent-chat-membership:${input.sourceEventId}`,
+  });
+}
+
+async function createAgentChatMemoryV2Plan(input: {
+  ownerUserId: string;
+  frontendSessionId: string;
+  workflowContext: Record<string, any> | null;
+  agentId: string;
+  message: string;
+}): Promise<{ memoryV2: MemoryV2ConsumerManifestResult; plan?: AiMemoryV2EnginePlan }> {
+  const status = await ensureMemoryV2FreshStart();
+  if (!status.ready) {
+    return {
+      memoryV2: { status, manifest: null, promptBlock: '', skippedReason: status.reason },
+    };
+  }
+
+  const runId = textValue(input.workflowContext?.runId);
+  const workflowId = textValue(input.workflowContext?.configFile);
+  const hasWorkflowIdentity = Boolean(runId || workflowId);
+  const ownerBoundFrontendSessionId = hasWorkflowIdentity
+    ? ''
+    : await resolveOwnerBoundFrontendSessionId({
+        ownerUserId: input.ownerUserId,
+        frontendSessionId: input.frontendSessionId,
+      });
+  if (!hasWorkflowIdentity && !ownerBoundFrontendSessionId) {
+    const reason = 'Memory V2 requires a persisted frontend session owned by the authenticated user';
+    const unavailableStatus: MemoryV2CutoverStatus = { ...status, ready: false, reason };
+    return {
+      memoryV2: { status: unavailableStatus, manifest: null, promptBlock: '', skippedReason: reason },
+    };
+  }
+  try {
+    const continuity = createAiMemoryContinuityIdentity({
+      frontendSessionId: ownerBoundFrontendSessionId || undefined,
+      runId,
+      workflowId,
+    });
+    const requestContext = {
+      ...buildMemoryV2RequestContext({
+        ownerUserId: input.ownerUserId,
+        // Agent chat accepts a browser working directory for runtime tools,
+        // never for V2 project scope. No server-owned project identity exists
+        // on this path, so project scope is intentionally omitted.
+        // Workflow short memory is run-scoped. Do not retain a client session
+        // authorization alongside a workflow identity.
+        sessionId: hasWorkflowIdentity ? undefined : ownerBoundFrontendSessionId,
+        runId,
+        workflowId,
+        agentId: input.agentId,
+      }),
+      actor: 'ai' as const,
+      actorId: `agent-chat:${input.agentId}`,
+    } satisfies MemoryRequestContext;
+    const sourceEventId = `agent-chat-memory-v2:${randomUUID()}`;
+    const memoryV2: MemoryV2ConsumerManifestResult = { status, manifest: null, promptBlock: '' };
+    const previewService = createMemoryService();
+    try {
+      if (continuity.kind === 'workflow-run') {
+        await assertWorkflowMemoryV2Authorization({
+          context: requestContext,
+          sourceEventId,
+          service: previewService,
+        });
+      }
+      const previewTurn = prepareAiMemoryEngineTurn({
+        memoryService: previewService,
+        requestContext,
+        continuity,
+        sourceEventId,
+        trigger: 'conversation-turn',
+        queryText: input.message,
+        ...(requestContext.stepAttemptId ? { targetStepAttemptId: requestContext.stepAttemptId } : {}),
+      });
+      memoryV2.manifest = previewTurn.manifest;
+      memoryV2.promptBlock = previewTurn.manifest.promptBlock;
+    } finally {
+      previewService.close();
+    }
+    return {
+      memoryV2,
+      plan: {
+        requestContext,
+        continuity,
+        sourceEventId,
+        queryText: input.message,
+      },
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Memory V2 chat context is unavailable';
+    const unavailableStatus: MemoryV2CutoverStatus = { ...status, ready: false, reason };
+    return {
+      memoryV2: { status: unavailableStatus, manifest: null, promptBlock: '', skippedReason: reason },
+    };
+  }
 }
 
 function isTemporaryWerewolfChat(input: {
@@ -271,6 +464,7 @@ async function executeWerewolfTurnWithResultEnforcement(input: {
       mcpServers: input.prepared.roleConfig.mcpServers,
       userId: input.prepared.userId,
     }, {
+      buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(input.prepared, input.prompt),
       onContextReset: () => {
         latestSessionId = undefined;
       },
@@ -317,6 +511,7 @@ async function executeAgoraTurnWithResultEnforcement(input: {
       mcpServers: input.prepared.roleConfig.mcpServers,
       userId: input.prepared.userId,
     }, {
+      buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(input.prepared, input.prompt),
       onContextReset: () => {
         latestSessionId = undefined;
       },
@@ -360,23 +555,7 @@ export async function finalizeAgentChatExecution(input: {
       ? buildVisibleAgoraOutput(cleanedOutput)
       : cleanedOutput;
 
-  if (finalSessionId) {
-    await appendMemoryEntries([
-      {
-        scope: 'chat',
-        key: `${prepared.roleConfig.name}:${finalSessionId}`,
-        kind: 'session',
-        title: `${prepared.roleConfig.name} ${prepared.mode}`,
-        content: `用户: ${input.userMessage}\n助手: ${visibleOutput.slice(0, 1600)}`,
-        source: prepared.mode,
-        runId: typeof prepared.workflowContext?.runId === 'string' ? prepared.workflowContext.runId : undefined,
-        configFile: typeof prepared.workflowContext?.configFile === 'string' ? prepared.workflowContext.configFile : undefined,
-        agent: prepared.roleConfig.name,
-        tags: [prepared.mode],
-      },
-    ]).catch(() => {});
-  }
-
+  prepared.releaseMemoryV2();
   return {
     ok: input.success || Boolean(cleanedOutput),
     output: visibleOutput || '',
@@ -390,8 +569,8 @@ export async function finalizeAgentChatExecution(input: {
     error: input.error || null,
     specCodingRevision,
     reusePolicy: prepared.mode === 'workflow-chat'
-      ? 'workflow-chat 优先复用 run 绑定会话；standalone-chat 不自动继承 workflow 记忆。'
-      : 'standalone-chat 仅复用该角色的独立会话与长期角色记忆。',
+      ? 'Workflow chat keeps its V2 run scope when the runtime session is replaced.'
+      : 'Standalone chat keeps its V2 frontend-session scope when the runtime session is replaced.',
   };
 }
 
@@ -514,6 +693,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
   const message = String(input.message || '').trim();
   const prepared = await prepareAgentChat(input);
 
+  try {
   const result = prepared.isTemporaryWerewolf
     ? await executeWerewolfTurnWithResultEnforcement({
         prepared,
@@ -536,6 +716,8 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
         appendSystemPrompt: Boolean(prepared.resumeSessionId),
         mcpServers: prepared.roleConfig.mcpServers,
         userId: prepared.userId,
+      }, {
+        buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(prepared, message),
       });
 
   if (!result.success && !result.output && result.error) {
@@ -556,6 +738,9 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
     error: result.error || null,
     sessionId: resolveRecoveredRuntimeSessionId(result, prepared.resumeSessionId),
   });
+  } finally {
+    prepared.releaseMemoryV2();
+  }
 }
 
 export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<PreparedAgentChat> {
@@ -565,6 +750,11 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
   const workflowContext = input.workflowContext && typeof input.workflowContext === 'object'
     ? input.workflowContext as Record<string, any>
     : null;
+  const frontendSessionId = typeof input.frontendSessionId === 'string' && input.frontendSessionId.trim()
+    ? input.frontendSessionId.trim()
+    : (typeof workflowContext?.frontendSessionId === 'string' && workflowContext.frontendSessionId.trim()
+      ? workflowContext.frontendSessionId.trim()
+      : '');
 
   if (!message) {
     throw new Error('消息不能为空');
@@ -672,19 +862,24 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
       buildWorkflowSpecCodingBlock(workflowContext),
     ].filter(Boolean).join('\n')
     : '';
-  const memoryContextBlock = await resolveAgentMemoryContext({
-    agentName: effectiveRoleConfig.name,
-    mode,
+  const preparedMemoryV2 = await createAgentChatMemoryV2Plan({
+    ownerUserId: input.userContext.id,
+    frontendSessionId,
     workflowContext,
-    workingDirectory,
-    sessionId: resumeSessionId || undefined,
-    maxRoleMemoryChars: effectiveRoleConfig.workspaceProfile?.memory?.baseBudget,
+    agentId: effectiveRoleConfig.name,
+    message,
   });
+  const memoryEngine = new AiMemoryV2EngineAdapter(
+    engine,
+    (options) => isAgentChatExecutionStep(mode, options.step),
+    preparedMemoryV2.plan,
+    preparedMemoryV2.memoryV2,
+  );
 
   const prompt = [
     mode === 'workflow-chat'
       ? '请基于以下 workflow 上下文回答，优先站在当前工作流和当前角色职责的角度给出建议。'
-      : '这是普通角色聊天，可以复用角色长期记忆与当前会话记忆，但不要默认引入 workflow 上下文，除非用户主动提及。',
+      : '这是普通角色聊天。只使用当前授权的 Memory V2 索引清单，不要默认引入 workflow 上下文，除非用户主动提及。',
     effectiveRoleConfig.roleType === 'supervisor' && mode === 'workflow-chat'
       ? [
         '## Supervisor Spec Coding 修订协议',
@@ -693,10 +888,9 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
         '- revisionPlan 用 add / modify / remove / rename 描述具体变更；targetId 使用 R/D/T 编号或明确章节名，避免只写笼统影响。',
         '- 兼容旧格式: {"type":"spec-coding-revision","apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]} 或 `<spec-coding-revision>...</spec-coding-revision>`。',
         '- 只有你判断需要真正落盘修订时才输出该块；否则不要输出。',
-      ].join('\n')
+    ].join('\n')
       : '',
     workflowContextBlock,
-    memoryContextBlock,
     '',
     '# 用户消息',
     message,
@@ -706,9 +900,10 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
     roleConfig: effectiveRoleConfig,
     mode,
     resumeSessionId,
+    frontendSessionId,
     workingDirectory,
     workflowContext,
-    engine,
+    engine: memoryEngine,
     engineType: effectiveEngine,
     model: effectiveModel,
     prompt,
@@ -717,5 +912,9 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
     isTemporaryWerewolf,
     isTemporaryAgora,
     agoraExpectedResultType,
+    memoryV2: preparedMemoryV2.memoryV2,
+    getLatestMemoryV2PromptBlock: () => memoryEngine.getLatestMemoryV2PromptBlock(),
+    getMemoryV2HandoffEligibleProposals: () => memoryEngine.getHandoffEligibleProposals(),
+    releaseMemoryV2: () => memoryEngine.releaseMemoryV2(),
   };
 }

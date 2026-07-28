@@ -108,9 +108,7 @@ export async function POST(request: Request) {
         return jsonOk({ error: '该配置已有其他运行正在执行，无法强制恢复目标运行' }, { status: 409 });
       }
 
-      manager.forceJumpToState(runId, targetState, instruction, { id: auth.id, name: auth.username }).catch((error) => {
-        console.error('[workflow/force-transition] force jump failed:', error);
-      });
+      await manager.forceJumpToStateInBackground(runId, targetState, instruction, { id: auth.id, name: auth.username });
       await appendWorkflowAuditEvent({
         action: 'force-transition',
         runId,
@@ -166,6 +164,9 @@ export async function POST(request: Request) {
     });
     return jsonOk({ success: true, message: `已请求强制跳转到: ${targetState}` });
   } catch (error: any) {
-    return jsonOk({ error: error.message }, { status: 400 });
+    return jsonOk(
+      { error: '强制恢复工作流失败', message: error?.message || String(error) },
+      { status: 500 }
+    );
   }
 }
