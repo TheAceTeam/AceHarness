@@ -386,10 +386,6 @@ describe('NewConfigModal backend draft isolation', () => {
               specRoot: '.spec',
               artifacts: {},
             },
-            uiState: {
-              formStep: 1,
-              workflowExperienceEnabled: false,
-            },
           },
         });
       }
@@ -419,7 +415,7 @@ describe('NewConfigModal backend draft isolation', () => {
     expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
     expect(screen.getByDisplayValue('恢复中的工作流')).toBeTruthy();
     expect(screen.getByDisplayValue('resume-workflow.yaml')).toBeTruthy();
-    expect((screen.getByLabelText('使用历史经验') as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByLabelText('使用历史经验')).toBeNull();
   });
 
   test('creates workflow from template library entry inside the new config modal', async () => {
@@ -554,7 +550,7 @@ describe('NewConfigModal backend draft isolation', () => {
     });
   });
 
-  test('sends historical experience preference and hides historical recommendation details when disabled', async () => {
+  test('shows static creation recommendations without the removed historical-experience toggle', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       const method = (init?.method || 'GET').toUpperCase();
@@ -567,14 +563,6 @@ describe('NewConfigModal backend draft isolation', () => {
       if (url === '/api/configs/recommendations' && method === 'POST') {
         return createJsonResponse({
           recommendations: {
-            experiences: [{
-              runId: 'run-historical',
-              workflowName: '历史经验工作流',
-              configFile: 'historical-reference.yaml',
-              summary: '历史经验摘要',
-              experience: ['复用历史经验'],
-              nextFocus: ['补齐边界'],
-            }],
             referenceWorkflow: {
               filename: 'historical-reference.yaml',
               name: '历史骨架模板',
@@ -582,13 +570,11 @@ describe('NewConfigModal backend draft isolation', () => {
               agents: ['developer'],
               supervisorAgent: 'default-supervisor',
               source: 'recommended-experience',
-              autoApply: true,
             },
             recommendedAgents: ['developer'],
             recommendedSupervisorAgent: 'default-supervisor',
             availableStepAgents: ['developer'],
             availableSupervisorAgents: ['default-supervisor'],
-            relationshipHints: [],
           },
         });
       }
@@ -654,30 +640,21 @@ describe('NewConfigModal backend draft isolation', () => {
     });
 
     await waitFor(() => {
-      expect(fetchCalls.some((call) => (
-        call.url === '/api/configs/recommendations'
-        && call.method === 'POST'
-        && call.body?.useHistoricalExperience === true
-      ))).toBe(true);
+      expect(screen.getByText('编排推荐')).toBeTruthy();
     });
 
+    const recommendationCall = fetchCalls.find((call) => call.url === '/api/configs/recommendations' && call.method === 'POST');
+    expect(recommendationCall?.body).toEqual(expect.objectContaining({
+      requirements: '需要创建一个代码审查状态机工作流',
+      referenceWorkflow: '',
+      workflowMode: 'state-machine',
+    }));
+    expect(recommendationCall?.body?.useHistoricalExperience).toBeUndefined();
+    expect(screen.queryByLabelText('使用历史经验')).toBeNull();
+    expect(screen.getByText('历史工作流骨架')).toBeTruthy();
     expect(screen.getByText('历史骨架模板')).toBeTruthy();
-    expect(screen.getByText('历史经验工作流')).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText('使用历史经验'));
-
-    await waitFor(() => {
-      expect(fetchCalls.some((call) => (
-        call.url === '/api/configs/recommendations'
-        && call.method === 'POST'
-        && call.body?.useHistoricalExperience === false
-      ))).toBe(true);
-    });
-
-    expect(screen.getByText('不使用经验')).toBeTruthy();
-    expect(screen.getByText('不自动套历史骨架')).toBeTruthy();
-    expect(screen.queryByText('历史骨架模板')).toBeNull();
-    expect(screen.queryByText('历史经验工作流')).toBeNull();
+    expect(screen.getByText('自动编排决策')).toBeTruthy();
+    expect(screen.getByText(/默认角色编队：developer/)).toBeTruthy();
   });
 
   test('restores unfinished homepage creation by chat session after refresh and keeps visible tags', async () => {
