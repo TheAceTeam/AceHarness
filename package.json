@@ -1,6 +1,6 @@
 {
   "name": "csiharness",
-  "version": "0.1.0",
+  "version": "0.1.1-beta.0",
   "description": "CSIHarness - an independent agent-centric engineering harness",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
