@@ -15,6 +15,11 @@ import {
 } from '@/lib/chat/chat-engine-runtime';
 import { requireAuth } from '@/lib/auth/middleware';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
+import {
+  buildMemoryV2RecoverySource,
+  prepareHomepageChatMemoryV2,
+} from '@/lib/memory-v2-cutover/homepage-chat';
+import { AiMemoryV2EngineAdapter } from '@/lib/agent/ai-memory-engine-adapter';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
 export const maxDuration = 1200;
@@ -54,7 +59,8 @@ export async function POST(request: Request) {
       message,
       model,
       engine: requestedEngine,
-      sessionId,
+      sessionId: requestedSessionId,
+      runtimeSessionId,
       frontendSessionId,
       mode,
       workingDirectory,
@@ -67,6 +73,10 @@ export async function POST(request: Request) {
     if (!message?.trim()) {
       return jsonError('消息不能为空', 400);
     }
+
+    const sessionId = typeof runtimeSessionId === 'string' && runtimeSessionId.trim()
+      ? runtimeSessionId.trim()
+      : (typeof requestedSessionId === 'string' ? requestedSessionId.trim() : '');
 
     const useModel = model || '';
     const { systemPrompt, resolvedWorkingDirectory, runtimeSkillNames, enabledMcpServers, runtimeDatabaseEnv } = await buildChatRequestContext({
@@ -82,6 +92,11 @@ export async function POST(request: Request) {
         : undefined,
       personalDir: auth?.personalDir,
     });
+    const preparedMemoryV2 = await prepareHomepageChatMemoryV2({
+      ownerUserId: auth.id,
+      frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
+      message,
+    });
 
     const engineType = await resolveRequestedChatRuntimeEngineType(requestedEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, engineType);
@@ -93,12 +108,20 @@ export async function POST(request: Request) {
 
     await ensureEngineRuntimeSkillsAvailable(engineType, resolvedWorkingDirectory || getWorkspaceRoot(), runtimeSkillNames);
 
+    const memoryEngine = new AiMemoryV2EngineAdapter(
+      engine,
+      (options) => options.step === 'chat',
+      preparedMemoryV2.plan,
+      preparedMemoryV2.memoryV2,
+    );
     const chunks: string[] = [];
-    engine.on('stream', (event: any) => {
+    const onMemoryEngineStream = (event: any) => {
       if (event.type === 'text') chunks.push(event.content);
-    });
+    };
+    memoryEngine.on('stream', onMemoryEngineStream);
 
-    const result = await executeChatRuntimeWithContextRecovery(engine, {
+    try {
+      const result = await executeChatRuntimeWithContextRecovery(memoryEngine, {
         agent: 'chat',
         step: 'chat',
         prompt: engineCommand.prompt,
@@ -107,23 +130,32 @@ export async function POST(request: Request) {
         workingDirectory: resolvedWorkingDirectory || getWorkspaceRoot(),
         sessionId: sessionId || undefined,
         mcpServers: enabledMcpServers,
-        userId: auth?.id,
+        userId: auth.id,
         rawPrompt: engineCommand.rawPrompt,
         env: runtimeDatabaseEnv,
-    });
+      }, {
+        buildCompactSource: () => buildMemoryV2RecoverySource({
+          promptBlock: memoryEngine.getLatestMemoryV2PromptBlock(),
+          currentRequest: engineCommand.prompt,
+        }),
+      });
 
-    const runtimeSessionId = resolveRecoveredRuntimeSessionId(result, sessionId);
-    return jsonOk({
-      result: result.output || chunks.join(''),
-      runtimeSessionId,
-      sessionId: runtimeSessionId,
-      engine: engineType,
-      usage: normalizeUsage(result.metadata),
-      costUsd: result.metadata?.costUsd ?? result.metadata?.cost_usd,
-      durationMs: result.metadata?.durationMs ?? result.metadata?.duration_ms,
-      isError: !result.success,
-      error: result.error || undefined,
-    });
+      const runtimeSessionId = resolveRecoveredRuntimeSessionId(result, sessionId);
+      return jsonOk({
+        result: result.output || chunks.join(''),
+        runtimeSessionId,
+        sessionId: runtimeSessionId,
+        engine: engineType,
+        usage: normalizeUsage(result.metadata),
+        costUsd: result.metadata?.costUsd ?? result.metadata?.cost_usd,
+        durationMs: result.metadata?.durationMs ?? result.metadata?.duration_ms,
+        isError: !result.success,
+        error: result.error || undefined,
+      });
+    } finally {
+      memoryEngine.off('stream', onMemoryEngineStream);
+      memoryEngine.releaseMemoryV2();
+    }
   } catch (error: any) {
     return jsonError(errorMessage(error) || '执行失败', 500);
   }

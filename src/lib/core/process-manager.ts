@@ -9,8 +9,8 @@ import type { ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { writeFile, mkdir } from 'fs/promises';
 import { resolve } from 'path';
-import { existsSync } from 'fs';
-import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { getWorkspaceDataFile, getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import { isWindows } from '@/lib/core/runtime-platform';
 
 const RUNS_DIR = getWorkspaceRunsDir();
@@ -21,6 +21,210 @@ const MAX_ERROR_CHARS = 50_000;
 const MAX_LOG_LINES = 200;
 const ACE_PROCESS_OPEN_TAG = '<ace-process>';
 const ACE_PROCESS_CLOSE_TAG = '</ace-process>';
+
+/**
+ * What the acpx session store records is the pid of the *wrapper* it spawned
+ * (`npm exec opencode-ai acp`), not the agent doing the work. The real tree is:
+ *
+ *   npm exec opencode-ai acp      <- the recorded pid
+ *     └─ opencode acp             <- the agent that is stuck in a long tool call
+ *          └─ codegraph serve --mcp
+ *               └─ node ...
+ *
+ * Signalling only the recorded pid leaves the agent running: `npm exec` does not reliably
+ * forward signals, and would not reach the grandchildren even if it did. So the sweep must
+ * walk down from each recorded pid and take the whole subtree.
+ *
+ * Walking *down* is also what keeps this safe. Every one of these processes shares a process
+ * group with the CSIHarness server itself, so a process-group kill would take the server down with
+ * them; and the recorded pid's parent *is* the server. Descending from the recorded pid can
+ * only ever reach agent-owned processes.
+ *
+ * `isDescendantOfServer` is the matching entry check — it decides whether a recorded pid is still
+ * one of ours — and it is deliberately structural rather than textual. Matching command lines was
+ * tried twice and does not work: acpx registers 18 agents launched through varying wrappers, and
+ * the `agent_command` it records is the registry template (`npx -y pkg@^1.2.3 acp`), not what `ps`
+ * shows (`npm exec pkg acp`). Every recorded pid is spawned by this server, so ancestry answers the
+ * same question exactly, for every engine, with no pattern to keep in sync.
+ *
+ * Known limit: a process orphaned before the check (parent already gone, reparented to init) no
+ * longer looks like a descendant and will not be swept.
+ */
+function isDescendantOfServer(pid: number, table: Map<number, ProcessRow>): boolean {
+  let current = table.get(pid)?.ppid;
+  // Bounded walk: a cycle or a detached branch must not spin.
+  for (let hops = 0; current !== undefined && current > 1 && hops < 64; hops++) {
+    if (current === process.pid) return true;
+    current = table.get(current)?.ppid;
+  }
+  return false;
+}
+
+/** Session records older than this are treated as dead without being opened. */
+const SESSION_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+type ProcessRow = { ppid: number; command: string; startedAt: number | null };
+
+/** `Tue Jul 21 10:28:58 2026` — five whitespace-separated fields, then the command. */
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/;
+
+/** One `ps` snapshot for the whole sweep — this runs inside the stop request path. */
+function readProcessTable(): Map<number, ProcessRow> {
+  const table = new Map<number, ProcessRow>();
+  try {
+    const out = execSync('ps -eo pid=,ppid=,lstart=,command=', {
+      encoding: 'utf-8',
+      maxBuffer: 8 * 1024 * 1024,
+      // `lstart` goes through strftime, so month and weekday names are localised: under zh_CN it
+      // prints `二  7月/21 …` and under de_DE `Di. 21 Juli …`, neither of which parses. Every row
+      // would then be dropped, leaving an empty table — which silently disables both sweeps rather
+      // than failing loudly. Pin the locale; TZ is deliberately left alone, since `lstart` is local
+      // time and Date.parse must read it as such.
+      //
+      // Consequence for `command`: under C locale `ps` escapes non-ASCII bytes (`M-fM-5M^K…` on
+      // macOS, `?` on Linux). That is fine for the two things it is used for — matching ASCII-only
+      // patterns, and comparing a pid against its own earlier snapshot, which is taken the same way
+      // — but it must not be surfaced to users or written to logs as a readable command line.
+      env: { ...process.env, LC_ALL: 'C' },
+    });
+    for (const line of out.split('\n')) {
+      const match = line.match(PS_ROW);
+      if (!match) continue;
+      const startedAt = Date.parse(match[3]);
+      table.set(parseInt(match[1], 10), {
+        ppid: parseInt(match[2], 10),
+        command: match[4],
+        startedAt: Number.isNaN(startedAt) ? null : startedAt,
+      });
+    }
+  } catch {
+    // Without a process table the ACP sweep is skipped; the registered-process path still runs.
+  }
+  return table;
+}
+
+/**
+ * How far a live process's start time may sit from what the session record claims before we treat
+ * the pid as recycled. Generous enough to absorb recording lag, tight enough that a pid reissued
+ * later in the machine's life never passes.
+ */
+const PID_START_TOLERANCE_MS = 5 * 60 * 1000;
+
+/**
+ * Recorded session pids that are still alive and still look like an agent root.
+ *
+ * @param scope.workspacePaths When non-empty, only sessions working inside one of those
+ *   directories qualify. This is a secondary guard for a run-scoped sweep.
+ * @param scope.acpxRecordIds When provided, only these ACP records qualify. An empty list matches
+ *   nothing, so callers that stop a specific run fail closed instead of falling back to a
+ *   workspace-wide sweep.
+ */
+function collectAcpAgentRoots(
+  table: Map<number, ProcessRow>,
+  scope: { workspacePaths?: string[]; acpxRecordIds?: string[] } = {},
+): number[] {
+  const workspacePaths = scope.workspacePaths || [];
+  const acpxRecordScope = Array.isArray(scope.acpxRecordIds)
+    ? new Set(scope.acpxRecordIds.filter((id) => id.trim().length > 0))
+    : null;
+  if (acpxRecordScope && acpxRecordScope.size === 0) return [];
+
+  const sessionsDir = getWorkspaceDataFile('acpx-runtime', 'sessions');
+  if (!existsSync(sessionsDir)) return [];
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(sessionsDir);
+  } catch {
+    return [];
+  }
+  const roots = new Set<number>();
+  const oldestUseful = Date.now() - SESSION_RECORD_MAX_AGE_MS;
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    try {
+      const path = resolve(sessionsDir, entry);
+      // The store never prunes and each record embeds its whole message history (tens of MB in
+      // total), so filter on mtime before parsing — `closed` is unreliable and rules out almost
+      // nothing, and this runs on a request path.
+      if (statSync(path).mtimeMs < oldestUseful) continue;
+      const record = JSON.parse(readFileSync(path, 'utf-8'));
+      if (record?.closed === true) continue;
+      if (acpxRecordScope) {
+        const recordIds = getAcpRecordCandidateIds(record, entry);
+        if (!recordIds.some((id) => acpxRecordScope.has(id))) continue;
+      }
+      const pid = record?.pid;
+      if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 1) continue;
+      if (pid === process.pid) continue;
+      if (workspacePaths.length > 0) {
+        const cwd = typeof record?.cwd === 'string' ? record.cwd : '';
+        const inScope = workspacePaths.some((ws) => cwd === ws || cwd.startsWith(`${ws}/`));
+        if (!inScope) continue;
+      }
+      if (!isDescendantOfServer(pid, table)) continue;
+      // Ancestry alone does not prove identity: every process this server spawned passes it, so a
+      // recycled pid that happens to land under the server would be signalled — and then SIGKILLed.
+      // The start time pins it to the process the record was actually written about. A record
+      // observed on this machine pointed at pid 1192, long since reissued to a system extension.
+      const startedAt = table.get(pid)?.startedAt;
+      const recordedStart = Date.parse(record?.agent_started_at ?? '');
+      if (startedAt === null || startedAt === undefined || Number.isNaN(recordedStart)) continue;
+      if (Math.abs(startedAt - recordedStart) > PID_START_TOLERANCE_MS) continue;
+      roots.add(pid);
+    } catch {
+      // Unreadable/partial record — skip it rather than failing the whole sweep.
+    }
+  }
+  return Array.from(roots);
+}
+
+function getAcpRecordCandidateIds(record: any, entry: string): string[] {
+  const encodedFileId = entry.replace(/\.json$/, '');
+  const candidates = [
+    encodedFileId,
+    safeDecodeURIComponent(encodedFileId),
+    record?.acpxRecordId,
+    record?.acpx_record_id,
+    record?.recordId,
+    record?.record_id,
+    record?.sessionKey,
+    record?.session_key,
+    record?.runtimeSessionId,
+    record?.runtime_session_id,
+    record?.runtimeSessionName,
+    record?.runtime_session_name,
+    record?.acpSessionId,
+    record?.acp_session_id,
+  ];
+  return Array.from(new Set(candidates.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)));
+}
+
+function safeDecodeURIComponent(input: string): string {
+  try {
+    return decodeURIComponent(input);
+  } catch {
+    return input;
+  }
+}
+
+/** Every descendant of `roots`, roots included. */
+function expandProcessSubtrees(roots: number[], table: Map<number, ProcessRow>): number[] {
+  const childrenOf = new Map<number, number[]>();
+  for (const [pid, row] of table) {
+    const siblings = childrenOf.get(row.ppid);
+    if (siblings) siblings.push(pid);
+    else childrenOf.set(row.ppid, [pid]);
+  }
+  const collected = new Set<number>();
+  const queue = [...roots];
+  while (queue.length > 0) {
+    const pid = queue.shift() as number;
+    if (pid === process.pid || collected.has(pid)) continue;
+    collected.add(pid);
+    for (const child of childrenOf.get(pid) || []) queue.push(child);
+  }
+  return Array.from(collected);
+}
 
 function trimToTail(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
@@ -83,6 +287,25 @@ export interface ProcessInfo {
   prompt?: string;
   systemPrompt?: string;
 }
+
+type RegisteredProcessScope = 'none' | 'matching-runs' | 'all';
+
+type KillAllSystemOptions = {
+  sweepAgentProcesses?: boolean;
+  workspacePaths?: string[];
+  acpxRecordIds?: string[];
+  runIds?: string[];
+  registeredProcessScope?: RegisteredProcessScope;
+};
+
+type KillAllSystemResult = {
+  killed: number;
+  pids: number[];
+  agentRootsMatched?: number;
+  registeredKilled: number;
+  registeredProcessIds: string[];
+};
+
 class ProcessManager extends EventEmitter {
   private processes: Map<string, ProcessInfo> = new Map();
   private activeStreams: Map<string, string> = new Map();
@@ -198,34 +421,113 @@ class ProcessManager extends EventEmitter {
     return true;
   }
 
-  async killAllSystem(): Promise<{ killed: number; pids: number[] }> {
+  /**
+   * @param options.runIds Registered processes are only killed when their `runId` matches this
+   *   set. This is the normal path for stopping one workflow run.
+   * @param options.registeredProcessScope `all` is reserved for the explicit global process
+   *   management API. The default is `none`, so cleanup callers never widen into unrelated runs
+   *   by accident.
+   * @param options.sweepAgentProcesses Also terminate ACP agent process trees. Off by default:
+   *   this method is reached from config edits and run deletions too (via `WorkflowManager.stop`),
+   *   and those must not take down agents belonging to unrelated live runs. Only an explicit
+   *   "stop this workflow" request opts in.
+   * @param options.workspacePaths Restrict that sweep to agents working inside these directories.
+   *   Stopping specific runs must pass this as the secondary directory guard.
+   * @param options.acpxRecordIds Restrict the ACP sweep to these session records. If this option is
+   *   present and empty, the sweep matches nothing.
+   */
+  async killAllSystem(
+    options: KillAllSystemOptions = {}
+  ): Promise<KillAllSystemResult> {
+    const runIdSet = new Set((options.runIds || []).filter(Boolean));
+    const registeredProcessScope: RegisteredProcessScope = options.registeredProcessScope
+      || (runIdSet.size > 0 ? 'matching-runs' : 'none');
+    const registeredProcessIds: string[] = [];
+
     for (const [, proc] of this.processes) {
-      if (proc.status === 'running') {
-        proc.status = 'killed';
-        proc.endTime = new Date();
-        if (proc.childProcess) {
-          try { proc.childProcess.kill('SIGTERM'); } catch {}
-        }
-        if ((proc as any)._cancelFn) {
-          try { (proc as any)._cancelFn(); } catch {}
-        }
+      if (proc.status !== 'running') continue;
+      const shouldKillRegisteredProcess = registeredProcessScope === 'all'
+        || (registeredProcessScope === 'matching-runs' && !!proc.runId && runIdSet.has(proc.runId));
+      if (!shouldKillRegisteredProcess) continue;
+
+      proc.status = 'killed';
+      proc.endTime = new Date();
+      registeredProcessIds.push(proc.id);
+      if (proc.childProcess) {
+        try { proc.childProcess.kill('SIGTERM'); } catch {}
+      }
+      if ((proc as any)._cancelFn) {
+        try { (proc as any)._cancelFn(); } catch {}
       }
     }
-    // Also kill orphan system claude processes
-    const pids: number[] = [];
+    // Also kill agent processes that outlived their run.
+    //
+    // Engine cancellation is cooperative: an agent stuck in a long tool call (a compiler build,
+    // say) keeps running — and keeps streaming — well after its run has been marked stopped. The
+    // survivors then contend with the next run for resources and keep writing into its workspace.
+    // Agent cleanup is based on ACP session records rather than engine-specific command lines.
+    //
+    const signalled: number[] = [];
+    // Set whenever a sweep was requested, so "asked to sweep but matched nothing" stays reportable
+    // even on Windows, where the sweep is not implemented at all and would otherwise be silent.
+    let agentRootsMatched: number | undefined = options.sweepAgentProcesses ? 0 : undefined;
     if (!isWindows()) {
-      try {
-        const out = execSync("pgrep -f 'claude.*-p' || true", { encoding: 'utf-8' });
-        const lines = out.trim().split('\n').filter(Boolean);
-        for (const line of lines) {
-          const pid = parseInt(line, 10);
-          if (!isNaN(pid) && pid !== process.pid) {
-            try { process.kill(pid, 'SIGTERM'); pids.push(pid); } catch {}
-          }
+      const escalate: Array<{ pid: number; command: string }> = [];
+      // Only read once a sweep is actually requested: the other callers of this method (config
+      // edits, run deletion, DELETE /api/processes) would otherwise pay a synchronous `ps` for
+      // nothing.
+      const table = options.sweepAgentProcesses ? readProcessTable() : new Map<number, ProcessRow>();
+
+      // ACP agent trees. Cancellation is cooperative, so an agent blocked in a long tool call
+      // ignores SIGTERM and has to be escalated — these are identified structurally (a recorded
+      // session pid plus its descendants) rather than by pattern, which is what makes escalation
+      // safe here.
+      if (options.sweepAgentProcesses) {
+        const roots = collectAcpAgentRoots(table, {
+          workspacePaths: options.workspacePaths,
+          acpxRecordIds: options.acpxRecordIds,
+        });
+        // Surfaced so a zero-match sweep is visible: a run whose recorded workingDirectory differs
+        // from the agent's actual cwd (isolated-run layouts do this) would otherwise no-op silently.
+        agentRootsMatched = roots.length;
+        for (const pid of expandProcessSubtrees(roots, table)) {
+          const command = table.get(pid)?.command;
+          if (command === undefined) continue;
+          try {
+            process.kill(pid, 'SIGTERM');
+            signalled.push(pid);
+            // Pin identity now, while the tree is still intact.
+            escalate.push({ pid, command });
+          } catch { /* gone */ }
         }
-      } catch {}
+      }
+
+      if (escalate.length > 0) {
+        // Fire-and-forget, like the escalation in `killProcess`: awaiting would hold the stop
+        // response open for the whole grace period for no benefit to the caller.
+        setTimeout(() => {
+          // Verify each pid individually against the identity pinned at SIGTERM time. Re-deriving
+          // the tree here would defeat the escalation in exactly the case it exists for: the
+          // recorded pid is a wrapper that exits promptly on SIGTERM, orphaning the agent that
+          // ignored it — the survivor is then no longer in anyone's subtree. Comparing the full
+          // command line is what rules out a pid recycled during the grace window.
+          const fresh = readProcessTable();
+          for (const { pid, command } of escalate) {
+            if (fresh.get(pid)?.command !== command) continue;
+            try { process.kill(pid, 'SIGKILL'); } catch { /* exited on SIGTERM */ }
+          }
+        }, 2000).unref?.();
+      }
     }
-    return { killed: pids.length, pids };
+    // Counts processes signalled, not confirmed dead — SIGKILL escalation is still pending at this
+    // point, and a just-killed child reads as alive until the parent reaps it.
+    return {
+      killed: signalled.length,
+      pids: signalled,
+      agentRootsMatched,
+      registeredKilled: registeredProcessIds.length,
+      registeredProcessIds,
+    };
   }
 
   reset(): void {

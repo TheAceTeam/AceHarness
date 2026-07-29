@@ -269,6 +269,54 @@ async function createManagerForTest(engine: MockEngine) {
   return manager;
 }
 
+describe('state-machine recovery startup', () => {
+  test('rejects startup and persists a visible failed state when resume initialization fails', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    const manager = await createManagerForTest(new MockEngine());
+    const persistState = (manager as any).persistState;
+    const logEvents: any[] = [];
+    const statusEvents: any[] = [];
+    manager.on('log', (event) => logEvents.push(event));
+    manager.on('status', (event) => statusEvents.push(event));
+
+    (manager as any).status = 'idle';
+    (manager as any).currentRunId = null;
+    (manager as any).restoreRunStateForContinuation = vi.fn().mockImplementation(async (runState: any) => {
+      (manager as any).currentRunId = runState.runId;
+      (manager as any).currentConfigFile = runState.configFile;
+      (manager as any).status = 'running';
+      (manager as any).shouldStop = false;
+      (manager as any).runStartTime = '2024-01-01T00:00:00.000Z';
+    });
+    (manager as any).readWorkflowConfigContent = vi.fn().mockRejectedValue(new Error('模型 API 不可用'));
+    vi.mocked(loadRunState).mockResolvedValue({
+      runId: 'run-recovery-startup',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'stopped',
+      startTime: '2024-01-01T00:00:00.000Z',
+    } as any);
+
+    await expect(manager.resumeInBackground('run-recovery-startup')).rejects.toThrow('模型 API 不可用');
+
+    expect(persistState).toHaveBeenCalledWith('failed');
+    expect(logEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: 'run-recovery-startup',
+        level: 'error',
+        message: expect.stringContaining('模型 API 不可用'),
+      }),
+    ]));
+    expect(statusEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: 'failed',
+        statusReason: '模型 API 不可用',
+        runId: 'run-recovery-startup',
+      }),
+    ]));
+  });
+});
+
 // ============================================================
 // parseVerdict
 // ============================================================

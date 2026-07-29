@@ -7,9 +7,6 @@ import {
 } from '@/lib/chat/system-prompt';
 import { getWorkspaceAgentConfigDir, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { loadChatSession } from '@/lib/chat/persistence';
-import { resolveCreationAssistantEnabled } from '@/lib/core/home-sidebar-state';
-import { loadCreationSession } from '@/lib/spec/coding-store';
-import { workflowRegistry } from '@/lib/workflow/registry';
 import { resolveMcpServersByNames, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
@@ -22,7 +19,6 @@ import {
 } from '@/lib/runtime/database-capabilities';
 
 const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
-const MAX_HISTORY_CHARS = 6000;
 const REQUIRED_DASHBOARD_SKILLS = ['aceharness-workflow-creator'];
 
 export type RequestedSkillsInput = string[] | Record<string, boolean> | undefined;
@@ -119,96 +115,17 @@ export async function resolveChatRequestedMcpServers(options: {
   return resolveEnabledMcpServers(chatSettings, options.requestedMcpServers, resolvedWorkingDirectory);
 }
 
-async function buildBoundSessionContext(frontendSessionId?: string): Promise<string> {
-  if (!frontendSessionId) return '';
+async function resolvePersistedCreationAssistantEnabled(frontendSessionId?: string): Promise<boolean | undefined> {
+  if (!frontendSessionId) return undefined;
+  const session = await loadChatSession(frontendSessionId).catch(() => null);
+  if (!session) return undefined;
 
-  try {
-    const session = await loadChatSession(frontendSessionId);
-    if (!session) return '';
-
-    const sections: string[] = [];
-
-    if (session.creationSession) {
-      const creationRecord = await loadCreationSession(session.creationSession.creationSessionId);
-      const specCoding = creationRecord?.specCoding;
-      const latestRevision = specCoding?.revisions?.at(-1);
-
-      sections.push([
-        '### 创建态绑定',
-        `- 工作流: ${session.creationSession.workflowName}`,
-        `- 配置文件: ${session.creationSession.filename}`,
-        `- 创建状态: ${session.creationSession.status}`,
-        `- SpecCoding ID: ${session.creationSession.specCodingId}`,
-        specCoding ? `- SpecCoding 版本: v${specCoding.version}` : '',
-        specCoding?.status ? `- SpecCoding 状态: ${specCoding.status}` : '',
-        specCoding?.summary ? `- SpecCoding 摘要: ${specCoding.summary}` : '',
-        specCoding?.progress?.summary ? `- SpecCoding 进度: ${specCoding.progress.summary}` : '',
-        latestRevision?.summary ? `- 最近修订: ${latestRevision.summary}` : '',
-      ].filter(Boolean).join('\n'));
-    }
-
-    if (session.workflowBinding) {
-      const manager = await workflowRegistry.getManager(session.workflowBinding.configFile);
-      const status = manager.getStatus();
-      const runState = session.workflowBinding.runId
-        ? await import('@/lib/run/state-persistence').then((mod) => mod.loadRunState(session.workflowBinding!.runId)).catch(() => null)
-        : null;
-      const specCoding = runState?.runSpecCoding || null;
-      const latestRevision = specCoding?.revisions?.at(-1);
-
-      sections.push([
-        '### 运行态绑定',
-        `- 配置文件: ${session.workflowBinding.configFile}`,
-        `- Run ID: ${session.workflowBinding.runId}`,
-        `- 当前 Supervisor: ${session.workflowBinding.supervisorAgent || 'default-supervisor'}`,
-        session.workflowBinding.supervisorSessionId ? `- Supervisor Session: ${session.workflowBinding.supervisorSessionId}` : '',
-        status?.status ? `- 运行状态: ${status.status}` : '',
-        status?.currentPhase ? `- 当前阶段: ${status.currentPhase}` : '',
-        status?.currentStep ? `- 当前步骤: ${status.currentStep}` : '',
-        specCoding ? `- 运行关联 SpecCoding: v${specCoding.version} / ${specCoding.status}` : '',
-        specCoding?.progress?.summary ? `- SpecCoding 执行进度: ${specCoding.progress.summary}` : '',
-        latestRevision?.summary ? `- SpecCoding 最近修订: ${latestRevision.summary}` : '',
-      ].filter(Boolean).join('\n'));
-    }
-
-    if (sections.length === 0) return '';
-
-    return [
-      '## 当前会话绑定上下文',
-      '以下信息来自当前首页会话已绑定的创建态或运行态上下文。用户未明确切换对象时，默认优先基于这些绑定对象回答，不要反复追问“是哪个 workflow / supervisor”。',
-      ...sections,
-    ].join('\n\n');
-  } catch {
-    return '';
+  // This is a narrow feature-mode projection only. Persisted messages and raw
+  // output are never read or returned to an AI prompt from this module.
+  if (session.workflowBinding || session.agentBinding || session.sessionWorkbenchState?.collaborationRoom) {
+    return false;
   }
-}
-
-export async function loadChatHistory(frontendSessionId: string): Promise<string> {
-  try {
-    const session = await loadChatSession(frontendSessionId);
-    if (!session) return '';
-    const messages: { role: string; content: string }[] = session.messages || [];
-    if (messages.length === 0) return '';
-
-    let history = '';
-    for (const msg of messages) {
-      const source = String(msg.content || (msg as any).rawContent || '').trim();
-      if (!source) continue;
-      const role = msg.role === 'user' ? '用户' : msg.role === 'assistant' ? 'AI' : '系统';
-      let text = source
-        .replace(/<result>[\s\S]*?<\/result>/gi, '[result block]')
-        .replace(/```(?:action|card)\s*\n[\s\S]*?```/g, '[action/card block]')
-        .replace(/<\/?result>/g, '')
-        .trim();
-      if (text.length > 500) text = `${text.slice(0, 500)}...`;
-      history += `${role}: ${text}\n\n`;
-      if (history.length > MAX_HISTORY_CHARS) break;
-    }
-    if (!history) return '';
-    return `\n\n## 之前的对话记录（会话已过期重建，以下是历史上下文）\n${history.slice(0, MAX_HISTORY_CHARS)}`;
-  } catch {
-    return '';
-  }
+  return session.sessionWorkbenchState?.creationAssistantEnabled !== false;
 }
 
 export async function buildChatRequestContext(options: {
@@ -245,11 +162,11 @@ export async function buildChatRequestContext(options: {
 
   const isResume = Boolean(sessionId);
   const chatSettings = mode === 'dashboard' ? await loadChatSettings() : null;
-  const persistedSession = mode === 'dashboard' && frontendSessionId && requestedCreationAssistantEnabled === undefined
-    ? await loadChatSession(frontendSessionId).catch(() => null)
+  const persistedCreationAssistantEnabled = mode === 'dashboard' && requestedCreationAssistantEnabled === undefined
+    ? await resolvePersistedCreationAssistantEnabled(frontendSessionId)
     : null;
   const creationAssistantEnabled = mode === 'dashboard'
-    ? requestedCreationAssistantEnabled ?? resolveCreationAssistantEnabled(persistedSession)
+    ? requestedCreationAssistantEnabled ?? persistedCreationAssistantEnabled ?? true
     : false;
   const configuredSkills = chatSettings
     ? expandCapabilitySkillNames(resolveEnabledSkills(chatSettings, requestedSkills), chatSettings.capabilitySkills)
@@ -318,10 +235,12 @@ export async function buildChatRequestContext(options: {
     systemPrompt = DEFAULT_PROMPT;
   }
 
-  const boundSessionPrompt = await buildBoundSessionContext(frontendSessionId);
   const extraPrompt = typeof extraSystemPrompt === 'string' ? extraSystemPrompt.trim() : '';
 
-  systemPrompt = `${systemPrompt}${boundSessionPrompt ? `\n\n${boundSessionPrompt}` : ''}${extraPrompt ? `\n\n${extraPrompt}` : ''}`.trim();
+  // Persisted transcript, raw output, and bound workflow/creation records are
+  // deliberately excluded here. Memory-aware homepage routes add only their
+  // authorized V2 index manifest through AiMemoryV2EngineAdapter.
+  systemPrompt = `${systemPrompt}${extraPrompt ? `\n\n${extraPrompt}` : ''}`.trim();
 
   return {
     systemPrompt,

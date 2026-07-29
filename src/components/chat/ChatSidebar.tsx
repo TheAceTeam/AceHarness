@@ -35,8 +35,10 @@ import {
 } from '@/components/ui/dialog';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import ConfirmDialog from '@/components/ConfirmDialog';
@@ -54,7 +56,6 @@ import { getAgoraTopicExtensionActions } from '@/lib/agora/extensions';
 import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
 import {
   isWorkflowSidebarHint,
-  resolveCreationAssistantEnabled,
   type CollaborationChatroomParticipant,
 } from '@/lib/core/home-sidebar-state';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
@@ -81,6 +82,7 @@ type SidebarSession = ChatSessionSummaryLike & {
   sessionWorkbenchState?: any;
 };
 type SessionIdSet = ReadonlySet<string>;
+type SessionTagFilter = 'collaboration-topic' | 'agora' | 'creation' | 'plain' | 'agent';
 
 const EMPTY_SESSION_ID_LIST: string[] = [];
 const EMPTY_SKILL_SETTINGS: Record<string, boolean> = {};
@@ -98,10 +100,20 @@ const AGORA_WORKSPACE_SEGMENT = 'agora-workspaces';
 const noopToggleSetting = (_name: string) => {};
 const noopSetSettings = (_settings: Record<string, boolean>) => {};
 const SESSION_PAGE_SIZE = 30;
+const LEGACY_WORKFLOW_TAG_FILTER = 'workflow';
+const SESSION_TAG_FILTER_OPTIONS: ReadonlyArray<{ value: SessionTagFilter; label: string }> = [
+  { value: 'collaboration-topic', label: '协作议题' },
+  { value: 'agora', label: '议场' },
+  { value: 'creation', label: '创建' },
+  { value: 'plain', label: '普通对话' },
+  { value: 'agent', label: 'Agent 对话' },
+];
+const DEFAULT_SESSION_TAG_FILTERS: SessionTagFilter[] = [];
 
 export type SessionDirectoryView = 'conversation';
 type WorkflowBucketKey = 'creating' | 'ready' | 'active';
 export const SESSION_DIRECTORY_ORDER_STORAGE_KEY = 'chat-session-directory-order';
+export const SESSION_TAG_FILTER_STORAGE_KEY = 'chat-session-tag-filter';
 export const DEFAULT_SESSION_DIRECTORY_ORDER: SessionDirectoryView[] = ['conversation'];
 
 export function normalizeSessionDirectoryOrder(order?: readonly string[] | null): SessionDirectoryView[] {
@@ -121,6 +133,33 @@ export function readStoredSessionDirectoryOrder(): SessionDirectoryView[] {
     return normalizeSessionDirectoryOrder(Array.isArray(parsed) ? parsed : null);
   } catch {
     return DEFAULT_SESSION_DIRECTORY_ORDER;
+  }
+}
+
+function normalizeSessionTagFilters(value: unknown): SessionTagFilter[] {
+  const values = Array.isArray(value) ? value : [value];
+  const filters: SessionTagFilter[] = [];
+  for (const candidate of values) {
+    if (typeof candidate !== 'string') continue;
+    const value = candidate === LEGACY_WORKFLOW_TAG_FILTER ? 'collaboration-topic' : candidate;
+    const option = SESSION_TAG_FILTER_OPTIONS.find((item) => item.value === value);
+    if (option && !filters.includes(option.value)) filters.push(option.value);
+  }
+  return filters;
+}
+
+export function readStoredSessionTagFilters(): SessionTagFilter[] {
+  if (typeof window === 'undefined') return DEFAULT_SESSION_TAG_FILTERS;
+  try {
+    const stored = window.localStorage.getItem(SESSION_TAG_FILTER_STORAGE_KEY);
+    if (!stored) return DEFAULT_SESSION_TAG_FILTERS;
+    try {
+      return normalizeSessionTagFilters(JSON.parse(stored));
+    } catch {
+      return normalizeSessionTagFilters(stored);
+    }
+  } catch {
+    return DEFAULT_SESSION_TAG_FILTERS;
   }
 }
 
@@ -533,6 +572,25 @@ function isLegacyEmptyAgoraSession(session: SidebarSession): boolean {
     && (session.messageCount || 0) === 0;
 }
 
+function getSessionTagFilterValue(session: SidebarSession): SessionTagFilter {
+  const collaborationRoom = session.sessionWorkbenchState?.collaborationRoom;
+  if (
+    session.workflowBinding
+    || session.conversationMode === 'workflow-running'
+    || session.conversationMode === 'workflow-completed'
+  ) {
+    return 'collaboration-topic';
+  }
+  if (collaborationRoom) return 'agora';
+  if (session.agentBinding || session.conversationMode === 'agent-chat') return 'agent';
+  if (session.sessionWorkbenchState?.creationTag) return 'creation';
+  return 'plain';
+}
+
+function matchesSessionTagFilters(session: SidebarSession, filters: readonly SessionTagFilter[]): boolean {
+  return filters.length === 0 || filters.includes(getSessionTagFilterValue(session));
+}
+
 function getDeleteConfirmationDescription(input: {
   view: SessionDirectoryView;
   sessions: SidebarSession[];
@@ -624,6 +682,7 @@ function ChatSidebarComponent({
     deleteSessions,
     renameSession,
     loading,
+    creationAssistantDefaultEnabled = true,
     activeStreamingSessionIds = EMPTY_SESSION_ID_LIST,
     recentlyCompletedSessionIds = EMPTY_SESSION_ID_LIST,
     sessionLoadingId,
@@ -650,6 +709,11 @@ function ChatSidebarComponent({
   const [sessionSearchByView, setSessionSearchByView] = useState<Record<SessionDirectoryView, string>>({
     conversation: '',
   });
+  const [sessionTagFilters, setSessionTagFilters] = useState<SessionTagFilter[]>(readStoredSessionTagFilters);
+  const creationTagFilterEnabled = creationAssistantDefaultEnabled;
+  const availableSessionTagFilterOptions = creationTagFilterEnabled
+    ? SESSION_TAG_FILTER_OPTIONS
+    : SESSION_TAG_FILTER_OPTIONS.filter((option) => option.value !== 'creation');
   const { pendingHumanQuestions, runStatusById } = useWorkflowLiveState();
   const [agoraTopicDialogOpen, setAgoraTopicDialogOpen] = useState(false);
   const [agoraGuestDialogOpen, setAgoraGuestDialogOpen] = useState(false);
@@ -688,6 +752,31 @@ function ChatSidebarComponent({
   const [workspaceDeleting, setWorkspaceDeleting] = useState(false);
   const { confirm, dialogProps } = useConfirmDialog();
   const { toast } = useToast();
+  const persistSessionTagFilters = useCallback((next: SessionTagFilter[]) => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(SESSION_TAG_FILTER_STORAGE_KEY, JSON.stringify(next));
+    } catch {}
+  }, []);
+  const updateSessionTagFilters = useCallback((next: SessionTagFilter[]) => {
+    setSessionTagFilters(next);
+    persistSessionTagFilters(next);
+  }, [persistSessionTagFilters]);
+  const toggleSessionTagFilter = useCallback((filter: SessionTagFilter) => {
+    updateSessionTagFilters(
+      sessionTagFilters.includes(filter)
+        ? sessionTagFilters.filter((item) => item !== filter)
+        : [...sessionTagFilters, filter]
+    );
+  }, [sessionTagFilters, updateSessionTagFilters]);
+  const clearSessionTagFilters = useCallback(() => {
+    updateSessionTagFilters([]);
+  }, [updateSessionTagFilters]);
+
+  useEffect(() => {
+    if (creationTagFilterEnabled || !sessionTagFilters.includes('creation')) return;
+    updateSessionTagFilters(sessionTagFilters.filter((filter) => filter !== 'creation'));
+  }, [creationTagFilterEnabled, sessionTagFilters, updateSessionTagFilters]);
 
   const enabledCount = useMemo(
     () => discoveredSkills.filter((skill) => !!skillSettings[skill.name]).length,
@@ -754,8 +843,9 @@ function ChatSidebarComponent({
   const sessionSearch = sessionSearchByView[currentSessionView] || '';
   const normalizedSearch = sessionSearch.trim().toLowerCase();
   const visibleSessions = useMemo(() => {
-    if (!normalizedSearch) return baseVisibleSessions;
     return baseVisibleSessions.filter((session) => {
+      if (!matchesSessionTagFilters(session, sessionTagFilters)) return false;
+      if (!normalizedSearch) return true;
       const haystack = [
         session.title,
         session.lastMessage,
@@ -769,13 +859,24 @@ function ChatSidebarComponent({
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(normalizedSearch);
     });
-  }, [baseVisibleSessions, normalizedSearch]);
+  }, [baseVisibleSessions, normalizedSearch, sessionTagFilters]);
   const pagedVisibleSessions = useMemo(
     () => visibleSessions.slice(0, visibleSessionLimit),
     [visibleSessionLimit, visibleSessions]
   );
   const hasMoreVisibleSessions = visibleSessions.length > pagedVisibleSessions.length;
-  const isFilteredEmpty = normalizedSearch.length > 0 && visibleSessions.length === 0;
+  const isFilteredEmpty = (normalizedSearch.length > 0 || sessionTagFilters.length > 0) && visibleSessions.length === 0;
+  const selectedSessionTagLabels = sessionTagFilters
+    .map((filter) => SESSION_TAG_FILTER_OPTIONS.find((option) => option.value === filter)?.label)
+    .filter((label): label is string => Boolean(label));
+  const sessionTagFilterLabel = selectedSessionTagLabels.length === 0
+    ? '全部标签'
+    : selectedSessionTagLabels.length === 1
+      ? selectedSessionTagLabels[0]
+      : `${selectedSessionTagLabels.length} 个标签`;
+  const sessionTagFilterTitle = selectedSessionTagLabels.length === 0
+    ? '全部标签'
+    : selectedSessionTagLabels.join('、');
   const visibleSessionIds = useMemo(() => getUniqueSessionIds(visibleSessions as SidebarSession[]), [visibleSessions]);
   const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds]);
   const visibleSessionById = useMemo(
@@ -810,7 +911,7 @@ function ChatSidebarComponent({
 
   useEffect(() => {
     setVisibleSessionLimit(SESSION_PAGE_SIZE);
-  }, [currentSessionView, normalizedSearch]);
+  }, [currentSessionView, normalizedSearch, sessionTagFilters]);
 
   useEffect(() => {
     const visibleIds = new Set(agoraSavedGuests.map((guest) => guest.id));
@@ -828,7 +929,7 @@ function ChatSidebarComponent({
 
   useEffect(() => {
     setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
-  }, [sessionSearch]);
+  }, [sessionSearch, sessionTagFilters]);
 
   useEffect(() => {
     setAgoraGuestManageMode(false);
@@ -1360,26 +1461,66 @@ function ChatSidebarComponent({
         </div>
 
         <div className="border-b border-border/40 bg-[#EDEDE9] px-3 py-2 dark:bg-[#121218]">
-          <div className="relative w-full">
-            <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              search
-            </span>
-            <Input
-              value={sessionSearch}
-              onChange={(event) => setSessionSearchByView((prev) => ({ ...prev, [currentSessionView]: event.target.value }))}
-              placeholder="筛选对话..."
-              className="h-8 pl-8 pr-8 text-xs"
-            />
-            {sessionSearch ? (
-              <button
-                type="button"
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={() => setSessionSearchByView((prev) => ({ ...prev, [currentSessionView]: '' }))}
-                aria-label="清空筛选"
-              >
-              <span className="material-symbols-outlined text-sm">close</span>
-            </button>
-          ) : null}
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                search
+              </span>
+              <Input
+                value={sessionSearch}
+                onChange={(event) => setSessionSearchByView((prev) => ({ ...prev, [currentSessionView]: event.target.value }))}
+                placeholder="筛选对话..."
+                className="h-8 pl-8 pr-8 text-xs"
+              />
+              {sessionSearch ? (
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => setSessionSearchByView((prev) => ({ ...prev, [currentSessionView]: '' }))}
+                  aria-label="清空筛选"
+                >
+                <span className="material-symbols-outlined text-sm">close</span>
+              </button>
+              ) : null}
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label="按标签筛选对话"
+                  title={`已选标签：${sessionTagFilterTitle}`}
+                  className="h-8 w-[112px] shrink-0 justify-between gap-1 bg-card px-2 text-xs"
+                >
+                  <span className="material-symbols-outlined text-sm" aria-hidden="true">filter_list</span>
+                  <span className="min-w-0 flex-1 truncate text-left">{sessionTagFilterLabel}</span>
+                  <span className="material-symbols-outlined text-sm text-muted-foreground" aria-hidden="true">expand_more</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-36">
+                <DropdownMenuCheckboxItem
+                  checked={sessionTagFilters.length === 0}
+                  onCheckedChange={clearSessionTagFilters}
+                  onSelect={(event) => event.preventDefault()}
+                  className="text-xs"
+                >
+                  全部标签
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                {availableSessionTagFilterOptions.map((option) => (
+                  <DropdownMenuCheckboxItem
+                    key={option.value}
+                    checked={sessionTagFilters.includes(option.value)}
+                    onCheckedChange={() => toggleSessionTagFilter(option.value)}
+                    onSelect={(event) => event.preventDefault()}
+                    className="text-xs"
+                  >
+                    {option.label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
@@ -1426,6 +1567,7 @@ function ChatSidebarComponent({
             kind={currentSessionView}
             filtered={isFilteredEmpty}
             query={sessionSearch.trim()}
+            tagLabel={selectedSessionTagLabels.length > 0 ? selectedSessionTagLabels.join('、') : undefined}
           />
         )}
         {visibleSessions.length > 0 ? (
@@ -2964,16 +3106,22 @@ function EmptySessionState({
   kind,
   filtered,
   query,
+  tagLabel,
 }: {
   kind: SessionDirectoryView;
   filtered: boolean;
   query: string;
+  tagLabel?: string;
 }) {
   const title = filtered
     ? '没有匹配结果'
     : '暂无对话';
   const description = filtered
-    ? `没有找到包含“${query}”的会话。`
+    ? query && tagLabel
+      ? `没有找到包含“${query}”且标签为“${tagLabel}”的会话。`
+      : query
+        ? `没有找到包含“${query}”的会话。`
+        : `没有找到标签为“${tagLabel}”的会话。`
     : '新建对话，让 AI 帮你继续推进。';
 
   return (
@@ -3380,22 +3528,21 @@ function SessionItem({
   const workflowTopic = session.sessionWorkbenchState?.collaborationRoom?.chatroom?.topic
     || session.sessionWorkbenchState?.collaborationRoom?.topic
     || '';
-  const isWorkflowAgoraTopic = Boolean(session.workflowBinding && session.sessionWorkbenchState?.collaborationRoom?.chatroom);
-  const creationAssistantEnabled = resolveCreationAssistantEnabled(session);
-  const modeBadge = creationAssistantEnabled
+  const isCollaborationTopic = Boolean(session.workflowBinding)
+    || session.conversationMode === 'workflow-running'
+    || session.conversationMode === 'workflow-completed';
+  const modeBadge = session.sessionWorkbenchState?.creationTag
     ? { label: '创建', tone: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' }
     : { label: '对话', tone: 'bg-muted text-muted-foreground' };
   const statusBadge = deleteDisabled
     ? { label: '运行中', tone: 'bg-primary/10 text-primary' }
-    : isWorkflowAgoraTopic
-    ? { label: '协作议题', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
-    : session.workflowBinding
-      ? { label: '运行', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
-    : session.sessionWorkbenchState?.collaborationRoom
+    : isCollaborationTopic
+      ? { label: '协作议题', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
+      : session.sessionWorkbenchState?.collaborationRoom
         ? { label: '议场', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
-      : session.agentBinding
-        ? { label: 'Agent', tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' }
-        : null;
+        : session.agentBinding
+          ? { label: 'Agent', tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' }
+          : null;
   const subLabel = session.workflowBinding
     ? [session.workflowBinding.configFile, workflowTopic && workflowTopic !== session.workflowBinding.configFile ? workflowTopic : ''].filter(Boolean).join(' · ')
     : session.creationSession

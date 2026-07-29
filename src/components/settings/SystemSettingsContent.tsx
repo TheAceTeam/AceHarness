@@ -23,6 +23,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { Progress } from '@/components/ui/progress';
+import { MemoryV2DiagnosticsPanel } from '@/components/memory-v2/MemoryV2DiagnosticsPanel';
+import { MemoryV2GovernancePanel } from '@/components/memory-v2/MemoryV2GovernancePanel';
 import { Download, RefreshCw } from 'lucide-react';
 import {
   cangjieSdkApi,
@@ -111,8 +113,8 @@ interface WorkspaceExperienceForm {
 }
 
 interface AgentMemoryForm {
-  runtimeEnabled: boolean;
-  persistMode: 'manual' | 'review' | 'auto';
+  captureEnabled: boolean;
+  governanceMode: 'manual' | 'review' | 'auto';
 }
 
 interface RuntimeDebugForm {
@@ -120,7 +122,7 @@ interface RuntimeDebugForm {
   acpxTraceDirectory: string;
 }
 
-type SettingsSectionId = 'system' | 'runtime' | 'security' | 'advanced';
+type SettingsSectionId = 'system' | 'memory' | 'runtime' | 'security' | 'advanced';
 
 type ConfirmRequest = {
   open: boolean;
@@ -134,6 +136,7 @@ type ConfirmRequest = {
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSectionId; label: string; description: string }> = [
   { id: 'system', label: 'System', description: 'Workspace defaults, notifications, and cache parameters.' },
+  { id: 'memory', label: 'Memory', description: 'Global Memory V2 governance, audit, and cutover diagnostics.' },
   { id: 'runtime', label: '工具链', description: '托管 SDK 与系统环境。' },
   { id: 'security', label: 'Security', description: 'Tokens and secret-bearing notification settings.' },
   { id: 'advanced', label: 'Advanced', description: 'Reference material and lower-frequency controls.' },
@@ -193,8 +196,8 @@ export default function SystemSettingsContent() {
     onePersonCompanyOnboardingSeen: false,
   });
   const [agentMemoryForm, setAgentMemoryForm] = useState<AgentMemoryForm>({
-    runtimeEnabled: false,
-    persistMode: 'review',
+    captureEnabled: false,
+    governanceMode: 'review',
   });
   const [runtimeDebugForm, setRuntimeDebugForm] = useState<RuntimeDebugForm>({
     acpxTraceEnabled: false,
@@ -268,8 +271,8 @@ export default function SystemSettingsContent() {
         onePersonCompanyOnboardingSeen: Boolean(settings.workspaceExperience?.onePersonCompanyOnboardingSeen),
       } satisfies WorkspaceExperienceForm;
       const nextAgentMemoryForm = {
-        runtimeEnabled: Boolean(settings.agentMemory?.runtimeEnabled),
-        persistMode: settings.agentMemory?.persistMode || 'review',
+        captureEnabled: Boolean(settings.agentMemory?.captureEnabled),
+        governanceMode: settings.agentMemory?.governanceMode || 'review',
       } satisfies AgentMemoryForm;
       const nextRuntimeDebugForm = {
         acpxTraceEnabled: Boolean(settings.runtimeDebug?.acpxTraceEnabled),
@@ -638,32 +641,32 @@ export default function SystemSettingsContent() {
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <FormField
-                  label="Agent 记忆参与推理"
-                  description="关闭后保留已沉淀记忆，新运行会按无长期记忆上下文启动。"
+                  label="记忆捕获"
+                  description="关闭后，AI 不会写入新的记忆；已有 Memory V2 索引仍按协议参与按需读取。"
                   control={(
                     <div className="flex h-10 items-center">
                       <Switch
-                        checked={agentMemoryForm.runtimeEnabled}
-                        onCheckedChange={(checked) => setAgentMemoryForm((prev) => ({ ...prev, runtimeEnabled: checked }))}
+                        checked={agentMemoryForm.captureEnabled}
+                        onCheckedChange={(checked) => setAgentMemoryForm((prev) => ({ ...prev, captureEnabled: checked }))}
                         disabled={experienceSaving}
                       />
                     </div>
                   )}
                 />
                 <FormField
-                  label="记忆沉淀模式"
-                  description="当前版本优先支持手动编辑和审核式沉淀。"
+                  label="长期记忆治理"
+                  description="控制长期记忆候选的服务端生命周期；不会改变 AI 对短期/长期的自主分类。"
                   control={(
                     <Select
-                      value={agentMemoryForm.persistMode}
-                      onValueChange={(value) => setAgentMemoryForm((prev) => ({ ...prev, persistMode: value as AgentMemoryForm['persistMode'] }))}
+                      value={agentMemoryForm.governanceMode}
+                      onValueChange={(value) => setAgentMemoryForm((prev) => ({ ...prev, governanceMode: value as AgentMemoryForm['governanceMode'] }))}
                       disabled={experienceSaving}
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="manual">手动</SelectItem>
-                        <SelectItem value="review">审核后写入</SelectItem>
-                        <SelectItem value="auto">自动写入</SelectItem>
+                        <SelectItem value="manual">全部人工审核</SelectItem>
+                        <SelectItem value="review">长期记忆待审核</SelectItem>
+                        <SelectItem value="auto">长期记忆自动生效</SelectItem>
                       </SelectContent>
                     </Select>
                   )}
@@ -728,6 +731,13 @@ export default function SystemSettingsContent() {
               />
             </FormSection>
           </DataCard>
+        ) : null}
+
+        {activeSection === 'memory' ? (
+          <div className="space-y-8">
+            <MemoryV2GovernancePanel />
+            <MemoryV2DiagnosticsPanel />
+          </div>
         ) : null}
 
         {activeSection === 'runtime' ? (

@@ -19,7 +19,7 @@ English | [中文](./README.md)
 </p>
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
 
@@ -65,7 +65,7 @@ CSIHarness organizes engineering tasks around planning, execution, collaboration
 
 ### Requirements
 
-- Node.js `>= 20` / npm `>= 9`
+- Node.js `>= 22.13.0` / npm `>= 9`
 - One AI execution engine: `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, or `magic-cli`
 
 ### Install and Run
@@ -94,16 +94,16 @@ git clone https://gitcode.com/Cangjie-SIG/ACEHarness.git && cd ACEHarness
 npm install
 
 # Local development: builds the CLI first, then starts the dev server
-CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3000 npm run dev
+CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3001 npm run dev
 
 # Windows PowerShell:
 # $env:CSIHARNESS_HOST="0.0.0.0"
-# $env:CSIHARNESS_PORT="3000"
+# $env:CSIHARNESS_PORT="3001"
 # npm run dev
 
 # Production mode: build after the first clone or after updates
 npm run build
-CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3000 npm start
+CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3001 npm start
 ```
 
 Open `http://127.0.0.1:3001` after startup. After entering the console, use Onboarding to learn the complete usage path and module guide. In PowerShell production mode, set `$env:CSIHARNESS_HOST` and `$env:CSIHARNESS_PORT` before running `npm start`.
@@ -167,15 +167,15 @@ CSIHarness configuration is driven by the startup wizard, the engine management 
 
 ### CSIHarness Service
 
-`server.js` loads `.env`, `.env.local`, and the mode-specific `.env.development*` / `.env.production*` files on startup. Values already present in the shell, process manager, or startup script take precedence and are not overwritten by env files.
+The launcher loads `.env`, `.env.local`, and the mode-specific `.env.development*` / `.env.production*` files on startup. Values already present in the shell, process manager, or startup script take precedence and are not overwritten by env files.
 
 Core startup and runtime-directory variables:
 
 | Variable | Description | Default / precedence |
 |------|-------------|----------------------|
 | `CSIHARNESS_HOST` | Server bind address | `127.0.0.1` |
-| `CSIHARNESS_PORT` | CSIHarness service port | `3000` |
-| `PORT` | Generic service port | Higher priority than `CSIHARNESS_PORT` |
+| `CSIHARNESS_PORT` | CSIHarness service port | `3001` |
+| `PORT` | Generic service port | Fallback only when `CSIHARNESS_PORT` is unset |
 | `BASEURL` / `BASE_URL` | Reverse-proxy subpath or public site prefix used for application routes and static asset URLs | Empty when unset; examples: `/ace` or `https://example.com/ace` |
 | `CSIHARNESS_HOME` | CSIHarness runtime root; controls where `config/`, `data/`, `cache/`, `logs/`, and `workspace/` live | Falls back by platform when unset |
 | `APPDATA` | Windows fallback root for `CSIHARNESS_HOME` | `<APPDATA>/CSIHarness` |
@@ -199,7 +199,7 @@ Windows PowerShell:
 ```powershell
 $env:BASEURL="/ace"
 $env:CSIHARNESS_HOST="127.0.0.1"
-$env:CSIHARNESS_PORT="3000"
+$env:CSIHARNESS_PORT="3001"
 npm run dev
 ```
 | `CSIHARNESS_INSTALL_ROOT` | Install root used to locate `configs/`, `dist/`, and other packaged files | Auto-filled to the current install directory when unset |
@@ -208,9 +208,6 @@ npm run dev
 | `LC_ALL` | Locale fallback variable | Used when `CSIHARNESS_LOCALE` and `LANG` are unset |
 | `NODE_ENV` | Runtime mode; also affects `.env*` loading and some debug defaults | `production` for managed child services |
 | `CSIHARNESS_MAX_OLD_SPACE_MB` | V8 old-space heap limit (MB) for the server process; overrides the auto value | Auto: ~60% of RAM, clamped to `4096`–`8192` |
-| `CSIHARNESS_MEM_WATCHDOG` | Memory-watchdog toggle; gracefully restarts before OOM when thresholds are crossed | Enabled by default; set `0` to disable |
-| `CSIHARNESS_MEM_SOFT_PCT` | Soft threshold (fraction of heap limit); graceful restart only while idle | `0.80` |
-| `CSIHARNESS_MEM_HARD_PCT` | Hard threshold (fraction of heap limit); unconditional forced restart to avoid OOM | `0.92` |
 | `CSIHARNESS_MANAGED` | Internal flag marking the server process as daemon-supervised so the watchdog may self-restart | Set automatically by the CLI; not for manual use |
 
 Public-origin and channel-recovery variables:

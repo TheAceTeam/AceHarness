@@ -61,6 +61,8 @@ describe('package contract', () => {
       'skills',
       'configs',
       'messages',
+      'templates',
+      'docs/workflow-templates.md',
     ];
 
     for (const entry of requiredRuntimeEntries) {
@@ -114,6 +116,10 @@ describe('package contract', () => {
       expect(source).toContain('csiharness --help');
       expect(source).toContain('CSIHARNESS_PORT');
       expect(source).toContain('CSIHARNESS_HOME');
+      expect(source).toContain('Node.js `>= 22.13.0`');
+      expect(source).toContain('CSIHARNESS_PORT=3001');
+      expect(source).not.toContain('CSIHARNESS_PORT=3000');
+      expect(source).not.toContain('CSIHARNESS_MEM_WATCHDOG');
       expect(source).not.toContain('raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/');
     }
   });

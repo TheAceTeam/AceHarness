@@ -32,6 +32,7 @@ import { Route as WorkspaceMarkdownPreviewRouteImport } from './routes/workspace
 import { Route as WorkbenchConfigRouteImport } from './routes/workbench.$config'
 import { Route as LoginResetRouteImport } from './routes/login.reset'
 import { Route as KnowledgeLibraryRouteImport } from './routes/knowledge.library'
+import { Route as ApiWorkflowTemplatesRouteImport } from './routes/api.workflow-templates'
 import { Route as ApiUsersRouteImport } from './routes/api.users'
 import { Route as ApiSystemSettingsRouteImport } from './routes/api.system-settings'
 import { Route as ApiSkillsRouteImport } from './routes/api.skills'
@@ -82,6 +83,7 @@ import { Route as ApiWorkflowEventLogRouteImport } from './routes/api.workflow.e
 import { Route as ApiWorkflowContextRouteImport } from './routes/api.workflow.context'
 import { Route as ApiWorkflowAuditLogRouteImport } from './routes/api.workflow.audit-log'
 import { Route as ApiWorkflowApproveRouteImport } from './routes/api.workflow.approve'
+import { Route as ApiWorkflowTemplatesInstantiateRouteImport } from './routes/api.workflow-templates.instantiate'
 import { Route as ApiWerewolfHistoryRouteImport } from './routes/api.werewolf.history'
 import { Route as ApiUsersShareableRouteImport } from './routes/api.users.shareable'
 import { Route as ApiUsersIdRouteImport } from './routes/api.users.$id'
@@ -108,6 +110,8 @@ import { Route as ApiNotebookManageRouteImport } from './routes/api.notebook.man
 import { Route as ApiNotebookFileRouteImport } from './routes/api.notebook.file'
 import { Route as ApiModelsProbesRouteImport } from './routes/api.models.probes'
 import { Route as ApiModelsDiagnosticsRouteImport } from './routes/api.models.diagnostics'
+import { Route as ApiMemoryV2GovernanceRouteImport } from './routes/api.memory-v2.governance'
+import { Route as ApiMemoryV2DiagnosticsRouteImport } from './routes/api.memory-v2.diagnostics'
 import { Route as ApiMcpTestRouteImport } from './routes/api.mcp.test'
 import { Route as ApiMarketplaceSearchRouteImport } from './routes/api.marketplace.search'
 import { Route as ApiMarketplaceInstallRouteImport } from './routes/api.marketplace.install'
@@ -182,6 +186,8 @@ import { Route as ApiModelsProbesQueryRouteImport } from './routes/api.models.pr
 import { Route as ApiModelsProbesBatchRouteImport } from './routes/api.models.probes.batch'
 import { Route as ApiModelsProbesIdRouteImport } from './routes/api.models.probes.$id'
 import { Route as ApiModelsDiagnosticsStreamRouteImport } from './routes/api.models.diagnostics.stream'
+import { Route as ApiMemoryV2GovernanceDetailsRouteImport } from './routes/api.memory-v2.governance.details'
+import { Route as ApiMemoryV2GovernanceActionsRouteImport } from './routes/api.memory-v2.governance.actions'
 import { Route as ApiEngineModelsSmokeRouteImport } from './routes/api.engine.models.smoke'
 import { Route as ApiConfigsFilenameCopyRouteImport } from './routes/api.configs.$filename.copy'
 import { Route as ApiCollaborationRoomsDirectRouteImport } from './routes/api.collaboration.rooms.direct'
@@ -208,6 +214,7 @@ import { Route as ApiSpecCodingSessionsIdImportPersistedRouteImport } from './ro
 import { Route as ApiRuntimeSqliteDatabasesNameRouteImport } from './routes/api.runtime.sqlite.databases.$name'
 import { Route as ApiOfficeOrgDraftIdRouteImport } from './routes/api.office.org.draft.$id'
 import { Route as ApiModelsProbesIdRunRouteImport } from './routes/api.models.probes.$id.run'
+import { Route as ApiMemoryV2WorkflowsRunIdHandoffsRouteImport } from './routes/api.memory-v2.workflows.$runId.handoffs'
 import { Route as ApiCollaborationRoomsRoomIdSessionRouteImport } from './routes/api.collaboration.rooms.$roomId.session'
 import { Route as ApiCollaborationRoomsRoomIdParticipantsRouteImport } from './routes/api.collaboration.rooms.$roomId.participants'
 import { Route as ApiCollaborationRoomsRoomIdFinishRouteImport } from './routes/api.collaboration.rooms.$roomId.finish'
@@ -223,6 +230,7 @@ import { Route as ApiRagV1CollectionsIdImportRouteImport } from './routes/api.ra
 import { Route as ApiOfficeOrgVersionsIdRestoreRouteImport } from './routes/api.office.org.versions.$id.restore'
 import { Route as ApiChannelsWechatOfficialLoginIdWaitRouteImport } from './routes/api.channels.wechat-official.login.$id.wait'
 import { Route as ApiRagV1CollectionsIdSourcesSourceIdRouteImport } from './routes/api.rag.v1.collections.$id.sources.$sourceId'
+import { Route as ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRouteImport } from './routes/api.memory-v2.workflows.$runId.handoffs.$handoffId.details'
 import { Route as ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRouteImport } from './routes/api.collaboration.rooms.$roomId.participants.$agentName.memory'
 
 const WorkflowsRoute = WorkflowsRouteImport.update({
@@ -340,6 +348,11 @@ const KnowledgeLibraryRoute = KnowledgeLibraryRouteImport.update({
   id: '/library',
   path: '/library',
   getParentRoute: () => KnowledgeRoute,
+} as any)
+const ApiWorkflowTemplatesRoute = ApiWorkflowTemplatesRouteImport.update({
+  id: '/api/workflow-templates',
+  path: '/api/workflow-templates',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiUsersRoute = ApiUsersRouteImport.update({
   id: '/api/users',
@@ -598,6 +611,12 @@ const ApiWorkflowApproveRoute = ApiWorkflowApproveRouteImport.update({
   path: '/api/workflow/approve',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiWorkflowTemplatesInstantiateRoute =
+  ApiWorkflowTemplatesInstantiateRouteImport.update({
+    id: '/instantiate',
+    path: '/instantiate',
+    getParentRoute: () => ApiWorkflowTemplatesRoute,
+  } as any)
 const ApiWerewolfHistoryRoute = ApiWerewolfHistoryRouteImport.update({
   id: '/api/werewolf/history',
   path: '/api/werewolf/history',
@@ -729,6 +748,16 @@ const ApiModelsDiagnosticsRoute = ApiModelsDiagnosticsRouteImport.update({
   id: '/diagnostics',
   path: '/diagnostics',
   getParentRoute: () => ApiModelsRoute,
+} as any)
+const ApiMemoryV2GovernanceRoute = ApiMemoryV2GovernanceRouteImport.update({
+  id: '/api/memory-v2/governance',
+  path: '/api/memory-v2/governance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMemoryV2DiagnosticsRoute = ApiMemoryV2DiagnosticsRouteImport.update({
+  id: '/api/memory-v2/diagnostics',
+  path: '/api/memory-v2/diagnostics',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMcpTestRoute = ApiMcpTestRouteImport.update({
   id: '/test',
@@ -1107,6 +1136,18 @@ const ApiModelsDiagnosticsStreamRoute =
     path: '/stream',
     getParentRoute: () => ApiModelsDiagnosticsRoute,
   } as any)
+const ApiMemoryV2GovernanceDetailsRoute =
+  ApiMemoryV2GovernanceDetailsRouteImport.update({
+    id: '/details',
+    path: '/details',
+    getParentRoute: () => ApiMemoryV2GovernanceRoute,
+  } as any)
+const ApiMemoryV2GovernanceActionsRoute =
+  ApiMemoryV2GovernanceActionsRouteImport.update({
+    id: '/actions',
+    path: '/actions',
+    getParentRoute: () => ApiMemoryV2GovernanceRoute,
+  } as any)
 const ApiEngineModelsSmokeRoute = ApiEngineModelsSmokeRouteImport.update({
   id: '/smoke',
   path: '/smoke',
@@ -1250,6 +1291,12 @@ const ApiModelsProbesIdRunRoute = ApiModelsProbesIdRunRouteImport.update({
   path: '/run',
   getParentRoute: () => ApiModelsProbesIdRoute,
 } as any)
+const ApiMemoryV2WorkflowsRunIdHandoffsRoute =
+  ApiMemoryV2WorkflowsRunIdHandoffsRouteImport.update({
+    id: '/api/memory-v2/workflows/$runId/handoffs',
+    path: '/api/memory-v2/workflows/$runId/handoffs',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiCollaborationRoomsRoomIdSessionRoute =
   ApiCollaborationRoomsRoomIdSessionRouteImport.update({
     id: '/session',
@@ -1339,6 +1386,12 @@ const ApiRagV1CollectionsIdSourcesSourceIdRoute =
     path: '/$id/sources/$sourceId',
     getParentRoute: () => ApiRagV1CollectionsRoute,
   } as any)
+const ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute =
+  ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRouteImport.update({
+    id: '/$handoffId/details',
+    path: '/$handoffId/details',
+    getParentRoute: () => ApiMemoryV2WorkflowsRunIdHandoffsRoute,
+  } as any)
 const ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRoute =
   ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRouteImport.update({
     id: '/$agentName/memory',
@@ -1386,6 +1439,7 @@ export interface FileRoutesByFullPath {
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
   '/api/users': typeof ApiUsersRouteWithChildren
+  '/api/workflow-templates': typeof ApiWorkflowTemplatesRouteWithChildren
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
@@ -1434,6 +1488,8 @@ export interface FileRoutesByFullPath {
   '/api/marketplace/install': typeof ApiMarketplaceInstallRoute
   '/api/marketplace/search': typeof ApiMarketplaceSearchRoute
   '/api/mcp/test': typeof ApiMcpTestRoute
+  '/api/memory-v2/diagnostics': typeof ApiMemoryV2DiagnosticsRoute
+  '/api/memory-v2/governance': typeof ApiMemoryV2GovernanceRouteWithChildren
   '/api/models/diagnostics': typeof ApiModelsDiagnosticsRouteWithChildren
   '/api/models/probes': typeof ApiModelsProbesRouteWithChildren
   '/api/notebook/file': typeof ApiNotebookFileRoute
@@ -1460,6 +1516,7 @@ export interface FileRoutesByFullPath {
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
   '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
+  '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
   '/api/workflow/context': typeof ApiWorkflowContextRoute
@@ -1510,6 +1567,8 @@ export interface FileRoutesByFullPath {
   '/api/collaboration/rooms/direct': typeof ApiCollaborationRoomsDirectRoute
   '/api/configs/$filename/copy': typeof ApiConfigsFilenameCopyRoute
   '/api/engine/models/smoke': typeof ApiEngineModelsSmokeRoute
+  '/api/memory-v2/governance/actions': typeof ApiMemoryV2GovernanceActionsRoute
+  '/api/memory-v2/governance/details': typeof ApiMemoryV2GovernanceDetailsRoute
   '/api/models/diagnostics/stream': typeof ApiModelsDiagnosticsStreamRoute
   '/api/models/probes/$id': typeof ApiModelsProbesIdRouteWithChildren
   '/api/models/probes/batch': typeof ApiModelsProbesBatchRoute
@@ -1548,6 +1607,7 @@ export interface FileRoutesByFullPath {
   '/api/collaboration/rooms/$roomId/finish': typeof ApiCollaborationRoomsRoomIdFinishRoute
   '/api/collaboration/rooms/$roomId/participants': typeof ApiCollaborationRoomsRoomIdParticipantsRouteWithChildren
   '/api/collaboration/rooms/$roomId/session': typeof ApiCollaborationRoomsRoomIdSessionRoute
+  '/api/memory-v2/workflows/$runId/handoffs': typeof ApiMemoryV2WorkflowsRunIdHandoffsRouteWithChildren
   '/api/models/probes/$id/run': typeof ApiModelsProbesIdRunRoute
   '/api/office/org/draft/$id': typeof ApiOfficeOrgDraftIdRoute
   '/api/runtime/sqlite/databases/$name': typeof ApiRuntimeSqliteDatabasesNameRoute
@@ -1561,6 +1621,7 @@ export interface FileRoutesByFullPath {
   '/api/rag/v1/collections/$id/schema': typeof ApiRagV1CollectionsIdSchemaRoute
   '/api/rag/v1/collections/$id/search': typeof ApiRagV1CollectionsIdSearchRoute
   '/api/collaboration/rooms/$roomId/participants/$agentName/memory': typeof ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRoute
+  '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details': typeof ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute
   '/api/rag/v1/collections/$id/sources/$sourceId': typeof ApiRagV1CollectionsIdSourcesSourceIdRoute
 }
 export interface FileRoutesByTo {
@@ -1603,6 +1664,7 @@ export interface FileRoutesByTo {
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
   '/api/users': typeof ApiUsersRouteWithChildren
+  '/api/workflow-templates': typeof ApiWorkflowTemplatesRouteWithChildren
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
@@ -1651,6 +1713,8 @@ export interface FileRoutesByTo {
   '/api/marketplace/install': typeof ApiMarketplaceInstallRoute
   '/api/marketplace/search': typeof ApiMarketplaceSearchRoute
   '/api/mcp/test': typeof ApiMcpTestRoute
+  '/api/memory-v2/diagnostics': typeof ApiMemoryV2DiagnosticsRoute
+  '/api/memory-v2/governance': typeof ApiMemoryV2GovernanceRouteWithChildren
   '/api/models/diagnostics': typeof ApiModelsDiagnosticsRouteWithChildren
   '/api/models/probes': typeof ApiModelsProbesRouteWithChildren
   '/api/notebook/file': typeof ApiNotebookFileRoute
@@ -1677,6 +1741,7 @@ export interface FileRoutesByTo {
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
   '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
+  '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
   '/api/workflow/context': typeof ApiWorkflowContextRoute
@@ -1727,6 +1792,8 @@ export interface FileRoutesByTo {
   '/api/collaboration/rooms/direct': typeof ApiCollaborationRoomsDirectRoute
   '/api/configs/$filename/copy': typeof ApiConfigsFilenameCopyRoute
   '/api/engine/models/smoke': typeof ApiEngineModelsSmokeRoute
+  '/api/memory-v2/governance/actions': typeof ApiMemoryV2GovernanceActionsRoute
+  '/api/memory-v2/governance/details': typeof ApiMemoryV2GovernanceDetailsRoute
   '/api/models/diagnostics/stream': typeof ApiModelsDiagnosticsStreamRoute
   '/api/models/probes/$id': typeof ApiModelsProbesIdRouteWithChildren
   '/api/models/probes/batch': typeof ApiModelsProbesBatchRoute
@@ -1765,6 +1832,7 @@ export interface FileRoutesByTo {
   '/api/collaboration/rooms/$roomId/finish': typeof ApiCollaborationRoomsRoomIdFinishRoute
   '/api/collaboration/rooms/$roomId/participants': typeof ApiCollaborationRoomsRoomIdParticipantsRouteWithChildren
   '/api/collaboration/rooms/$roomId/session': typeof ApiCollaborationRoomsRoomIdSessionRoute
+  '/api/memory-v2/workflows/$runId/handoffs': typeof ApiMemoryV2WorkflowsRunIdHandoffsRouteWithChildren
   '/api/models/probes/$id/run': typeof ApiModelsProbesIdRunRoute
   '/api/office/org/draft/$id': typeof ApiOfficeOrgDraftIdRoute
   '/api/runtime/sqlite/databases/$name': typeof ApiRuntimeSqliteDatabasesNameRoute
@@ -1778,6 +1846,7 @@ export interface FileRoutesByTo {
   '/api/rag/v1/collections/$id/schema': typeof ApiRagV1CollectionsIdSchemaRoute
   '/api/rag/v1/collections/$id/search': typeof ApiRagV1CollectionsIdSearchRoute
   '/api/collaboration/rooms/$roomId/participants/$agentName/memory': typeof ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRoute
+  '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details': typeof ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute
   '/api/rag/v1/collections/$id/sources/$sourceId': typeof ApiRagV1CollectionsIdSourcesSourceIdRoute
 }
 export interface FileRoutesById {
@@ -1821,6 +1890,7 @@ export interface FileRoutesById {
   '/api/skills': typeof ApiSkillsRoute
   '/api/system-settings': typeof ApiSystemSettingsRoute
   '/api/users': typeof ApiUsersRouteWithChildren
+  '/api/workflow-templates': typeof ApiWorkflowTemplatesRouteWithChildren
   '/knowledge/library': typeof KnowledgeLibraryRoute
   '/login/reset': typeof LoginResetRoute
   '/workbench/$config': typeof WorkbenchConfigRoute
@@ -1869,6 +1939,8 @@ export interface FileRoutesById {
   '/api/marketplace/install': typeof ApiMarketplaceInstallRoute
   '/api/marketplace/search': typeof ApiMarketplaceSearchRoute
   '/api/mcp/test': typeof ApiMcpTestRoute
+  '/api/memory-v2/diagnostics': typeof ApiMemoryV2DiagnosticsRoute
+  '/api/memory-v2/governance': typeof ApiMemoryV2GovernanceRouteWithChildren
   '/api/models/diagnostics': typeof ApiModelsDiagnosticsRouteWithChildren
   '/api/models/probes': typeof ApiModelsProbesRouteWithChildren
   '/api/notebook/file': typeof ApiNotebookFileRoute
@@ -1895,6 +1967,7 @@ export interface FileRoutesById {
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
   '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
+  '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
   '/api/workflow/context': typeof ApiWorkflowContextRoute
@@ -1945,6 +2018,8 @@ export interface FileRoutesById {
   '/api/collaboration/rooms/direct': typeof ApiCollaborationRoomsDirectRoute
   '/api/configs/$filename/copy': typeof ApiConfigsFilenameCopyRoute
   '/api/engine/models/smoke': typeof ApiEngineModelsSmokeRoute
+  '/api/memory-v2/governance/actions': typeof ApiMemoryV2GovernanceActionsRoute
+  '/api/memory-v2/governance/details': typeof ApiMemoryV2GovernanceDetailsRoute
   '/api/models/diagnostics/stream': typeof ApiModelsDiagnosticsStreamRoute
   '/api/models/probes/$id': typeof ApiModelsProbesIdRouteWithChildren
   '/api/models/probes/batch': typeof ApiModelsProbesBatchRoute
@@ -1983,6 +2058,7 @@ export interface FileRoutesById {
   '/api/collaboration/rooms/$roomId/finish': typeof ApiCollaborationRoomsRoomIdFinishRoute
   '/api/collaboration/rooms/$roomId/participants': typeof ApiCollaborationRoomsRoomIdParticipantsRouteWithChildren
   '/api/collaboration/rooms/$roomId/session': typeof ApiCollaborationRoomsRoomIdSessionRoute
+  '/api/memory-v2/workflows/$runId/handoffs': typeof ApiMemoryV2WorkflowsRunIdHandoffsRouteWithChildren
   '/api/models/probes/$id/run': typeof ApiModelsProbesIdRunRoute
   '/api/office/org/draft/$id': typeof ApiOfficeOrgDraftIdRoute
   '/api/runtime/sqlite/databases/$name': typeof ApiRuntimeSqliteDatabasesNameRoute
@@ -1996,6 +2072,7 @@ export interface FileRoutesById {
   '/api/rag/v1/collections/$id/schema': typeof ApiRagV1CollectionsIdSchemaRoute
   '/api/rag/v1/collections/$id/search': typeof ApiRagV1CollectionsIdSearchRoute
   '/api/collaboration/rooms/$roomId/participants/$agentName/memory': typeof ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRoute
+  '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details': typeof ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute
   '/api/rag/v1/collections/$id/sources/$sourceId': typeof ApiRagV1CollectionsIdSourcesSourceIdRoute
 }
 export interface FileRouteTypes {
@@ -2040,6 +2117,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/system-settings'
     | '/api/users'
+    | '/api/workflow-templates'
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
@@ -2088,6 +2166,8 @@ export interface FileRouteTypes {
     | '/api/marketplace/install'
     | '/api/marketplace/search'
     | '/api/mcp/test'
+    | '/api/memory-v2/diagnostics'
+    | '/api/memory-v2/governance'
     | '/api/models/diagnostics'
     | '/api/models/probes'
     | '/api/notebook/file'
@@ -2114,6 +2194,7 @@ export interface FileRouteTypes {
     | '/api/users/$id'
     | '/api/users/shareable'
     | '/api/werewolf/history'
+    | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
     | '/api/workflow/context'
@@ -2164,6 +2245,8 @@ export interface FileRouteTypes {
     | '/api/collaboration/rooms/direct'
     | '/api/configs/$filename/copy'
     | '/api/engine/models/smoke'
+    | '/api/memory-v2/governance/actions'
+    | '/api/memory-v2/governance/details'
     | '/api/models/diagnostics/stream'
     | '/api/models/probes/$id'
     | '/api/models/probes/batch'
@@ -2202,6 +2285,7 @@ export interface FileRouteTypes {
     | '/api/collaboration/rooms/$roomId/finish'
     | '/api/collaboration/rooms/$roomId/participants'
     | '/api/collaboration/rooms/$roomId/session'
+    | '/api/memory-v2/workflows/$runId/handoffs'
     | '/api/models/probes/$id/run'
     | '/api/office/org/draft/$id'
     | '/api/runtime/sqlite/databases/$name'
@@ -2215,6 +2299,7 @@ export interface FileRouteTypes {
     | '/api/rag/v1/collections/$id/schema'
     | '/api/rag/v1/collections/$id/search'
     | '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
+    | '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details'
     | '/api/rag/v1/collections/$id/sources/$sourceId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -2257,6 +2342,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/system-settings'
     | '/api/users'
+    | '/api/workflow-templates'
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
@@ -2305,6 +2391,8 @@ export interface FileRouteTypes {
     | '/api/marketplace/install'
     | '/api/marketplace/search'
     | '/api/mcp/test'
+    | '/api/memory-v2/diagnostics'
+    | '/api/memory-v2/governance'
     | '/api/models/diagnostics'
     | '/api/models/probes'
     | '/api/notebook/file'
@@ -2331,6 +2419,7 @@ export interface FileRouteTypes {
     | '/api/users/$id'
     | '/api/users/shareable'
     | '/api/werewolf/history'
+    | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
     | '/api/workflow/context'
@@ -2381,6 +2470,8 @@ export interface FileRouteTypes {
     | '/api/collaboration/rooms/direct'
     | '/api/configs/$filename/copy'
     | '/api/engine/models/smoke'
+    | '/api/memory-v2/governance/actions'
+    | '/api/memory-v2/governance/details'
     | '/api/models/diagnostics/stream'
     | '/api/models/probes/$id'
     | '/api/models/probes/batch'
@@ -2419,6 +2510,7 @@ export interface FileRouteTypes {
     | '/api/collaboration/rooms/$roomId/finish'
     | '/api/collaboration/rooms/$roomId/participants'
     | '/api/collaboration/rooms/$roomId/session'
+    | '/api/memory-v2/workflows/$runId/handoffs'
     | '/api/models/probes/$id/run'
     | '/api/office/org/draft/$id'
     | '/api/runtime/sqlite/databases/$name'
@@ -2432,6 +2524,7 @@ export interface FileRouteTypes {
     | '/api/rag/v1/collections/$id/schema'
     | '/api/rag/v1/collections/$id/search'
     | '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
+    | '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details'
     | '/api/rag/v1/collections/$id/sources/$sourceId'
   id:
     | '__root__'
@@ -2474,6 +2567,7 @@ export interface FileRouteTypes {
     | '/api/skills'
     | '/api/system-settings'
     | '/api/users'
+    | '/api/workflow-templates'
     | '/knowledge/library'
     | '/login/reset'
     | '/workbench/$config'
@@ -2522,6 +2616,8 @@ export interface FileRouteTypes {
     | '/api/marketplace/install'
     | '/api/marketplace/search'
     | '/api/mcp/test'
+    | '/api/memory-v2/diagnostics'
+    | '/api/memory-v2/governance'
     | '/api/models/diagnostics'
     | '/api/models/probes'
     | '/api/notebook/file'
@@ -2548,6 +2644,7 @@ export interface FileRouteTypes {
     | '/api/users/$id'
     | '/api/users/shareable'
     | '/api/werewolf/history'
+    | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
     | '/api/workflow/context'
@@ -2598,6 +2695,8 @@ export interface FileRouteTypes {
     | '/api/collaboration/rooms/direct'
     | '/api/configs/$filename/copy'
     | '/api/engine/models/smoke'
+    | '/api/memory-v2/governance/actions'
+    | '/api/memory-v2/governance/details'
     | '/api/models/diagnostics/stream'
     | '/api/models/probes/$id'
     | '/api/models/probes/batch'
@@ -2636,6 +2735,7 @@ export interface FileRouteTypes {
     | '/api/collaboration/rooms/$roomId/finish'
     | '/api/collaboration/rooms/$roomId/participants'
     | '/api/collaboration/rooms/$roomId/session'
+    | '/api/memory-v2/workflows/$runId/handoffs'
     | '/api/models/probes/$id/run'
     | '/api/office/org/draft/$id'
     | '/api/runtime/sqlite/databases/$name'
@@ -2649,6 +2749,7 @@ export interface FileRouteTypes {
     | '/api/rag/v1/collections/$id/schema'
     | '/api/rag/v1/collections/$id/search'
     | '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
+    | '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details'
     | '/api/rag/v1/collections/$id/sources/$sourceId'
   fileRoutesById: FileRoutesById
 }
@@ -2690,6 +2791,7 @@ export interface RootRouteChildren {
   ApiSkillsRoute: typeof ApiSkillsRoute
   ApiSystemSettingsRoute: typeof ApiSystemSettingsRoute
   ApiUsersRoute: typeof ApiUsersRouteWithChildren
+  ApiWorkflowTemplatesRoute: typeof ApiWorkflowTemplatesRouteWithChildren
   WorkbenchConfigRoute: typeof WorkbenchConfigRoute
   WorkspaceMarkdownPreviewRoute: typeof WorkspaceMarkdownPreviewRoute
   ApiAgoraGuestsRoute: typeof ApiAgoraGuestsRouteWithChildren
@@ -2714,6 +2816,8 @@ export interface RootRouteChildren {
   ApiMarketplaceCategoriesRoute: typeof ApiMarketplaceCategoriesRoute
   ApiMarketplaceInstallRoute: typeof ApiMarketplaceInstallRoute
   ApiMarketplaceSearchRoute: typeof ApiMarketplaceSearchRoute
+  ApiMemoryV2DiagnosticsRoute: typeof ApiMemoryV2DiagnosticsRoute
+  ApiMemoryV2GovernanceRoute: typeof ApiMemoryV2GovernanceRouteWithChildren
   ApiNotebookFileRoute: typeof ApiNotebookFileRoute
   ApiNotebookManageRoute: typeof ApiNotebookManageRoute
   ApiNotebookShareRoute: typeof ApiNotebookShareRoute
@@ -2782,6 +2886,7 @@ export interface RootRouteChildren {
   ApiRuntimeSqliteExecRoute: typeof ApiRuntimeSqliteExecRoute
   ApiRuntimeSqliteQueryRoute: typeof ApiRuntimeSqliteQueryRoute
   ApiRuntimeSqliteTransactionRoute: typeof ApiRuntimeSqliteTransactionRoute
+  ApiMemoryV2WorkflowsRunIdHandoffsRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsRouteWithChildren
   ApiWorkspaceStaticWorkspaceTokenSplatRoute: typeof ApiWorkspaceStaticWorkspaceTokenSplatRoute
 }
 
@@ -2947,6 +3052,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/knowledge/library'
       preLoaderRoute: typeof KnowledgeLibraryRouteImport
       parentRoute: typeof KnowledgeRoute
+    }
+    '/api/workflow-templates': {
+      id: '/api/workflow-templates'
+      path: '/api/workflow-templates'
+      fullPath: '/api/workflow-templates'
+      preLoaderRoute: typeof ApiWorkflowTemplatesRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/users': {
       id: '/api/users'
@@ -3298,6 +3410,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiWorkflowApproveRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/workflow-templates/instantiate': {
+      id: '/api/workflow-templates/instantiate'
+      path: '/instantiate'
+      fullPath: '/api/workflow-templates/instantiate'
+      preLoaderRoute: typeof ApiWorkflowTemplatesInstantiateRouteImport
+      parentRoute: typeof ApiWorkflowTemplatesRoute
+    }
     '/api/werewolf/history': {
       id: '/api/werewolf/history'
       path: '/api/werewolf/history'
@@ -3479,6 +3598,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/models/diagnostics'
       preLoaderRoute: typeof ApiModelsDiagnosticsRouteImport
       parentRoute: typeof ApiModelsRoute
+    }
+    '/api/memory-v2/governance': {
+      id: '/api/memory-v2/governance'
+      path: '/api/memory-v2/governance'
+      fullPath: '/api/memory-v2/governance'
+      preLoaderRoute: typeof ApiMemoryV2GovernanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/memory-v2/diagnostics': {
+      id: '/api/memory-v2/diagnostics'
+      path: '/api/memory-v2/diagnostics'
+      fullPath: '/api/memory-v2/diagnostics'
+      preLoaderRoute: typeof ApiMemoryV2DiagnosticsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/mcp/test': {
       id: '/api/mcp/test'
@@ -3998,6 +4131,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiModelsDiagnosticsStreamRouteImport
       parentRoute: typeof ApiModelsDiagnosticsRoute
     }
+    '/api/memory-v2/governance/details': {
+      id: '/api/memory-v2/governance/details'
+      path: '/details'
+      fullPath: '/api/memory-v2/governance/details'
+      preLoaderRoute: typeof ApiMemoryV2GovernanceDetailsRouteImport
+      parentRoute: typeof ApiMemoryV2GovernanceRoute
+    }
+    '/api/memory-v2/governance/actions': {
+      id: '/api/memory-v2/governance/actions'
+      path: '/actions'
+      fullPath: '/api/memory-v2/governance/actions'
+      preLoaderRoute: typeof ApiMemoryV2GovernanceActionsRouteImport
+      parentRoute: typeof ApiMemoryV2GovernanceRoute
+    }
     '/api/engine/models/smoke': {
       id: '/api/engine/models/smoke'
       path: '/smoke'
@@ -4180,6 +4327,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiModelsProbesIdRunRouteImport
       parentRoute: typeof ApiModelsProbesIdRoute
     }
+    '/api/memory-v2/workflows/$runId/handoffs': {
+      id: '/api/memory-v2/workflows/$runId/handoffs'
+      path: '/api/memory-v2/workflows/$runId/handoffs'
+      fullPath: '/api/memory-v2/workflows/$runId/handoffs'
+      preLoaderRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/collaboration/rooms/$roomId/session': {
       id: '/api/collaboration/rooms/$roomId/session'
       path: '/session'
@@ -4284,6 +4438,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/rag/v1/collections/$id/sources/$sourceId'
       preLoaderRoute: typeof ApiRagV1CollectionsIdSourcesSourceIdRouteImport
       parentRoute: typeof ApiRagV1CollectionsRoute
+    }
+    '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details': {
+      id: '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details'
+      path: '/$handoffId/details'
+      fullPath: '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details'
+      preLoaderRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRouteImport
+      parentRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsRoute
     }
     '/api/collaboration/rooms/$roomId/participants/$agentName/memory': {
       id: '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
@@ -4643,6 +4804,17 @@ const ApiUsersRouteWithChildren = ApiUsersRoute._addFileChildren(
   ApiUsersRouteChildren,
 )
 
+interface ApiWorkflowTemplatesRouteChildren {
+  ApiWorkflowTemplatesInstantiateRoute: typeof ApiWorkflowTemplatesInstantiateRoute
+}
+
+const ApiWorkflowTemplatesRouteChildren: ApiWorkflowTemplatesRouteChildren = {
+  ApiWorkflowTemplatesInstantiateRoute: ApiWorkflowTemplatesInstantiateRoute,
+}
+
+const ApiWorkflowTemplatesRouteWithChildren =
+  ApiWorkflowTemplatesRoute._addFileChildren(ApiWorkflowTemplatesRouteChildren)
+
 interface ApiAgoraGuestsRouteChildren {
   ApiAgoraGuestsIdRoute: typeof ApiAgoraGuestsIdRoute
 }
@@ -4753,6 +4925,21 @@ const ApiCollaborationRoomsRouteChildren: ApiCollaborationRoomsRouteChildren = {
 const ApiCollaborationRoomsRouteWithChildren =
   ApiCollaborationRoomsRoute._addFileChildren(
     ApiCollaborationRoomsRouteChildren,
+  )
+
+interface ApiMemoryV2GovernanceRouteChildren {
+  ApiMemoryV2GovernanceActionsRoute: typeof ApiMemoryV2GovernanceActionsRoute
+  ApiMemoryV2GovernanceDetailsRoute: typeof ApiMemoryV2GovernanceDetailsRoute
+}
+
+const ApiMemoryV2GovernanceRouteChildren: ApiMemoryV2GovernanceRouteChildren = {
+  ApiMemoryV2GovernanceActionsRoute: ApiMemoryV2GovernanceActionsRoute,
+  ApiMemoryV2GovernanceDetailsRoute: ApiMemoryV2GovernanceDetailsRoute,
+}
+
+const ApiMemoryV2GovernanceRouteWithChildren =
+  ApiMemoryV2GovernanceRoute._addFileChildren(
+    ApiMemoryV2GovernanceRouteChildren,
   )
 
 interface ApiSpecCodingSessionsIdRouteChildren {
@@ -4884,6 +5071,21 @@ const ApiRuntimeSqliteDatabasesRouteWithChildren =
     ApiRuntimeSqliteDatabasesRouteChildren,
   )
 
+interface ApiMemoryV2WorkflowsRunIdHandoffsRouteChildren {
+  ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute
+}
+
+const ApiMemoryV2WorkflowsRunIdHandoffsRouteChildren: ApiMemoryV2WorkflowsRunIdHandoffsRouteChildren =
+  {
+    ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute:
+      ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute,
+  }
+
+const ApiMemoryV2WorkflowsRunIdHandoffsRouteWithChildren =
+  ApiMemoryV2WorkflowsRunIdHandoffsRoute._addFileChildren(
+    ApiMemoryV2WorkflowsRunIdHandoffsRouteChildren,
+  )
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountRoute: AccountRouteWithChildren,
@@ -4922,6 +5124,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSkillsRoute: ApiSkillsRoute,
   ApiSystemSettingsRoute: ApiSystemSettingsRoute,
   ApiUsersRoute: ApiUsersRouteWithChildren,
+  ApiWorkflowTemplatesRoute: ApiWorkflowTemplatesRouteWithChildren,
   WorkbenchConfigRoute: WorkbenchConfigRoute,
   WorkspaceMarkdownPreviewRoute: WorkspaceMarkdownPreviewRoute,
   ApiAgoraGuestsRoute: ApiAgoraGuestsRouteWithChildren,
@@ -4946,6 +5149,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMarketplaceCategoriesRoute: ApiMarketplaceCategoriesRoute,
   ApiMarketplaceInstallRoute: ApiMarketplaceInstallRoute,
   ApiMarketplaceSearchRoute: ApiMarketplaceSearchRoute,
+  ApiMemoryV2DiagnosticsRoute: ApiMemoryV2DiagnosticsRoute,
+  ApiMemoryV2GovernanceRoute: ApiMemoryV2GovernanceRouteWithChildren,
   ApiNotebookFileRoute: ApiNotebookFileRoute,
   ApiNotebookManageRoute: ApiNotebookManageRoute,
   ApiNotebookShareRoute: ApiNotebookShareRoute,
@@ -5017,6 +5222,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRuntimeSqliteExecRoute: ApiRuntimeSqliteExecRoute,
   ApiRuntimeSqliteQueryRoute: ApiRuntimeSqliteQueryRoute,
   ApiRuntimeSqliteTransactionRoute: ApiRuntimeSqliteTransactionRoute,
+  ApiMemoryV2WorkflowsRunIdHandoffsRoute:
+    ApiMemoryV2WorkflowsRunIdHandoffsRouteWithChildren,
   ApiWorkspaceStaticWorkspaceTokenSplatRoute:
     ApiWorkspaceStaticWorkspaceTokenSplatRoute,
 }

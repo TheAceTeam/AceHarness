@@ -53,11 +53,13 @@ type AgentSortKey = 'name' | 'team' | 'category' | 'temperature';
 interface AgentsManagerProps {
   embedded?: boolean;
   returnTarget?: ReturnTarget;
+  highlightedAgentName?: string;
 }
 
 export default function AgentsManager({
   embedded = false,
   returnTarget = { href: '/dashboard', label: '返回仪表盘' },
+  highlightedAgentName,
 }: AgentsManagerProps) {
   const VIEW_MODE_STORAGE_KEY = 'aceharness:agents:view-mode';
   const { toast } = useToast();
@@ -86,6 +88,7 @@ export default function AgentsManager({
   const [agentSortDirection, setAgentSortDirection] = useState<'asc' | 'desc'>('asc');
   const [visibleAgentColumnIds, setVisibleAgentColumnIds] = useState<string[]>(['agent', 'team', 'category', 'temperature', 'tags']);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
+  const highlightedAgentLookupRef = useRef('');
   const agentsQuery = useAgentsQuery();
   const engineConfigQuery = useEngineConfigQuery();
   const saveAgentMutation = useSaveAgentMutation();
@@ -94,6 +97,7 @@ export default function AgentsManager({
   const importAgentZipMutation = useImportAgentZipMutation();
   const exportAgentsMutation = useExportAgentsMutation();
   const agents = agentsQuery.data?.agents || EMPTY_AGENTS;
+  const normalizedHighlightedAgentName = highlightedAgentName?.trim() || '';
   useSyncAgentConfigsToDb(agents);
   const dbAgents = useAgentConfigRows({
     keyword: '',
@@ -192,6 +196,35 @@ export default function AgentsManager({
     setEditingAgent(agent);
     setIsNewAgent(false);
   };
+
+  useEffect(() => {
+    if (!normalizedHighlightedAgentName) {
+      highlightedAgentLookupRef.current = '';
+      return;
+    }
+    if (agentsQuery.isLoading || highlightedAgentLookupRef.current === normalizedHighlightedAgentName) return;
+
+    setSelectedGroup('all');
+    setSelectedTeam('all');
+    setSelectedCategory('all');
+    setSelectedTags([]);
+    setSearchQuery(normalizedHighlightedAgentName);
+    setEmbeddedSearchDraft(normalizedHighlightedAgentName);
+
+    const matchedAgent = agents.find((agent) => agent.name === normalizedHighlightedAgentName);
+    if (matchedAgent) {
+      setViewMode('gallery');
+      setEditingAgent(matchedAgent);
+      setIsNewAgent(false);
+      highlightedAgentLookupRef.current = normalizedHighlightedAgentName;
+      return;
+    }
+
+    if (!agentsQuery.isFetching) {
+      highlightedAgentLookupRef.current = normalizedHighlightedAgentName;
+      setAlertMessage(`未找到 Agent：${normalizedHighlightedAgentName}`);
+    }
+  }, [agents, agentsQuery.isFetching, agentsQuery.isLoading, normalizedHighlightedAgentName]);
 
   const handleReviseAgent = (agent: AgentConfig) => {
     setShowAICreateModal(false);

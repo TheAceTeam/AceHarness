@@ -6,7 +6,9 @@ import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import { extractLastChatPreview } from '@/lib/chat/message-preview';
 import {
   isCreationAssistantSidebarHint,
+  readStoredCreationAssistantEnabled,
   resolveCreationAssistantEnabled,
+  writeStoredCreationAssistantEnabled,
   type HomeSidebarHint,
   type SessionWorkbenchState,
 } from '@/lib/core/home-sidebar-state';
@@ -329,6 +331,8 @@ interface DashboardChatContextType {
   unmarkSessionStreaming: (sessionId: string | null | undefined) => void;
   model: string;
   setModel: (m: string) => void;
+  creationAssistantDefaultEnabled: boolean;
+  setCreationAssistantDefaultEnabled: (enabled: boolean) => void;
   engine: string;
   effectiveEngine: string;
   isModelSelectionReady: boolean;
@@ -379,6 +383,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   loading: false, activeStreamingSessionIds: [], recentlyCompletedSessionIds: [], sessionLoadingId: null, streamingMessageId: null, setStreamingMessageId: () => {},
   markSessionStreaming: () => {}, unmarkSessionStreaming: () => {},
   model: '', setModel: () => {},
+  creationAssistantDefaultEnabled: true, setCreationAssistantDefaultEnabled: () => {},
   engine: '', effectiveEngine: '', isModelSelectionReady: false, setEngine: () => {},
   confirmAction: async () => {}, rejectAction: () => {},
   undoActionById: async () => {}, retryAction: async () => {}, reloadActionResult: async () => {},
@@ -576,6 +581,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
     return '';
   });
+  const [creationAssistantDefaultEnabled, setCreationAssistantDefaultEnabledState] = useState(
+    readStoredCreationAssistantEnabled
+  );
+  const setCreationAssistantDefaultEnabled = useCallback((enabled: boolean) => {
+    setCreationAssistantDefaultEnabledState(enabled);
+    writeStoredCreationAssistantEnabled(enabled);
+  }, []);
 
   // Per-chat engine override (empty = use global)
   const [engine, setEngineState] = useState(() => {
@@ -1808,6 +1820,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const id = genId();
     const title = options?.title?.trim() || '新对话';
     const now = Date.now();
+    const requestedCreationAssistantEnabled = options?.sessionWorkbenchState?.creationAssistantEnabled;
+    const initialSessionWorkbenchState: SessionWorkbenchState = {
+      ...(options?.sessionWorkbenchState || {}),
+      creationAssistantEnabled: typeof requestedCreationAssistantEnabled === 'boolean'
+        ? requestedCreationAssistantEnabled
+        : creationAssistantDefaultEnabled,
+    };
     const initialMessages: ChatMessage[] = (options?.messages || []).map((message, index) => ({
       ...message,
       id: message.id || genId(),
@@ -1815,7 +1834,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }));
     const baseSession: ChatSession = {
       id, title, model, engine: engine || undefined, messages: initialMessages,
-      conversationMode: options?.sessionWorkbenchState?.conversationMode,
+      conversationMode: initialSessionWorkbenchState.conversationMode,
       agentBinding: options?.agentBinding ? {
         agentName: options.agentBinding.agentName,
         team: options.agentBinding.team,
@@ -1823,16 +1842,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         createdAt: now,
         updatedAt: now,
       } : undefined,
-      sessionWorkbenchState: options?.sessionWorkbenchState,
+      sessionWorkbenchState: initialSessionWorkbenchState,
       createdAt: now, updatedAt: now,
     };
     const conversationMode = resolveConversationMode(baseSession, { runStatusById });
+    const creationAssistantEnabled = resolveCreationAssistantEnabled(baseSession);
     const session: ChatSession = {
       ...baseSession,
       conversationMode,
       sessionWorkbenchState: {
         ...(baseSession.sessionWorkbenchState || {}),
-        creationAssistantEnabled: resolveCreationAssistantEnabled(baseSession),
+        creationAssistantEnabled,
+        creationTag: typeof baseSession.sessionWorkbenchState?.creationTag === 'boolean'
+          ? baseSession.sessionWorkbenchState.creationTag
+          : creationAssistantEnabled,
         conversationMode,
       },
     };
@@ -1851,7 +1874,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setActiveSessionId(id);
     apiCreateSession(session).catch(console.error);
     return id;
-  }, [model, engine, runStatusById]);
+  }, [creationAssistantDefaultEnabled, model, engine, runStatusById]);
 
   const deleteSession = useCallback((id: string) => {
     const sessionToDelete = sessions.find((session) => session.id === id)
@@ -2472,6 +2495,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             message: text,
             mode: 'standalone-chat',
             runtimeSessionId: shouldStartFresh ? undefined : (previousSession.runtimeSessionId || undefined),
+            frontendSessionId: targetSessionId,
             workingDirectory: targetWorkingDirectory || undefined,
             requestedMcpServers: mcpSettingsRef.current,
           }),
@@ -2522,6 +2546,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             message: text,
             mode: 'workflow-chat',
             runtimeSessionId: shouldStartFresh ? undefined : (previousSession.runtimeSessionId || workflowBinding.supervisorSessionId || undefined),
+            frontendSessionId: targetSessionId,
             workingDirectory: targetWorkingDirectory || undefined,
             workflowContext: {
               configFile: workflowBinding.configFile,
@@ -3168,6 +3193,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sendMessage, compactActiveSession, stopStreaming, deleteMessage, retryFromMessage, continueFromMessage,
       loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId,
       markSessionStreaming, unmarkSessionStreaming, model, setModel: handleSetModel,
+      creationAssistantDefaultEnabled, setCreationAssistantDefaultEnabled,
       engine, effectiveEngine, isModelSelectionReady, setEngine: handleSetEngine,
       confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,

@@ -1,0 +1,91 @@
+import { requireAdmin } from '@/lib/auth/middleware';
+import { createMemoryService, MemoryServiceError } from '@/lib/memory-v2';
+import { recordMemoryV2CutoverEvent } from '@/lib/memory-v2-cutover/telemetry';
+import { jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
+import {
+  createMemoryV2ReviewerContext,
+  ensureMemoryV2GovernanceReady,
+  memoryV2RouteError,
+} from '../../_shared';
+
+export const dynamic = 'force-dynamic';
+
+const ALLOWED_QUERY_KEYS = new Set(['memoryId', 'detailVersion', 'cursor', 'maxChars']);
+const MAX_CURSOR_CHARS = 4_096;
+const MAX_DETAIL_PAGE_CHARS = 8_000;
+
+interface DetailPageRequest {
+  memoryId: string;
+  detailVersion: number;
+  cursor?: string;
+  maxChars?: number;
+}
+
+function parsePositiveInteger(value: string, label: string, maximum: number): number {
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new MemoryServiceError('MEMORY_INVALID_INPUT', `${label} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > maximum) {
+    throw new MemoryServiceError('MEMORY_INVALID_INPUT', `${label} is outside the allowed range`);
+  }
+  return parsed;
+}
+
+function parseDetailPageRequest(request: Request): DetailPageRequest {
+  const url = requestUrl(request);
+  for (const key of Array.from(url.searchParams.keys())) {
+    if (!ALLOWED_QUERY_KEYS.has(key)) {
+      throw new MemoryServiceError('MEMORY_INVALID_INPUT', `unsupported governance detail query parameter: ${key}`);
+    }
+  }
+  const memoryIds = url.searchParams.getAll('memoryId');
+  if (memoryIds.length !== 1 || !memoryIds[0].trim()) {
+    throw new MemoryServiceError('MEMORY_INVALID_INPUT', 'memoryId is required exactly once');
+  }
+  const versions = url.searchParams.getAll('detailVersion');
+  if (versions.length !== 1) {
+    throw new MemoryServiceError('MEMORY_INVALID_INPUT', 'detailVersion is required exactly once');
+  }
+  const cursors = url.searchParams.getAll('cursor');
+  if (cursors.length > 1 || (cursors[0] !== undefined && (!cursors[0] || cursors[0].length > MAX_CURSOR_CHARS))) {
+    throw new MemoryServiceError('MEMORY_INVALID_INPUT', 'cursor is invalid');
+  }
+  const maxCharsValues = url.searchParams.getAll('maxChars');
+  if (maxCharsValues.length > 1 || (maxCharsValues.length === 1 && !maxCharsValues[0])) {
+    throw new MemoryServiceError('MEMORY_INVALID_INPUT', 'maxChars must be supplied once as a positive integer');
+  }
+  return {
+    memoryId: memoryIds[0],
+    detailVersion: parsePositiveInteger(versions[0], 'detailVersion', Number.MAX_SAFE_INTEGER),
+    ...(cursors[0] ? { cursor: cursors[0] } : {}),
+    ...(maxCharsValues.length ? { maxChars: parsePositiveInteger(maxCharsValues[0], 'maxChars', MAX_DETAIL_PAGE_CHARS) } : {}),
+  };
+}
+
+export async function GET(request: Request) {
+  const auth = await requireAdmin(request);
+  if (auth instanceof Response) return auth;
+  const unavailable = await ensureMemoryV2GovernanceReady();
+  if (unavailable) return unavailable;
+
+  try {
+    const pageRequest = parseDetailPageRequest(request);
+    const service = createMemoryService();
+    try {
+      const page = service.readGovernanceDetails({
+        context: createMemoryV2ReviewerContext(auth),
+        memoryId: pageRequest.memoryId,
+        detailVersion: pageRequest.detailVersion,
+        ...(pageRequest.cursor ? { cursor: pageRequest.cursor } : {}),
+        ...(pageRequest.maxChars ? { maxChars: pageRequest.maxChars } : {}),
+      });
+      recordMemoryV2CutoverEvent('governanceDetailReads');
+      return jsonOk({ page });
+    } finally {
+      service.close();
+    }
+  } catch (error) {
+    return memoryV2RouteError(error);
+  }
+}

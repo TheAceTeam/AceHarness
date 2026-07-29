@@ -24,26 +24,11 @@ import {
   type AgentCreationItemKind,
   type AgentCreationItemResult,
 } from '@/lib/ai/agent-creation-items';
-import {
-  buildWorkflowExperiencePromptBlock,
-  findRelevantWorkflowExperiences,
-} from '@/lib/workflow/experience-store';
-import {
-  buildMemoryPromptBlock,
-  listMemoryEntries,
-} from '@/lib/workflow/memory-store';
 import { getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
-import { listAgentRelationships } from '@/lib/agent/relationship-store';
 import { formatValidationIssuesForResponse, validateAgentDraft } from '@/lib/core/creator-validation';
 import type { ClarificationFormResult } from '@/lib/ai/result-normalizers';
 
 export type AgentDraftRecommendation = {
-  experiences: Array<{
-    runId: string;
-    workflowName?: string;
-    configFile: string;
-    summary: string;
-  }>;
   referenceWorkflow: null | {
     filename: string;
     name?: string;
@@ -53,12 +38,6 @@ export type AgentDraftRecommendation = {
     phases: string[];
     states: string[];
   };
-  relationshipHints: Array<{
-    agent: string;
-    counterpart: string;
-    synergyScore: number;
-    strengths: string[];
-  }>;
 };
 
 export type AgentDraftStreamEvent =
@@ -410,7 +389,6 @@ function collectWorkflowAgents(referenceConfig: any): string[] {
 function buildReferenceWorkflowPromptBlock(input: {
   referenceWorkflow?: string;
   referenceConfig?: any;
-  relationshipHints: string[];
 }): string {
   if (!input.referenceWorkflow || !input.referenceConfig) return '';
 
@@ -429,33 +407,18 @@ function buildReferenceWorkflowPromptBlock(input: {
     phaseNames.length ? `- 阶段: ${phaseNames.slice(0, 6).join('、')}` : '',
     stateNames.length ? `- 状态: ${stateNames.slice(0, 6).join('、')}` : '',
     agentNames.length ? `- 已有角色: ${agentNames.slice(0, 10).join('、')}` : '',
-    input.relationshipHints.length ? '- 相关协作关系:' : '',
-    ...input.relationshipHints.map((line) => `  - ${line}`),
     '- 要求: 如果当前要创建的 Agent 与参考工作流中的角色职责接近，请复用其分工风格、命名粒度和能力边界；如果是补位角色，请避免与现有角色重复。',
   ].filter(Boolean).join('\n');
 }
 
 function buildDraftRecommendations(input: {
-  relatedExperiences: Awaited<ReturnType<typeof findRelevantWorkflowExperiences>>;
   referenceWorkflow?: string;
   referenceConfig?: any;
-  relationshipEntries: Array<{
-    agent: string;
-    counterpart: string;
-    synergyScore: number;
-    strengths: string[];
-  }>;
 }): AgentDraftRecommendation {
   const workflow = input.referenceConfig?.workflow || {};
   const context = input.referenceConfig?.context || {};
 
   return {
-    experiences: input.relatedExperiences.slice(0, 3).map((entry) => ({
-      runId: entry.runId,
-      workflowName: entry.workflowName,
-      configFile: entry.configFile,
-      summary: entry.summary,
-    })),
     referenceWorkflow: input.referenceWorkflow && input.referenceConfig ? {
       filename: input.referenceWorkflow,
       name: typeof workflow.name === 'string' ? workflow.name : undefined,
@@ -469,7 +432,6 @@ function buildDraftRecommendations(input: {
         ? workflow.states.map((state: any) => state?.name).filter((value: unknown): value is string => typeof value === 'string').slice(0, 8)
         : [],
     } : null,
-    relationshipHints: input.relationshipEntries.slice(0, 8),
   };
 }
 
@@ -710,20 +672,7 @@ export async function generateAgentDraft(
     '自然语言说明保持简短，结构化字段使用用户输入语言。',
   ].join('\n');
 
-  progress('context', '正在读取历史经验、项目记忆和参考工作流。');
-  const relatedExperiences = await findRelevantWorkflowExperiences({
-    requirements: [mission, specialties].filter(Boolean).join('\n'),
-    projectRoot: workingDirectory || undefined,
-    workflowName: displayName,
-    limit: 3,
-  }).catch(() => []);
-  const projectMemories = workingDirectory
-    ? await listMemoryEntries({
-        scope: 'project',
-        key: workingDirectory,
-        limit: 3,
-      }).catch(() => [])
-    : [];
+  progress('context', '正在读取参考工作流。');
 
   let referenceConfig: any = null;
   if (referenceWorkflow) {
@@ -736,37 +685,13 @@ export async function generateAgentDraft(
     }
   }
 
-  const referenceAgents = referenceConfig ? collectWorkflowAgents(referenceConfig).slice(0, 6) : [];
-  const relationshipEntries = (await Promise.all(
-    referenceAgents.map(async (agentName) => {
-      const relations = await listAgentRelationships(agentName, 3).catch(() => []);
-      return relations
-        .filter((item) => referenceAgents.includes(item.counterpart))
-        .slice(0, 2)
-        .map((item) => ({
-          agent: agentName,
-          counterpart: item.counterpart,
-          synergyScore: item.synergyScore,
-          strengths: item.strengths.slice(0, 2),
-        }));
-    })
-  )).flat();
-  const experienceBlock = buildWorkflowExperiencePromptBlock(relatedExperiences, '与当前角色职责相关的历史经验');
-  const projectMemoryBlock = buildMemoryPromptBlock('当前工程的项目记忆', projectMemories, { maxItems: 3 });
   const referenceWorkflowBlock = buildReferenceWorkflowPromptBlock({
     referenceWorkflow,
     referenceConfig,
-    relationshipHints: Array.from(new Set(
-      relationshipEntries.map((item) => (
-        `${item.agent} <-> ${item.counterpart} 协作倾向 ${item.synergyScore >= 0 ? '+' : ''}${item.synergyScore}${item.strengths.length ? `，强项：${item.strengths.join('；')}` : ''}`
-      ))
-    )).slice(0, 8),
   });
   const recommendations = buildDraftRecommendations({
-    relatedExperiences,
     referenceWorkflow,
     referenceConfig,
-    relationshipEntries,
   });
 
   const prompt = buildAgentDraftPrompt({
@@ -783,8 +708,6 @@ export async function generateAgentDraft(
     specialties,
     workingDirectory,
     referenceWorkflow,
-    experienceBlock,
-    projectMemoryBlock,
     referenceWorkflowBlock,
   });
 
@@ -805,7 +728,7 @@ export async function generateAgentDraft(
       draft: validation.normalized || draft,
       raw: JSON.stringify(draft, null, 2),
       fallback: true,
-      experienceHints: relatedExperiences,
+      experienceHints: [],
       recommendations,
       validation: formatValidationIssuesForResponse(validation),
       sessionId: null,
@@ -973,7 +896,7 @@ export async function generateAgentDraft(
       repairEvents,
       protocol: 'agent-creation-items',
       initialRaw,
-      experienceHints: relatedExperiences,
+      experienceHints: [],
       recommendations,
       validation: formattedValidation,
       sessionId: currentSessionId || null,

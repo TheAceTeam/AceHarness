@@ -85,6 +85,7 @@ export default function ChatModal() {
   const [messages, setMessages] = useState<Message[]>(createInitialMessages);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [frontendSessionId, setFrontendSessionId] = useState<string | null>(null);
   const [model, setModel] = useState('');
   const [engine, setEngine] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -128,10 +129,37 @@ export default function ChatModal() {
     }]);
     setLoading(true);
     try {
+      // The server generates this lookup key and binds it to the authenticated
+      // owner. It is reused only as a Memory V2 session lookup key.
+      let memorySessionId = frontendSessionId;
+      if (!memorySessionId) {
+        const sessionResponse = await fetch('/api/chat/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({
+            title: '轻聊',
+            model: effectiveModel,
+            engine: effectiveEngine,
+          }),
+        });
+        const sessionData = await sessionResponse.json().catch(() => null);
+        memorySessionId = normalizeSessionId(sessionData?.session?.id);
+        if (!sessionResponse.ok || !memorySessionId) {
+          throw new Error(sessionData?.error || '创建对话会话失败');
+        }
+        setFrontendSessionId(memorySessionId);
+      }
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ message: trimmed, model: effectiveModel, engine: effectiveEngine, sessionId }),
+        body: JSON.stringify({
+          message: trimmed,
+          model: effectiveModel,
+          engine: effectiveEngine,
+          sessionId,
+          frontendSessionId: memorySessionId,
+        }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -179,6 +207,7 @@ export default function ChatModal() {
   const clearChat = () => {
     setMessages(createInitialMessages());
     setSessionId(null);
+    setFrontendSessionId(null);
     setDraft('');
   };
   const handleClose = () => {

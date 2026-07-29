@@ -92,7 +92,17 @@ const API_DATA: ApiCategory[] = [
       { method: 'POST', path: '/api/workflow/start', description: '启动工作流执行', requestBody: '{ configFile: string }', response: '{ success, message }' },
       { method: 'POST', path: '/api/workflow/stop', description: '停止运行中的工作流', response: '{ success, message }' },
       { method: 'GET', path: '/api/workflow/status?configFile=file', description: '获取当前工作流状态（可按 configFile 指定）', response: '{ status, runId, currentPhase, currentStep, agents, ... }' },
-      { method: 'POST', path: '/api/workflow/resume', description: '恢复暂停的工作流', requestBody: '{ runId, action?: "iterate"|"approve", feedback? }', response: '{ success, message }' },
+      {
+        method: 'POST',
+        path: '/api/workflow/resume',
+        description: '恢复暂停的工作流',
+        requestBody: '{ runId, action?: "iterate"|"approve", feedback? }',
+        response: '{ success, message }',
+        notes: [
+          '状态机恢复会同步等待配置、Agent、引擎、MCP 和 Git 基线完成启动；不会等待整个工作流执行完成。',
+          '客户端和反向代理的超时预算至少为 120 秒；初始化更慢的部署应提高该预算。请求未返回前不要重试，竞争恢复返回 409。',
+        ],
+      },
       { method: 'GET', path: '/api/workflow/events', description: 'SSE 事件流，实时推送工作流进度', response: 'text/event-stream: status, phase, step, result, checkpoint ...', notes: ['SSE 调试会只读取前几秒的输出片段。'] },
       { method: 'POST', path: '/api/workflow/force-transition', description: '强制状态机跳转到目标状态', requestBody: '{ targetState, instruction?, configFile? }', response: '{ success, message }' },
       { method: 'POST', path: '/api/workflow/force-complete', description: '强制完成当前执行中的步骤', response: '{ success, step, outputLength }' },

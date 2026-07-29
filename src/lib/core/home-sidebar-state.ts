@@ -381,6 +381,7 @@ export interface HomeSidebarHint {
 export interface SessionWorkbenchState {
   conversationMode?: 'plain' | 'agent-chat' | 'workflow-drafting' | 'workflow-running' | 'workflow-completed';
   creationAssistantEnabled?: boolean;
+  creationTag?: boolean;
   homeSidebar?: HomeSidebarHint | null;
   rightRail?: {
     collapsed?: boolean;
@@ -431,6 +432,24 @@ export interface CreationAssistantSessionLike {
   workflowBinding?: unknown;
   agentBinding?: unknown;
   sessionWorkbenchState?: SessionWorkbenchState | null;
+}
+
+export const CREATION_ASSISTANT_DEFAULT_STORAGE_KEY = 'csiharness:chat:creation-assistant-default';
+
+export function readStoredCreationAssistantEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    return window.localStorage.getItem(CREATION_ASSISTANT_DEFAULT_STORAGE_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+export function writeStoredCreationAssistantEnabled(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(CREATION_ASSISTANT_DEFAULT_STORAGE_KEY, enabled ? 'true' : 'false');
+  } catch {}
 }
 
 export function resolveCreationAssistantEnabled(

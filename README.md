@@ -19,7 +19,7 @@
 </p>
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
   
@@ -74,7 +74,7 @@ CSIHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工
 
 ### 前置条件
 
-- Node.js `>= 20` / npm `>= 9`：运行 Next.js 服务与 npm CLI 包
+- Node.js `>= 22.13.0` / npm `>= 9`：运行 CSIHarness 服务与 npm CLI 包
 - AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli`、`magic-cli` 等至少一种
 
 ### 安装与运行
@@ -105,16 +105,16 @@ git clone https://gitcode.com/Cangjie-SIG/ACEHarness.git && cd ACEHarness
 npm install
 
 # 本地调试：npm run dev 会先构建 CLI，再启动开发服务
-CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3000 npm run dev
+CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3001 npm run dev
 
 # Windows PowerShell:
 # $env:CSIHARNESS_HOST="0.0.0.0"
-# $env:CSIHARNESS_PORT="3000"
+# $env:CSIHARNESS_PORT="3001"
 # npm run dev
 
 # 生产模式：首次启动或代码更新后先构建
 npm run build
-CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3000 npm start
+CSIHARNESS_HOST=0.0.0.0 CSIHARNESS_PORT=3001 npm start
 ```
 
 启动后访问 `http://127.0.0.1:3001`。如果使用 PowerShell 运行生产模式，同样先设置 `$env:CSIHARNESS_HOST` 和 `$env:CSIHARNESS_PORT`，再执行 `npm start`。
@@ -178,15 +178,15 @@ CSIHarness 的配置主要由启动向导、引擎管理页和环境变量共同
 
 ### CSIHarness Service
 
-`server.js` 会在启动时加载 `.env`、`.env.local` 以及当前模式对应的 `.env.development*` / `.env.production*`；shell、进程管理器或启动脚本里已存在的环境变量优先级更高，不会被文件覆盖。
+启动器会在启动时加载 `.env`、`.env.local` 以及当前模式对应的 `.env.development*` / `.env.production*`；shell、进程管理器或启动脚本里已存在的环境变量优先级更高，不会被文件覆盖。
 
 核心启动与运行目录变量：
 
 | 变量 | 说明 | 默认值 / 优先级 |
 |------|------|-----------------|
 | `CSIHARNESS_HOST` | 服务监听地址 | `127.0.0.1` |
-| `CSIHARNESS_PORT` | CSIHarness 服务端口 | `3000` |
-| `PORT` | 通用服务端口 | 优先级高于 `CSIHARNESS_PORT` |
+| `CSIHARNESS_PORT` | CSIHarness 服务端口 | `3001` |
+| `PORT` | 通用服务端口 | 仅在未设置 `CSIHARNESS_PORT` 时作为回退 |
 | `BASEURL` / `BASE_URL` | 反向代理子路径或站点前缀，用于生成应用路由和静态资源访问前缀 | 未设置时为空；示例：`/ace` 或 `https://example.com/ace` |
 | `CSIHARNESS_HOME` | CSIHarness 运行根目录，决定 `config/`、`data/`、`cache/`、`logs/`、`workspace/` 等运行时数据位置 | 未设置时按平台回退 |
 | `APPDATA` | Windows 下 `CSIHARNESS_HOME` 的回退根目录 | `<APPDATA>/CSIHarness` |
@@ -210,7 +210,7 @@ Windows PowerShell:
 ```powershell
 $env:BASEURL="/ace"
 $env:CSIHARNESS_HOST="127.0.0.1"
-$env:CSIHARNESS_PORT="3000"
+$env:CSIHARNESS_PORT="3001"
 npm run dev
 ```
 | `CSIHARNESS_INSTALL_ROOT` | 安装根目录；用于定位 `configs/`、`dist/` 等安装内容 | 未设置时由启动器自动设为当前安装目录 |
@@ -219,9 +219,6 @@ npm run dev
 | `LC_ALL` | 语言回退变量 | 在 `CSIHARNESS_LOCALE`、`LANG` 未设置时参与解析 |
 | `NODE_ENV` | 运行模式；同时影响 `.env*` 加载和部分调试默认值 | `production`（受管服务子进程默认如此） |
 | `CSIHARNESS_MAX_OLD_SPACE_MB` | 服务进程 V8 老生代堆上限（MB），覆盖自动计算值 | 默认按物理内存 60% 取值，夹在 `4096`–`8192` |
-| `CSIHARNESS_MEM_WATCHDOG` | 内存看门狗开关；超阈值时在 OOM 前优雅重启 | 默认开启；设为 `0` 关闭 |
-| `CSIHARNESS_MEM_SOFT_PCT` | 软阈值（占堆上限比例）；仅在空闲时触发优雅重启 | `0.80` |
-| `CSIHARNESS_MEM_HARD_PCT` | 硬阈值（占堆上限比例）；无条件强制重启以避免 OOM | `0.92` |
 | `CSIHARNESS_MANAGED` | 内部标记：标识服务进程受 daemon 监管，允许看门狗自重启 | 由 CLI 自动设置，无需手动配置 |
 
 对外地址与渠道恢复变量：
@@ -240,6 +237,7 @@ CSIHarness 现已支持把工作流运行时对话、人工检查点和多 Agent
 
 ## 文档
 
+- [工作流模板用户指南](./docs/workflow-templates.md)：将现有工作流另存为模板，以及通过内置、个人或团队模板创建工作流
 - [工作流案例](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/workflow-cases.md)：四个真实/复盘案例的完整细节
 - [ACP Code Agent 集成检查清单](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/acp-code-agent-integration-checklist.md)：ACP Code Agent 接入与验证参考
 - [一人公司模式功能介绍](./docs/one-person-company-mode.md)：基于 `/office` 的个人 AI 团队、组织草案、工位协作和记忆模式说明

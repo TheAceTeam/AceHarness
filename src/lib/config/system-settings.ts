@@ -18,7 +18,13 @@ export interface SystemSettings {
     onePersonCompanyOnboardingSeen?: boolean;
   };
   agentMemory?: {
+    /** Enables new AI memory capture. It does not suppress index-only reads. */
+    captureEnabled?: boolean;
+    /** Controls how long-memory proposals enter the server lifecycle. */
+    governanceMode?: 'manual' | 'review' | 'auto';
+    /** @deprecated Read only for settings written before Memory V2. */
     runtimeEnabled?: boolean;
+    /** @deprecated Read only for settings written before Memory V2. */
     persistMode?: 'manual' | 'review' | 'auto';
   };
   runtimeControls?: {
@@ -55,13 +61,24 @@ export function normalizeWorkspaceExperienceSettings(settings?: SystemSettings['
   };
 }
 
-export function normalizeAgentMemorySettings(settings?: SystemSettings['agentMemory']): Required<NonNullable<SystemSettings['agentMemory']>> {
-  const persistMode = settings?.persistMode === 'manual' || settings?.persistMode === 'auto'
-    ? settings.persistMode
-    : 'review';
+export interface NormalizedAgentMemorySettings {
+  captureEnabled: boolean;
+  governanceMode: 'manual' | 'review' | 'auto';
+}
+
+export function normalizeAgentMemorySettings(settings?: SystemSettings['agentMemory']): NormalizedAgentMemorySettings {
+  const governanceMode = settings?.governanceMode === 'manual' || settings?.governanceMode === 'auto'
+    ? settings.governanceMode
+    : settings?.governanceMode === 'review'
+      ? settings.governanceMode
+      : settings?.persistMode === 'manual' || settings?.persistMode === 'auto'
+        ? settings.persistMode
+        : 'review';
   return {
-    runtimeEnabled: Boolean(settings?.runtimeEnabled),
-    persistMode,
+    captureEnabled: settings?.captureEnabled === undefined
+      ? Boolean(settings?.runtimeEnabled)
+      : Boolean(settings.captureEnabled),
+    governanceMode,
   };
 }
 

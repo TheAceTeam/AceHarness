@@ -397,6 +397,7 @@ async function handleAgentChatMessage(binding: ChannelSessionBinding, integratio
     message: applyWechatReplyGuardrail(integration, message.text),
     mode: status ? 'workflow-chat' : 'standalone-chat',
     sessionId: binding.agentSessionId || null,
+    frontendSessionId: binding.frontendSessionId || null,
     workingDirectory: user.personalDir,
     workflowContext: status ? buildWorkflowContext(binding, status) : null,
     userContext: {

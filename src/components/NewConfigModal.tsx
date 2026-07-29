@@ -75,6 +75,7 @@ import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { cn } from '@/lib/core/utils';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { useCreateConfigMutation, useValidateConfigMutation } from '@/client/query/workflow-mutations';
+import WorkflowTemplateBrowser from '@/components/workflow-templates/WorkflowTemplateBrowser';
 
 const MonacoEditor = dynamic(
   async () => {
@@ -115,7 +116,6 @@ const SPEC_LANGUAGE_RULE = [
 const PERSIST_SPEC_MODE_STORAGE_KEY = 'aceharness.newConfig.persistMode';
 const PERSIST_SPEC_ROOT_STORAGE_KEY = 'aceharness.newConfig.specRoot';
 const SPEC_PLANNING_ENABLED_STORAGE_KEY = 'aceharness.newConfig.specPlanningEnabled';
-const WORKFLOW_EXPERIENCE_ENABLED_STORAGE_KEY = 'aceharness.newConfig.workflowExperienceEnabled';
 
 function normalizePersistSpecValues(values: { persistMode?: string; specRoot?: string }) {
   const persistMode = values.persistMode === 'repository' ? 'repository' : 'none';
@@ -685,15 +685,9 @@ type ReferenceWorkflowSummary = {
   mode?: 'phase-based' | 'state-machine';
 };
 
+type WorkflowCreationSource = 'custom' | 'template';
+
 type WorkflowCreationRecommendations = {
-  experiences: Array<{
-    runId: string;
-    workflowName?: string;
-    configFile: string;
-    summary: string;
-    experience: string[];
-    nextFocus: string[];
-  }>;
   referenceWorkflow: null | {
     filename: string;
     name?: string;
@@ -701,36 +695,12 @@ type WorkflowCreationRecommendations = {
     mode: 'phase-based' | 'state-machine';
     agents: string[];
     supervisorAgent?: string;
-    source?: 'manual' | 'recommended-experience';
-    autoApply?: boolean;
   };
   recommendedAgents: string[];
   recommendedSupervisorAgent?: string;
   availableStepAgents?: string[];
   availableSupervisorAgents?: string[];
-  relationshipHints: Array<{
-    agent: string;
-    counterpart: string;
-    synergyScore: number;
-    strengths: string[];
-    lastConfigFile?: string;
-  }>;
 };
-
-function filterWorkflowExperienceRecommendations(
-  recommendations: WorkflowCreationRecommendations | null,
-  enabled: boolean,
-): WorkflowCreationRecommendations | null {
-  if (!recommendations || enabled) return recommendations;
-  const referenceWorkflow = recommendations.referenceWorkflow?.source === 'recommended-experience'
-    ? null
-    : recommendations.referenceWorkflow;
-  return {
-    ...recommendations,
-    experiences: [],
-    referenceWorkflow,
-  };
-}
 
 type CreationStageKey = 'clarification' | 'specPlanning' | 'workflowDraft';
 
@@ -1531,7 +1501,7 @@ function PlanningContextSnapshot({
     { label: '文件名', value: filename || '自动生成' },
     { label: '工作目录', value: workingDirectory || '未选择' },
     { label: '运行方式', value: workspaceMode === 'isolated-copy' ? '隔离副本' : '原地执行' },
-    { label: '工作流模板', value: referenceWorkflow || '无' },
+    { label: '参考工作流', value: referenceWorkflow || '无' },
   ];
   const requirementText = clipContextText(requirements || description, 260);
   const clarificationSummary = [
@@ -1686,16 +1656,13 @@ function buildCreationRecommendationsPrompt(recommendations: WorkflowCreationRec
   if (recommendations.referenceWorkflow) {
     sections.push([
       '**编排参考骨架**',
-      `- 工作流模板: ${recommendations.referenceWorkflow.name || recommendations.referenceWorkflow.filename}`,
+      `- 参考工作流: ${recommendations.referenceWorkflow.name || recommendations.referenceWorkflow.filename}`,
       `- 模式: ${recommendations.referenceWorkflow.mode === 'state-machine' ? '状态机' : '阶段式'}`,
       recommendations.referenceWorkflow.agents.length
         ? `- 可优先复用的角色: ${recommendations.referenceWorkflow.agents.join('、')}`
         : '',
       recommendations.referenceWorkflow.supervisorAgent
         ? `- 可复用指挥官: ${recommendations.referenceWorkflow.supervisorAgent}`
-        : '',
-      recommendations.referenceWorkflow.autoApply
-        ? '- 当前若未手动指定工作流模板，系统会自动采用这份骨架参与生成'
         : '',
     ].filter(Boolean).join('\n'));
   }
@@ -1708,24 +1675,6 @@ function buildCreationRecommendationsPrompt(recommendations: WorkflowCreationRec
       recommendations.availableStepAgents?.length ? `- 可用普通执行 Agent: ${recommendations.availableStepAgents.join('、')}` : '',
       '- 若未手动覆盖，生成 workflow 草案时应优先采用该编队，而不是回退到固定占位角色',
     ].filter(Boolean).join('\n'));
-  }
-
-  if (recommendations.relationshipHints.length) {
-    sections.push([
-      '**高协同编队建议**',
-      ...recommendations.relationshipHints.slice(0, 4).map((item) => (
-        `- ${item.agent} × ${item.counterpart}：协作倾向 ${item.synergyScore >= 0 ? '+' : ''}${item.synergyScore}${item.strengths.length ? `，强项 ${item.strengths.join('、')}` : ''}`
-      )),
-    ].join('\n'));
-  }
-
-  if (recommendations.experiences.length) {
-    sections.push([
-      '**相关历史经验**',
-      ...recommendations.experiences.slice(0, 3).map((item) => (
-        `- ${item.workflowName || item.configFile}：${item.summary}${item.experience[0] ? `；经验 ${item.experience[0]}` : ''}${item.nextFocus[0] ? `；后续重点 ${item.nextFocus[0]}` : ''}`
-      )),
-    ].join('\n'));
   }
 
   return sections.join('\n\n');
@@ -1964,7 +1913,7 @@ function CreationStageStepper({ currentStep }: { currentStep: 1 | 2 | 3 | 4 }) {
     {
       step: 1 as const,
       title: '需求澄清',
-      description: '确认目标、约束、工作目录与工作流模板',
+      description: '确认目标、约束、工作目录与参考工作流',
     },
     {
       step: 2 as const,
@@ -2679,6 +2628,7 @@ export default function NewConfigModal({
   const { resolvedTheme } = useTheme();
   const validateConfigMutation = useValidateConfigMutation();
   const createConfigMutation = useCreateConfigMutation();
+  const [creationSource, setCreationSource] = useState<WorkflowCreationSource>('custom');
   const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>(initialMode || 'phase-based');
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
   const [formStep, setFormStep] = useState<1 | 2 | 3 | 4 | 5>(1);
@@ -2759,7 +2709,6 @@ export default function NewConfigModal({
   const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(null);
   const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(null);
   const [specPlanningEnabled, setSpecPlanningEnabled] = useState(true);
-  const [workflowExperienceEnabled, setWorkflowExperienceEnabled] = useState(true);
   const requirementsSectionRef = useRef<HTMLDivElement | null>(null);
   const requirementsInputRef = useRef<HTMLTextAreaElement | null>(null);
   const draftBootstrapStartedRef = useRef(false);
@@ -2840,20 +2789,8 @@ export default function NewConfigModal({
   const filteredReferenceWorkflows = useMemo(() => (
     referenceWorkflows.filter((workflow) => normalizeReferenceWorkflowMode(workflow.mode) === referenceWorkflowMode)
   ), [referenceWorkflowMode, referenceWorkflows]);
-  const effectiveCreationRecommendations = useMemo(
-    () => filterWorkflowExperienceRecommendations(creationRecommendations, workflowExperienceEnabled),
-    [creationRecommendations, workflowExperienceEnabled],
-  );
-  const effectiveReferenceWorkflowValue = useMemo(() => {
-    if (referenceWorkflowValue) return referenceWorkflowValue;
-    if (
-      effectiveCreationRecommendations?.referenceWorkflow?.autoApply
-      && normalizeReferenceWorkflowMode(effectiveCreationRecommendations.referenceWorkflow.mode) === referenceWorkflowMode
-    ) {
-      return effectiveCreationRecommendations.referenceWorkflow.filename;
-    }
-    return '';
-  }, [effectiveCreationRecommendations?.referenceWorkflow, referenceWorkflowMode, referenceWorkflowValue]);
+  const effectiveCreationRecommendations = creationRecommendations;
+  const effectiveReferenceWorkflowValue = referenceWorkflowValue || '';
   const recommendedAgents = useMemo(() => effectiveCreationRecommendations?.recommendedAgents || [], [effectiveCreationRecommendations?.recommendedAgents]);
   const handleWorkingDirectoryChange = useCallback((path: string) => {
     setValue('workingDirectory', path, { shouldDirty: true, shouldValidate: true });
@@ -2861,7 +2798,9 @@ export default function NewConfigModal({
   const recommendedSupervisorAgent = effectiveCreationRecommendations?.recommendedSupervisorAgent || 'default-supervisor';
   const creationDialogClassName = creationFullscreen
     ? 'flex h-screen max-h-none w-screen max-w-none flex-col p-0 sm:rounded-none'
-    : 'max-w-4xl flex flex-col p-0 max-h-[90vh]';
+    : creationSource === 'template'
+      ? 'flex max-h-[92vh] w-[96vw] max-w-[1200px] flex-col p-0'
+      : 'max-w-4xl flex flex-col p-0 max-h-[90vh]';
   const creationStageDialogClassName = creationFullscreen
     ? creationDialogClassName
     : 'flex h-[92vh] max-h-[92vh] w-[96vw] max-w-[1600px] flex-col p-0';
@@ -2895,6 +2834,7 @@ export default function NewConfigModal({
     modalWasOpenRef.current = true;
     draftBootstrapStartedRef.current = false;
     draftSessionCreatedInCurrentOpenRef.current = false;
+    setCreationSource('custom');
     if (!resumeCreationSessionId) {
       setPreviewSession(null);
       setPreviewConfigValidation(null);
@@ -2910,7 +2850,6 @@ export default function NewConfigModal({
     const storedMode = localStorage.getItem(PERSIST_SPEC_MODE_STORAGE_KEY);
     const storedRoot = localStorage.getItem(PERSIST_SPEC_ROOT_STORAGE_KEY);
     const storedSpecPlanning = localStorage.getItem(SPEC_PLANNING_ENABLED_STORAGE_KEY);
-    const storedWorkflowExperience = localStorage.getItem(WORKFLOW_EXPERIENCE_ENABLED_STORAGE_KEY);
     if (storedMode === 'repository' || storedMode === 'none') {
       setValue('persistMode', storedMode, { shouldDirty: false, shouldValidate: false });
     }
@@ -2920,9 +2859,6 @@ export default function NewConfigModal({
     if (storedSpecPlanning === '0' || storedSpecPlanning === '1') {
       setSpecPlanningEnabled(storedSpecPlanning !== '0');
     }
-    if (storedWorkflowExperience === '0' || storedWorkflowExperience === '1') {
-      setWorkflowExperienceEnabled(storedWorkflowExperience !== '0');
-    }
   }, [isOpen, resumeCreationSessionId, setValue]);
 
   useEffect(() => {
@@ -2931,8 +2867,7 @@ export default function NewConfigModal({
     localStorage.setItem(PERSIST_SPEC_MODE_STORAGE_KEY, persistModeValue === 'repository' ? 'repository' : 'none');
     localStorage.setItem(PERSIST_SPEC_ROOT_STORAGE_KEY, (specRootValue || '.spec').trim() || '.spec');
     localStorage.setItem(SPEC_PLANNING_ENABLED_STORAGE_KEY, specPlanningEnabled ? '1' : '0');
-    localStorage.setItem(WORKFLOW_EXPERIENCE_ENABLED_STORAGE_KEY, workflowExperienceEnabled ? '1' : '0');
-  }, [isOpen, persistModeValue, specPlanningEnabled, specRootValue, workflowExperienceEnabled]);
+  }, [isOpen, persistModeValue, specPlanningEnabled, specRootValue]);
 
   useEffect(() => {
     if (!isOpen || showReferenceWorkflowOptions) return;
@@ -3035,9 +2970,6 @@ export default function NewConfigModal({
       setClarificationForm(null);
       setClarificationAnswers(session.uiState?.clarificationAnswers || {});
       setPlanningStage(session.uiState?.planningStage || 'idle');
-    }
-    if (typeof session.uiState?.workflowExperienceEnabled === 'boolean') {
-      setWorkflowExperienceEnabled(session.uiState.workflowExperienceEnabled);
     }
     const resolvedStep = Math.max(session.uiState?.formStep || 1, resolveFormStepFromSession(session)) as 1 | 2 | 3 | 4 | 5;
     setFormStep(resolvedStep);
@@ -3148,7 +3080,6 @@ export default function NewConfigModal({
           workingDirectory: workingDirectoryValue || '',
           referenceWorkflow: referenceWorkflowValue || '',
           workflowMode: referenceWorkflowMode,
-          useHistoricalExperience: workflowExperienceEnabled,
         }),
       })
         .then((result) => {
@@ -3172,7 +3103,7 @@ export default function NewConfigModal({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [descriptionValue, isOpen, referenceWorkflowMode, referenceWorkflowValue, requirementsValue, workflowExperienceEnabled, workflowNameValue, workingDirectoryValue]);
+  }, [descriptionValue, isOpen, referenceWorkflowMode, referenceWorkflowValue, requirementsValue, workflowNameValue, workingDirectoryValue]);
 
   useEffect(() => {
     if (restoringSessionRef.current) return;
@@ -3466,6 +3397,14 @@ export default function NewConfigModal({
     setPreviewConfigValidation(null);
     stageSessionsRef.current = {} as Record<CreationStageKey, any>;
   }, [interruptPlanningRun]);
+
+  const handleTemplateInstantiated = useCallback((filename: string) => {
+    resetAll();
+    reset();
+    setCreationSource('custom');
+    onSuccess(filename);
+    onClose();
+  }, [onClose, onSuccess, reset, resetAll]);
 
   // When engine or model changes during workflow creation, restart the AI conversation
   const handleAiEngineChange = (engine: string) => {
@@ -3785,7 +3724,6 @@ export default function NewConfigModal({
           formStep: 1,
           planningStage: 'idle',
           clarificationAnswers: {},
-          workflowExperienceEnabled,
         },
       }),
     });
@@ -3809,7 +3747,6 @@ export default function NewConfigModal({
     generateDefaultFilename,
     getValues,
     workflowMode,
-    workflowExperienceEnabled,
   ]);
 
   const createPreviewSession = useCallback(async (draft?: PlanDraftResult, chatSessionId?: string | null) => {
@@ -3867,7 +3804,6 @@ export default function NewConfigModal({
         planningStage: 'idle',
         clarificationForm: clarificationForm || undefined,
         clarificationAnswers,
-        workflowExperienceEnabled,
       },
     };
     const shouldUpdateExistingSession = Boolean(draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current);
@@ -3898,7 +3834,7 @@ export default function NewConfigModal({
     await bindDraftCreationSessionToChat(data.session);
     await appendCreationSessionTags(data.session, '计划草案已生成');
     return data.session;
-  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowExperienceEnabled, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
 
   const updatePreviewSessionFromPlanDraft = useCallback(async (draft: PlanDraftResult, revisionSummary: string) => {
     if (!previewSession?.id) {
@@ -3961,7 +3897,6 @@ export default function NewConfigModal({
           planningStage: 'idle',
           clarificationForm: clarificationForm || undefined,
           clarificationAnswers,
-          workflowExperienceEnabled,
         },
         revisionSummary,
       }),
@@ -3975,7 +3910,7 @@ export default function NewConfigModal({
     await bindDraftCreationSessionToChat(data.session);
     await appendCreationSessionTags(data.session, '计划草案已修订');
     return data.session;
-  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, effectiveReferenceWorkflowValue, frontendSessionId, getValues, planningFrontendSessionId, previewSession, workflowExperienceEnabled, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, effectiveReferenceWorkflowValue, frontendSessionId, getValues, planningFrontendSessionId, previewSession, workflowMode]);
 
   const ensureDraftCreationSession = useCallback(async (chatSessionId?: string | null) => {
     if (draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current) return draftCreationSessionId;
@@ -4010,7 +3945,6 @@ export default function NewConfigModal({
           formStep: 2,
           planningStage: 'clarifying',
           clarificationAnswers: {},
-          workflowExperienceEnabled,
         },
       }),
     });
@@ -4022,7 +3956,7 @@ export default function NewConfigModal({
     await bindDraftCreationSessionToChat(data.session);
     await appendCreationSessionTags(data.session, '补充问答中');
     return data.session.id as string;
-  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, createInitialDraftCreationSession, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowExperienceEnabled, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, createInitialDraftCreationSession, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
 
   const persistDraftUiState = useCallback(async (input: {
     formStep: 2 | 3 | 4 | 5;
@@ -4043,11 +3977,10 @@ export default function NewConfigModal({
           planningStage: input.planningStage,
           clarificationForm: input.clarificationForm || undefined,
           clarificationAnswers: input.clarificationAnswers || {},
-          workflowExperienceEnabled,
         },
       }),
     }).catch(() => {});
-  }, [ensureDraftCreationSession, planningFrontendSessionId, workflowExperienceEnabled]);
+  }, [ensureDraftCreationSession, planningFrontendSessionId]);
 
   useEffect(() => {
     if (!isOpen || resumeCreationSessionId || !frontendSessionId || draftCreationSessionId || draftBootstrapStartedRef.current || !specPlanningEnabled) return;
@@ -4147,7 +4080,6 @@ export default function NewConfigModal({
             planningStage,
             clarificationForm: clarificationForm || undefined,
             clarificationAnswers,
-            workflowExperienceEnabled,
           },
         }),
       }).catch(() => {});
@@ -4178,7 +4110,6 @@ export default function NewConfigModal({
     planningStage,
     requirementsValue,
     specRootValue,
-    workflowExperienceEnabled,
     workflowMode,
     workflowNameValue,
     workingDirectoryValue,
@@ -4469,9 +4400,9 @@ export default function NewConfigModal({
     const reqs = values.requirements || values.description || '';
     const referenceContext = values.referenceWorkflow && referenceConfig
       ? [
-          `工作流模板：${values.referenceWorkflow}`,
-          '模板摘要：优先参考它体现出的流程骨架、关键检查点和 Agent 协作安排。',
-          '模板 YAML：',
+          `参考工作流：${values.referenceWorkflow}`,
+          '参考工作流摘要：优先参考它体现出的流程骨架、关键检查点和 Agent 协作安排。',
+          '参考工作流 YAML：',
           '```yaml',
           truncateForPrompt(referenceConfig.raw, 4000),
           '```',
@@ -5313,9 +5244,9 @@ export default function NewConfigModal({
 
     const referenceContext = values.referenceWorkflow && referenceConfig
       ? [
-          `工作流模板：${values.referenceWorkflow}`,
-          '优先参考模板体现出的状态/阶段顺序、关键检查点、Agent 协作和失败处理；当前需求明确冲突时再调整。',
-          '模板 YAML：',
+          `参考工作流：${values.referenceWorkflow}`,
+          '优先参考工作流体现出的状态/阶段顺序、关键检查点、Agent 协作和失败处理；当前需求明确冲突时再调整。',
+          '参考工作流 YAML：',
           '```yaml',
           truncateForPrompt(referenceConfig.raw, 8000),
           '```',
@@ -6751,7 +6682,7 @@ export default function NewConfigModal({
                 ) : null}
                 <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                   <div>配置文件：{previewSession.filename}</div>
-                  <div>工作流模板：{previewSession.referenceWorkflow || '无'}</div>
+                  <div>参考工作流：{previewSession.referenceWorkflow || '无'}</div>
                   <div>工作目录：{previewSession.workingDirectory}</div>
                   <div>工作区模式：{previewSession.workspaceMode}</div>
                   <div>计划节点数：{specCoding.phases?.length || 0}</div>
@@ -6921,7 +6852,7 @@ export default function NewConfigModal({
                     <div>文件名：{previewSession.filename}</div>
                     <div>工作流名：{previewSession.workflowName}</div>
                     <div>工作目录：{previewSession.workingDirectory}</div>
-                    <div>工作流模板：{previewSession.referenceWorkflow || '无'}</div>
+                    <div>参考工作流：{previewSession.referenceWorkflow || '无'}</div>
                   </div>
                   <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
                     <div>结构类型：{draftMode === 'state-machine' ? '状态机 workflow' : '阶段式 workflow'}</div>
@@ -7449,7 +7380,21 @@ export default function NewConfigModal({
             </Button>
           </div>
         </div>
-        <form id="new-config-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="flex-1 overflow-auto px-6 space-y-6">
+        <Tabs
+          value={creationSource}
+          onValueChange={(value) => setCreationSource(value === 'template' ? 'template' : 'custom')}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <div className="px-6 pb-3">
+            <TabsList className="grid w-full grid-cols-2 sm:w-[320px]">
+              <TabsTrigger value="custom">自定义新建</TabsTrigger>
+              <TabsTrigger value="template">模板库</TabsTrigger>
+            </TabsList>
+          </div>
+          <TabsContent value="custom" className="m-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
+            {creationSource === 'custom' ? (
+              <>
+                <form id="new-config-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="flex-1 overflow-auto px-6 space-y-6">
           {useSpecPlanningFlow && !hideAiGuided ? (
             <>
               <CreationStageStepper currentStep={1} />
@@ -7567,32 +7512,6 @@ export default function NewConfigModal({
             </div>
           ) : null}
 
-          <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 space-y-1">
-                <Label htmlFor="workflowExperienceEnabled">使用历史经验</Label>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  开启后会召回历史工作流经验，并可能在未手动选择模板时自动采用相近工作流骨架；关闭后只使用当前输入、手动模板和可用 Agent 编队。
-                </p>
-              </div>
-              <Switch
-                id="workflowExperienceEnabled"
-                checked={workflowExperienceEnabled}
-                onCheckedChange={(checked: boolean) => {
-                  setWorkflowExperienceEnabled(Boolean(checked));
-                }}
-              />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant={workflowExperienceEnabled ? 'secondary' : 'outline'}>
-                {workflowExperienceEnabled ? '召回经验' : '不使用经验'}
-              </Badge>
-              <Badge variant="outline">
-                {workflowExperienceEnabled ? '可自动参考历史骨架' : '不自动套历史骨架'}
-              </Badge>
-            </div>
-          </div>
-
           <div className="space-y-2">
             <Label htmlFor="workflowName">
               工作流名称 <span className="text-destructive">*</span>
@@ -7632,7 +7551,7 @@ export default function NewConfigModal({
 
           {showReferenceWorkflowOptions ? (
             <div className="space-y-2">
-              <Label htmlFor="referenceWorkflow">工作流模板（可选）</Label>
+              <Label htmlFor="referenceWorkflow">参考已有工作流（可选）</Label>
               <Select
                 value={referenceWorkflowValue || '__none__'}
                 onValueChange={(value) => {
@@ -7640,13 +7559,13 @@ export default function NewConfigModal({
                 }}
               >
                 <SelectTrigger id="referenceWorkflow">
-                  <SelectValue placeholder={referenceLoading ? '加载工作流模板中...' : '选择一个同类型工作流模板'} />
+                  <SelectValue placeholder={referenceLoading ? '加载参考工作流中...' : '选择一个同类型参考工作流'} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">不使用工作流模板</SelectItem>
+                  <SelectItem value="__none__">不使用参考工作流</SelectItem>
                   {filteredReferenceWorkflows.length === 0 && !referenceLoading ? (
                     <SelectItem value="__empty__" disabled>
-                      暂无同类型工作流模板
+                      暂无同类型参考工作流
                     </SelectItem>
                   ) : null}
                   {filteredReferenceWorkflows.map((workflow) => (
@@ -7657,88 +7576,56 @@ export default function NewConfigModal({
                 </SelectContent>
               </Select>
               {referenceConfigLoading ? (
-                <p className="text-xs text-muted-foreground">正在读取工作流模板结构...</p>
+                <p className="text-xs text-muted-foreground">正在读取参考工作流结构...</p>
               ) : effectiveReferenceWorkflowValue && referenceConfig ? (
-                <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                  <div className="font-medium text-foreground">
-                    {referenceWorkflowValue ? '已选择工作流模板' : '系统自动采用工作流模板'}
-                  </div>
-                  <div>文件：{effectiveReferenceWorkflowValue}</div>
-                  <div>模式：{referenceConfig.config?.workflow?.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
-                  <div>
-                    说明：会尽量继承模板的流程结构、关键节点和 Agent 安排，只更新当前需求与任务说明。
-                    {!referenceWorkflowValue && effectiveCreationRecommendations?.referenceWorkflow?.source === 'recommended-experience'
-                      ? ' 当前未手动指定工作流模板，系统已按相关历史经验自动采用这份骨架。'
-                      : ''}
-                  </div>
-                </div>
+	                <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+	                  <div className="font-medium text-foreground">
+	                    {referenceWorkflowValue ? '已选择参考工作流' : '未选择参考工作流'}
+	                  </div>
+	                  <div>文件：{effectiveReferenceWorkflowValue}</div>
+	                  <div>模式：{referenceConfig.config?.workflow?.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
+	                  <div>
+	                    说明：会尽量继承参考工作流的流程结构、关键节点和 Agent 安排，只更新当前需求与任务说明。
+	                  </div>
+	                </div>
               ) : null}
               <p className="text-xs text-muted-foreground">
                 只能选择同类型工作流；阶段式参考阶段式，状态机参考状态机。
               </p>
               {recommendationsLoading ? (
-                <p className="text-xs text-muted-foreground">正在整理经验库和编队推荐...</p>
+                <p className="text-xs text-muted-foreground">正在整理可用 Agent 编队...</p>
               ) : effectiveCreationRecommendations ? (
               <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-medium">编排推荐</div>
-                  <Badge variant="outline">{workflowExperienceEnabled ? '经验库 + 关系系统' : '关系系统'}</Badge>
+                  <Badge variant="outline">静态配置 + 可用 Agent</Badge>
                 </div>
                 {effectiveCreationRecommendations.referenceWorkflow ? (
                   <div className="rounded-lg border bg-background/80 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">工作流模板骨架</div>
+                    <div className="font-medium text-foreground">历史工作流骨架</div>
                     <div>{effectiveCreationRecommendations.referenceWorkflow.name || effectiveCreationRecommendations.referenceWorkflow.filename}</div>
                     <div>模式：{effectiveCreationRecommendations.referenceWorkflow.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
-                    {effectiveCreationRecommendations.referenceWorkflow.supervisorAgent ? (
-                      <div>指挥官：{effectiveCreationRecommendations.referenceWorkflow.supervisorAgent}</div>
-                    ) : null}
-                    {effectiveCreationRecommendations.referenceWorkflow.autoApply ? (
-                      <div>自动决策：当前未手动指定时，将默认采用这份工作流模板骨架参与预览生成。</div>
-                    ) : null}
-                    {effectiveCreationRecommendations.referenceWorkflow.agents.length ? (
-                      <div>候选角色：{effectiveCreationRecommendations.referenceWorkflow.agents.join('、')}</div>
-                    ) : null}
+	                    {effectiveCreationRecommendations.referenceWorkflow.supervisorAgent ? (
+	                      <div>指挥官：{effectiveCreationRecommendations.referenceWorkflow.supervisorAgent}</div>
+	                    ) : null}
+	                    {effectiveCreationRecommendations.referenceWorkflow.agents.length ? (
+	                      <div>候选角色：{effectiveCreationRecommendations.referenceWorkflow.agents.join('、')}</div>
+	                    ) : null}
                   </div>
                 ) : null}
                 {effectiveCreationRecommendations.recommendedAgents.length || effectiveCreationRecommendations.recommendedSupervisorAgent ? (
                   <div className="rounded-lg border bg-background/80 p-3 text-xs text-muted-foreground space-y-1">
                     <div className="font-medium text-foreground">自动编排决策</div>
                     <div>指挥官：{effectiveCreationRecommendations.recommendedSupervisorAgent || 'default-supervisor'}</div>
-                    {effectiveCreationRecommendations.recommendedAgents.length ? (
-                      <div>默认角色编队：{effectiveCreationRecommendations.recommendedAgents.join('、')}</div>
-                    ) : (
-                      <div>默认角色编队：将回退到基础角色骨架。</div>
-                    )}
-                    <div>当你未手动提供工作流模板时，SpecCoding 预览和 workflow 草案会直接采用这组编排决策。</div>
-                  </div>
-                ) : null}
-                {effectiveCreationRecommendations.relationshipHints.length ? (
-                  <div className="space-y-2">
-                    <div className="text-xs font-medium text-foreground">高协同编队</div>
-                    {effectiveCreationRecommendations.relationshipHints.slice(0, 3).map((item) => (
-                      <div key={`${item.agent}-${item.counterpart}`} className="rounded-lg border bg-background/80 p-3 text-xs text-muted-foreground space-y-1">
-                        <div className="font-medium text-foreground">{item.agent} × {item.counterpart}</div>
-                        <div>协作倾向：{item.synergyScore >= 0 ? '+' : ''}{item.synergyScore}</div>
-                        {item.strengths.length ? <div>强项：{item.strengths.join('、')}</div> : null}
-                        {item.lastConfigFile ? <div>最近出现于：{item.lastConfigFile}</div> : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                {effectiveCreationRecommendations.experiences.length ? (
-                  <div className="space-y-2">
-                    <div className="text-xs font-medium text-foreground">相关历史经验</div>
-                    {effectiveCreationRecommendations.experiences.slice(0, 2).map((item) => (
-                      <div key={item.runId} className="rounded-lg border bg-background/80 p-3 text-xs text-muted-foreground space-y-1">
-                        <div className="font-medium text-foreground">{item.workflowName || item.configFile}</div>
-                        <div>{item.summary}</div>
-                        {item.experience[0] ? <div>经验：{item.experience[0]}</div> : null}
-                        {item.nextFocus[0] ? <div>后续重点：{item.nextFocus[0]}</div> : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+	                    {effectiveCreationRecommendations.recommendedAgents.length ? (
+	                      <div>默认角色编队：{effectiveCreationRecommendations.recommendedAgents.join('、')}</div>
+	                    ) : (
+	                      <div>默认角色编队：将回退到基础角色骨架。</div>
+	                    )}
+	                    <div>SpecCoding 预览和 workflow 草案会使用这组可用 Agent 编队。</div>
+	                  </div>
+	                ) : null}
+	              </div>
               ) : null}
             </div>
           ) : null}
@@ -7865,26 +7752,38 @@ export default function NewConfigModal({
               {...register('description')}
             />
           </div>
-        </form>
+                </form>
 
-        <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
-          <Button type="button" variant="destructive" onClick={handleClose}>
-            取消
-          </Button>
-          <Button
-            type="button"
-            onClick={handleNextStep}
-            disabled={isSubmitting || isGeneratingPlan}
-          >
-            {workflowMode === 'ai-guided'
-              ? specPlanningEnabled
-                ? (isGeneratingPlan ? '生成计划中...' : '下一步')
-                : (isGeneratingPlan ? '生成草案中...' : '直接进入编排')
-              : workflowMode === 'state-machine' && !specPlanningEnabled
-                ? (isSubmitting ? '创建中...' : '创建')
-                : (isSubmitting ? '创建中...' : '创建')}
-          </Button>
-        </div>
+                <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
+                  <Button type="button" variant="destructive" onClick={handleClose}>
+                    取消
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleNextStep}
+                    disabled={isSubmitting || isGeneratingPlan}
+                  >
+                    {workflowMode === 'ai-guided'
+                      ? specPlanningEnabled
+                        ? (isGeneratingPlan ? '生成计划中...' : '下一步')
+                        : (isGeneratingPlan ? '生成草案中...' : '直接进入编排')
+                      : workflowMode === 'state-machine' && !specPlanningEnabled
+                        ? (isSubmitting ? '创建中...' : '创建')
+                        : (isSubmitting ? '创建中...' : '创建')}
+                  </Button>
+                </div>
+              </>
+            ) : null}
+          </TabsContent>
+          <TabsContent value="template" className="m-0 min-h-0 flex-1 overflow-auto px-6 pb-6 data-[state=inactive]:hidden">
+            {creationSource === 'template' ? (
+              <WorkflowTemplateBrowser
+                variant="embedded"
+                onInstantiated={handleTemplateInstantiated}
+              />
+            ) : null}
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

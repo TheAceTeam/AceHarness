@@ -85,6 +85,7 @@ class WorkflowRegistry extends EventEmitter {
   /** All event types that workflow managers emit */
   private static PHASE_EVENTS = [
     'status', 'phase', 'step', 'result', 'checkpoint', 'agents',
+    'log',
     'iteration', 'iteration-complete', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled', 'context-updated',
     'route-decision',
@@ -94,6 +95,7 @@ class WorkflowRegistry extends EventEmitter {
     'force-transition', 'transition-forced', 'human-approval-required',
     'human-question-required', 'human-question-answered', 'human-question-updated',
     'status', 'agents', 'escalation', 'token-usage',
+    'log',
     'feedback-injected', 'feedback-recalled',
     'route-decision', 'agent-flow', 'supervisor-review',
     'state-executing', 'parallel-group-start', 'parallel-group-complete',

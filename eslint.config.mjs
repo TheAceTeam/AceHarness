@@ -1,7 +1,52 @@
 import reactPlugin from 'eslint-plugin-react';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
+import tseslint from 'typescript-eslint';
 
 const eslintConfig = [
+  {
+    ignores: [
+      '.next/**',
+      '.tanstack/**',
+      '.tmp/**',
+      'out/**',
+      'build/**',
+      'dist/**',
+      '**/dist/**',
+      'dist-build/**',
+      'coverage/**',
+      'data/**',
+      'runs/**',
+      'node_modules/**',
+    ],
+  },
+  {
+    files: ['**/*.{js,jsx,ts,tsx}'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      parserOptions: {
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
+    },
+  },
+  {
+    files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+  },
   {
     plugins: {
       react: reactPlugin,
@@ -45,15 +90,6 @@ const eslintConfig = [
     rules: {
       'react/display-name': 'off',
     },
-  },
-  {
-    ignores: [
-      'out/**',
-      'build/**',
-      'dist/**',
-      'dist-build/**',
-      'coverage/**',
-    ],
   },
 ];
 

@@ -20,14 +20,18 @@ export async function GET(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const { killed, pids } = await processManager.killAllSystem();
+    const { killed, pids, registeredKilled, registeredProcessIds } = await processManager.killAllSystem({
+      registeredProcessScope: 'all',
+    });
+    const totalKilled = killed + registeredKilled;
 
     return jsonOk({
       success: true,
-      message: killed > 0
-        ? `已终止所有进程，清理了 ${killed} 个系统残留进程`
+      message: totalKilled > 0
+        ? `已终止所有进程，清理了 ${totalKilled} 个进程`
         : '所有进程已终止',
       killedSystemPids: pids,
+      killedProcessIds: registeredProcessIds,
     });
   } catch (error: any) {
     return jsonOk(

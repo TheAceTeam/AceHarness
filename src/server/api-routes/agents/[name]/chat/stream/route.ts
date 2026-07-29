@@ -2,6 +2,7 @@ import { errorMessage, jsonError, jsonOk, readJsonBody, requestUrl } from '@/ser
 import { EventEmitter } from 'events';
 import { requireAuth } from '@/lib/auth/middleware';
 import {
+  buildAgentChatMemoryV2RecoverySource,
   finalizeAgentChatExecution,
   prepareAgentChat,
   type ExecuteAgentChatInput,
@@ -102,6 +103,7 @@ export async function POST(
       message: String(body?.message || ''),
       mode: body?.mode === 'workflow-chat' ? 'workflow-chat' : 'standalone-chat',
       sessionId: requestedRuntimeSessionId,
+      frontendSessionId,
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
       workflowContext: body?.workflowContext && typeof body.workflowContext === 'object'
         ? body.workflowContext as Record<string, any>
@@ -147,6 +149,7 @@ export async function POST(
           mcpServers: prepared.roleConfig.mcpServers,
           userId: prepared.userId,
         }, {
+          buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(prepared, prepared.prompt),
           onContextReset: () => {
             agentStreamEvents.emit(streamId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
           },
@@ -185,6 +188,7 @@ export async function POST(
           mcpServers: prepared.roleConfig.mcpServers,
           userId: prepared.userId,
         }, {
+          buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(prepared, prepared.prompt),
           onContextReset: () => {
             latestSessionId = undefined;
             agentStreamEvents.emit(streamId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
@@ -214,6 +218,7 @@ export async function POST(
       };
     }).finally(() => {
       prepared.engine.off('stream', onEngineStream);
+      prepared.releaseMemoryV2();
     });
 
     const entry = {
@@ -221,7 +226,10 @@ export async function POST(
       settled: false,
       frontendSessionId,
       agentName: name,
-      cancel: () => prepared.engine.cancel(),
+      cancel: () => {
+        prepared.engine.cancel();
+        prepared.releaseMemoryV2();
+      },
     };
     activeAgentStreams.set(streamId, entry);
     execPromise

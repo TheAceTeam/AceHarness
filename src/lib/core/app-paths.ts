@@ -144,6 +144,14 @@ export function getWorkspaceSkillsDir(): string {
   return getWorkspacePath('skills');
 }
 
+export function getInstallWorkflowTemplatesDir(): string {
+  return getInstallPath('templates', 'workflows');
+}
+
+export function getWorkspaceWorkflowTemplatesDir(): string {
+  return getWorkspacePath('templates', 'workflows');
+}
+
 export function getWorkspaceSkillPath(...segments: string[]): string {
   return join(getWorkspaceSkillsDir(), ...segments);
 }

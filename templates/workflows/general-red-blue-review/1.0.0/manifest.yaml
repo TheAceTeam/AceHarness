@@ -1,0 +1,34 @@
+apiVersion: csiharness.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  id: general-red-blue-review
+  version: 1.0.0
+  name: 通用红蓝评审
+  description: 通过方案、执行和验收三轮红蓝对抗，形成可追溯的交付结论。
+  category: 通用协作
+  tags: [红蓝对抗, 评审]
+  featured: true
+spec:
+  entrypoint: workflow.yaml
+  mode: state-machine
+  compatibility:
+    csiharness: ">=0.1.0 <1.0.0"
+  parameters:
+    - { id: workflowName, label: 工作流名称, type: string, bind: /workflow/name, required: true, default: 通用红蓝评审 }
+    - { id: description, label: 工作流描述, type: text, bind: /workflow/description, default: 通过红蓝对抗完成方案、执行和验收 }
+    - { id: projectRoot, label: 工作目录, description: 工作流执行时使用的项目绝对路径, type: directory, bind: /context/projectRoot, required: true }
+    - id: workspaceMode
+      label: 工作区模式
+      type: enum
+      bind: /context/workspaceMode
+      required: true
+      default: in-place
+      options:
+        - { label: 原目录执行, value: in-place }
+        - { label: 隔离副本, value: isolated-copy }
+    - { id: requirements, label: 本次需求, type: text, bind: /context/requirements, default: "" }
+  dependencies:
+    agents: [default-supervisor, architect, design-breaker, design-judge, developer, code-hunter, code-judge, tester, stress-tester, documentation-writer]
+    skills: []
+    mcpServers: []
+    subworkflows: []

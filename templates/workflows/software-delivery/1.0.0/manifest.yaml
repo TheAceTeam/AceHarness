@@ -1,0 +1,34 @@
+apiVersion: csiharness.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  id: software-delivery
+  version: 1.0.0
+  name: 软件交付
+  description: 适合范围清晰的软件需求，依次完成设计、实现、测试和交付整理。
+  category: 软件研发
+  tags: [研发, 交付]
+  featured: true
+spec:
+  entrypoint: workflow.yaml
+  mode: phase-based
+  compatibility:
+    csiharness: ">=0.1.0 <1.0.0"
+  parameters:
+    - { id: workflowName, label: 工作流名称, type: string, bind: /workflow/name, required: true, default: 软件交付 }
+    - { id: description, label: 工作流描述, type: text, bind: /workflow/description, default: 完成设计、实现、测试和交付整理 }
+    - { id: projectRoot, label: 工作目录, type: directory, bind: /context/projectRoot, required: true }
+    - id: workspaceMode
+      label: 工作区模式
+      type: enum
+      bind: /context/workspaceMode
+      required: true
+      default: in-place
+      options:
+        - { label: 原目录执行, value: in-place }
+        - { label: 隔离副本, value: isolated-copy }
+    - { id: requirements, label: 本次需求, type: text, bind: /context/requirements, default: "" }
+  dependencies:
+    agents: [default-supervisor, architect, developer, tester, documentation-writer]
+    skills: []
+    mcpServers: []
+    subworkflows: []

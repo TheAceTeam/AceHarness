@@ -54,11 +54,9 @@ import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
   inferHomeSidebarTab,
-  isCreationAssistantSidebarHint,
   isWorkflowSidebarHint,
   normalizeHomeSidebarTab,
   normalizeHomeSidebarTabs,
-  resolveCreationAssistantEnabled,
   type HomeSidebarHint,
   type HomeSidebarMode,
   type HomeSidebarTab,
@@ -1862,7 +1860,14 @@ export function ChatPageContent({
     activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, compactActiveSession, stopStreaming,
     deleteMessage, retryFromMessage, continueFromMessage,
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
-    model, setModel, engine, effectiveEngine, isModelSelectionReady, setEngine,
+    model,
+    setModel,
+    creationAssistantDefaultEnabled = true,
+    setCreationAssistantDefaultEnabled = () => {},
+    engine,
+    effectiveEngine,
+    isModelSelectionReady,
+    setEngine,
     confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
     skillSettings, mcpSettings, setSessionWorkbenchState, updateSessionWorkbenchState,
     appendSessionMessage,
@@ -4964,23 +4969,9 @@ export function ChatPageContent({
     toast('success', '已创建 Fork');
     return sessionId;
   }, [activeSession, createAndActivateSession, loading, toast]);
-  const creationAssistantEnabled = resolveCreationAssistantEnabled(activeSession);
-  const creationAssistantAvailable = Boolean(
-    activeSession
-    && !activeSession.agentBinding
-    && !activeSession.workflowBinding
-    && !activeSession.sessionWorkbenchState?.collaborationRoom
-  );
   const handleCreationAssistantChange = useCallback((enabled: boolean) => {
-    if (!creationAssistantAvailable) return;
-    setSessionWorkbenchState((prev) => ({
-      ...(prev || {}),
-      creationAssistantEnabled: enabled,
-      homeSidebar: !enabled && isCreationAssistantSidebarHint(prev?.homeSidebar)
-        ? null
-        : prev?.homeSidebar,
-    }));
-  }, [creationAssistantAvailable, setSessionWorkbenchState]);
+    setCreationAssistantDefaultEnabled(enabled);
+  }, [setCreationAssistantDefaultEnabled]);
   const chatHeaderStatus = activeAiBusy || isCurrentSessionLoading
     ? <StatusPill tone="neutral">生成中</StatusPill>
     : activeWeChatBinding
@@ -5047,9 +5038,8 @@ export function ChatPageContent({
           <span className="hidden xl:inline">保存为 Notebook</span>
         </Button>
         <ChatSessionMenu
-          disabled={!activeSession}
-          creationAssistantEnabled={creationAssistantEnabled}
-          creationAssistantDisabled={!creationAssistantAvailable || loading}
+          creationAssistantEnabled={creationAssistantDefaultEnabled}
+          creationAssistantDisabled={loading}
           forkDisabled={!activeSession || loading}
           onCreationAssistantChange={handleCreationAssistantChange}
           onFork={handleForkFromSessionMenu}
@@ -5065,8 +5055,7 @@ export function ChatPageContent({
     activeWeChatBinding?.externalConversationId,
     activeAiBusy,
     chatTitle,
-    creationAssistantAvailable,
-    creationAssistantEnabled,
+    creationAssistantDefaultEnabled,
     handleCreationAssistantChange,
     handleCreateNewConversation,
     handleForkFromSessionMenu,
@@ -5533,9 +5522,8 @@ export function ChatPageContent({
                 </Button>
                 <ChatSessionMenu
                   compact
-                  disabled={!activeSession}
-                  creationAssistantEnabled={creationAssistantEnabled}
-                  creationAssistantDisabled={!creationAssistantAvailable || loading}
+                  creationAssistantEnabled={creationAssistantDefaultEnabled}
+                  creationAssistantDisabled={loading}
                   forkDisabled={!activeSession || loading}
                   onCreationAssistantChange={handleCreationAssistantChange}
                   onFork={handleForkFromSessionMenu}

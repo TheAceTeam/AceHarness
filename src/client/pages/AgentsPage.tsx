@@ -6,5 +6,10 @@ import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 
 export default function AgentsPage() {
   const searchParams = useSearchParams();
-  return <AgentsManager returnTarget={getOfficeAwareReturnTarget(searchParams.get('from'))} />;
+  return (
+    <AgentsManager
+      returnTarget={getOfficeAwareReturnTarget(searchParams.get('from'))}
+      highlightedAgentName={searchParams.get('agent') || undefined}
+    />
+  );
 }

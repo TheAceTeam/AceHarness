@@ -21,6 +21,8 @@ export interface RunRecord {
   endTime: string | null;
   status: 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' | 'crashed' | 'pending' | string;
   currentPhase: string | null;
+  taskTitle?: string;
+  taskIssueUrl?: string;
   totalSteps: number;
   completedSteps: number;
   inputTokens?: number;
@@ -45,6 +47,8 @@ function runRecordFromSummary(summary: RunSummaryCache): RunRecord {
     endTime: summary.endTime,
     status: summary.status,
     currentPhase: summary.currentPhase,
+    taskTitle: summary.taskTitle,
+    taskIssueUrl: summary.taskIssueUrl,
     totalSteps: summary.totalSteps,
     completedSteps: summary.completedSteps,
     inputTokens: summary.tokenUsage.inputTokens,

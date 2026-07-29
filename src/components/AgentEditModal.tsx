@@ -21,11 +21,8 @@ import {
 } from '@/lib/agent/personas';
 import { useToast } from '@/components/ui/toast';
 import {
-  useAgentMemoryQuery,
   useAgentsQuery,
-  useClearAgentMemoryMutation,
   useGenerateAgentAvatarMutation,
-  useSaveAgentMemoryMutation,
 } from '@/client/query/agents';
 import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { useSkillsQuery } from '@/client/query/skills';
@@ -62,10 +59,6 @@ interface AgentWorkspaceProfile {
     deskVariant?: string;
     desk?: string;
     order?: number;
-  };
-  memory?: {
-    baseBudget?: number;
-    deepSearchEnabled?: boolean;
   };
 }
 
@@ -197,16 +190,10 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [availableSkills, setAvailableSkills] = useState<Array<{ name: string; description?: string }>>([]);
   const [availableMcpServers, setAvailableMcpServers] = useState<Array<{ name: string; command?: string }>>([]);
   const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<Array<{ id: string; name: string; description?: string; chunkCount?: number }>>([]);
-  const [memoryDraft, setMemoryDraft] = useState('');
-  const [memoryError, setMemoryError] = useState<string | null>(null);
-  const memoryMaxChars = Math.max(0, Math.min(50000, Number(formData.workspaceProfile?.memory?.baseBudget || 5000)));
   const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
   const agentsQuery = useAgentsQuery();
   const skillsQuery = useSkillsQuery();
   const ragKnowledgeBasesQuery = useRagKnowledgeBasesQuery();
-  const agentMemoryQuery = useAgentMemoryQuery(agent.name, memoryMaxChars, { enabled: !isNew && Boolean(agent.name) });
-  const saveAgentMemoryMutation = useSaveAgentMemoryMutation(agent.name);
-  const clearAgentMemoryMutation = useClearAgentMemoryMutation(agent.name);
   const generateAgentAvatarMutation = useGenerateAgentAvatarMutation();
   const existingAgentNames = useMemo(
     () => new Set((agentsQuery.data?.agents || []).map((item) => item.name).filter(Boolean)),
@@ -242,18 +229,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       ? ragKnowledgeBasesQuery.data.knowledgeBases.map((kb: any) => ({ id: kb.id, name: kb.name || kb.id, description: kb.description || '', chunkCount: kb.chunkCount || 0 }))
       : []);
   }, [ragKnowledgeBasesQuery.data?.knowledgeBases]);
-
-  useEffect(() => {
-    if (isNew || !agent.name) return;
-    if (agentMemoryQuery.data) {
-      setMemoryDraft(agentMemoryQuery.data.baseMemory || '');
-      setMemoryError(null);
-      return;
-    }
-    if (agentMemoryQuery.error) {
-      setMemoryError(agentMemoryQuery.error instanceof Error ? agentMemoryQuery.error.message : '读取 Agent 记忆失败');
-    }
-  }, [agent.name, agentMemoryQuery.data, agentMemoryQuery.error, isNew]);
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -382,19 +357,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     }));
   };
 
-  const updateWorkspaceMemory = (patch: NonNullable<AgentWorkspaceProfile['memory']>) => {
-    setFormData((prev) => ({
-      ...prev,
-      workspaceProfile: {
-        ...(prev.workspaceProfile || {}),
-        memory: {
-          ...(prev.workspaceProfile?.memory || {}),
-          ...patch,
-        },
-      },
-    }));
-  };
-
   const renderSuggestions = (field: ListField, suggestions: string[]) => {
     const selected = new Set(formData[field] || []);
     const visibleSuggestions = suggestions.filter((suggestion) => !selected.has(suggestion));
@@ -425,52 +387,11 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     roleType: formData.roleType || 'normal',
   });
   const agentSuggestions = getAgentSuggestions(formData);
-  const memoryCharCount = memoryDraft.trim().length;
-  const memoryOverLimit = memoryCharCount > memoryMaxChars;
-  const memoryLoading = agentMemoryQuery.isFetching;
-  const memorySaving = saveAgentMemoryMutation.isPending || clearAgentMemoryMutation.isPending;
   const updateAgentRagKnowledgeBases = (ragKnowledgeBases: string[]) => {
     const nextSkills = ragKnowledgeBases.length > 0
       ? Array.from(new Set([...(formData.skills || []), 'aceharness-rag']))
       : (formData.skills || []);
     setFormData({ ...formData, ragKnowledgeBases, skills: nextSkills });
-  };
-
-  const saveAgentMemory = async () => {
-    if (isNew || !agent.name) return;
-    if (memoryOverLimit) {
-      setMemoryError(`基础记忆不能超过 ${memoryMaxChars} 个字符`);
-      return;
-    }
-    setMemoryError(null);
-    try {
-      const data = await saveAgentMemoryMutation.mutateAsync({
-        baseMemory: memoryDraft,
-        maxChars: memoryMaxChars,
-      });
-      setMemoryDraft(data.baseMemory || '');
-      toast('success', 'Agent 记忆已保存');
-    } catch (error: any) {
-      const message = error?.message || '保存 Agent 记忆失败';
-      setMemoryError(message);
-      toast('error', message);
-    }
-  };
-
-  const clearAgentMemory = async () => {
-    if (isNew || !agent.name) return;
-    const confirmed = window.confirm('确认清空该 Agent 的永久记忆吗？');
-    if (!confirmed) return;
-    setMemoryError(null);
-    try {
-      await clearAgentMemoryMutation.mutateAsync(memoryMaxChars);
-      setMemoryDraft('');
-      toast('success', 'Agent 记忆已清空');
-    } catch (error: any) {
-      const message = error?.message || '清空 Agent 记忆失败';
-      setMemoryError(message);
-      toast('error', message);
-    }
   };
 
   const refreshAvatar = async () => {
@@ -636,7 +557,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
               <div>
                 <div className="text-sm font-medium">协作空间</div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  控制该 Agent 在会议室和办公室中的常驻、昵称、工位和记忆预算。
+                  控制该 Agent 在会议室和办公室中的常驻、昵称和工位。
                 </p>
               </div>
               <Badge variant="outline" className="shrink-0">Agent YAML</Badge>
@@ -749,76 +670,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                   placeholder="10"
                 />
               </div>
-              <div>
-                <Label>基础记忆预算</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  max="50000"
-                  value={formData.workspaceProfile?.memory?.baseBudget ?? ''}
-                  onChange={(e) => updateWorkspaceMemory({ baseBudget: e.target.value ? Number(e.target.value) : undefined })}
-                  placeholder="5000"
-                />
-              </div>
-              <div className="flex items-center justify-between rounded-xl border bg-background/60 px-3 py-2">
-                <div>
-                  <div className="text-sm font-medium">深层记忆按需查询</div>
-                  <div className="text-xs text-muted-foreground">允许运行时查询该 Agent 的深层记忆</div>
-                </div>
-                <Switch
-                  checked={formData.workspaceProfile?.memory?.deepSearchEnabled !== false}
-                  onCheckedChange={(checked) => updateWorkspaceMemory({ deepSearchEnabled: checked })}
-                />
-              </div>
             </div>
-          </div>
-
-          <div className="rounded-2xl border bg-muted/20 p-4">
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <div className="text-sm font-medium">永久记忆</div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  这份内容会保存为该 Agent 的长期角色记忆；是否参与推理由系统设置统一控制。
-                </p>
-              </div>
-              <Badge variant={memoryOverLimit ? 'destructive' : 'outline'} className="shrink-0">
-                {memoryCharCount} / {memoryMaxChars}
-              </Badge>
-            </div>
-            {isNew ? (
-              <div className="rounded-xl border bg-background/60 px-3 py-3 text-sm text-muted-foreground">
-                新建 Agent 保存后即可编辑永久记忆。
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <Textarea
-                  value={memoryDraft}
-                  onChange={(event) => {
-                    setMemoryDraft(event.target.value);
-                    if (memoryError) setMemoryError(null);
-                  }}
-                  rows={7}
-                  disabled={memoryLoading || memorySaving}
-                  placeholder="记录该 Agent 的长期身份、稳定偏好、协作原则和常用约束。"
-                />
-                {memoryError ? (
-                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{memoryError}</div>
-                ) : null}
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-xs text-muted-foreground">
-                    {memoryLoading ? '正在读取记忆...' : '保存后会写入 role scope，并被统一 memory resolver 读取。'}
-                  </div>
-                  <div className="flex gap-2">
-                    <Button type="button" variant="outline" size="sm" onClick={clearAgentMemory} disabled={memoryLoading || memorySaving || !memoryDraft.trim()}>
-                      清空记忆
-                    </Button>
-                    <Button type="button" size="sm" onClick={saveAgentMemory} disabled={memoryLoading || memorySaving || memoryOverLimit}>
-                      {memorySaving ? '保存中...' : '保存记忆'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
           <div>

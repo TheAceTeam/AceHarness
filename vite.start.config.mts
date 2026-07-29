@@ -4,6 +4,7 @@ import { createLogger, defineConfig } from 'vite';
 
 const rawBase = process.env.BASEURL || process.env.BASE_URL || '/';
 const base = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
+const devHost = process.env.CSIHARNESS_HOST || '127.0.0.1';
 const rawPort = process.env.CSIHARNESS_PORT || process.env.PORT;
 const devPort = rawPort ? Number.parseInt(rawPort, 10) : undefined;
 const devTimeoutMs = Number.parseInt(process.env.VITE_DEV_TIMEOUT_MS || '180000', 10);
@@ -35,6 +36,7 @@ export default defineConfig({
   base,
   customLogger,
   server: {
+    host: devHost,
     port: Number.isFinite(devPort) ? devPort : undefined,
     strictPort: Number.isFinite(devPort),
     watch: {

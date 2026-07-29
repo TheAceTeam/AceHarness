@@ -1,0 +1,34 @@
+apiVersion: csiharness.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  id: issue-fix
+  version: 1.0.0
+  name: 缺陷定位与修复
+  description: 从稳定复现开始，经根因分析、修复评审和回归验证完成问题闭环。
+  category: 软件研发
+  tags: [缺陷修复, 根因分析]
+  featured: false
+spec:
+  entrypoint: workflow.yaml
+  mode: state-machine
+  compatibility:
+    csiharness: ">=0.1.0 <1.0.0"
+  parameters:
+    - { id: workflowName, label: 工作流名称, type: string, bind: /workflow/name, required: true, default: 缺陷定位与修复 }
+    - { id: description, label: 工作流描述, type: text, bind: /workflow/description, default: 完成问题复现、根因分析、修复和回归验证 }
+    - { id: projectRoot, label: 工作目录, type: directory, bind: /context/projectRoot, required: true }
+    - id: workspaceMode
+      label: 工作区模式
+      type: enum
+      bind: /context/workspaceMode
+      required: true
+      default: in-place
+      options:
+        - { label: 原目录执行, value: in-place }
+        - { label: 隔离副本, value: isolated-copy }
+    - { id: requirements, label: 问题描述, type: text, bind: /context/requirements, required: true, default: "" }
+  dependencies:
+    agents: [default-supervisor, issue-reproducer, fix-hunter, fix-breaker, fix-judge, fix-developer, fix-reviewer, tester, stress-tester, documentation-writer]
+    skills: []
+    mcpServers: []
+    subworkflows: []
