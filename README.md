@@ -48,6 +48,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 - [文档](#文档)
 - [开发参考](#开发参考)
 - [贡献指南](#贡献指南)
+- [免责声明](#免责声明)
 - [许可证](#许可证)
 
 ---
@@ -343,6 +344,12 @@ git push origin feature/your-feature
 ```
 
 Commit 规范遵循 [Conventional Commits](https://www.conventionalcommits.org/)：`feat` / `fix` / `docs` / `perf` / `refactor` / `test` / `chore`
+
+---
+
+## 免责声明
+
+本产品仅作为流程编排工具，不包含 AI 模型能力。用户在连接 AI 模型并将其用于特定业务场景时，需自行评估并承担包括《欧盟人工智能法案》（EU AI Act）在内的相关法律法规及合规义务。
 
 ---
 

@@ -47,6 +47,7 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 - [Documentation](#documentation)
 - [Developer Reference](#developer-reference)
 - [Contributing](#contributing)
+- [Disclaimer](#disclaimer)
 - [License](#license)
 
 ---
@@ -332,6 +333,12 @@ git push origin feature/your-feature
 ```
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `feat` / `fix` / `docs` / `perf` / `refactor` / `test` / `chore`
+
+---
+
+## Disclaimer
+
+ACEHarness is provided solely as a workflow orchestration tool and does not include AI model capabilities. Users who connect AI models for specific business scenarios are solely responsible for evaluating and fulfilling all applicable legal and compliance obligations, including those under the European Union Artificial Intelligence Act (EU AI Act).
 
 ---
 
