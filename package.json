@@ -1,6 +1,6 @@
 {
   "name": "@cangjielang/aceharness",
-  "version": "1.0.0-rc.9",
+  "version": "1.0.0-beta.91",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
@@ -135,7 +135,7 @@
     "@tiptap/suggestion": "^3.23.4",
     "@tiptap/y-tiptap": "^3.0.3",
     "@types/yazl": "^3.3.1",
-    "acpx": "^0.12.0",
+    "acpx": "^0.13.0",
     "ag-grid-community": "^34.3.1",
     "ag-grid-react": "^34.3.1",
     "ai": "^6.0.184",
