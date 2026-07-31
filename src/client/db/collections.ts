@@ -5,7 +5,7 @@ import type { ConfigListParams, WorkflowConfigSummary } from '../query/configs';
 import type { AgentConfig } from '../query/agents';
 import type { LocalSkill } from '../query/skills';
 import type { RunHistoryItem, RunHistoryParams } from '../query/run-history';
-import type { TreeNode } from '@/lib/core/api';
+import type { RunDocumentReference, RunDocumentSource, TreeNode } from '@/lib/core/api';
 import type { ModelDiagnosticsResponse } from '@/lib/models/diagnostic-types';
 import type { ModelProbeListResponse, ModelProbeSummary } from '@/lib/models/probe-types';
 import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
@@ -19,8 +19,10 @@ export type WorkflowConfigRow = {
   filename: string;
   name: string;
   description?: string;
-  mode?: 'phase-based' | 'state-machine';
-  phaseCount?: number;
+  mode?: 'state-machine';
+  kind?: 'lightweight' | 'state-machine';
+  profile?: 'lightweight';
+  stateCount?: number;
   stepCount?: number;
   agentCount?: number;
   createdAt?: number | string;
@@ -57,8 +59,13 @@ export type RunHistoryRow = {
 export type DocumentMetadataRow = {
   id: string;
   runId: string;
-  sourceRunId?: string;
-  filename?: string;
+  sourceRunId: string;
+  documentSource: RunDocumentSource;
+  documentKey: string;
+  filename: string;
+  relativePath: string;
+  documentSourceLabel?: string;
+  documentDirectory?: string;
   name: string;
   baseName?: string;
   logicalName?: string;
@@ -167,6 +174,7 @@ export type AgentMessageRow = {
     output?: unknown;
     error?: string;
   }>;
+  toolEvents?: Array<import('@/lib/runtime-agent/tool-events').RuntimeToolEvent>;
   diagnostics?: {
     provider?: string;
     model?: string;
@@ -432,25 +440,60 @@ export function restoreDocumentMetadataSnapshot(runId: string, snapshot: Documen
   snapshot.forEach((row) => documentsMetadataCollection.insert({ ...row }));
 }
 
-export function optimisticRenameDocumentMetadata(runId: string, filename: string, newName: string) {
-  const sourceRunId = runId;
-  const existingId = `${sourceRunId}:${filename}`;
+export function getDocumentMetadataId(runId: string, reference: RunDocumentReference): string {
+  return JSON.stringify([
+    runId,
+    reference.sourceRunId?.trim() || runId,
+    reference.source,
+    reference.file,
+  ]);
+}
+
+export function getDocumentReferenceKey(reference: RunDocumentReference, fallbackRunId = ''): string {
+  return JSON.stringify([
+    reference.sourceRunId?.trim() || fallbackRunId || null,
+    reference.source,
+    reference.file,
+  ]);
+}
+
+function renamedDocumentPath(file: string, newName: string): string {
+  const normalizedName = newName.trim();
+  const currentBaseName = file.split('/').pop() || file;
+  const extension = /\.[^.]+$/.exec(currentBaseName)?.[0] || '';
+  const nextBaseName = /\.[^.]+$/.test(normalizedName) ? normalizedName : `${normalizedName}${extension}`;
+  const parentPath = file.split('/').slice(0, -1).join('/');
+  return parentPath ? `${parentPath}/${nextBaseName}` : nextBaseName;
+}
+
+export function optimisticRenameDocumentMetadata(
+  runId: string,
+  reference: RunDocumentReference,
+  newName: string,
+): string {
+  const sourceRunId = reference.sourceRunId?.trim() || runId;
+  const existingId = getDocumentMetadataId(runId, { ...reference, sourceRunId });
   const existing = documentsMetadataCollection.get(existingId);
-  if (!existing) return;
+  const newFilename = renamedDocumentPath(reference.file, newName);
+  if (!existing) return newFilename;
   documentsMetadataCollection.delete(existingId);
   const nextRow: DocumentMetadataRow = {
     ...existing,
-    id: `${sourceRunId}:${newName}`,
-    filename: newName,
-    name: newName,
-    baseName: newName,
+    id: getDocumentMetadataId(runId, { ...reference, sourceRunId, file: newFilename }),
+    documentKey: getDocumentReferenceKey({ ...reference, sourceRunId, file: newFilename }),
+    sourceRunId,
+    filename: newFilename,
+    relativePath: newFilename,
+    name: newFilename,
+    baseName: newFilename.split('/').pop() || newFilename,
     updatedAt: new Date().toISOString(),
   };
   documentsMetadataCollection.insert(nextRow);
+  return newFilename;
 }
 
-export function optimisticDeleteDocumentMetadata(runId: string, filenames: string[]) {
-  const targets = new Set(filenames.map((name) => `${runId}:${name}`));
+export function optimisticDeleteDocumentMetadata(runId: string, references: RunDocumentReference[]) {
+  const targets = new Set(references.map((reference) => getDocumentMetadataId(runId, reference)));
   readCollectionRows<DocumentMetadataRow>(documentsMetadataCollection)
     .filter((row) => row.runId === runId && targets.has(row.id))
     .forEach((row) => documentsMetadataCollection.delete(row.id));
@@ -755,7 +798,9 @@ export function syncWorkflowConfigsToDb(configs: Array<WorkflowConfigSummary>) {
       name: config.name,
       description: config.description,
       mode: config.mode,
-      phaseCount: config.phaseCount,
+      kind: config.kind,
+      profile: config.profile,
+      stateCount: config.stateCount,
       stepCount: config.stepCount,
       agentCount: config.agentCount,
       createdAt: config.createdAt,
@@ -799,16 +844,26 @@ export function syncRunHistoryToDb(runs: Array<RunHistoryItem>) {
   runs.forEach(visit);
 }
 
-export function syncDocumentsMetadataToDb(runId: string, files: Array<Record<string, unknown>>) {
+export function syncDocumentsMetadataToDb(runId: string, files: Array<unknown>) {
   if (!runId) return;
-  files.forEach((file, index) => {
+  files.forEach((input) => {
+    const file = asRecord(input);
+    const documentSource = documentSourceValue(file.documentSource);
+    if (!documentSource) return;
     const sourceRunId = stringValue(file.sourceRunId) || runId;
-    const filename = stringValue(file.filename) || stringValue(file.name) || stringValue(file.baseName) || `document-${index}`;
+    const filename = stringValue(file.relativePath) || stringValue(file.filename) || stringValue(file.name) || stringValue(file.baseName);
+    if (!filename) return;
+    const reference = { source: documentSource, sourceRunId, file: filename };
     upsertDocumentMetadata({
-      id: `${sourceRunId}:${filename}`,
+      id: getDocumentMetadataId(runId, reference),
       runId,
       sourceRunId,
+      documentSource,
+      documentKey: getDocumentReferenceKey(reference),
       filename,
+      relativePath: filename,
+      documentSourceLabel: stringValue(file.documentSourceLabel),
+      documentDirectory: stringValue(file.documentDirectory),
       name: stringValue(file.name) || filename,
       baseName: stringValue(file.baseName),
       logicalName: stringValue(file.logicalName),
@@ -1162,7 +1217,7 @@ export function useSyncRunHistoryToDb(runs: Array<RunHistoryItem>) {
   }, [runs]);
 }
 
-export function useSyncDocumentsMetadataToDb(runId: string | undefined, files: Array<Record<string, unknown>>) {
+export function useSyncDocumentsMetadataToDb(runId: string | undefined, files: Array<unknown>) {
   useEffect(() => {
     if (runId) syncDocumentsMetadataToDb(runId, files);
   }, [runId, files]);
@@ -1261,7 +1316,7 @@ export function useDocumentMetadataRows(runId?: string) {
   const rows = useLiveCollectionRows<DocumentMetadataRow>(documentsMetadataCollection);
   return useMemo(() => {
     return rows
-      .filter((row) => !runId || row.runId === runId)
+      .filter((row) => (!runId || row.runId === runId) && Boolean(documentSourceValue(row.documentSource)))
       .sort((left, right) => toTime(right.modifiedTime || right.updatedAt) - toTime(left.modifiedTime || left.updatedAt));
   }, [rows, runId]);
 }
@@ -1566,7 +1621,8 @@ export function deriveWorkflowConfigRows(
         || row.name.toLowerCase().includes(keyword)
         || row.filename.toLowerCase().includes(keyword)
         || (row.description || '').toLowerCase().includes(keyword);
-      const matchesMode = !mode || row.mode === mode;
+      const kind = row.kind || (row.profile === 'lightweight' ? 'lightweight' : 'state-machine');
+      const matchesMode = !mode || kind === mode;
       return matchesKeyword && matchesMode;
     })
     .sort((left, right) => {
@@ -1677,6 +1733,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' ? value : undefined;
+}
+
+function documentSourceValue(value: unknown): RunDocumentSource | undefined {
+  return value === 'tasklist' || value === 'runtime-output' ? value : undefined;
 }
 
 function numberValue(value: unknown) {

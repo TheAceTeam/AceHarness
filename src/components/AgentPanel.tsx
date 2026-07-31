@@ -43,7 +43,7 @@ interface PersistedStepLog {
   id: string;
   stepName: string;
   agent: string;
-  status: 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed';
   output: string;
   error: string;
   costUsd: number;

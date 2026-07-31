@@ -107,9 +107,7 @@ async function inferProjectPreflightCommands(cwd: string): Promise<PreflightComm
 async function collectPreflightCommands(config: any, cwd: string): Promise<PreflightCommand[]> {
   const steps = Array.isArray(config?.workflow?.states)
     ? config.workflow.states.flatMap((state: any) => state?.steps || [])
-    : Array.isArray(config?.workflow?.phases)
-      ? config.workflow.phases.flatMap((phase: any) => phase?.steps || [])
-      : [];
+    : [];
 
   const commands = new Set<string>();
   const collected: PreflightCommand[] = [];

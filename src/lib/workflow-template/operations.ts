@@ -41,9 +41,7 @@ function unique(values: unknown[]): string[] {
 
 function getWorkflowNodes(config: Record<string, any>): Array<Record<string, any>> {
   const workflow = config.workflow || {};
-  if (Array.isArray(workflow.states)) return workflow.states;
-  if (Array.isArray(workflow.phases)) return workflow.phases;
-  return [];
+  return Array.isArray(workflow.states) ? workflow.states : [];
 }
 
 function getWorkflowSteps(config: Record<string, any>): Array<Record<string, any>> {
@@ -242,7 +240,6 @@ export async function saveWorkflowAsTemplate(
   if (!portableValidation.ok || !portableValidation.normalized) {
     throw new WorkflowTemplateError('工作流无法转换为可移植模板', 422, 'WORKFLOW_TEMPLATE_SANITIZE_FAILED', portableValidation.issues);
   }
-  const mode = portableValidation.normalized.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based';
   const manifest = parseInput(workflowTemplateManifestSchema.safeParse({
     apiVersion: WORKFLOW_TEMPLATE_API_VERSION,
     kind: 'WorkflowTemplate',
@@ -257,7 +254,7 @@ export async function saveWorkflowAsTemplate(
     },
     spec: {
       entrypoint: 'workflow.yaml',
-      mode,
+      mode: 'state-machine',
       compatibility: { aceharness: '>=1.0.0-rc.8 <2.0.0' },
       parameters: defaultTemplateParameters(portableValidation.normalized),
       dependencies: deriveWorkflowTemplateDependencies(portableValidation.normalized),

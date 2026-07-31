@@ -16,8 +16,10 @@ export type ConfigSummary = {
   filename: string;
   name: string;
   description: string;
-  mode: 'phase-based' | 'state-machine';
-  phaseCount: number;
+  mode: 'state-machine';
+  kind: 'lightweight' | 'state-machine';
+  profile?: 'lightweight';
+  stateCount: number;
   stepCount: number;
   agentCount: number;
   createdAt: number | string;
@@ -34,12 +36,12 @@ type ConfigSummaryIndexEntry = {
 };
 
 type ConfigSummaryIndexFile = {
-  version: 1;
+  version: 2;
   configsDir: string;
   entries: Record<string, ConfigSummaryIndexEntry>;
 };
 
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
 const memoryIndex = new Map<string, ConfigSummaryIndexEntry>();
 let diskIndexLoadedFor: string | null = null;
 let writeChain: Promise<void> = Promise.resolve();
@@ -176,27 +178,21 @@ async function readIndexedConfigSummary(
   try {
     const content = await readFile(fullPath, 'utf-8');
     const config = parse(content);
-    const hasWorkflowRoot = Boolean(config?.workflow && typeof config.workflow === 'object');
-    const hasPhaseWorkflow = Array.isArray(config?.workflow?.phases);
-    const hasStateWorkflow = Array.isArray(config?.workflow?.states);
-    if (hasWorkflowRoot && (hasPhaseWorkflow || hasStateWorkflow)) {
-      const workflowMode = config?.workflow?.mode === 'state-machine' || (hasStateWorkflow && !hasPhaseWorkflow)
-        ? 'state-machine'
-        : 'phase-based';
-      const phaseCount = workflowMode === 'state-machine'
-        ? config?.workflow?.states?.length || 0
-        : config?.workflow?.phases?.length || 0;
-      const stepCount = workflowMode === 'state-machine'
-        ? config?.workflow?.states?.reduce((sum: number, state: any) => sum + (state.steps?.length || 0), 0) || 0
-        : config?.workflow?.phases?.reduce((sum: number, phase: any) => sum + (phase.steps?.length || 0), 0) || 0;
+    const states = config?.workflow?.states;
+    if (config?.workflow?.mode === 'state-machine' && Array.isArray(states)) {
+      const kind = config.workflow.profile === 'lightweight' ? 'lightweight' : 'state-machine';
+      const stateCount = states.length;
+      const stepCount = states.reduce((sum: number, state: any) => sum + (state.steps?.length || 0), 0) || 0;
       const meta = metaMap[candidate.filename];
       const owner = meta?.createdBy ? usersById.get(meta.createdBy) : undefined;
       summary = {
         filename: candidate.filename,
         name: config?.workflow?.name || candidate.filename,
         description: config?.workflow?.description || '',
-        mode: workflowMode,
-        phaseCount,
+        mode: 'state-machine',
+        kind,
+        profile: kind === 'lightweight' ? 'lightweight' : undefined,
+        stateCount,
         stepCount,
         agentCount,
         createdAt: candidate.createdAt,

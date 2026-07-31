@@ -3,6 +3,7 @@ import type {
   SpecCodingTask,
   SpecTaskBinding,
   UnifiedWorkflowConfig,
+  StateMachineWorkflowConfig,
   WorkflowStep,
 } from '@/lib/core/schemas';
 
@@ -75,7 +76,7 @@ export function getSpecTaskBindingIds(binding?: SpecTaskBinding | null): string[
     .filter(Boolean)));
 }
 
-export function getWorkflowStepRefs(config: UnifiedWorkflowConfig | Record<string, any>): WorkflowStepRef[] {
+export function getWorkflowStepRefs(config: StateMachineWorkflowConfig | Record<string, any>): WorkflowStepRef[] {
   const workflow = (config as any)?.workflow || {};
   if (Array.isArray(workflow.states)) {
     return workflow.states.flatMap((state: any, stateIndex: number) => {
@@ -93,27 +94,6 @@ export function getWorkflowStepRefs(config: UnifiedWorkflowConfig | Record<strin
           stepName,
           agent: String(step?.agent || ''),
           phaseId,
-          step,
-        };
-      });
-    });
-  }
-
-  if (Array.isArray(workflow.phases)) {
-    return workflow.phases.flatMap((phase: any, phaseIndex: number) => {
-      const containerName = String(phase?.name || `phase-${phaseIndex + 1}`);
-      return (Array.isArray(phase?.steps) ? phase.steps : []).map((step: any, stepIndex: number) => {
-        const stepName = String(step?.name || `step-${stepIndex + 1}`);
-        const stepId = typeof step?.id === 'string' && step.id.trim() ? step.id.trim() : undefined;
-        return {
-          stepKey: stepId || `phase:${containerName}#${stepIndex + 1}:${stepName}`,
-          containerKey: `phase:${containerName}`,
-          containerName,
-          containerIndex: phaseIndex,
-          stepIndex,
-          stepName,
-          agent: String(step?.agent || ''),
-          phaseId: undefined,
           step,
         };
       });

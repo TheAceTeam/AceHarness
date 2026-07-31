@@ -1,6 +1,8 @@
 workflow:
   name: 软件交付
   description: 完成设计、实现、测试和交付整理
+  mode: state-machine
+  maxTransitions: 30
   supervisor:
     enabled: true
     agent: default-supervisor
@@ -8,27 +10,48 @@ workflow:
     checkpointAdviceEnabled: true
     scoringEnabled: true
     experienceEnabled: true
-  phases:
+  states:
     - name: 方案设计
+      isInitial: true
+      isFinal: false
       steps:
         - name: 需求与设计
           agent: architect
           task: 分析需求边界，形成实现方案、风险清单和验收标准
+      transitions:
+        - { to: 编码实现, condition: { verdict: pass }, priority: 10, label: 设计通过 }
+        - { to: 方案设计, condition: { verdict: conditional_pass }, priority: 20, label: 补充设计 }
+        - { to: 方案设计, condition: { verdict: fail }, priority: 30, label: 重做设计 }
     - name: 编码实现
+      isInitial: false
+      isFinal: false
       steps:
         - name: 实现与自检
           agent: developer
           task: 按方案完成实现，保持改动聚焦并执行必要的静态检查
+      transitions:
+        - { to: 测试验证, condition: { verdict: pass }, priority: 10, label: 实现通过 }
+        - { to: 编码实现, condition: { verdict: conditional_pass }, priority: 20, label: 补充实现 }
+        - { to: 方案设计, condition: { verdict: fail }, priority: 30, label: 返回设计 }
     - name: 测试验证
+      isInitial: false
+      isFinal: false
       steps:
         - name: 测试与回归
           agent: tester
           task: 补齐针对性测试，执行回归并记录结果和残余风险
+      transitions:
+        - { to: 交付整理, condition: { verdict: pass }, priority: 10, label: 测试通过 }
+        - { to: 测试验证, condition: { verdict: conditional_pass }, priority: 20, label: 补充测试 }
+        - { to: 编码实现, condition: { verdict: fail }, priority: 30, label: 返回实现 }
     - name: 交付整理
+      isInitial: false
+      isFinal: true
       steps:
         - name: 交付说明
           agent: documentation-writer
           task: 汇总改动、验证结果、使用说明和已知限制
+      transitions: []
 context:
   projectRoot: ""
   workspaceMode: in-place

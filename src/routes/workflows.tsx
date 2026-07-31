@@ -3,7 +3,7 @@ import WorkflowsPage from '@/client/pages/WorkflowsPage';
 
 export type WorkflowsSearch = {
   keyword?: string;
-  mode?: 'all' | 'state-machine' | 'phase-based';
+  mode?: 'all' | 'state-machine' | 'lightweight';
   sortKey?: 'name' | 'createdAt';
   sortDirection?: 'asc' | 'desc';
   page?: number;
@@ -41,7 +41,7 @@ function WorkflowsRoute() {
 }
 
 function isWorkflowMode(value: unknown): value is NonNullable<WorkflowsSearch['mode']> {
-  return value === 'all' || value === 'state-machine' || value === 'phase-based';
+  return value === 'all' || value === 'state-machine' || value === 'lightweight';
 }
 
 function isPageSize(value: unknown) {

@@ -11,7 +11,7 @@ import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import {
   executeChatRuntimeWithContextRecovery,
   compactChatRuntimeContextManually,
-  formatRuntimeToolEvent,
+  projectRuntimeToolEvent,
   getConfiguredChatRuntimeEngine,
   resolveRequestedChatRuntimeEngineType,
   resolveRecoveredRuntimeSessionId,
@@ -197,7 +197,9 @@ export function getLogicalEngineId(runtimeType?: string | null): string {
 class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntime {
   private runtimeSessionId?: string;
   private cancelled = false;
+  private cancellationError?: string;
   private activeTurnId?: string;
+  private activeRequestId?: string;
 
   constructor(
     private readonly runtimeType: string,
@@ -208,6 +210,7 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
 
   async execute(options: WorkflowRuntimeOptions): Promise<WorkflowRuntimeResult> {
     this.cancelled = false;
+    this.cancellationError = undefined;
     const startedAt = Date.now();
     const orchestrator = getWorkflowRuntimeOrchestrator();
     let modelRouteId: string;
@@ -221,18 +224,27 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
     this.emit('stream', { type: 'session', content: runtimeSessionId });
 
     const requestId = `${options.runId || 'workflow'}:${options.agent}:${options.step}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    this.activeRequestId = requestId;
     let output = '';
     let success = true;
     let error: string | undefined;
     let stopReason: string | undefined;
     let usage: WorkflowRuntimeTokenUsage | undefined;
     let costUsd: number | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const projectionState: WorkflowRuntimeProjectionState = {
       hasMessageText: false,
       toolObservedAfterMessage: false,
       seenToolCalls: new Set<string>(),
       pendingTools: new Map<string, RuntimeToolState>(),
     };
+
+    if (options.timeoutMs && options.timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        this.cancellationError = `步骤执行超时：已超过配置上限 ${formatRuntimeTimeout(options.timeoutMs)}。`;
+        this.cancel();
+      }, options.timeoutMs);
+    }
 
     try {
       for await (const event of orchestrator.runTurn({
@@ -249,23 +261,33 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
           runId: options.runId,
           frontendSessionId: options.frontendSessionId,
         },
-      })) {
-        this.activeTurnId = event.turnId;
-        if (this.cancelled) {
-          success = false;
-          error = 'cancelled';
-          stopReason = 'cancelled';
+        })) {
+          this.activeTurnId = event.turnId;
+          if (this.cancelled) {
+            await orchestrator.cancelTurn({
+              runtimeSessionId,
+              turnId: event.turnId,
+              requestId: `${requestId}:cancel-late-turn`,
+              reason: 'workflow runtime cancellation',
+            }).catch(() => orchestrator.cancelSession({
+              runtimeSessionId,
+              requestId: `${requestId}:cancel-late-session`,
+              reason: 'workflow runtime cancellation',
+            }));
+            success = false;
+            error = this.cancellationError || '运行时执行已取消';
+            stopReason = 'cancelled';
           break;
         }
         const projection = projectWorkflowRuntimeEvent(event, projectionState);
         if (projection) this.emit('stream', projection);
-        if (projection?.type === 'text' || projection?.type === 'tool') output += projection.content;
+        if (projection?.type === 'text') output += projection.content;
         if (event.type === 'turn.failed') {
           success = false;
           error = extractMessage(event.payload) || 'Runtime turn failed';
         } else if (event.type === 'turn.cancelled') {
           success = false;
-          error = 'cancelled';
+          error = this.cancellationError || '运行时执行已取消';
           stopReason = 'cancelled';
         } else if (event.type === 'turn.completed') {
           stopReason = extractStopReason(event.payload);
@@ -280,7 +302,9 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
       error = caught instanceof Error ? caught.message : String(caught);
       this.emit('stream', { type: 'error', content: error });
     } finally {
+      if (timeout) clearTimeout(timeout);
       this.activeTurnId = undefined;
+      this.activeRequestId = undefined;
     }
 
     return {
@@ -301,14 +325,23 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
 
   cancel(): void {
     this.cancelled = true;
-    if (this.runtimeSessionId && this.activeTurnId) {
-      void getWorkflowRuntimeOrchestrator().cancelTurn({
-        runtimeSessionId: this.runtimeSessionId,
+    const runtimeSessionId = this.runtimeSessionId;
+    if (!runtimeSessionId) return;
+    const requestId = `${this.activeRequestId || `cancel:${Date.now()}`}:cancel`;
+    const orchestrator = getWorkflowRuntimeOrchestrator();
+    const cancellation = this.activeTurnId
+      ? orchestrator.cancelTurn({
+        runtimeSessionId,
         turnId: this.activeTurnId,
-        requestId: `cancel:${Date.now()}`,
+        requestId,
         reason: 'workflow runtime cancellation',
-      }).catch(() => {});
-    }
+      })
+      : orchestrator.cancelSession({
+        runtimeSessionId,
+        requestId,
+        reason: 'workflow runtime cancellation',
+      });
+    void cancellation.catch(() => {});
   }
 
   async isAvailable(): Promise<boolean> {
@@ -430,6 +463,7 @@ function isSqliteForeignKeyConstraintError(error: unknown): boolean {
 function createRuntimeProfileSnapshot(agentId: string, options: WorkflowRuntimeOptions, modelRouteId: string): RuntimeProfileSnapshot {
   return {
     agentId,
+    ownerUserId: options.userId,
     modelRouteId,
     cwd: options.workingDirectory,
     systemPromptHash: 'sha256:workflow-runtime-facade',
@@ -461,9 +495,6 @@ export function projectWorkflowRuntimeEvent(
   event: RuntimeEvent,
   state: WorkflowRuntimeProjectionState,
 ): WorkflowRuntimeStreamEvent | null {
-  if (event.type.startsWith('tool.') && state.hasMessageText) {
-    state.toolObservedAfterMessage = true;
-  }
   if (event.type === 'message.delta' || event.type === 'message.completed') {
     const content = extractText(event.payload);
     if (!content) return null;
@@ -479,14 +510,22 @@ export function projectWorkflowRuntimeEvent(
     return content ? { type: 'thought', content, metadata: event.payload } : null;
   }
   if (event.type.startsWith('tool.')) {
-    const content = formatRuntimeToolEvent(
+    const tool = projectRuntimeToolEvent(
       event.type,
       event.payload,
       event.toolCallId,
       state.seenToolCalls || (state.seenToolCalls = new Set<string>()),
       state.pendingTools || (state.pendingTools = new Map<string, RuntimeToolState>()),
     );
-    return content ? { type: 'text', content, metadata: event.payload } : null;
+    if (!tool) return null;
+    // The next model text starts a new transcript segment after this tool,
+    // including when the tool is the first visible runtime event.
+    state.toolObservedAfterMessage = true;
+    return {
+      type: 'tool',
+      tool: { ...tool, createdAt: tool.createdAt || event.createdAt, updatedAt: event.createdAt },
+      metadata: event.payload,
+    };
   }
   if (event.type === 'turn.failed') {
     return { type: 'error', content: extractMessage(event.payload) || 'Runtime turn failed', metadata: event.payload };
@@ -551,6 +590,11 @@ function extractStopReason(payload: unknown): string | undefined {
     : isRecord(payload) && typeof payload.reason === 'string'
       ? payload.reason
       : undefined;
+}
+
+function formatRuntimeTimeout(timeoutMs: number): string {
+  const minutes = timeoutMs / 60_000;
+  return Number.isInteger(minutes) ? `${minutes} 分钟` : `${Math.ceil(timeoutMs / 1_000)} 秒`;
 }
 
 function numberOrZero(value: unknown): number {

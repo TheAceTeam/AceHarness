@@ -57,7 +57,6 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
       questions: STRING_ARRAY_SCHEMA,
       recommendedNextAction: { type: 'string' },
       shouldOpenModal: { type: 'boolean' },
-      workflowDraft: { type: 'object' },
       agentDraft: { type: 'object' },
       payload: {
         type: 'object',
@@ -74,7 +73,6 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
           questions: STRING_ARRAY_SCHEMA,
           recommendedNextAction: { type: 'string' },
           shouldOpenModal: { type: 'boolean' },
-          workflowDraft: { type: 'object' },
           agentDraft: { type: 'object' },
         },
       },
@@ -95,26 +93,6 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
       header: { type: 'object' },
       blocks: { type: 'array', items: { type: 'object' } },
       actions: { type: 'array', items: { type: 'object' } },
-    },
-  },
-  clarification_form: {
-    type: 'object',
-    properties: {
-      kind: { type: 'string' },
-      type: { type: 'string' },
-      payload: {
-        type: 'object',
-        properties: {
-          summary: { type: 'string' },
-          knownFacts: STRING_ARRAY_SCHEMA,
-          missingFields: STRING_ARRAY_SCHEMA,
-          questions: { type: 'array', items: { type: 'object' } },
-        },
-      },
-      summary: { type: 'string' },
-      knownFacts: STRING_ARRAY_SCHEMA,
-      missingFields: STRING_ARRAY_SCHEMA,
-      questions: { type: 'array', items: { type: 'object' } },
     },
   },
   plan_draft: {
@@ -141,61 +119,7 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
       artifacts: { type: 'object' },
     },
   },
-  workflow_draft: {
-    type: 'object',
-    properties: {
-      kind: { type: 'string' },
-      type: { type: 'string' },
-      payload: {
-        type: 'object',
-        properties: {
-          filename: { type: 'string' },
-          summary: { type: 'string' },
-          config: { type: 'object' },
-        },
-        required: ['config'],
-      },
-      filename: { type: 'string' },
-      summary: { type: 'string' },
-      config: { type: 'object' },
-    },
-  },
-  workflow_patch: {
-    type: 'object',
-    properties: {
-      kind: { type: 'string' },
-      type: { type: 'string' },
-      payload: {
-        type: 'object',
-        properties: {
-          filename: { type: 'string' },
-          summary: { type: 'string' },
-          scope: { type: 'string' },
-          workflowMode: { type: 'string' },
-          patch: { type: 'object' },
-        },
-        required: ['scope', 'patch'],
-      },
-      filename: { type: 'string' },
-      summary: { type: 'string' },
-      scope: { type: 'string' },
-      workflowMode: { type: 'string' },
-      patch: { type: 'object' },
-    },
-  },
-  workflow_clarification_summary: SIMPLE_ITEM_RESULT_SCHEMA,
-  workflow_clarification_facts: SIMPLE_ITEM_RESULT_SCHEMA,
-  workflow_clarification_gaps: SIMPLE_ITEM_RESULT_SCHEMA,
-  workflow_clarification_question: SIMPLE_ITEM_RESULT_SCHEMA,
-  spec_coding_meta: SIMPLE_ITEM_RESULT_SCHEMA,
-  spec_requirement: SIMPLE_ITEM_RESULT_SCHEMA,
-  spec_design: SIMPLE_ITEM_RESULT_SCHEMA,
-  spec_decision: SIMPLE_ITEM_RESULT_SCHEMA,
-  spec_task: SIMPLE_ITEM_RESULT_SCHEMA,
-  workflow_state_outline: SIMPLE_ITEM_RESULT_SCHEMA,
-  workflow_state_steps: SIMPLE_ITEM_RESULT_SCHEMA,
   workflow_patch_item: SIMPLE_ITEM_RESULT_SCHEMA,
-  spec_revision_item: SIMPLE_ITEM_RESULT_SCHEMA,
   spec_artifact_revision: {
     type: 'object',
     properties: {
@@ -474,12 +398,6 @@ function coerceKnownResultShape(parsed: any): any {
     target.goals = toStringArray(target.goals);
     target.nonGoals = toStringArray(target.nonGoals);
     target.constraints = toStringArray(target.constraints);
-    return clone;
-  }
-
-  if (schemaKey === 'clarification_form') {
-    target.knownFacts = toStringArray(target.knownFacts);
-    target.missingFields = toStringArray(target.missingFields);
     return clone;
   }
 

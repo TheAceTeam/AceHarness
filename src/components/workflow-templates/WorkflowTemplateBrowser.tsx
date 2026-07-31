@@ -68,10 +68,6 @@ export interface WorkflowTemplateBrowserProps {
   className?: string;
 }
 
-function modeLabel(mode: WorkflowTemplateSummary['mode']) {
-  return mode === 'state-machine' ? '状态机' : '阶段模式';
-}
-
 function sourceBadge(template: WorkflowTemplateSummary) {
   if (template.source === 'builtin') {
     return <Badge variant="secondary"><ShieldCheck className="mr-1 h-3 w-3" />内置</Badge>;
@@ -93,21 +89,12 @@ const PARAMETER_TYPE_LABELS: Record<WorkflowTemplateParameter['type'], string> =
 
 function getWorkflowNodes(template: WorkflowTemplateDetail): WorkflowTemplateNode[] {
   const workflow = template.workflow?.workflow as Record<string, any> | undefined;
-  if (Array.isArray(workflow?.states)) {
-    return workflow.states.map((state: any) => ({
-      name: state.name,
-      description: state.description,
-      steps: Array.isArray(state.steps) ? state.steps : [],
-      stepCount: Array.isArray(state.steps) ? state.steps.length : 0,
-      final: state.isFinal === true,
-    }));
-  }
-  return (Array.isArray(workflow?.phases) ? workflow.phases : []).map((phase: any) => ({
-    name: phase.name,
-    description: phase.description,
-    steps: Array.isArray(phase.steps) ? phase.steps : [],
-    stepCount: Array.isArray(phase.steps) ? phase.steps.length : 0,
-    final: false,
+  return (Array.isArray(workflow?.states) ? workflow.states : []).map((state: any) => ({
+    name: state.name,
+    description: state.description,
+    steps: Array.isArray(state.steps) ? state.steps : [],
+    stepCount: Array.isArray(state.steps) ? state.steps.length : 0,
+    final: state.isFinal === true,
   }));
 }
 
@@ -267,7 +254,7 @@ function WorkflowTemplateDetailPanel({
       <div className="flex flex-wrap items-center gap-2">
         {sourceBadge(template)}
         <Badge variant="outline">v{template.version}</Badge>
-        <Badge variant="outline">{modeLabel(template.mode)}</Badge>
+        <Badge variant="outline">状态机</Badge>
         {template.versions.length > 1 ? (
           <Select value={template.version} onValueChange={onVersionChange}>
             <SelectTrigger className="h-7 w-[112px]"><SelectValue /></SelectTrigger>
@@ -305,7 +292,7 @@ function WorkflowTemplateDetailPanel({
       <div className="flex items-center justify-between gap-3">
         <h4 className="text-sm font-medium">流程结构</h4>
         <span className="text-xs text-muted-foreground">
-          {nodes.length} 个{template.mode === 'state-machine' ? '状态' : '阶段'} · {template.stepCount} 个步骤
+          {nodes.length} 个状态 · {template.stepCount} 个步骤
         </span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
@@ -601,11 +588,10 @@ export default function WorkflowTemplateBrowser({
 }: WorkflowTemplateBrowserProps) {
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState('all');
-  const [mode, setMode] = useState('all');
   const [source, setSource] = useState('all');
   const [selectedIdentity, setSelectedIdentity] = useState<TemplateIdentity | null>(null);
   const [instantiateTemplate, setInstantiateTemplate] = useState<WorkflowTemplateDetail | null>(null);
-  const templatesQuery = useWorkflowTemplatesQuery({ keyword, category, mode, source });
+  const templatesQuery = useWorkflowTemplatesQuery({ keyword, category, mode: 'state-machine', source });
   const detailQuery = useWorkflowTemplateDetailQuery(selectedIdentity);
   const templates = templatesQuery.data?.templates || [];
   const selectedTemplate = detailQuery.data?.template;
@@ -664,8 +650,8 @@ export default function WorkflowTemplateBrowser({
           </div>
           <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">{template.description}</p>
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <span className="inline-flex items-center"><GitBranch className="mr-1 h-3.5 w-3.5" />{modeLabel(template.mode)}</span>
-            <span className="inline-flex items-center"><Layers3 className="mr-1 h-3.5 w-3.5" />{template.stateCount || template.phaseCount} 个{template.mode === 'state-machine' ? '状态' : '阶段'}</span>
+            <span className="inline-flex items-center"><GitBranch className="mr-1 h-3.5 w-3.5" />状态机</span>
+            <span className="inline-flex items-center"><Layers3 className="mr-1 h-3.5 w-3.5" />{template.stateCount} 个状态</span>
             <span className="inline-flex items-center"><Boxes className="mr-1 h-3.5 w-3.5" />{template.stepCount} 个步骤</span>
           </div>
           <div className="mt-auto flex items-center justify-between gap-3 border-t pt-3">
@@ -731,14 +717,6 @@ export default function WorkflowTemplateBrowser({
             <SelectContent>
               <SelectItem value="all">全部分类</SelectItem>
               {templatesQuery.data?.categories?.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={mode} onValueChange={setMode}>
-            <SelectTrigger className="w-full sm:w-[130px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部模式</SelectItem>
-              <SelectItem value="state-machine">状态机</SelectItem>
-              <SelectItem value="phase-based">阶段模式</SelectItem>
             </SelectContent>
           </Select>
           <Select value={source} onValueChange={setSource}>

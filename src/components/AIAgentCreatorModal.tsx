@@ -48,7 +48,8 @@ type WorkflowSummary = {
   filename: string;
   name: string;
   description?: string;
-  mode?: 'phase-based' | 'state-machine';
+  mode?: 'state-machine';
+  kind?: 'lightweight' | 'state-machine';
 };
 
 type AgentDraftRecommendations = {
@@ -58,7 +59,6 @@ type AgentDraftRecommendations = {
     description?: string;
     projectRoot?: string;
     agents: string[];
-    phases: string[];
     states: string[];
   };
 };

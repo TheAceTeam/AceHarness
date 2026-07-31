@@ -373,16 +373,11 @@ function looksLikeMachinePath(value: string) {
 }
 
 function getWorkflowNodes(config: any): any[] {
-  const workflow = config?.workflow || {};
-  if (workflow.mode === 'state-machine' || Array.isArray(workflow.states)) return workflow.states || [];
-  return workflow.phases || [];
+  return Array.isArray(config?.workflow?.states) ? config.workflow.states : [];
 }
 
 function getWorkflowNodePath(config: any, nodeIndex: number) {
-  const workflow = config?.workflow || {};
-  return workflow.mode === 'state-machine' || Array.isArray(workflow.states)
-    ? `workflow.states.${nodeIndex}`
-    : `workflow.phases.${nodeIndex}`;
+  return `workflow.states.${nodeIndex}`;
 }
 
 function auditAndSanitizeImportedWorkflow(

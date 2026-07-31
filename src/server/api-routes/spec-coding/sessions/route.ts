@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       specCodingStatus: body.specCodingStatus,
       filename: body.filename,
       workflowName: body.workflowName,
-      mode: body.mode,
+      mode: body.mode === 'lightweight' ? 'lightweight' : 'state-machine',
       referenceWorkflow: body.referenceWorkflow,
       planningEngine: typeof body.planningEngine === 'string' ? body.planningEngine : undefined,
       planningModel: typeof body.planningModel === 'string' ? body.planningModel : undefined,
@@ -69,6 +69,9 @@ export async function POST(request: Request) {
       workspaceMode: body.workspaceMode,
       description: body.description,
       requirements: body.requirements,
+      lightweight: body.mode === 'lightweight' && body.lightweight && typeof body.lightweight === 'object'
+        ? body.lightweight
+        : undefined,
       clarification: body.clarification,
       stageSessions: body.stageSessions,
       uiState: body.uiState,

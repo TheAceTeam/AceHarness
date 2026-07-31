@@ -1,7 +1,7 @@
-import type { StateMachineWorkflowConfig, WorkflowConfig } from '@/lib/core/schemas';
+import type { StateMachineWorkflowConfig } from '@/lib/core/schemas';
 
 export function collectWorkflowRuntimeAgentNames(
-  workflowConfig: WorkflowConfig | StateMachineWorkflowConfig | Record<string, any> | null | undefined,
+  workflowConfig: StateMachineWorkflowConfig | Record<string, any> | null | undefined,
   supervisorAgent?: string | null,
 ): string[] {
   const names = new Set<string>();
@@ -18,14 +18,6 @@ export function collectWorkflowRuntimeAgentNames(
   }
 
   pushName(workflow.supervisor?.agent);
-
-  if (Array.isArray(workflow.phases)) {
-    for (const phase of workflow.phases) {
-      for (const step of phase?.steps || []) {
-        pushName(step?.agent);
-      }
-    }
-  }
 
   if (Array.isArray(workflow.states)) {
     for (const state of workflow.states) {

@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import { mcpServerSchema } from '@/lib/mcp/types';
+import {
+  LIGHTWEIGHT_TASKLIST_SKILL,
+  LIGHTWEIGHT_WORKFLOW_PROFILE,
+  normalizeLightweightTasklistDirectory,
+} from '@/lib/workflow/lightweight';
 
 const agentTeamSchema = z.enum(['blue', 'red', 'judge', 'black-gold']);
 const agentRoleTypeSchema = z.enum(['normal', 'supervisor']);
@@ -33,15 +38,6 @@ const workflowHumanHelpConfigSchema = z.object({
   blockUntilAnswered: z.boolean().default(true),
   defaultSelectionMode: z.enum(['single', 'multiple']).default('single'),
 }).optional();
-
-// 迭代配置 Schema
-export const iterationConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  maxIterations: z.number().min(1).max(20).default(5),
-  exitCondition: z.enum(['no_new_bugs_3_rounds', 'all_resolved', 'manual']).default('no_new_bugs_3_rounds'),
-  consecutiveCleanRounds: z.number().min(1).max(10).default(3),
-  escalateToHuman: z.boolean().default(true),
-});
 
 // 并发设计元数据 Schema（当前用于设计/展示；运行时仍按现有执行器能力调度）
 export const joinPolicySchema = z.object({
@@ -193,7 +189,7 @@ export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
   channelIds: z.array(z.string()).optional(),
   specTaskBinding: specTaskBindingSchema.optional(),
   enableReviewPanel: z.boolean().optional(), // 是否启用会审模式
-  skills: z.array(z.string()).optional(), // 兼容旧配置：步骤级 skills 已废弃，新配置写入 Agent.skills
+  skills: z.array(z.string().min(1)).optional(),
 }).superRefine((step, ctx) => {
   if (step.type === 'subworkflow') {
     const configFile = step.workflow?.trim() || step.subworkflow?.configFile?.trim();
@@ -222,20 +218,6 @@ export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
     });
   }
 }) as any;
-
-// 检查点 Schema
-export const checkpointSchema = z.object({
-  name: z.string().min(1, '检查点名称不能为空'),
-  message: z.string().min(1, '检查点消息不能为空'),
-});
-
-// 工作流阶段 Schema
-export const workflowPhaseSchema = z.object({
-  name: z.string().min(1, '阶段名称不能为空'),
-  steps: z.array(workflowStepSchema).min(1, '至少需要一个步骤'),
-  checkpoint: checkpointSchema.optional(),
-  iteration: iterationConfigSchema.optional(),
-});
 
 export const agentWorkspaceProfileSchema = z.object({
   displayName: z.string().optional(),
@@ -381,19 +363,6 @@ export const contextConfigSchema = z.object({
   routerModel: z.string().optional(), // Supervisor-Lite 路由模型（可选）
 });
 
-// 完整工作流配置 Schema
-export const workflowConfigSchema = z.object({
-  workflow: z.object({
-    name: z.string().min(1, '工作流名称不能为空'),
-    description: z.string().optional(),
-    phases: z.array(workflowPhaseSchema).min(1, '至少需要一个阶段'),
-    supervisor: workflowSupervisorConfigSchema,
-    concurrency: workflowConcurrencySchema,
-  }),
-  roles: z.array(roleConfigSchema).optional(),
-  context: contextConfigSchema,
-});
-
 // TypeScript 类型导出
 export type JoinPolicy = z.infer<typeof joinPolicySchema>;
 export type ChannelBinding = z.infer<typeof channelBindingSchema>;
@@ -407,9 +376,6 @@ export type SubworkflowInputs = z.infer<typeof subworkflowInputsSchema>;
 export type SubworkflowResultMapping = z.infer<typeof subworkflowResultMappingSchema>;
 export type SubworkflowRuntime = z.infer<typeof subworkflowRuntimeSchema>;
 export type SubworkflowReference = z.infer<typeof subworkflowReferenceSchema>;
-export type IterationConfig = z.infer<typeof iterationConfigSchema>;
-export type Checkpoint = z.infer<typeof checkpointSchema>;
-export type WorkflowPhase = z.infer<typeof workflowPhaseSchema>;
 export type RoleConfig = z.infer<typeof roleConfigSchema>;
 export type WorkflowAgentExecutionOverride = z.infer<typeof workflowAgentExecutionOverrideSchema>;
 export type WorkflowExecutionPolicy = z.infer<typeof workflowExecutionPolicySchema>;
@@ -418,7 +384,6 @@ export type SqliteCapabilityDatabase = z.infer<typeof sqliteCapabilityDatabaseSc
 export type WorkflowTaskInputFieldConfig = z.infer<typeof workflowTaskInputFieldSchema>;
 export type WorkflowTaskInputConfig = z.infer<typeof workflowTaskInputConfigSchema>;
 export type ContextConfig = z.infer<typeof contextConfigSchema>;
-export type WorkflowConfig = z.infer<typeof workflowConfigSchema>;
 
 // 新建配置表单 Schema
 export const newConfigFormSchema = z.object({
@@ -433,8 +398,8 @@ export const newConfigFormSchema = z.object({
     .min(1, '工作目录不能为空'),
   workspaceMode: z.enum(['isolated-copy', 'in-place']).default('in-place'),
   description: z.string().optional(),
-  mode: z.enum(['phase-based', 'state-machine', 'ai-guided']).default('phase-based').optional(),
-  requirements: z.string().optional(), // AI 引导模式下的需求描述
+  mode: z.enum(['state-machine', 'lightweight']).default('state-machine').optional(),
+  requirements: z.string().optional(),
   persistMode: z.enum(['none', 'repository']).default('none').optional(),
   specRoot: z.string().optional(),
 });
@@ -569,6 +534,13 @@ export const specCodingDocumentSchema = z.object({
 
 export const creationSessionStatusSchema = z.enum(['draft', 'confirmed', 'config-generated', 'run-bound', 'archived']);
 
+const lightweightCreationSessionSchema = z.object({
+  agent: z.string().optional(),
+  task: z.string().optional(),
+  skills: z.array(z.string()).default([]),
+  tasklistDirectory: z.string().optional(),
+});
+
 export const creationSessionSchema = z.object({
   id: z.string(),
   chatSessionId: z.string().optional(),
@@ -577,7 +549,7 @@ export const creationSessionSchema = z.object({
   status: creationSessionStatusSchema.default('draft'),
   workflowName: z.string(),
   filename: z.string(),
-  mode: z.enum(['phase-based', 'state-machine', 'ai-guided']),
+  mode: z.enum(['state-machine', 'lightweight']),
   referenceWorkflow: z.string().optional(),
   planningEngine: z.string().optional(),
   planningModel: z.string().optional(),
@@ -585,6 +557,7 @@ export const creationSessionSchema = z.object({
   workspaceMode: z.enum(['isolated-copy', 'in-place']),
   description: z.string().optional(),
   requirements: z.string().optional(),
+  lightweight: lightweightCreationSessionSchema.optional(),
   clarification: z.object({
     summary: z.string().optional(),
     knownFacts: z.array(z.string()).default([]),
@@ -644,13 +617,12 @@ export const creationSessionSchema = z.object({
   }).optional(),
   specCoding: specCodingDocumentSchema,
   generatedConfigSummary: z.object({
-    mode: z.enum(['phase-based', 'state-machine']),
-    phaseCount: z.number().int().min(0).default(0),
+    mode: z.literal('state-machine'),
     stateCount: z.number().int().min(0).default(0),
     agentNames: z.array(z.string()).default([]),
   }).optional(),
   workflowDraftSummary: z.object({
-    mode: z.enum(['phase-based', 'state-machine']),
+    mode: z.literal('state-machine'),
     nodes: z.array(z.object({
       name: z.string(),
       detail: z.string(),
@@ -711,7 +683,7 @@ export interface ConfigSummary {
   filename: string;
   name: string;
   description: string;
-  phaseCount: number;
+  stateCount: number;
   stepCount: number;
   agentCount: number;
 }
@@ -754,7 +726,7 @@ export const stateMachineStateSchema = z.object({
   type: z.enum(['normal', 'human-checkpoint']).default('normal').optional(), // 状态类型（将废弃）
   requireHumanApproval: z.boolean().default(false).optional(), // 完成后是否需要人工审查（跳转到自身除外）
   enableSpecRevisionOnComplete: z.boolean().default(false).optional(), // 状态结束后是否发起 Spec 修订表决
-  steps: z.array(workflowStepSchema).min(1, '至少需要一个步骤'),
+  steps: z.array(workflowStepSchema),
   transitions: z.array(stateTransitionSchema), // 终止状态允许空数组
   position: z.object({ x: z.number(), y: z.number() }).optional(), // 可视化位置
   isInitial: z.boolean().default(false), // 是否为初始状态
@@ -776,11 +748,17 @@ export const issueRoutingRuleSchema = z.object({
 });
 
 // 状态机工作流配置 Schema
+const lightweightWorkflowConfigSchema = z.object({
+  tasklistDirectory: z.string().trim().min(1, 'tasklistDirectory is required'),
+});
+
 export const stateMachineWorkflowSchema = z.object({
   workflow: z.object({
     name: z.string().min(1, '工作流名称不能为空'),
     description: z.string().optional(),
     mode: z.literal('state-machine'),
+    profile: z.literal(LIGHTWEIGHT_WORKFLOW_PROFILE).optional(),
+    lightweight: lightweightWorkflowConfigSchema.optional(),
     states: z.array(stateMachineStateSchema).min(1, '至少需要一个状态'),
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50), // 最大状态转移次数，防止死循环
@@ -790,17 +768,98 @@ export const stateMachineWorkflowSchema = z.object({
   }),
   roles: z.array(roleConfigSchema).optional(),
   context: contextConfigSchema,
+}).superRefine((config, ctx) => {
+  const workflow = config.workflow;
+  const isLightweight = workflow.profile === LIGHTWEIGHT_WORKFLOW_PROFILE;
+
+  if (!isLightweight) {
+    if (workflow.lightweight) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['workflow', 'lightweight'],
+        message: 'workflow.lightweight requires workflow.profile: lightweight',
+      });
+    }
+    return;
+  }
+
+  if (!workflow.lightweight) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'lightweight'],
+      message: 'lightweight workflows require workflow.lightweight.tasklistDirectory',
+    });
+  } else {
+    try {
+      normalizeLightweightTasklistDirectory(workflow.lightweight.tasklistDirectory);
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['workflow', 'lightweight', 'tasklistDirectory'],
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (workflow.states.length !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states'],
+      message: 'lightweight workflows require exactly one state',
+    });
+    return;
+  }
+
+  const state = workflow.states[0];
+  if (!state.isInitial) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states', 0, 'isInitial'],
+      message: 'the lightweight state must be initial',
+    });
+  }
+  if (!state.isFinal) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states', 0, 'isFinal'],
+      message: 'the lightweight state must be final',
+    });
+  }
+  if (state.transitions.length !== 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states', 0, 'transitions'],
+      message: 'the lightweight state must not define transitions',
+    });
+  }
+  if (state.steps.length !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states', 0, 'steps'],
+      message: 'lightweight workflows require exactly one agent step',
+    });
+    return;
+  }
+
+  const step = state.steps[0];
+  if (step.type === 'subworkflow') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states', 0, 'steps', 0, 'type'],
+      message: 'lightweight workflows cannot contain subworkflow steps',
+    });
+  }
+  if (!Array.isArray(step.skills) || !step.skills.includes(LIGHTWEIGHT_TASKLIST_SKILL)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states', 0, 'steps', 0, 'skills'],
+      message: `lightweight steps must include ${LIGHTWEIGHT_TASKLIST_SKILL}`,
+    });
+  }
 });
 
-// 统一工作流配置 Schema（支持两种模式）
-export const unifiedWorkflowConfigSchema = z.union([
-  workflowConfigSchema.extend({
-    workflow: workflowConfigSchema.shape.workflow.extend({
-      mode: z.literal('phase-based').optional().default('phase-based'),
-    }),
-  }),
-  stateMachineWorkflowSchema,
-]);
+// State machine is the only supported workflow contract.
+export const unifiedWorkflowConfigSchema = stateMachineWorkflowSchema;
 
 // TypeScript 类型导出
 export type Issue = z.infer<typeof issueSchema>;
@@ -809,6 +868,12 @@ export type StateTransition = z.infer<typeof stateTransitionSchema>;
 export type StateMachineState = z.infer<typeof stateMachineStateSchema>;
 export type IssueRoutingRule = z.infer<typeof issueRoutingRuleSchema>;
 export type StateMachineWorkflowConfig = z.infer<typeof stateMachineWorkflowSchema>;
+export type LightweightWorkflowConfig = StateMachineWorkflowConfig & {
+  workflow: StateMachineWorkflowConfig['workflow'] & {
+    profile: typeof LIGHTWEIGHT_WORKFLOW_PROFILE;
+    lightweight: z.infer<typeof lightweightWorkflowConfigSchema>;
+  };
+};
 export type UnifiedWorkflowConfig = z.infer<typeof unifiedWorkflowConfigSchema>;
 
 // 状态转移记录（运行时）

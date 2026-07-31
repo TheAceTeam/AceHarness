@@ -1,5 +1,4 @@
 import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
-import werewolfAgoraExtension from '@/plugins/werewolf';
 
 export type AgoraTopicExtensionAction = {
   id: string;
@@ -16,9 +15,7 @@ type AgoraExtensionModule = {
   topicActions?: readonly AgoraTopicExtensionAction[];
 };
 
-const modules: AgoraExtensionModule[] = [
-  werewolfAgoraExtension as AgoraExtensionModule,
-];
+const modules: AgoraExtensionModule[] = [];
 
 export function getAgoraTopicExtensionActions(): AgoraTopicExtensionAction[] {
   return modules.flatMap((module) => module.topicActions || []);

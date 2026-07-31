@@ -11,13 +11,13 @@ import { existsSync } from 'fs';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { cpus } from 'os';
 import { parse } from 'yaml';
-import { resolveAgentEngineSelection, resolveAgentModel } from '@/lib/workflow/manager';
+import { resolveAgentEngineSelection } from '@/lib/engines/workflow-engine-selection';
 import { resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { processManager } from '@/lib/core/process-manager';
 import { createRun, updateRun } from '@/lib/run/store';
 import {
-  saveRunState, saveProcessOutput, appendStreamContent, appendFeedbackToStream,
-  loadRunState,
+  saveRunState, saveProcessOutput, appendStreamContent, appendStreamToolEvent, appendFeedbackToStream,
+  loadRunState, findActiveRuns, isProcessAlive,
   type PersistedRunState,
   type PersistedProcessInfo,
   type PersistedStepLog,
@@ -30,6 +30,7 @@ import {
   type HumanAnswerContext,
   type PersistedSubworkflowRunRef,
   type PersistedSubworkflowAuditEvent,
+  type PersistedLightweightRunMetadata,
   type WorkflowSpecRevisionBallot,
   type WorkflowSpecRevisionVoteChoice,
   type WorkflowSpecRevisionVoteRecord,
@@ -40,6 +41,7 @@ import {
   type WorkflowChildSpecDeltaSummary,
   type WorkflowFinalReview,
 } from '@/lib/workflow/experience-store';
+import { stateMachineWorkflowSchema } from '@/lib/core/schemas';
 import type {
   StateMachineWorkflowConfig, StateMachineState, StateTransition,
   Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
@@ -73,8 +75,12 @@ import {
   writeRuntimeDatabaseEnvFile,
   type RuntimeDatabaseGrant,
 } from '@/lib/runtime/database-capabilities';
-import { listChatSessions, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
-import { appendWorkflowAgoraMessage, createWorkflowParticipants } from '@/lib/agora/workflow-topic';
+import { listChatSessions, updateChatSessionCreationBinding } from '@/lib/chat/persistence';
+import { appendWorkflowSupervisorReviewToAgora, bindWorkflowRunToConversation } from '@/lib/workflow/runtime-session';
+import {
+  appendWorkflowRuntimeTranscript,
+  toWorkflowRuntimeTranscriptLiveEvent,
+} from '@/lib/workflow/runtime-transcript';
 import {
   DEFAULT_SUPERVISOR_NAME,
   ensureDefaultSupervisorConfig,
@@ -157,6 +163,17 @@ import {
   resolveWorkflowTaskInputFields,
   type WorkflowTaskInput,
 } from '@/lib/workflow/task-input';
+import {
+  LIGHTWEIGHT_TASKLIST_SKILL,
+  ensureLightweightWorkflowStepSkill,
+  getEffectiveWorkflowStepSkills,
+  isLightweightWorkflowConfig,
+} from '@/lib/workflow/lightweight';
+import {
+  releaseLightweightTasklistDirectory,
+  reserveLightweightTasklistDirectory,
+  resolveLightweightTasklistDirectory,
+} from '@/lib/workflow/lightweight-runtime';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -188,8 +205,15 @@ const MAX_PARALLEL_SUBWORKFLOW_BRANCHES = 8;
 const MAX_CHILD_EVENT_COUNT = 500;
 const MAX_CHILD_OUTPUT_SUMMARY_BYTES = 16 * 1024;
 const MAX_SUBWORKFLOW_AUDIT_EVENTS = 300;
-
+const FAILED_STEP_RECOVERY_REQUIRED_ERROR = '存在失败步骤，必须先从失败断点恢复并重试';
 type LiveFeedbackStatus = 'queued' | 'interrupting' | 'delivered';
+
+class FailedStepRecoveryRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FailedStepRecoveryRequiredError';
+  }
+}
 
 interface LiveFeedbackEntry {
   id: string;
@@ -281,6 +305,7 @@ export interface StateExecutionResult {
   issues: Issue[];
   stepOutputs: string[];
   summary: string;
+  executionFailed?: boolean;
 }
 
 export interface StateTransitionRecord {
@@ -357,7 +382,10 @@ function normalizeWorkflowVerdict(value: unknown): 'pass' | 'conditional_pass' |
 
 export function compactStepConclusion(raw: string): string {
   const MAX_CONCLUSION_CHARS = 4000;
-  const tagged = extractTaggedBlock(raw, 'step-conclusion');
+  // A final-verdict repair can append a corrected conclusion after an earlier
+  // draft. Downstream consumers must receive and archive the newest one.
+  const taggedBlocks = extractTaggedBlocks(raw, 'step-conclusion');
+  const tagged = taggedBlocks[taggedBlocks.length - 1] || null;
   if (tagged) {
     // 结论是"结果/裁决"前置结构，超长时保留开头。缺失此上限会导致
     // agent 把整篇文档塞进 <step-conclusion> 时按原样落盘（曾出现 117KB/134KB 结论文件）。
@@ -668,6 +696,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private subworkflowAuditEvents: PersistedSubworkflowAuditEvent[] = [];
   private workflowSnapshotRoot: string | null = null;
   private workflowSnapshotManifestHash: string | null = null;
+  private lightweightRunMetadata: PersistedLightweightRunMetadata | null = null;
   private embeddedProjectRoot: string | null = null;
   private embeddedWorkspaceMode: 'in-place' | 'isolated-copy' | null = null;
   private embeddedContextOverrides: Record<string, any> | null = null;
@@ -686,6 +715,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private waitStartedAt: string | null = null;
   private pendingForceTransition: string | null = null;
   private pendingForceInstruction: string | null = null;
+  // Set exclusively by the explicit operator force-transition API.  A bare
+  // pending target (for example an internal approval selection) must not
+  // weaken failed-step checkpoint gating.
+  private pendingExplicitForceTransition = false;
   /** Tracks human approval context for crash recovery */
   private pendingApprovalInfo: {
     suggestedNextState: string;
@@ -757,6 +790,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private engineType: WorkflowRuntimeType = 'claude-code';
   private engineExecutionTail: Promise<void> = Promise.resolve();
   private workflowGit: WorkflowGitState | null = null;
+  // This run-level gate is authoritative for every start/resume/retry path.
+  // It prevents stale persisted workflowGit state from re-enabling Git work.
+  private workflowGitBaselineEnabled = true;
   /** Resolved workflow-level MCP servers from context.mcpServers */
   private workflowMcpServers: ManagedMcpServer[] = [];
   private runtimeDatabaseGrant: RuntimeDatabaseGrant | null = null;
@@ -815,27 +851,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   private shouldRequireFinalVerdict(step: WorkflowStep, state: StateMachineState): boolean {
     return this.isStateLastStep(step, state) && !step.parallelGroup;
-  }
-
-  private getWorkflowAgoraAgentSessions(): Record<string, string> {
-    return Object.fromEntries(
-      this.agents
-        .filter((agent) => Boolean(agent.sessionId))
-        .map((agent) => [agent.name, agent.sessionId as string])
-    );
-  }
-
-  private getWorkflowAgoraParticipants() {
-    const names = new Set<string>();
-    const addName = (name?: string | null) => {
-      const trimmed = String(name || '').trim();
-      if (trimmed) names.add(trimmed);
-    };
-    addName(this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME);
-    this.agents.forEach((agent) => addName(agent.name));
-    return createWorkflowParticipants([...names], {
-      coordinatorAgent: this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME,
-    });
   }
 
   private async initializeMemoryV2(workflowConfig: StateMachineWorkflowConfig): Promise<void> {
@@ -1232,12 +1247,22 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     if (!existsSync(serverSkillsDir)) return;
 
-    // Collect all skill names needed: context.skills + agent.skills
+    // Collect all effective skill names: workflow, Agent, and step scopes.
     const needed = new Set<string>();
     if (config.context?.skills) config.context.skills.forEach(s => needed.add(s));
     for (const roleConfig of this.agentConfigs || []) {
       if (Array.isArray((roleConfig as any).skills)) {
         (roleConfig as any).skills.forEach((s: string) => needed.add(s));
+      }
+    }
+    for (const state of config.workflow.states || []) {
+      for (const step of state.steps || []) {
+        if (isSubworkflowStep(step)) continue;
+        const roleConfig = this.agentConfigs.find((role) => role.name === step.agent)
+          || config.roles?.find((role) => role.name === step.agent);
+        for (const skillName of getEffectiveWorkflowStepSkills({ config, step, roleConfig })) {
+          needed.add(skillName);
+        }
       }
     }
     if (needed.size === 0) {
@@ -1264,10 +1289,20 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     const linkedNames: string[] = [];
     for (const skillName of needed) {
-      if (isAceHarnessSkillName(skillName)) continue;
+      const isRequiredTasklistSkill = isLightweightWorkflowConfig(config)
+        && skillName === LIGHTWEIGHT_TASKLIST_SKILL;
+      if (isAceHarnessSkillName(skillName) && !isRequiredTasklistSkill) continue;
       const src = resolve(serverSkillsDir, skillName);
       const dst = resolve(workspaceSkillsDir, skillName);
-      if (!existsSync(src)) continue;
+      if (!existsSync(src)) {
+        if (isRequiredTasklistSkill) {
+          throw new Error(`Required lightweight skill is unavailable: ${LIGHTWEIGHT_TASKLIST_SKILL}`);
+        }
+        continue;
+      }
+      if (isRequiredTasklistSkill && !existsSync(resolve(src, 'SKILL.md'))) {
+        throw new Error(`Required lightweight skill is invalid: ${LIGHTWEIGHT_TASKLIST_SKILL}`);
+      }
       if (existsSync(dst)) continue;
       try {
         createDirectoryLinkSync(src, dst);
@@ -1319,6 +1354,88 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.copiedSkills = null;
   }
 
+  private async reserveLightweightTasklistDirectory(metadata: PersistedLightweightRunMetadata): Promise<void> {
+    if (!this.currentRunId) return;
+    await reserveLightweightTasklistDirectory({
+      runId: this.currentRunId,
+      resolvedTasklistDirectory: metadata.resolvedTasklistDirectory,
+    });
+    try {
+      await mkdir(metadata.resolvedTasklistDirectory, { recursive: true });
+    } catch (error) {
+      releaseLightweightTasklistDirectory({
+        runId: this.currentRunId,
+        resolvedTasklistDirectory: metadata.resolvedTasklistDirectory,
+      });
+      throw error;
+    }
+  }
+
+  private async prepareLightweightRunMetadata(config: StateMachineWorkflowConfig): Promise<void> {
+    if (!isLightweightWorkflowConfig(config)) {
+      this.lightweightRunMetadata = null;
+      return;
+    }
+
+    const state = config.workflow.states[0];
+    const step = state?.steps?.[0];
+    const workspaceRoot = this.getWorkingDirectory() || config.context?.projectRoot;
+    if (!state || !step || !workspaceRoot) {
+      throw new Error('Lightweight workflow cannot resolve its tasklist workspace');
+    }
+
+    const resolved = resolveLightweightTasklistDirectory({
+      workspaceRoot,
+      tasklistDirectory: config.workflow.lightweight?.tasklistDirectory,
+    });
+    const roleConfig = this.agentConfigs.find((role) => role.name === step.agent)
+      || config.roles?.find((role) => role.name === step.agent);
+    const metadata: PersistedLightweightRunMetadata = {
+      profile: 'lightweight',
+      ...resolved,
+      stateName: state.name,
+      stepName: step.name,
+      effectiveStepSkills: getEffectiveWorkflowStepSkills({ config, step, roleConfig }),
+    };
+    await this.reserveLightweightTasklistDirectory(metadata);
+    this.lightweightRunMetadata = metadata;
+  }
+
+  private async restoreLightweightRunMetadata(runState: PersistedRunState): Promise<void> {
+    if (!runState.lightweight) {
+      this.lightweightRunMetadata = null;
+      return;
+    }
+
+    const expectedWorkspaceRoot = runState.workingDirectory
+      ? resolve(runState.workingDirectory)
+      : resolve(runState.lightweight.workspaceRoot);
+    if (resolve(runState.lightweight.workspaceRoot) !== expectedWorkspaceRoot) {
+      throw new Error('Persisted lightweight workspace does not match the run working directory');
+    }
+    const resolved = resolveLightweightTasklistDirectory({
+      workspaceRoot: expectedWorkspaceRoot,
+      tasklistDirectory: runState.lightweight.tasklistDirectory,
+    });
+    if (resolved.resolvedTasklistDirectory !== runState.lightweight.resolvedTasklistDirectory) {
+      throw new Error('Persisted lightweight tasklist directory no longer resolves to its recorded workspace path');
+    }
+
+    this.lightweightRunMetadata = {
+      ...runState.lightweight,
+      ...resolved,
+    };
+    await this.reserveLightweightTasklistDirectory(this.lightweightRunMetadata);
+  }
+
+  private releaseLightweightTasklistDirectory(): void {
+    if (!this.currentRunId || !this.lightweightRunMetadata) return;
+    releaseLightweightTasklistDirectory({
+      runId: this.currentRunId,
+      resolvedTasklistDirectory: this.lightweightRunMetadata.resolvedTasklistDirectory,
+    });
+  }
+
   /**
    * Copy a directory with progress updates so frontend can show preparation details.
    */
@@ -1326,7 +1443,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     srcDir: string,
     destDir: string,
     runId: string,
-    reportStatus: (message: string, step: string) => Promise<void>
+    reportStatus: (message: string, step: string) => Promise<void>,
+    options: { excludeGitMetadata?: boolean } = {},
   ): Promise<void> {
     const files: Array<{ src: string; dst: string; size: number }> = [];
     const formatBytes = (bytes: number): string => {
@@ -1349,6 +1467,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const cur = stack.pop()!;
       const entries = await readdir(cur.src, { withFileTypes: true });
       for (const entry of entries) {
+        // When Git tracking is disabled, the runtime copy must not inherit a
+        // repository's object database or worktree metadata.
+        if (options.excludeGitMetadata && entry.name === '.git') continue;
         const srcPath = join(cur.src, entry.name);
         const dstPath = join(cur.dst, entry.name);
         if (entry.isDirectory()) {
@@ -1506,6 +1627,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       subworkflowAuditEvents: this.subworkflowAuditEvents,
       workflowSnapshotRoot: this.workflowSnapshotRoot,
       workflowSnapshotManifestHash: this.workflowSnapshotManifestHash,
+      lightweight: this.lightweightRunMetadata,
       runOwnerId: this._createdBy,
       runOwnerName: this._createdByName,
       createdBy: this._createdBy,
@@ -1639,7 +1761,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           bindingValidation: compiled.validation,
         });
       }
-      this.currentWorkflowConfig = compiled.config as StateMachineWorkflowConfig;
+      this.currentWorkflowConfig = ensureLightweightWorkflowStepSkill(compiled.config as StateMachineWorkflowConfig);
       this.bindingValidation = compiled.validation;
       this.stepTaskBindingsSnapshot = compiled.validation.bindings;
       this.stepTaskBindingsByStepKey = new Map(
@@ -1723,6 +1845,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentRunSpecCoding = null;
       this.currentSpecRootDir = null;
       this.workflowGit = null;
+      this.workflowGitBaselineEnabled = true;
       this.workflowMcpServers = [];
       this.promptMemos.clear();
       this.stepTaskBindingsByStepKey.clear();
@@ -1746,6 +1869,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.subworkflowAuditEvents = [];
       this.workflowSnapshotRoot = null;
       this.workflowSnapshotManifestHash = null;
+      this.lightweightRunMetadata = null;
       this.embeddedProjectRoot = null;
       this.embeddedWorkspaceMode = null;
       this.embeddedContextOverrides = null;
@@ -1755,6 +1879,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Clear stale in-memory flags from previous run
       this.pendingForceTransition = null;
       this.pendingForceInstruction = null;
+      this.pendingExplicitForceTransition = false;
       this.pendingApprovalInfo = null;
       this.humanQuestions = [];
       this.pendingHumanQuestionId = null;
@@ -1793,6 +1918,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         };
       }
       this.currentWorkflowConfig = workflowConfig;
+      this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
       this.workflowName = workflowConfig.workflow.name || '';
       this.currentRequirements = requirements || workflowConfig.context?.requirements || '';
       this.currentSupervisorAgent = resolveWorkflowSupervisorAgent(workflowConfig);
@@ -1879,6 +2005,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         };
         this.currentWorkflowConfig = workflowConfig;
       }
+      workflowConfig = ensureLightweightWorkflowStepSkill(workflowConfig);
+      this.currentWorkflowConfig = workflowConfig;
       // Resolve projectRoot to absolute path relative to user's personal dir
       this.currentProjectRoot = workflowConfig.context?.projectRoot
         ? this.resolveProjectRootPath(workflowConfig.context.projectRoot)
@@ -1935,7 +2063,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           filename: configFile,
         });
         const compiled = compileStepTaskBindings(workflowConfig, this.currentRunSpecCoding);
-        workflowConfig = compiled.config as StateMachineWorkflowConfig;
+        workflowConfig = ensureLightweightWorkflowStepSkill(compiled.config as StateMachineWorkflowConfig);
         this.currentWorkflowConfig = workflowConfig;
         this.assertRequiredVerdictTransitions(workflowConfig);
         this.bindingValidation = compiled.validation;
@@ -1989,7 +2117,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
             this.isolatedDir = isoDir;
             this.currentProjectRoot = isoDir;
             await this.persistState();
-            await this.copyDirectoryWithProgress(srcDir, isoDir, runId, reportPreparingProgress);
+            await this.copyDirectoryWithProgress(srcDir, isoDir, runId, reportPreparingProgress, {
+              excludeGitMetadata: !this.workflowGitBaselineEnabled,
+            });
             if (this.shouldStop) {
               // Stopped during copy — clean up incomplete dir
               await rm(isoDir, { recursive: true, force: true }).catch(() => {});
@@ -2007,7 +2137,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (this.shouldStop) return;
 
       const workflowGitWorkspacePath = this.getWorkingDirectory() || workflowConfig.context?.projectRoot;
-      if (workflowGitWorkspacePath && workflowConfig.context?.gitBaselineEnabled !== false) {
+      if (workflowGitWorkspacePath && this.workflowGitBaselineEnabled) {
         await reportPreparingProgress('准备中：建立 Git 基线...', '建立 Git 基线');
         await this.ensureWorkflowGitBaseline(workflowGitWorkspacePath);
       } else if (workflowGitWorkspacePath) {
@@ -2043,6 +2173,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       });
       await writeRuntimeDatabaseEnvFile(this.runtimeDatabaseGrant);
       if (this.shouldStop) return;
+      if (isLightweightWorkflowConfig(workflowConfig)) {
+        await reportPreparingProgress('准备中：初始化任务文档目录...', '初始化任务文档目录');
+        await this.prepareLightweightRunMetadata(workflowConfig);
+        await this.persistState();
+      }
       await reportPreparingProgress('准备中：同步 Skills...', '同步 Skills');
       await this.syncSkillsToWorkspace(workflowConfig);
 
@@ -2209,7 +2344,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       throw new Error('工作流未在运行中');
     }
     const fromState = this.currentState;
+    // This is an explicit operator override.  Retain failed step logs for
+    // audit, but release their checkpoint so the selected state can execute.
+    this.failedSteps = [];
     this.pendingForceTransition = targetState;
+    this.pendingExplicitForceTransition = true;
     if (instruction) {
       this.pendingForceInstruction = instruction;
     }
@@ -2289,7 +2428,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return parts.filter(Boolean).join('\n') || '已确认';
   }
 
-  private async appendSupervisorChatEvent(input: {
+  private async appendRuntimeTranscriptEvent(input: {
     type: string;
     title: string;
     body?: string;
@@ -2298,20 +2437,22 @@ export class StateMachineWorkflowManager extends EventEmitter {
     speakerName?: string;
     speakerType?: 'human' | 'agent' | 'system';
   }): Promise<void> {
-    if (!this._frontendSessionId) return;
+    const runId = this.currentRunId;
+    if (!runId) return;
     const speakerName = input.speakerName || this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
-    await appendWorkflowAgoraMessage({
-      sessionId: this._frontendSessionId,
+    const event = await appendWorkflowRuntimeTranscript({
+      runId,
       type: input.type,
       title: input.title,
       body: input.body,
+      tags: input.tags,
       speakerName,
       speakerType: input.speakerType || 'agent',
       dedupeKey: input.dedupeKey,
-      participants: this.getWorkflowAgoraParticipants(),
-      agentSessions: this.getWorkflowAgoraAgentSessions(),
-      workspacePath: this.getWorkingDirectory() || undefined,
-    }).catch(() => {});
+    }).catch(() => null);
+    if (event) {
+      this.emit('runtime-transcript', toWorkflowRuntimeTranscriptLiveEvent(event));
+    }
   }
 
   async createHumanQuestion(input: Partial<HumanQuestion> & {
@@ -2385,7 +2526,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     await this.persistState();
     const isParallelManualJoin = question.source?.type === 'parallel-manual-join';
     const isHumanHelp = question.source?.type === 'human-help';
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: isParallelManualJoin ? 'parallel-manual-join-question' : isHumanHelp ? 'human-help-question' : 'human-question',
       title: `${isParallelManualJoin ? '等待并发人工确认' : isHumanHelp ? '等待人工客服回复' : '等待人工回复'}：${question.title}`,
       body: question.message,
@@ -2478,7 +2619,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     await this.persistState();
     const isParallelManualJoin = existing.source?.type === 'parallel-manual-join';
     const isHumanHelp = existing.source?.type === 'human-help';
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: isParallelManualJoin ? 'parallel-manual-join-answer' : isHumanHelp ? 'human-help-answer' : 'human-answer',
       title: `${isParallelManualJoin ? '并发人工确认已回复' : isHumanHelp ? '人工客服已回复' : '人工已回复'}：${existing.title}`,
       body: answerText,
@@ -2786,7 +2927,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       request,
       timestamp,
     });
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: 'human-help-request',
       title: `请求人工客服：${stateName} / ${step.name}`,
       body: [
@@ -2809,7 +2950,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       timestamp: new Date().toISOString(),
       stateName,
     });
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: decision.needsHuman ? 'human-help-review' : 'human-help-dismissed',
       title: decision.needsHuman
         ? `Supervisor 确认需要人工：${stateName} / ${step.name}`
@@ -2877,7 +3018,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       throw new Error('工作流已停止');
     }
     const finalQuestion = answered || this.humanQuestions.find((question) => question.id === humanQuestion.id) || humanQuestion;
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: 'human-answer',
       title: `人工客服已回复：${finalQuestion.title}`,
       body: finalQuestion.answer ? this.formatHumanQuestionAnswer(finalQuestion.answer) : '已回复。',
@@ -2940,7 +3081,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     } catch (err) {
     }
 
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: status === 'completed' ? 'run-completed' : status === 'failed' ? 'run-failed' : 'run-stopped',
       title: status === 'completed' ? '工作流执行完成' : status === 'failed' ? '工作流执行失败' : '工作流已停止',
       body: status === 'completed'
@@ -2950,6 +3091,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       dedupeKey: `workflow-run-${status}-${this.currentRunId}`,
     });
 
+    this.releaseLightweightTasklistDirectory();
     this.status = 'idle';
     } finally {
       this.releaseMemoryV2AfterRun();
@@ -2973,19 +3115,33 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentStep = null;
   }
 
+  private assertStateMachineWorkflowConfig(configFile: string, config: unknown): void {
+    const parsed = stateMachineWorkflowSchema.safeParse(config);
+    if (parsed.success) return;
+    const details = parsed.error.issues
+      .map((issue) => `${issue.path.join('.') || 'workflow'}: ${issue.message}`)
+      .join('; ');
+    throw new Error(`Invalid state-machine workflow configuration ${configFile}: ${details}`);
+  }
+
   private async readWorkflowConfigContent(configFile: string): Promise<string> {
+    let content: string;
     if (this.rootRunId) {
       try {
-        return (await readWorkflowConfigSnapshot({
+        content = (await readWorkflowConfigSnapshot({
           rootRunId: this.rootRunId,
           configFile,
         })).content;
+        this.assertStateMachineWorkflowConfig(configFile, parse(content));
+        return content;
       } catch (error) {
         if (this.parentRunId || this.rootRunId === this.currentRunId) throw error;
       }
     }
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
-    return readFile(configPath, 'utf-8');
+    content = await readFile(configPath, 'utf-8');
+    this.assertStateMachineWorkflowConfig(configFile, parse(content));
+    return content;
   }
 
   private refreshCurrentStep(): void {
@@ -3028,10 +3184,35 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.failedSteps = this.failedSteps.filter((item) => item !== stepKey);
   }
 
+  private createFailedStepRecoveryRequiredError(stateName?: string, failedSteps = this.failedSteps): FailedStepRecoveryRequiredError {
+    const failedStepList = failedSteps.filter(Boolean).join(', ');
+    const stateLabel = stateName || this.currentState || '当前状态';
+    return new FailedStepRecoveryRequiredError(
+      `状态 "${stateLabel}" ${FAILED_STEP_RECOVERY_REQUIRED_ERROR}${failedStepList ? `：${failedStepList}` : ''}`
+    );
+  }
+
+  private assertStateCanTransition(result: StateExecutionResult): void {
+    if (!result.executionFailed && this.failedSteps.length === 0) return;
+
+    // An explicit operator force request may arrive after the step has already
+    // produced a failed result but before this checkpoint is evaluated.  It is
+    // a deliberate recovery action, unlike normal transition evaluation.
+    if (this.pendingExplicitForceTransition && this.pendingForceTransition) {
+      this.failedSteps = [];
+      return;
+    }
+
+    this.pendingForceTransition = null;
+    this.pendingForceInstruction = null;
+    this.pendingExplicitForceTransition = false;
+    throw this.createFailedStepRecoveryRequiredError(result.stateName);
+  }
+
   private deriveFailedStepKeys(stepLogs: PersistedStepLog[] = []): string[] {
     return Array.from(new Set(
       stepLogs
-        .filter((log) => log.status === 'failed' && typeof log.stepName === 'string' && log.stepName.trim())
+        .filter((log) => !log.superseded && log.status === 'failed' && typeof log.stepName === 'string' && log.stepName.trim())
         .map((log) => log.stepName)
     ));
   }
@@ -3040,10 +3221,17 @@ export class StateMachineWorkflowManager extends EventEmitter {
     for (let i = this.stepLogs.length - 1; i >= 0; i--) {
       const log = this.stepLogs[i];
       if (log.stepName !== stepKey) continue;
+      if (log.superseded) continue;
       if (status && log.status !== status) continue;
       return log;
     }
     return null;
+  }
+
+  private upsertPersistedStepLog(log: PersistedStepLog): void {
+    const index = this.stepLogs.findIndex((item) => item.id === log.id);
+    if (index >= 0) this.stepLogs[index] = log;
+    else this.stepLogs.push(log);
   }
 
   private getSegmentStepKeys(stateName: string, segment: StepSegment): string[] {
@@ -3060,9 +3248,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const validStepKeys = new Set(state.steps.map((step) => this.getWorkflowStepKey(state.name, step)));
     if (validStepKeys.size === 0) return null;
 
+    const failedStep = [...(runState.failedSteps || [])]
+      .reverse()
+      .find((stepKey) => validStepKeys.has(stepKey));
+    if (failedStep) return failedStep;
+
     const failedLog = [...(runState.stepLogs || [])]
       .reverse()
-      .find((log) => log.status === 'failed' && validStepKeys.has(log.stepName));
+      .find((log) => !log.superseded && log.status === 'failed' && validStepKeys.has(log.stepName));
     if (failedLog) return failedLog.stepName;
 
     const activeStep = (runState.activeSteps || []).find((stepKey) => validStepKeys.has(stepKey));
@@ -3157,6 +3350,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         subworkflowAuditEvents: this.subworkflowAuditEvents,
         workflowSnapshotRoot: this.workflowSnapshotRoot || undefined,
         workflowSnapshotManifestHash: this.workflowSnapshotManifestHash || undefined,
+        lightweight: this.lightweightRunMetadata || undefined,
         runOwnerId: this._createdBy,
         runOwnerName: this._createdByName,
         createdBy: this._createdBy,
@@ -3241,13 +3435,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
         deltaMergeState: this.deltaMergeState,
       });
       await this.syncRunSpecCodingDelta().catch(() => {});
-      if (this._frontendSessionId) {
-        await updateChatSessionWorkflowBinding(this._frontendSessionId, {
+      const requiresLightweightMetadata = isLightweightWorkflowConfig(this.currentWorkflowConfig);
+      if (this._frontendSessionId && !this.parentRunId && (!requiresLightweightMetadata || this.lightweightRunMetadata)) {
+        await bindWorkflowRunToConversation({
+          sessionId: this._frontendSessionId,
           configFile: this.currentConfigFile,
           runId: this.currentRunId,
+          status: statusToPersist,
           supervisorAgent: this.currentSupervisorAgent,
           supervisorSessionId,
           attachedAgentSessions,
+          lightweight: this.lightweightRunMetadata,
+          requireLightweightMetadata: requiresLightweightMetadata,
         });
         await updateChatSessionCreationBinding(this._frontendSessionId, {
           filename: this.currentConfigFile,
@@ -3290,6 +3489,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     return null;
+  }
+
+  private parseVerdictFromConclusion(raw: string): 'pass' | 'conditional_pass' | 'fail' | null {
+    return this.extractVerdictJson(raw)?.verdict || null;
   }
 
   private buildSpecRevisionVoteContext(input: SpecRevisionVoteTriggerInput): string {
@@ -3514,7 +3717,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (!compiled.validation.ok) {
         throw new Error(`自动修订后的 Spec task 与 workflow step 绑定不一致: ${compiled.validation.errors.join('; ')}`);
       }
-      this.currentWorkflowConfig = compiled.config as StateMachineWorkflowConfig;
+      this.currentWorkflowConfig = ensureLightweightWorkflowStepSkill(compiled.config as StateMachineWorkflowConfig);
       this.bindingValidation = compiled.validation;
       this.stepTaskBindingsSnapshot = compiled.validation.bindings;
       this.stepTaskBindingsByStepKey = new Map(
@@ -3592,7 +3795,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     this.specRevisionVote = vote;
     await this.persistState();
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: 'spec-revision-vote',
       title: vote.title,
       body: `${vote.question}\n参与 Agent: ${voters.join('、')}`,
@@ -3656,7 +3859,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.specRevisionVote = vote;
     this.specRevisionVoteHistory = [vote, ...this.specRevisionVoteHistory.filter((item) => item.id !== vote.id)].slice(0, 20);
     await this.persistState();
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: 'spec-revision-vote-result',
       title: `Spec 修订表决完成：${getSpecRevisionChoiceLabel(vote.recommendedChoice || 'defer')}`,
       body: [
@@ -3714,7 +3917,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private async ensureWorkflowGitBaseline(workspacePath?: string | null): Promise<void> {
-    if (!this.currentRunId || !workspacePath) return;
+    if (!this.workflowGitBaselineEnabled || !this.currentRunId || !workspacePath) return;
     try {
       this.workflowGit = await ensureWorkflowGitState({
         workspacePath,
@@ -3762,7 +3965,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     stateName?: string;
     agent: string;
   }): Promise<string | undefined> {
-    if (!this.workflowGit?.enabled) return undefined;
+    if (!this.workflowGitBaselineEnabled || !this.workflowGit?.enabled) return undefined;
     try {
       const recorded = await recordWorkflowGitSnapshot({
         state: this.workflowGit,
@@ -3799,7 +4002,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     status: 'completed' | 'failed';
     beforeSnapshotId?: string;
   }): Promise<string | undefined> {
-    if (!this.workflowGit?.enabled) return undefined;
+    if (!this.workflowGitBaselineEnabled || !this.workflowGit?.enabled) return undefined;
     try {
       const recorded = await recordWorkflowGitSnapshot({
         state: this.workflowGit,
@@ -3832,7 +4035,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private async recordFinalGitSnapshot(status: 'completed' | 'failed' | 'stopped'): Promise<void> {
-    if (!this.workflowGit?.enabled) return;
+    if (!this.workflowGitBaselineEnabled || !this.workflowGit?.enabled) return;
     try {
       const recorded = await recordWorkflowGitSnapshot({
         state: this.workflowGit,
@@ -4186,11 +4389,27 @@ try {
           return;
         }
 
-        // Accumulate visible message text and structured tool blocks into the preview stream.
-        if (event.type !== 'text' && event.type !== 'tool') return;
+        if (event.type === 'tool') {
+          const tool = event.tool;
+          processManager.upsertToolEvent(processId, tool);
+          if (options.runId) {
+            void appendStreamToolEvent(options.runId, displayStep, tool).catch(() => {});
+          }
+          processManager.emit('stream', {
+            id: processId,
+            step: displayStep,
+            tool,
+          });
+          return;
+        }
+
+        if (event.type !== 'text') return;
 
         fullStreamContent += event.content;
         const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
+        if (options.runId) {
+          void appendStreamContent(options.runId, displayStep, event.content).catch(() => {});
+        }
         processManager.emit('stream', {
           id: processId,
           step: displayStep,
@@ -4617,15 +4836,19 @@ try {
       timestamp,
       stateName: state.name,
     });
-    await this.appendSupervisorChatEvent({
-      type,
-      title: type === 'checkpoint-advice'
-        ? `Supervisor 检查点建议：${state.name}`
-        : `Supervisor 阶段审阅：${state.name}`,
-      body: response,
-      tags: [type, state.name],
+    const supervisorSessionId = this.agents.find((agent) => agent.name === this.currentSupervisorAgent)?.sessionId;
+    await appendWorkflowSupervisorReviewToAgora({
+      sessionId: this._frontendSessionId,
+      runId: this.currentRunId,
+      configFile: this.currentConfigFile,
+      stateName: state.name,
+      reviewType: type,
+      content: response,
+      supervisorAgent: this.currentSupervisorAgent,
+      supervisorSessionId,
+      timestamp,
       dedupeKey: `workflow-supervisor-review-${this.currentRunId}-${state.name}-${type}-${timestamp}`,
-    });
+    }).catch(() => {});
     this.emit('supervisor-review', this.latestSupervisorReview);
     if (this.currentRunSpecCoding) {
       this.currentRunSpecCoding = appendSupervisorSpecCodingRevision(this.currentRunSpecCoding, {
@@ -4714,6 +4937,48 @@ try {
         // Execute final state steps (e.g. regression tests) before completing
         if (stateConfig.steps.length > 0) {
           const finalResult = await this.executeState(stateConfig, config, requirements);
+          if (this.shouldStop) {
+            break;
+          }
+          this.assertStateCanTransition(finalResult);
+          const forcedTarget = this.pendingForceTransition;
+          if (forcedTarget) {
+            const fromState = this.currentState;
+            const instruction = this.pendingForceInstruction || '';
+            const nextState = await this.evaluateTransitions([], finalResult, config);
+            this.pendingForceInstruction = null;
+            this.stateHistory.push({
+              from: fromState,
+              to: nextState,
+              reason: instruction
+                ? `强制跳转到 ${nextState}，附加指令: ${instruction}`
+                : `强制跳转到 ${nextState}`,
+              issues: finalResult.issues,
+              timestamp: new Date().toISOString(),
+            });
+            this.transitionCount++;
+            this.emit('transition', {
+              from: fromState,
+              to: nextState,
+              transitionCount: this.transitionCount,
+              issues: finalResult.issues,
+              forced: true,
+            });
+            if (this.currentRunSpecCoding) {
+              const statusUpdate = this.deriveRunSpecCodingStateUpdate(stateConfig, finalResult, nextState);
+              this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
+                stateName: stateConfig.name,
+                status: statusUpdate.status,
+                summary: statusUpdate.summary,
+              });
+              await this.persistState();
+            }
+            this.currentState = nextState;
+            this.selfTransitionCounts.set(nextState, 0);
+            this.emit('state-change', { state: this.currentState });
+            this.emitRuntimeStatus();
+            continue;
+          }
           if (this.currentRunSpecCoding) {
             const statusUpdate = this.deriveRunSpecCodingStateUpdate(stateConfig, finalResult, null);
             this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
@@ -4742,6 +5007,7 @@ try {
       if (this.shouldStop) {
         break;
       }
+      this.assertStateCanTransition(result);
 
       // Evaluate transitions
       // Remember whether this transition was forced by the user so we can skip human approval
@@ -4784,39 +5050,46 @@ try {
         const currentSelfCount = this.selfTransitionCounts.get(this.currentState!) || 0;
         const maxSelfTransitions = stateConfig.maxSelfTransitions ?? 3;
         if (currentSelfCount >= maxSelfTransitions) {
-          // Circuit breaker triggered - force transition to a different state or fail
+          const fromState: string = this.currentState!;
+          // Circuit breaker triggered - only follow an explicitly matching alternative route.
           this.emit('circuit-breaker', {
-            state: this.currentState,
+            state: fromState,
             selfTransitionCount: currentSelfCount,
             maxSelfTransitions,
-            message: `状态 "${this.currentState}" 自我转换次数超过限制 (${maxSelfTransitions})，自动熔断`,
+            message: `状态 "${fromState}" 自我转换次数超过限制 (${maxSelfTransitions})，自动熔断`,
           });
-          // Find an alternative transition target
-          const alternativeTransition = stateConfig.transitions.find(t =>
-            t.to !== this.currentState
-            && (!t.condition?.verdict || t.condition.verdict === result.verdict)
-          ) || stateConfig.transitions.find(t => t.to !== this.currentState);
+          const alternativeTransition: StateTransition | undefined = [...stateConfig.transitions]
+            .sort((a, b) => a.priority - b.priority)
+            .find((transition) => (
+              transition.to !== fromState
+              && this.matchCondition(transition.condition, result)
+            ));
           if (alternativeTransition) {
+            const targetState = alternativeTransition.to;
             this.stateHistory.push({
-              from: this.currentState!,
-              to: alternativeTransition.to,
-              reason: `熔断：自我转换超过限制，强制转向 ${alternativeTransition.to}`,
+              from: fromState,
+              to: targetState,
+              reason: `熔断：自我转换超过限制，强制转向 ${targetState}`,
               issues: result.issues,
               timestamp: new Date().toISOString(),
             });
             this.transitionCount++;
-            this.currentState = alternativeTransition.to;
-            this.selfTransitionCounts.set(this.currentState, 0);
+            this.selfTransitionCounts.set(fromState, 0);
             this.emit('transition', {
-              from: this.currentState,
-              to: alternativeTransition.to,
+              from: fromState,
+              to: targetState,
               transitionCount: this.transitionCount,
               issues: result.issues,
               circuitBreaker: true,
             });
+            this.currentState = targetState;
+            this.selfTransitionCounts.set(targetState, 0);
+            this.emit('state-change', {
+              state: this.currentState,
+            });
             continue;
           } else {
-            throw new Error(`状态 "${this.currentState}" 达到最大自我转换次数 (${maxSelfTransitions}) 且无其他转移路径，工作流终止`);
+            throw new Error(`状态 "${fromState}" 达到最大自我转换次数 (${maxSelfTransitions}) 且无匹配的其他转移路径，工作流终止`);
           }
         }
         // Increment self-transition counter
@@ -4917,6 +5190,7 @@ try {
         // After human approval, pendingForceTransition will be set
         const humanSelectedState: string = this.pendingForceTransition || nextState;
         this.pendingForceTransition = null;
+        this.pendingExplicitForceTransition = false;
         const answeredHumanQuestion = humanQuestion.status === 'answered'
           ? humanQuestion
           : this.humanQuestions.find((question) => question.id === humanQuestion.id) || humanQuestion;
@@ -5131,6 +5405,10 @@ try {
           },
         };
       } catch (error: any) {
+        const shouldRecordFailure = !this.shouldStop && !this.pendingForceTransition;
+        if (shouldRecordFailure) {
+          this.addFailedStep(this.getWorkflowStepKey(state.name, step));
+        }
         return {
           index,
           result: {
@@ -5284,7 +5562,14 @@ try {
     config: StateMachineWorkflowConfig,
     requirements?: string,
     useVerdict = true
-  ): Promise<{ outputs: string[]; issues: Issue[]; verdict: 'pass' | 'conditional_pass' | 'fail'; summary: string; failed: boolean }> {
+  ): Promise<{
+    outputs: string[];
+    issues: Issue[];
+    verdict: 'pass' | 'conditional_pass' | 'fail';
+    summary: string;
+    failed: boolean;
+    executionFailed: boolean;
+  }> {
     const joinPolicy = resolveJoinPolicy(segment, config);
     const groupState: ActiveConcurrencyGroup = {
       id: segment.groupId,
@@ -5363,6 +5648,10 @@ try {
       }
     }
     if (!joinResult.passed) verdict = 'fail';
+    const executionFailed = results.some((item) => (
+      item.status === 'rejected'
+      && this.failedSteps.includes(this.getWorkflowStepKey(state.name, item.step))
+    ));
 
     const logMessage = [
       `并发组 ${segment.groupId} 完成：${joinResult.passed ? '通过' : '失败'} (${joinResult.successCount}/${results.length}，要求 ${joinResult.requiredCount})`,
@@ -5374,7 +5663,7 @@ try {
     this.emit('parallel-group-complete', { state: state.name, groupId: segment.groupId, joinPolicy, results, passed: joinResult.passed });
     await this.persistState();
 
-    return { outputs, issues, verdict, summary, failed: !joinResult.passed };
+    return { outputs, issues, verdict, summary, failed: !joinResult.passed, executionFailed };
   }
 
   private async executeState(
@@ -5398,7 +5687,7 @@ try {
       });
       await this.persistState();
     }
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: 'state-start',
       title: `状态开始：${state.name}`,
       body: `${state.steps.length} 个步骤待处理。`,
@@ -5409,6 +5698,7 @@ try {
     const stepOutputs: string[] = [];
     const issues: Issue[] = [];
     let verdict: 'pass' | 'conditional_pass' | 'fail' = 'pass';
+    let executionFailed = false;
 
     const segments = groupStateStepsIntoSegments(state.steps);
     const resumeStepKey = this.resumeStateName === state.name ? this.resumeStepKey : null;
@@ -5472,6 +5762,10 @@ try {
         issues.push(...parallelResult.issues);
         if (parallelResult.verdict === 'fail') verdict = 'fail';
         else if (parallelResult.verdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
+        if (parallelResult.executionFailed) {
+          executionFailed = true;
+          break;
+        }
         if (parallelResult.failed) break;
         continue;
       }
@@ -5509,12 +5803,22 @@ try {
         const errorMsg = stepError.message || String(stepError);
         stepOutputs.push(`ERROR: ${errorMsg}`);
 
+        const shouldRecordFailure = !this.pendingForceTransition && stateGeneration === this.runtimeGeneration;
+        if (shouldRecordFailure) {
+          this.addFailedStep(this.getWorkflowStepKey(state.name, step));
+        }
+
         if (isFatalRuntimeConfigurationError(stepError) || isEngineLevelFailure(errorMsg)) {
           // Engine-level failures are fatal for state-machine execution to avoid
           // uncontrolled fallback iterations and token burn.
           throw new Error(`引擎异常，已停止工作流：${errorMsg}`);
         }
 
+        // A user-initiated force transition cancels the active generation deliberately.
+        // Do not turn that cancellation into a failed execution breakpoint.
+        if (shouldRecordFailure) {
+          executionFailed = true;
+        }
         verdict = 'fail';
         // Abort remaining steps in this state on non-engine step failure
         break;
@@ -5524,7 +5828,7 @@ try {
     // Add issues to tracker
     this.issueTracker.push(...issues);
     const summary = this.generateStateSummary(state, issues);
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: verdict === 'fail' ? 'state-failed' : 'state-complete',
       title: verdict === 'fail' ? `状态失败：${state.name}` : `状态完成：${state.name}`,
       body: summary,
@@ -5538,6 +5842,7 @@ try {
       issues,
       stepOutputs,
       summary,
+      executionFailed,
     };
   }
 
@@ -5981,20 +6286,56 @@ try {
     const completedCount = (runState.completedSteps || []).length;
     const failedCount = (runState.failedSteps || []).length;
     const issueCount = (runState.issueTracker || []).length;
+    const decisionOutput = this.getSubworkflowDecisionOutput(runState, fallbackStatus);
+    const decisionOutputBytes = Buffer.byteLength(decisionOutput, 'utf-8');
     return [
       `子工作流 ${runState.configFile} ${runState.status}`,
       state ? `当前状态: ${state}` : '',
       `已完成步骤: ${completedCount}`,
       `失败步骤: ${failedCount}`,
       `问题数: ${issueCount}`,
+      decisionOutputBytes > MAX_CHILD_OUTPUT_SUMMARY_BYTES
+        ? `[子工作流摘要已截断，超过 ${MAX_CHILD_OUTPUT_SUMMARY_BYTES} bytes]`
+        : '',
     ].filter(Boolean).join('\n');
   }
 
   private getSubworkflowHandoffResult(runState: PersistedRunState | null) {
     if (!runState) return parseWorkflowMemoryV2Handoff('');
-    const finalLog = [...(runState.stepLogs || [])].reverse().find((log) => Boolean(log.output));
+    const finalLog = [...(runState.stepLogs || [])].reverse().find((log) => !log.superseded && Boolean(log.output));
     // Child output is only inspected for its V2 control-plane references.
     return parseWorkflowMemoryV2Handoff(finalLog?.output || '');
+  }
+
+  private getSubworkflowDecisionOutput(runState: PersistedRunState | null, fallbackStatus: string): string {
+    if (!runState) return `子工作流状态: ${fallbackStatus}`;
+    const finalLog = [...(runState.stepLogs || [])].reverse().find((log) => !log.superseded && (log.output || log.error));
+    return finalLog?.output || finalLog?.error || runState.statusReason || `子工作流状态: ${fallbackStatus}`;
+  }
+
+  private resolveSubworkflowTerminalVerdict(
+    decisionOutput: string,
+    finalStatus: string,
+    useVerdict: boolean,
+  ): 'pass' | 'conditional_pass' | 'fail' {
+    if (finalStatus !== 'completed') return 'fail';
+
+    const readVerdict = (candidate: any): 'pass' | 'conditional_pass' | 'fail' | null => (
+      candidate && ['pass', 'conditional_pass', 'fail'].includes(candidate.verdict)
+        ? candidate.verdict
+        : null
+    );
+
+    const conclusion = extractTaggedBlock(decisionOutput, 'step-conclusion');
+    const conclusionVerdict = readVerdict(conclusion ? this.extractJsonObject(conclusion) : null)
+      || (conclusion ? this.parseVerdictFromConclusion(conclusion) : null);
+    if (conclusionVerdict) return conclusionVerdict;
+
+    const structuredVerdict = readVerdict(this.extractJsonObject(decisionOutput));
+    if (structuredVerdict) return structuredVerdict;
+
+    if (/(?:\bfail(?:ed|ure)?\b|失败|不通过)/i.test(decisionOutput)) return 'fail';
+    return useVerdict ? 'conditional_pass' : 'pass';
   }
 
   private buildSubworkflowParentHandoffBlock(input: {
@@ -6162,6 +6503,19 @@ try {
     let finalVerdict: 'pass' | 'conditional_pass' | 'fail' = 'fail';
     let errorMsg = '';
     let timeoutTriggered = false;
+    const terminalChildStatuses = new Set<PersistedSubworkflowRunRef['status']>([
+      'completed', 'failed', 'stopped', 'crashed', 'cancelled', 'detached', 'abandoned', 'superseded',
+    ]);
+    let observedChildTerminalStatus: PersistedSubworkflowRunRef['status'] | null = null;
+    const observeChildTerminalStatus = (rawStatus: unknown) => {
+      if (typeof rawStatus !== 'string') return;
+      const status = rawStatus as PersistedSubworkflowRunRef['status'];
+      if (!terminalChildStatuses.has(status)) return;
+      // A failure terminal event must win over a stale completed persistence record.
+      if (status !== 'completed' || !observedChildTerminalStatus) {
+        observedChildTerminalStatus = status;
+      }
+    };
 
     try {
       const { workflowRegistry } = await import('@/lib/workflow/registry');
@@ -6169,7 +6523,6 @@ try {
       const childManager = await workflowRegistry.getManagerForRun({
         configFile: childConfigFile,
         managerKey,
-        isStateMachine: true,
       });
       const updateChildRefStatus = (status: PersistedSubworkflowRunRef['status'], payload: any = {}) => {
         const current = this.subworkflowRuns.find((item) => item.runId === childRunId) || childRef;
@@ -6221,11 +6574,13 @@ try {
         });
       };
       const onChildStatus = (payload: any) => {
-        const childStatus = payload?.status;
-        if (childStatus === 'running' || childStatus === 'preparing') updateChildRefStatus('running', payload);
-        if (childStatus === 'stopped') updateChildRefStatus('stopped', payload);
-        if (childStatus === 'failed') updateChildRefStatus('failed', payload);
-        if (childStatus === 'completed') updateChildRefStatus('completed', payload);
+        const rawChildStatus = typeof payload?.status === 'string' ? payload.status : undefined;
+        if (rawChildStatus === 'running' || rawChildStatus === 'preparing') updateChildRefStatus('running', payload);
+        const childStatus = rawChildStatus as PersistedSubworkflowRunRef['status'] | undefined;
+        if (childStatus && terminalChildStatuses.has(childStatus)) {
+          observeChildTerminalStatus(childStatus);
+          updateChildRefStatus(childStatus, payload);
+        }
       };
       childManager.on?.('human-question-required', onChildHumanQuestion);
       childManager.on?.('human-approval-required', onChildHumanQuestion);
@@ -6306,6 +6661,7 @@ try {
         const childContexts = this.buildSubworkflowInitialContexts(step, state, childConfigFile, extraContext);
         await runWithTimeout((childManager as any).start(childConfigFile, childRequirements, [], childContexts, childRunId), childManager);
       }
+      observeChildTerminalStatus(childManager.getStatus?.()?.status);
       childManager.off?.('human-question-required', onChildHumanQuestion);
       childManager.off?.('human-approval-required', onChildHumanQuestion);
       childManager.off?.('status', onChildStatus);
@@ -6314,11 +6670,18 @@ try {
     }
 
     const childRunState = await loadRunState(childRunId).catch(() => null);
-    finalStatus = timeoutTriggered ? 'stopped' : (childRunState?.status || (errorMsg ? 'failed' : 'completed'));
+    const loadedChildStatus = childRunState?.status;
+    const observedFailureStatus = observedChildTerminalStatus && observedChildTerminalStatus !== 'completed'
+      ? observedChildTerminalStatus
+      : null;
+    finalStatus = timeoutTriggered
+      ? 'stopped'
+      : (observedFailureStatus || loadedChildStatus || observedChildTerminalStatus || (errorMsg ? 'failed' : 'completed'));
+    const childDecisionOutput = this.getSubworkflowDecisionOutput(childRunState, finalStatus);
     const childHandoff = memoryV2 && memoryStep
       ? this.getSubworkflowHandoffResult(childRunState)
       : null;
-    finalVerdict = finalStatus === 'completed' ? 'pass' : 'fail';
+    finalVerdict = this.resolveSubworkflowTerminalVerdict(childDecisionOutput, finalStatus, useVerdict);
     finalSummary = this.truncateSubworkflowSummary(this.getSubworkflowSummary(childRunState, finalStatus));
     const staleExecution = stepStartGeneration !== this.runtimeGeneration;
     let parentAllowedByHuman = false;
@@ -6412,6 +6775,7 @@ try {
         })
       : '';
     const output = [verdictBlock, subworkflowResultBlock, parentHandoffBlock].filter(Boolean).join('\n');
+    const failureReason = errorMsg || childRunState?.statusReason || finalSummary || finalStatus;
 
     if (staleExecution) {
       this.recordMemoryV2Terminal(memoryStep, 'cancelled');
@@ -6487,7 +6851,7 @@ try {
       status: completed ? 'completed' : 'failed',
       output: completed ? compactLogOutput.output : '',
       outputBytes: completed ? compactLogOutput.outputBytes : undefined,
-      error: completed ? '' : (errorMsg || finalSummary || finalStatus),
+      error: completed ? '' : failureReason,
       costUsd: childCostUsd,
       durationMs: childDurationMs,
       timestamp: endedAt,
@@ -6511,7 +6875,7 @@ try {
       endedAt,
       summary: finalSummary,
       verdict: finalVerdict,
-      error: completed ? undefined : (errorMsg || finalSummary || finalStatus),
+      error: completed ? undefined : failureReason,
     });
     this.recordSubworkflowAudit({
       action: 'result-mapping',
@@ -6521,14 +6885,16 @@ try {
       stepName: step.name,
       resultMapping: {
         childStatus: finalStatus,
-        parentVerdict: useVerdict ? finalVerdict : undefined,
+        parentVerdict: finalVerdict,
       },
       details: {
-        verdictSource: 'child-run-status',
+        verdictSource: parentAllowedByHuman
+          ? 'human-timeout-release'
+          : (finalStatus === 'completed' ? 'child-terminal-output' : 'child-terminal-status'),
         childHandoffStatus,
         childReferenceCount,
         completed,
-        error: completed ? undefined : (errorMsg || finalStatus),
+        error: completed ? undefined : failureReason,
       },
     });
 
@@ -6578,7 +6944,7 @@ try {
       childStatus: finalStatus,
       childVerdict: finalVerdict,
       ...trace,
-      error: errorMsg || finalSummary || finalStatus,
+      error: failureReason,
     });
     const subworkflowTerminalEvent = ['stopped', 'cancelled', 'detached'].includes(finalStatus)
       ? 'subworkflow-stopped'
@@ -6591,11 +6957,11 @@ try {
       childConfigFile,
       status: finalStatus,
       verdict: finalVerdict,
-      error: errorMsg || finalSummary || finalStatus,
+      error: failureReason,
       summary: finalSummary,
       ...trace,
     });
-    throw new Error(errorMsg || finalSummary || `子工作流失败: ${childConfigFile}`);
+    throw new Error(failureReason || `子工作流失败: ${childConfigFile}`);
     } catch (error) {
       if (!memoryHandoffSettled) {
         this.recordMemoryV2Terminal(memoryStep, this.shouldStop ? 'cancelled' : 'failed');
@@ -6641,6 +7007,7 @@ try {
     }
 
     const stepId = randomUUID();
+    const stepStartedAt = new Date().toISOString();
     const stepKey = this.getWorkflowStepKey(state.name, step);
     const memoryV2 = this.memoryV2;
     const memoryStep = memoryV2 ? this.createMemoryV2Step(step, state) : null;
@@ -6657,6 +7024,22 @@ try {
     this.clearFailedStep(stepKey);
     this.completedSteps = this.completedSteps.filter((item) => item !== stepKey);
     this.markStepActive(stepKey);
+    this.upsertPersistedStepLog({
+      id: stepId,
+      stepName: stepKey,
+      agent: runtimeAgentName,
+      status: 'running',
+      output: '',
+      error: '',
+      costUsd: 0,
+      durationMs: 0,
+      timestamp: stepStartedAt,
+      tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
+      sessionId: agent.sessionId || null,
+      engineName: this.engineType,
+      gitStepDiffId: `git-step-${stepId}`,
+      gitBeforeSnapshotId: beforeSnapshotId,
+    });
     this.markBoundSpecTasksForStep({
       step,
       stateName: state.name,
@@ -6674,7 +7057,7 @@ try {
       step: step.name,
       agent: runtimeAgentName,
     });
-    await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
       type: 'step-start',
       title: `步骤开始：${state.name} / ${step.name}`,
       body: `- Agent: ${runtimeAgentName}`,
@@ -6818,7 +7201,7 @@ try {
       });
       const compactLogOutput = compactRuntimeOutputPreview(output);
       // Record step log for persistence
-      this.stepLogs.push({
+      this.upsertPersistedStepLog({
         id: stepId,
         stepName: stepKey,
         agent: runtimeAgentName,
@@ -6851,7 +7234,7 @@ try {
         costUsd: stepResult.costUsd,
         durationMs: stepResult.durationMs,
       });
-      await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
         type: 'step-complete',
         title: `步骤完成：${state.name} / ${step.name}`,
         body: [
@@ -6916,7 +7299,7 @@ try {
         status: 'failed',
         beforeSnapshotId,
       });
-      this.stepLogs.push({
+      this.upsertPersistedStepLog({
         id: stepId,
         stepName: stepKey,
         agent: runtimeAgentName,
@@ -6936,7 +7319,7 @@ try {
 
       this.emit('agents', { agents: this.agents });
       await this.persistState();
-      await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
         type: 'step-failed',
         title: `步骤失败：${state.name} / ${step.name}`,
         body: [
@@ -7014,8 +7397,10 @@ try {
     if (!this.currentRunId) return null;
     const safe = (value: string) => value.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 96) || 'step';
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const relativePath = `${timestamp}-${safe(state.name)}-${safe(step.name)}.md`;
-    const absolutePath = resolve(getWorkspaceRunsDir(), this.currentRunId, 'outputs', relativePath);
+    // Memory V2 keeps a raw, backend-only artifact. User-facing run documents
+    // remain the step conclusion files under outputs/.
+    const relativePath = `artifacts/memory-v2/${timestamp}-${safe(state.name)}-${safe(step.name)}.md`;
+    const absolutePath = resolve(getWorkspaceRunsDir(), this.currentRunId, ...relativePath.split('/'));
     try {
       await mkdir(dirname(absolutePath), { recursive: true });
       await writeFile(absolutePath, output, 'utf-8');
@@ -7171,7 +7556,14 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
-
+    if (this.lightweightRunMetadata && isLightweightWorkflowConfig(config)) {
+      parts.push([
+        '\n# Lightweight task documents',
+        `Use this run-owned tasklist directory for task documents: ${this.lightweightRunMetadata.resolvedTasklistDirectory}`,
+        `Configured workspace-relative directory: ${this.lightweightRunMetadata.tasklistDirectory}`,
+        'Do not create a run-id subdirectory and do not use .ace-outputs for task documents.',
+      ].join('\n'));
+    }
     const roadmapKey = `${state.name}:${requiresFinalVerdict ? 'with-verdict' : 'without-verdict'}:${config.workflow.states.map((item) => {
       const stepSig = (item.steps || []).map((stateStep) => stateStep.name).join('|');
       const transitionSig = (item.transitions || [])
@@ -7384,17 +7776,28 @@ try {
       ].join('\n'));
     }
 
-    // Add workflow-level and current Agent skills. Step-level skills are deprecated.
+    // Resolve workflow, Agent, and step skills for this exact execution step.
     const promptRoleConfig = this.agentConfigs.find((r) => r.name === step.agent)
       || config.roles?.find((r) => r.name === step.agent);
-    const allSkillNames: string[] = [];
-    if (config.context?.skills) allSkillNames.push(...config.context.skills);
-    if (Array.isArray((promptRoleConfig as any)?.skills)) allSkillNames.push(...(promptRoleConfig as any).skills);
+    const allSkillNames = getEffectiveWorkflowStepSkills({
+      config,
+      step,
+      roleConfig: promptRoleConfig,
+    });
     if (allSkillNames.length > 0 && config.context?.projectRoot) {
       const skillsAbsPath = await getRuntimeSkillsDirPath();
       const uniqueSkillNames = [...new Set(allSkillNames)];
+      const stepSkillNames = new Set(Array.isArray(step.skills) ? step.skills : []);
+      const agentSkillNames = new Set(Array.isArray((promptRoleConfig as any)?.skills) ? (promptRoleConfig as any).skills : []);
+      const workflowSkillNames = new Set(Array.isArray(config.context?.skills) ? config.context.skills : []);
       const skillLines = uniqueSkillNames.map((name) => {
-        const source = (promptRoleConfig as any)?.skills?.includes(name) ? 'agent.skills' : 'workflow.context.skills';
+        const source = stepSkillNames.has(name)
+          ? 'step.skills'
+          : agentSkillNames.has(name)
+            ? 'agent.skills'
+            : workflowSkillNames.has(name)
+              ? 'workflow.context.skills'
+              : 'runtime-required';
         return `- ${name} (${source}): \`${skillsAbsPath}/${name}/SKILL.md\``;
       }).join('\n');
       const rules = memo.skillRulesShown
@@ -7981,7 +8384,7 @@ try {
       }
 
       if (result.stop_reason === 'cancelled' && !humanHelpStreamInterrupted) {
-        throw new Error('运行时执行已取消');
+        throw new Error(result.result || '运行时执行已取消');
       }
 
       if (result.is_error) {
@@ -8166,12 +8569,15 @@ try {
     result: StateExecutionResult,
     config: StateMachineWorkflowConfig
   ): Promise<string> {
+    this.assertStateCanTransition(result);
+
     // Check for pending forced transition (human override)
     if (this.pendingForceTransition) {
       const target = this.pendingForceTransition;
       this.pendingForceTransition = null;
+      this.pendingExplicitForceTransition = false;
       this.emit('transition-forced', { from: result.stateName, to: target });
-      await this.appendSupervisorChatEvent({
+    await this.appendRuntimeTranscriptEvent({
         type: 'human-answer',
         title: `人工指定下一状态：${target}`,
         body: this.pendingForceInstruction || `从「${result.stateName}」转入「${target}」。`,
@@ -8265,6 +8671,7 @@ try {
 
     const humanSelectedState = this.pendingForceTransition || transitions[0]?.to || result.stateName;
     this.pendingForceTransition = null;
+    this.pendingExplicitForceTransition = false;
     this.pendingApprovalInfo = null;
     return humanSelectedState;
   }
@@ -8416,15 +8823,27 @@ try {
 
   // ========== Resume functionality ==========
   async recoverFromCrash(): Promise<void> {
-    // Find any crashed runs and attempt to recover
-    const runningRuns = await loadRunState(this.currentRunId || '').catch(() => null);
-    if (!runningRuns) return;
+    try {
+      const activeRuns = await findActiveRuns();
+      for (const runState of activeRuns) {
+        if (runState.mode !== 'state-machine') continue;
+        const anyProcessAlive = (runState.processes || []).some((processInfo) => isProcessAlive(processInfo.pid));
+        if (anyProcessAlive) continue;
 
-    if (runningRuns.status === 'running' && runningRuns.mode === 'state-machine') {
-      try {
-        await this.resume(runningRuns.runId);
-      } catch (error) {
+        runState.status = 'crashed';
+        runState.statusReason = `Service restart interrupted the state-machine run. Current state: ${runState.currentState || 'unknown'}; current step: ${runState.currentStep || 'unknown'}.`;
+        runState.endTime = new Date().toISOString();
+        for (const agent of runState.agents || []) {
+          if (agent.status === 'running') agent.status = 'failed';
+        }
+        if (runState.currentStep && !runState.completedSteps?.includes(runState.currentStep) && !runState.failedSteps?.includes(runState.currentStep)) {
+          runState.failedSteps = [...(runState.failedSteps || []), runState.currentStep];
+        }
+        runState.processes = [];
+        await saveRunState(runState);
       }
+    } catch {
+      // Startup recovery is best effort.
     }
   }
 
@@ -8541,6 +8960,7 @@ try {
     // Load config and continue execution
     const configContent = await this.readWorkflowConfigContent(runState.configFile);
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
     this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
     if (runState.workingDirectory) {
       workflowConfig.context.projectRoot = runState.workingDirectory;
@@ -8582,7 +9002,7 @@ try {
     // Initialize engine
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
     await this.resolveWorkflowMcpServers(workflowConfig);
-    if (workflowConfig.context?.gitBaselineEnabled !== false) {
+    if (this.workflowGitBaselineEnabled) {
       await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
     } else {
       await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
@@ -8678,6 +9098,7 @@ try {
       const instruction = this.pendingForceInstruction || '';
       this.pendingForceTransition = null;
       this.pendingForceInstruction = null;
+      this.pendingExplicitForceTransition = false;
       this.pendingApprovalInfo = null;
 
       // Record transition from __human_approval__ to selected state
@@ -8783,6 +9204,7 @@ try {
     this.taskInput = normalizeWorkflowTaskInput(runState.taskInput);
     this.isolatedDir = runState.workingDirectory || null;
     this.currentProjectRoot = runState.workingDirectory || null;
+    await this.restoreLightweightRunMetadata(runState);
     this.workflowGit = runState.workspaceGit || null;
     this.currentRunSpecCoding = runState.runSpecCoding
       ? normalizeSpecCodingDocument(runState.runSpecCoding)
@@ -8821,6 +9243,7 @@ try {
     this.shouldStop = false;
     this.pendingForceTransition = null;
     this.pendingForceInstruction = null;
+    this.pendingExplicitForceTransition = false;
     this.pendingApprovalInfo = null;
     this.interruptFlag = false;
     this.feedbackInterrupt = false;
@@ -9061,7 +9484,22 @@ try {
   }
 
   // ========== Rerun from step functionality ==========
-  async rerunFromStep(runId: string, stateName: string, actor?: WorkflowActionActor): Promise<void> {
+  async rerunFromStepInBackground(
+    runId: string,
+    stepName: string,
+    actor?: WorkflowActionActor,
+  ): Promise<void> {
+    return this.runContinuationInBackground((markStartupReady) => (
+      this.rerunFromStep(runId, stepName, actor, markStartupReady)
+    ));
+  }
+
+  async rerunFromStep(
+    runId: string,
+    stepName: string,
+    actor?: WorkflowActionActor,
+    markStartupReady?: () => void,
+  ): Promise<void> {
     if (this.status === 'running') {
       throw new Error('已有工作流正在运行');
     }
@@ -9075,20 +9513,91 @@ try {
       throw new Error('该运行记录不是状态机工作流');
     }
 
-    // Find the state in history
     const persistedHistory = (runState.stateHistory || []) as StateTransitionRecord[];
-    const stateIndex = persistedHistory.findIndex(h => h.to === stateName);
-    if (stateIndex === -1) {
-      throw new Error(`找不到状态: ${stateName}`);
+    const configContent = await this.readWorkflowConfigContent(runState.configFile);
+    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
+    const configuredSteps = workflowConfig.workflow.states.flatMap((state) => state.steps.map((step) => ({
+      state,
+      step,
+      stepKey: this.getWorkflowStepKey(state.name, step),
+    })));
+    // `stepName` is the public route contract.  Prefer the persisted step key
+    // (state-step), allow a unique raw step name for existing callers, and
+    // retain state-name handling for older persisted UI actions.
+    const exactStep = configuredSteps.find((item) => item.stepKey === stepName);
+    const rawStepMatches = exactStep ? [] : configuredSteps.filter((item) => item.step.name === stepName);
+    if (rawStepMatches.length > 1) {
+      throw new Error(`步骤名称不唯一，请使用步骤键: ${stepName}`);
     }
+    const selectedStep = exactStep || rawStepMatches[0];
+    const selectedState = selectedStep?.state
+      || workflowConfig.workflow.states.find((state) => state.name === stepName);
+    if (!selectedState) {
+      throw new Error(`找不到步骤: ${stepName}`);
+    }
+    const stateName = selectedState.name;
+    const selectedStepKey = selectedStep
+      ? selectedStep.stepKey
+      : selectedState.steps[0]
+        ? this.getWorkflowStepKey(stateName, selectedState.steps[0])
+        : null;
+    if (!selectedStepKey) {
+      throw new Error(`状态 "${stateName}" 没有可重新运行的步骤`);
+    }
+    const stateIndex = persistedHistory.findIndex((record) => record.to === stateName);
+    if (stateIndex === -1 && runState.currentState !== stateName) {
+      throw new Error(`找不到步骤所属的历史状态: ${stateName}`);
+    }
+    const replayedStateNames = new Set([
+      stateName,
+      ...persistedHistory.slice(Math.max(0, stateIndex + 1)).map((record) => record.to),
+      runState.currentState || '',
+    ]);
+    const replayedStepKeys = new Set<string>();
+    for (const state of workflowConfig.workflow.states) {
+      if (!replayedStateNames.has(state.name)) continue;
+      const firstReplayedStepIndex = state.name === stateName
+        ? state.steps.findIndex((step) => this.getWorkflowStepKey(state.name, step) === selectedStepKey)
+        : 0;
+      for (const step of state.steps.slice(Math.max(0, firstReplayedStepIndex))) {
+        replayedStepKeys.add(this.getWorkflowStepKey(state.name, step));
+      }
+    }
+
+    // Rerun is an explicit recovery operation. Clear only the selected path's
+    // materialized indexes. Old attempts remain in the audit trail but are
+    // marked superseded so they cannot become a current result or checkpoint.
+    const supersededAt = new Date().toISOString();
+    const replayRunState: PersistedRunState = {
+      ...runState,
+      completedSteps: (runState.completedSteps || []).filter((stepKey) => !replayedStepKeys.has(stepKey)),
+      // Rerun is explicit operator recovery. Historical failed attempts remain
+      // visible, but no prior checkpoint may block the selected replay path.
+      failedSteps: [],
+      activeSteps: (runState.activeSteps || []).filter((stepKey) => !replayedStepKeys.has(stepKey)),
+      currentStep: null,
+      stepLogs: (runState.stepLogs || []).map((log) => (
+        replayedStepKeys.has(log.stepName)
+          ? {
+              ...log,
+              superseded: true,
+              supersededAt: log.supersededAt || supersededAt,
+              supersededByStep: log.supersededByStep || selectedStepKey,
+            }
+          : log
+      )),
+      stateHistory: stateIndex >= 0 ? persistedHistory.slice(0, stateIndex + 1) : persistedHistory,
+      transitionCount: stateIndex >= 0 ? stateIndex + 1 : runState.transitionCount || 0,
+    };
 
     // Restore state up to that point
     await this.restoreRunStateForContinuation({
-      ...runState,
-      stateHistory: persistedHistory.slice(0, stateIndex + 1),
-      transitionCount: stateIndex + 1,
+      ...replayRunState,
     }, stateName);
-    const supersededAt = new Date().toISOString();
+    this.resumeStateName = stateName;
+    this.resumeStepKey = selectedStepKey;
+    this.currentStep = selectedStepKey;
     this.subworkflowRuns = this.subworkflowRuns.map((ref) => {
       if (ref.parentStateName !== stateName || !['pending', 'starting', 'running', 'waiting-human', 'completed', 'failed', 'stopped', 'crashed'].includes(ref.status)) {
         return ref;
@@ -9124,9 +9633,11 @@ try {
     await this.persistState();
 
     // Load config and continue execution
-    const configContent = await this.readWorkflowConfigContent(runState.configFile);
-    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
     this.currentWorkflowConfig = workflowConfig;
+    if (runState.workingDirectory) {
+      workflowConfig.context.projectRoot = runState.workingDirectory;
+    }
+    this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
     this.workflowMcpServers = [];
     await this.resolveWorkflowMcpServers(workflowConfig);
     this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
@@ -9142,7 +9653,13 @@ try {
         agent.sessionId = persistedAgent.sessionId;
       }
     }
+    if (this.workflowGitBaselineEnabled) {
+      await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    } else {
+      await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    }
     this.startWorkflowAgentPrewarm(workflowConfig);
+    markStartupReady?.();
 
     // Continue execution from this state
     try {
@@ -9197,7 +9714,9 @@ try {
     try {
       await this.forceJumpToStateContinuation(runId, targetState, instruction, actor, markStartupReady);
     } catch (error) {
-      await this.markContinuationFailed(runId, error, '强制恢复');
+      if (!(error instanceof FailedStepRecoveryRequiredError)) {
+        await this.markContinuationFailed(runId, error, '强制恢复');
+      }
       throw error;
     }
   }
@@ -9220,10 +9739,14 @@ try {
     if (runState.mode !== 'state-machine') {
       throw new Error('该运行记录不是状态机工作流');
     }
-
     await this.restoreRunStateForContinuation(runState, targetState);
+    // An explicit force jump deliberately abandons the failed checkpoint.
+    // Keep its failed step logs as historical evidence, but do not let them
+    // block execution of the operator-selected target state.
+    this.failedSteps = [];
     const configContent = await this.readWorkflowConfigContent(runState.configFile);
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
     const target = workflowConfig.workflow.states.find((state) => state.name === targetState);
     if (!target) {
       throw new Error(`找不到目标状态: ${targetState}`);
@@ -9295,7 +9818,7 @@ try {
     }
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
     await this.resolveWorkflowMcpServers(workflowConfig);
-    if (workflowConfig.context?.gitBaselineEnabled !== false) {
+    if (this.workflowGitBaselineEnabled) {
       await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
     } else {
       await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
@@ -9382,6 +9905,7 @@ try {
           timeoutMs: 60000,
           resumeSessionId: agentState?.sessionId || undefined,
           engineType: selection.engine,
+          runId: this.currentRunId || undefined,
           mcpServers: this.getEffectiveMcpServers(roleConfig),
         }
       );

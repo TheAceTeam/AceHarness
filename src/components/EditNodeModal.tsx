@@ -22,18 +22,6 @@ import { useAgentsQuery } from '@/client/query/agents';
 import { useConfigOptionsQuery } from '@/client/query/configs';
 import { useSkillsQuery } from '@/client/query/skills';
 
-const phaseSchema = z.object({
-  name: z.string().min(1, '阶段名称不能为空'),
-  checkpointEnabled: z.boolean(),
-  checkpointName: z.string().optional(),
-  checkpointMessage: z.string().optional(),
-  iterationEnabled: z.boolean(),
-  maxIterations: z.number().min(1).max(20).optional(),
-  exitCondition: z.string().optional(),
-  consecutiveCleanRounds: z.number().min(1).max(10).optional(),
-  escalateToHuman: z.boolean().optional(),
-});
-
 const stepSchema = z.object({
   type: z.enum(['agent', 'subworkflow']).optional(),
   name: z.string().min(1, '步骤名称不能为空'),
@@ -71,7 +59,6 @@ const stepSchema = z.object({
   }
 });
 
-type PhaseForm = z.infer<typeof phaseSchema>;
 type StepForm = z.infer<typeof stepSchema>;
 
 const listToInput = (value: unknown) => Array.isArray(value) ? value.join(', ') : '';
@@ -82,6 +69,12 @@ const linesToList = (value: unknown) => typeof value === 'string'
   ? value.split('\n').map((item) => item.trim()).filter(Boolean)
   : [];
 const cleanString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+const normalizeSkillNames = (value: unknown) => Array.from(new Set(
+  (Array.isArray(value) ? value : [])
+    .filter((skill): skill is string => typeof skill === 'string')
+    .map((skill) => skill.trim())
+    .filter(Boolean),
+));
 
 interface RoleOption {
   name: string;
@@ -127,8 +120,17 @@ interface WorkflowOption {
   filename: string;
   name: string;
   description?: string;
-  phaseCount?: number;
+  mode?: 'lightweight' | 'state-machine';
+  kind?: 'lightweight' | 'state-machine';
+  profile?: 'lightweight';
+  stateCount?: number;
   stepCount?: number;
+}
+
+function isLightweightWorkflowOption(workflow: WorkflowOption) {
+  return workflow.mode === 'lightweight'
+    || workflow.kind === 'lightweight'
+    || workflow.profile === 'lightweight';
 }
 
 function getAgentTeamTone(team?: string) {
@@ -224,21 +226,20 @@ function AgentSelectedContent({ role, fallbackName }: { role?: RoleOption; fallb
 }
 
 interface EditNodeModalProps {
+  [key: string]: unknown;
   isOpen: boolean;
-  type: 'phase' | 'step';
   data: any;
   roles?: RoleOption[];
   availableSkills?: SkillOption[];
   availableMcpServers?: McpServerOption[];
   availableKnowledgeBases?: KnowledgeBaseOption[];
   isNew?: boolean;
-  existingPhases?: any[];
+  type: string;
   existingSteps?: any[];
   specTasks?: SpecTaskOption[];
   initialSection?: 'spec';
   onClose: () => void;
   onSave: (data: any) => void;
-  onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
   onAgentMcpServersChange?: (agentName: string, servers: string[]) => void | Promise<void>;
   onAgentRagKnowledgeBasesChange?: (agentName: string, knowledgeBases: string[]) => void | Promise<void>;
   onDelete?: () => void;
@@ -246,29 +247,24 @@ interface EditNodeModalProps {
 
 export default function EditNodeModal({
   isOpen,
-  type,
   data,
   roles = [],
   availableSkills = [],
   availableMcpServers = [],
   availableKnowledgeBases = [],
   isNew = false,
-  existingPhases = [],
   existingSteps = [],
   specTasks = [],
   initialSection,
   onClose,
   onSave,
-  onAgentSkillsChange,
   onAgentMcpServersChange,
   onAgentRagKnowledgeBasesChange,
   onDelete,
 }: EditNodeModalProps) {
-  const isPhase = type === 'phase';
-  const schema = isPhase ? phaseSchema : stepSchema;
   const [showAdvancedBindings, setShowAdvancedBindings] = useState(initialSection === 'spec');
   const agentsQuery = useAgentsQuery();
-  const skillsQuery = useSkillsQuery({ enabled: isOpen && !isPhase });
+  const skillsQuery = useSkillsQuery({ enabled: isOpen });
   const workflowOptionsQuery = useConfigOptionsQuery({ mode: 'state-machine', sortKey: 'name', sortDirection: 'asc' });
   const queryRoles = (agentsQuery.data?.agents || []) as RoleOption[];
   const effectiveRoles = roles.length > 0 ? roles : queryRoles;
@@ -283,58 +279,42 @@ export default function EditNodeModal({
     watch,
     setValue,
     reset,
-  } = useForm({
-    resolver: zodResolver(schema),
-    defaultValues: isPhase
-      ? {
-          name: data?.name || '',
-          checkpointEnabled: !!data?.checkpoint,
-          checkpointName: data?.checkpoint?.name || '',
-          checkpointMessage: data?.checkpoint?.message || '',
-          iterationEnabled: !!data?.iteration?.enabled,
-          maxIterations: data?.iteration?.maxIterations || 5,
-          exitCondition: data?.iteration?.exitCondition || 'no_new_bugs_3_rounds',
-          consecutiveCleanRounds: data?.iteration?.consecutiveCleanRounds || 3,
-          escalateToHuman: data?.iteration?.escalateToHuman ?? true,
-        }
-      : {
-          type: data?.type === 'subworkflow' ? 'subworkflow' : 'agent',
-          name: data?.name || '',
-          agent: data?.agent || '',
-          task: data?.task || '',
-          workflow: data?.workflow || data?.subworkflow?.configFile || '',
-          subworkflowRequirements: typeof data?.inputs?.requirements === 'string' && data.inputs.requirements !== 'inherit'
-            ? data.inputs.requirements
-            : '',
-          inputWorkspace: data?.inputs?.workspace || 'inherit',
-          inputContext: data?.inputs?.context || 'inherit',
-          inputSkills: data?.inputs?.skills || 'merge',
-          inputMcpServers: data?.inputs?.mcpServers || 'merge',
-          inputRag: data?.inputs?.rag || 'merge',
-          inputEngine: data?.inputs?.engine || 'child',
-          constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
-          preCommands: Array.isArray(data?.preCommands) ? data.preCommands.join('\n') : '',
-          enableReviewPanel: data?.enableReviewPanel || false,
-          skills: Array.isArray(initialAgent?.skills)
-            ? initialAgent?.skills
-            : (Array.isArray(data?.skills) ? data.skills : []),
-          mcpServers: Array.isArray(initialAgent?.mcpServers)
-            ? initialAgent?.mcpServers
-            : (Array.isArray(data?.mcpServers) ? data.mcpServers : []),
-          ragKnowledgeBases: Array.isArray(initialAgent?.ragKnowledgeBases)
-            ? initialAgent?.ragKnowledgeBases
-            : (Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : []),
-          specTaskId: [
-            ...((data?.specTaskBinding?.taskIds || []) as string[]),
-            data?.specTaskBinding?.taskId,
-          ].filter(Boolean).join(', '),
-          requirementIds: listToInput(data?.specTaskBinding?.requirementIds),
-          artifactKeys: listToInput(data?.specTaskBinding?.artifactKeys),
-        },
+  } = useForm<StepForm>({
+    resolver: zodResolver(stepSchema),
+    defaultValues: {
+      type: data?.type === 'subworkflow' ? 'subworkflow' : 'agent',
+      name: data?.name || '',
+      agent: data?.agent || '',
+      task: data?.task || '',
+      workflow: data?.workflow || data?.subworkflow?.configFile || '',
+      subworkflowRequirements: typeof data?.inputs?.requirements === 'string' && data.inputs.requirements !== 'inherit'
+        ? data.inputs.requirements
+        : '',
+      inputWorkspace: data?.inputs?.workspace || 'inherit',
+      inputContext: data?.inputs?.context || 'inherit',
+      inputSkills: data?.inputs?.skills || 'merge',
+      inputMcpServers: data?.inputs?.mcpServers || 'merge',
+      inputRag: data?.inputs?.rag || 'merge',
+      inputEngine: data?.inputs?.engine || 'child',
+      constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
+      preCommands: Array.isArray(data?.preCommands) ? data.preCommands.join('\n') : '',
+      enableReviewPanel: data?.enableReviewPanel || false,
+      skills: Array.isArray(data?.skills) ? data.skills : [],
+      mcpServers: Array.isArray(initialAgent?.mcpServers)
+        ? initialAgent?.mcpServers
+        : (Array.isArray(data?.mcpServers) ? data.mcpServers : []),
+      ragKnowledgeBases: Array.isArray(initialAgent?.ragKnowledgeBases)
+        ? initialAgent?.ragKnowledgeBases
+        : (Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : []),
+      specTaskId: [
+        ...((data?.specTaskBinding?.taskIds || []) as string[]),
+        data?.specTaskBinding?.taskId,
+      ].filter(Boolean).join(', '),
+      requirementIds: listToInput(data?.specTaskBinding?.requirementIds),
+      artifactKeys: listToInput(data?.specTaskBinding?.artifactKeys),
+    },
   });
 
-  const checkpointEnabled = watch('checkpointEnabled');
-  const iterationEnabled = watch('iterationEnabled');
   const stepType = (watch('type') || 'agent') as 'agent' | 'subworkflow';
   const selectedAgentName = (watch('agent') || data?.agent || '') as string;
   const workflowOptions = useMemo(
@@ -381,173 +361,123 @@ export default function EditNodeModal({
     }
     for (const skillName of selectedSkillNames) {
       if (!byName.has(skillName)) {
-        byName.set(skillName, { name: skillName, description: 'Agent 配置中已选择的 Skill' });
+        byName.set(skillName, { name: skillName, description: '当前步骤已选择的 Skill' });
       }
     }
     return Array.from(byName.values());
   }, [effectiveSkills, selectedSkillNames]);
 
   useEffect(() => {
-    if (isPhase || !selectedAgentName) return;
-    const agentSkills = selectedAgent?.skills;
+    if (!selectedAgentName) return;
     const agentMcpServers = selectedAgent?.mcpServers;
     const agentRagKnowledgeBases = selectedAgent?.ragKnowledgeBases;
-    const preRuntimeStepSkills = selectedAgentName === data?.agent && Array.isArray(data?.skills) ? data.skills : [];
     const preRuntimeStepMcp = selectedAgentName === data?.agent && Array.isArray(data?.mcpServers) ? data.mcpServers : [];
     const preRuntimeStepRag = selectedAgentName === data?.agent && Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : [];
-    setValue('skills', Array.isArray(agentSkills) ? agentSkills : preRuntimeStepSkills);
     setValue('mcpServers', Array.isArray(agentMcpServers) ? agentMcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean) : preRuntimeStepMcp);
     setValue('ragKnowledgeBases', Array.isArray(agentRagKnowledgeBases) ? agentRagKnowledgeBases : preRuntimeStepRag);
-  }, [data?.agent, data?.mcpServers, data?.ragKnowledgeBases, data?.skills, isPhase, selectedAgent?.mcpServers, selectedAgent?.ragKnowledgeBases, selectedAgent?.skills, selectedAgentName, setValue]);
+  }, [data?.agent, data?.mcpServers, data?.ragKnowledgeBases, selectedAgent?.mcpServers, selectedAgent?.ragKnowledgeBases, selectedAgentName, setValue]);
 
   const handleCopyFrom = (sourceName: string) => {
     if (!sourceName) return;
-    if (isPhase) {
-      const source = existingPhases.find((p: any) => p.name === sourceName);
-      if (!source) return;
-      reset({
-        name: source.name + ' (副本)',
-        checkpointEnabled: !!source.checkpoint,
-        checkpointName: source.checkpoint?.name || '',
-        checkpointMessage: source.checkpoint?.message || '',
-        iterationEnabled: !!source.iteration?.enabled,
-        maxIterations: source.iteration?.maxIterations || 5,
-        exitCondition: source.iteration?.exitCondition || 'no_new_bugs_3_rounds',
-        consecutiveCleanRounds: source.iteration?.consecutiveCleanRounds || 3,
-        escalateToHuman: source.iteration?.escalateToHuman ?? true,
-      });
-    } else {
-      const source = existingSteps.find((s: any) => s.name === sourceName);
-      if (!source) return;
-      const sourceRole = effectiveRoles.find((role) => role.name === source.agent);
-      reset({
-        type: source.type === 'subworkflow' ? 'subworkflow' : 'agent',
-        name: source.name + ' (副本)',
-        agent: source.agent || '',
-        task: source.task || '',
-        workflow: source.workflow || source.subworkflow?.configFile || '',
-        subworkflowRequirements: typeof source.inputs?.requirements === 'string' && source.inputs.requirements !== 'inherit'
-          ? source.inputs.requirements
-          : '',
-        inputWorkspace: source.inputs?.workspace || 'inherit',
-        inputContext: source.inputs?.context || 'inherit',
-        inputSkills: source.inputs?.skills || 'merge',
-        inputMcpServers: source.inputs?.mcpServers || 'merge',
-        inputRag: source.inputs?.rag || 'merge',
-        inputEngine: source.inputs?.engine || 'child',
-        constraints: Array.isArray(source.constraints) ? source.constraints.join('\n') : (source.constraints || ''),
-        preCommands: Array.isArray(source.preCommands) ? source.preCommands.join('\n') : '',
-        enableReviewPanel: source.enableReviewPanel || false,
-        skills: Array.isArray(sourceRole?.skills)
-          ? sourceRole.skills
-          : (Array.isArray(source.skills) ? source.skills : []),
-        mcpServers: Array.isArray(sourceRole?.mcpServers)
-          ? sourceRole.mcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean)
-          : (Array.isArray(source.mcpServers) ? source.mcpServers : []),
-        ragKnowledgeBases: Array.isArray(sourceRole?.ragKnowledgeBases)
-          ? sourceRole.ragKnowledgeBases
-          : (Array.isArray(source.ragKnowledgeBases) ? source.ragKnowledgeBases : []),
-        specTaskId: '',
-        requirementIds: '',
-        artifactKeys: '',
-      });
-    }
+    const source = existingSteps.find((s: any) => s.name === sourceName);
+    if (!source) return;
+    const sourceRole = effectiveRoles.find((role) => role.name === source.agent);
+    reset({
+      type: source.type === 'subworkflow' ? 'subworkflow' : 'agent',
+      name: source.name + ' (副本)',
+      agent: source.agent || '',
+      task: source.task || '',
+      workflow: source.workflow || source.subworkflow?.configFile || '',
+      subworkflowRequirements: typeof source.inputs?.requirements === 'string' && source.inputs.requirements !== 'inherit'
+        ? source.inputs.requirements
+        : '',
+      inputWorkspace: source.inputs?.workspace || 'inherit',
+      inputContext: source.inputs?.context || 'inherit',
+      inputSkills: source.inputs?.skills || 'merge',
+      inputMcpServers: source.inputs?.mcpServers || 'merge',
+      inputRag: source.inputs?.rag || 'merge',
+      inputEngine: source.inputs?.engine || 'child',
+      constraints: Array.isArray(source.constraints) ? source.constraints.join('\n') : (source.constraints || ''),
+      preCommands: Array.isArray(source.preCommands) ? source.preCommands.join('\n') : '',
+      enableReviewPanel: source.enableReviewPanel || false,
+      skills: Array.isArray(source.skills) ? source.skills : [],
+      mcpServers: Array.isArray(sourceRole?.mcpServers)
+        ? sourceRole.mcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean)
+        : (Array.isArray(source.mcpServers) ? source.mcpServers : []),
+      ragKnowledgeBases: Array.isArray(sourceRole?.ragKnowledgeBases)
+        ? sourceRole.ragKnowledgeBases
+        : (Array.isArray(source.ragKnowledgeBases) ? source.ragKnowledgeBases : []),
+      specTaskId: '',
+      requirementIds: '',
+      artifactKeys: '',
+    });
   };
 
-  const onSubmit = async (formData: any) => {
-    if (isPhase) {
-      const phaseData: any = { name: formData.name };
-      if (formData.checkpointEnabled) {
-        phaseData.checkpoint = {
-          name: formData.checkpointName,
-          message: formData.checkpointMessage,
-        };
-      }
-      if (formData.iterationEnabled) {
-        phaseData.iteration = {
-          enabled: true,
-          maxIterations: Number(formData.maxIterations) || 5,
-          exitCondition: formData.exitCondition || 'no_new_bugs_3_rounds',
-          consecutiveCleanRounds: Number(formData.consecutiveCleanRounds) || 3,
-          escalateToHuman: formData.escalateToHuman ?? true,
-        };
-      } else {
-        phaseData.iteration = { enabled: false };
-      }
-      onSave(phaseData);
+  const onSubmit = async (formData: StepForm) => {
+    const stepData: any = { name: formData.name };
+    if (formData.type === 'subworkflow') {
+      stepData.type = 'subworkflow';
+      stepData.workflow = formData.workflow;
+      stepData.subworkflow = { configFile: formData.workflow };
+      stepData.inputs = {
+        requirements: cleanString(formData.subworkflowRequirements) || 'inherit',
+        workspace: formData.inputWorkspace || 'inherit',
+        context: formData.inputContext || 'inherit',
+        skills: formData.inputSkills || 'merge',
+        mcpServers: formData.inputMcpServers || 'merge',
+        rag: formData.inputRag || 'merge',
+        engine: formData.inputEngine || 'child',
+      };
     } else {
-      const stepData: any = { name: formData.name };
-      if (formData.type === 'subworkflow') {
-        stepData.type = 'subworkflow';
-        stepData.workflow = formData.workflow;
-        stepData.subworkflow = { configFile: formData.workflow };
-        stepData.inputs = {
-          requirements: cleanString(formData.subworkflowRequirements) || 'inherit',
-          workspace: formData.inputWorkspace || 'inherit',
-          context: formData.inputContext || 'inherit',
-          skills: formData.inputSkills || 'merge',
-          mcpServers: formData.inputMcpServers || 'merge',
-          rag: formData.inputRag || 'merge',
-          engine: formData.inputEngine || 'child',
-        };
-      } else {
-        stepData.agent = formData.agent;
-        stepData.task = formData.task;
-      }
-      if (formData.type !== 'subworkflow' && onAgentMcpServersChange && formData.agent) {
-        try {
-          await onAgentMcpServersChange(formData.agent, Array.isArray(formData.mcpServers) ? formData.mcpServers : []);
-        } catch (error: any) {
-          alert(error?.message || '保存 Agent MCP Servers 失败');
-          return;
-        }
-      }
-      if (data?.role === 'attacker' || data?.role === 'defender' || data?.role === 'judge') {
-        stepData.role = data.role;
-      }
-      if (formData.type !== 'subworkflow' && formData.constraints) {
-        stepData.constraints = formData.constraints
-          .split('\n')
-          .filter((c: string) => c.trim());
-      }
-      if (formData.type !== 'subworkflow' && formData.preCommands !== undefined) {
-        stepData.preCommands = linesToList(formData.preCommands);
-      }
-      if (formData.type !== 'subworkflow' && formData.enableReviewPanel !== undefined) {
-        stepData.enableReviewPanel = formData.enableReviewPanel;
-      }
-      if (formData.type !== 'subworkflow' && onAgentSkillsChange && formData.agent) {
-        try {
-          await onAgentSkillsChange(formData.agent, Array.isArray(formData.skills) ? formData.skills : []);
-        } catch (error: any) {
-          alert(error?.message || '保存 Agent Skills 失败');
-          return;
-        }
-      }
-      if (formData.type !== 'subworkflow' && onAgentRagKnowledgeBasesChange && formData.agent) {
-        try {
-          await onAgentRagKnowledgeBasesChange(formData.agent, Array.isArray(formData.ragKnowledgeBases) ? formData.ragKnowledgeBases : []);
-        } catch (error: any) {
-          alert(error?.message || '保存 Agent RAG 知识库失败');
-          return;
-        }
-      }
-
-      if (data?.parallelGroup) stepData.parallelGroup = data.parallelGroup;
-      if (data?.concurrency) stepData.concurrency = data.concurrency;
-      if (data?.agentInstanceId) stepData.agentInstanceId = data.agentInstanceId;
-      if (Array.isArray(data?.channelIds) && data.channelIds.length > 0) stepData.channelIds = data.channelIds;
-      const specTaskIds = inputToList(formData.specTaskId);
-      stepData.specTaskBinding = specTaskIds.length > 0
-        ? {
-            taskId: specTaskIds[0],
-            taskIds: specTaskIds,
-            requirementIds: inputToList(formData.requirementIds),
-            artifactKeys: inputToList(formData.artifactKeys),
-          }
-        : undefined;
-      onSave(stepData);
+      stepData.agent = formData.agent;
+      stepData.task = formData.task;
+      stepData.skills = normalizeSkillNames(formData.skills);
     }
+    if (formData.type !== 'subworkflow' && onAgentMcpServersChange && formData.agent) {
+      try {
+        await onAgentMcpServersChange(formData.agent, Array.isArray(formData.mcpServers) ? formData.mcpServers : []);
+      } catch (error: any) {
+        alert(error?.message || '保存 Agent MCP Servers 失败');
+        return;
+      }
+    }
+    if (data?.role === 'attacker' || data?.role === 'defender' || data?.role === 'judge') {
+      stepData.role = data.role;
+    }
+    if (formData.type !== 'subworkflow' && formData.constraints) {
+      stepData.constraints = formData.constraints
+        .split('\n')
+        .filter((c: string) => c.trim());
+    }
+    if (formData.type !== 'subworkflow' && formData.preCommands !== undefined) {
+      stepData.preCommands = linesToList(formData.preCommands);
+    }
+    if (formData.type !== 'subworkflow' && formData.enableReviewPanel !== undefined) {
+      stepData.enableReviewPanel = formData.enableReviewPanel;
+    }
+    if (formData.type !== 'subworkflow' && onAgentRagKnowledgeBasesChange && formData.agent) {
+      try {
+        await onAgentRagKnowledgeBasesChange(formData.agent, Array.isArray(formData.ragKnowledgeBases) ? formData.ragKnowledgeBases : []);
+      } catch (error: any) {
+        alert(error?.message || '保存 Agent RAG 知识库失败');
+        return;
+      }
+    }
+
+    if (data?.parallelGroup) stepData.parallelGroup = data.parallelGroup;
+    if (data?.concurrency) stepData.concurrency = data.concurrency;
+    if (data?.agentInstanceId) stepData.agentInstanceId = data.agentInstanceId;
+    if (Array.isArray(data?.channelIds) && data.channelIds.length > 0) stepData.channelIds = data.channelIds;
+    const specTaskIds = inputToList(formData.specTaskId);
+    stepData.specTaskBinding = specTaskIds.length > 0
+      ? {
+          taskId: specTaskIds[0],
+          taskIds: specTaskIds,
+          requirementIds: inputToList(formData.requirementIds),
+          artifactKeys: inputToList(formData.artifactKeys),
+        }
+      : undefined;
+    onSave(stepData);
   };
 
   return (
@@ -556,25 +486,23 @@ export default function EditNodeModal({
         <ComboboxPortalProvider>
         <div className="flex items-start justify-between gap-4 border-b px-6 py-5 flex-shrink-0">
           <div>
-            <DialogTitle className="text-xl">{isNew ? (isPhase ? '新建阶段' : '新建步骤') : (isPhase ? '编辑阶段' : '编辑步骤')}</DialogTitle>
-            {!isPhase ? (
-              <p className="mt-1 text-sm text-muted-foreground">
-                调整 Agent、任务描述、约束与 Spec 绑定。保存配置时会统一校验 task 覆盖情况。
-              </p>
-            ) : null}
+            <DialogTitle className="text-xl">{isNew ? '新建步骤' : '编辑步骤'}</DialogTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              调整 Agent、任务描述、约束与 Spec 绑定。保存配置时会统一校验 task 覆盖情况。
+            </p>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose}>
             <span className="material-symbols-outlined">close</span>
           </Button>
         </div>
         <form id="edit-node-form" onSubmit={handleSubmit(onSubmit)} className="flex-1 overflow-auto px-6 py-5 space-y-5">
-          {isNew && ((isPhase && existingPhases.length > 0) || (!isPhase && existingSteps.length > 0)) && (
+          {isNew && existingSteps.length > 0 && (
             <div className="space-y-2">
               <Label>从现有复制</Label>
               <SingleCombobox
                 value=""
                 onValueChange={handleCopyFrom}
-                options={(isPhase ? existingPhases : existingSteps).map((item: any) => ({
+                options={existingSteps.map((item: any) => ({
                   value: item.name,
                   label: item.name,
                   icon: <span className="material-symbols-outlined text-sm">content_copy</span>,
@@ -584,88 +512,6 @@ export default function EditNodeModal({
               />
             </div>
           )}
-          {isPhase ? (
-            <>
-              <div className="space-y-2">
-                <Label htmlFor="name">
-                  阶段名称 <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="name"
-                  {...register('name')}
-                  className={errors.name ? 'border-destructive' : ''}
-                />
-                {errors.name && (
-                  <p className="text-sm text-destructive">{errors.name.message as string}</p>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between">
-                <Label htmlFor="checkpointEnabled">启用检查点</Label>
-                <Switch
-                  id="checkpointEnabled"
-                  checked={checkpointEnabled as boolean}
-                  onCheckedChange={(v) => setValue('checkpointEnabled', v)}
-                />
-              </div>
-
-              {checkpointEnabled && (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="checkpointName">检查点名称</Label>
-                    <Input id="checkpointName" {...register('checkpointName')} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="checkpointMessage">检查点消息</Label>
-                    <Textarea id="checkpointMessage" rows={3} {...register('checkpointMessage')} />
-                  </div>
-                </>
-              )}
-
-              <div className="flex items-center justify-between">
-                <Label htmlFor="iterationEnabled">启用对抗迭代</Label>
-                <Switch
-                  id="iterationEnabled"
-                  checked={iterationEnabled as boolean}
-                  onCheckedChange={(v) => setValue('iterationEnabled', v)}
-                />
-              </div>
-              {iterationEnabled && (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="maxIterations">最大迭代次数 (1-20)</Label>
-                    <Input id="maxIterations" type="number" min={1} max={20} {...register('maxIterations', { valueAsNumber: true })} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="exitCondition">退出条件</Label>
-                    <SingleCombobox
-                      value={watch('exitCondition') || data?.iteration?.exitCondition || 'no_new_bugs_3_rounds'}
-                      onValueChange={(v) => setValue('exitCondition', v)}
-                      options={[
-                        { value: 'no_new_bugs_3_rounds', label: '连续 N 轮无新 Bug' },
-                        { value: 'all_resolved', label: '所有问题已解决' },
-                        { value: 'manual', label: '手动停止' },
-                      ]}
-                      searchable={false}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="consecutiveCleanRounds">连续无 Bug 轮数</Label>
-                    <Input id="consecutiveCleanRounds" type="number" min={1} max={10} {...register('consecutiveCleanRounds', { valueAsNumber: true })} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="escalateToHuman">达到上限时升级人工</Label>
-                    <Switch
-                      id="escalateToHuman"
-                      checked={watch('escalateToHuman') as boolean}
-                      onCheckedChange={(v) => setValue('escalateToHuman', v)}
-                    />
-                  </div>
-                </>
-              )}
-            </>
-          ) : (
-            <>
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.95fr)]">
                 <div className="space-y-5">
                   <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
@@ -742,16 +588,19 @@ export default function EditNodeModal({
                           onValueChange={(v) => setValue('workflow', v, { shouldDirty: true })}
                           options={workflowOptions.map((workflow) => ({
                             value: workflow.filename,
-                            label: workflow.name || workflow.filename,
+                            label: isLightweightWorkflowOption(workflow)
+                              ? `${workflow.name || workflow.filename}（轻量工作流）`
+                              : (workflow.name || workflow.filename),
                             description: [
                               workflow.filename,
-                              `${workflow.phaseCount || 0} 状态`,
+                              isLightweightWorkflowOption(workflow) ? '轻量工作流' : '状态机',
+                              `${workflow.stateCount ?? 0} 状态`,
                               `${workflow.stepCount || 0} 步骤`,
                               workflow.description,
                             ].filter(Boolean).join(' · '),
                           }))}
-                          placeholder={workflowOptionsLoading ? '加载工作流...' : '选择状态机工作流...'}
-                          emptyText={workflowOptionsError || '没有可选状态机工作流'}
+                          placeholder={workflowOptionsLoading ? '加载工作流...' : '选择子工作流...'}
+                          emptyText={workflowOptionsError || '没有可选子工作流'}
                           triggerClassName={errors.workflow ? 'border-destructive' : ''}
                         />
                         {errors.workflow && (
@@ -853,10 +702,7 @@ export default function EditNodeModal({
                     </div>
 
                     <div className="space-y-2">
-                      <Label>Agent Skills</Label>
-                      <p className="text-xs leading-5 text-muted-foreground">
-                        保存后写入所选 Agent 配置；工作流步骤本身不再保存独立 Skills。
-                      </p>
+                      <Label>步骤 Skills</Label>
                       <MultiCombobox
                         value={watch('skills') || []}
                         onValueChange={(v) => setValue('skills', v)}
@@ -1050,8 +896,6 @@ export default function EditNodeModal({
                   </div>
                 </div>
               </div>
-            </>
-          )}
 
         </form>
         <div className="flex gap-2 justify-end p-6 border-t bg-background/95 flex-shrink-0">

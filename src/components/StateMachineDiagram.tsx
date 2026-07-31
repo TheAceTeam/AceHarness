@@ -22,11 +22,13 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/core/schemas';
 import { Badge } from './ui/badge';
+import { RotateCcw } from 'lucide-react';
 
 // 稳定的空数组引用：避免默认参数 = [] 在每次渲染产生新数组，
 // 进而触发 useMemo 重算与 setNodes 写入新对象 → Maximum update depth exceeded
 const EMPTY_ACTIVE_STEPS: string[] = [];
 const EMPTY_COMPLETED_STEPS: string[] = [];
+const EMPTY_FAILED_STEPS: string[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
 const EXECUTED_EDGE_COLOR = '#2563eb';
 const CONFIG_EDGE_COLOR = '#64748b';
@@ -304,12 +306,14 @@ interface StateMachineDiagramProps {
   agents?: Array<{ name: string; team?: string | null }>;
   onStateClick?: (stateName: string) => void;
   onStepClick?: (step: any) => void;
+  onRerunFromStep?: (stepName: string) => void;
   onTransitionClick?: (from: string, to: string) => void;
   onForceTransition?: (targetState: string) => void;
   currentState?: string | null;
   currentStep?: string | null;
   activeSteps?: string[];
   completedSteps?: string[];
+  failedSteps?: string[];
   stateHistory?: StateTransitionRecord[];
   isRunning?: boolean;
   allowForceTransition?: boolean;
@@ -508,8 +512,12 @@ export function stateDiagramStepKeyMatches(stepKey: string | null | undefined, s
   ));
 }
 
+export function getStateDiagramRerunStepKey(stateName: string, stepName: string): string {
+  return `${stateName}-${stepName}`;
+}
+
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, agents, onStepClick, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, failedSteps = EMPTY_FAILED_STEPS, agents, onStepClick, onRerunFromStep, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const isHumanHelpPending = pendingHumanQuestion?.source?.type === 'human-help'
@@ -520,14 +528,15 @@ function StateNode({ data }: any) {
   const pendingHumanHelpStep = isHumanHelpPending ? pendingHumanQuestion?.source?.stepName : '';
   const getStepStatus = (step: any) => {
     const isDone = completedSteps.some((key: string) => stateDiagramStepKeyMatches(key, state.name, step.name));
+    const isFailed = failedSteps.some((key: string) => stateDiagramStepKeyMatches(key, state.name, step.name));
     const runningKeys = [currentStep, ...activeSteps].filter(Boolean);
     const isRunningStep = runningKeys.some((key) => stateDiagramStepKeyMatches(key, state.name, step.name));
     const isWaitingHumanHelp = Boolean(isHumanHelpPending && pendingHumanHelpStep && pendingHumanHelpStep === step.name);
     const isWaitingParallelApproval = Boolean(isParallelManualJoinPending && pendingParallelGroupId && getStateDiagramParallelGroup(step) === pendingParallelGroupId);
-    return { isDone, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval };
+    return { isDone, isFailed, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval };
   };
   const renderStepPill = (step: any, idx: number, compact = false) => {
-    const { isDone, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval } = getStepStatus(step);
+    const { isDone, isFailed, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval } = getStepStatus(step);
     const agentTeam = getStateDiagramAgentTeam(agents, step?.agent);
     const isWaitingApproval = isWaitingHumanHelp || isWaitingParallelApproval;
     return (
@@ -537,13 +546,27 @@ function StateNode({ data }: any) {
         className={`
           flex items-center gap-1 rounded cursor-pointer transition-colors
           ${compact ? 'px-1 py-0.5 text-[9px]' : 'px-1.5 py-0.5 text-[10px]'}
-          ${isWaitingApproval ? 'bg-amber-500 text-black ring-1 ring-amber-300' : isRunningStep ? 'bg-blue-500 text-white' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}
+          ${isWaitingApproval ? 'bg-amber-500 text-black ring-1 ring-amber-300' : isRunningStep ? 'bg-blue-500 text-white' : isFailed ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}
         `}
       >
         <span className="material-symbols-outlined" style={{ fontSize: compact ? 10 : 11 }}>
           {isWaitingApproval ? 'support_agent' : isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramStepIcon(step, agentTeam)}
         </span>
         <span className="truncate flex-1">{step.name}</span>
+        {!isRunning && (isDone || isFailed) && onRerunFromStep ? (
+          <button
+            type="button"
+            className="nodrag nopan inline-flex h-4 w-4 shrink-0 items-center justify-center rounded hover:bg-black/10"
+            aria-label={`从 ${state.name} / ${step.name} 重新运行`}
+            title="从此步骤重新运行"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRerunFromStep(getStateDiagramRerunStepKey(state.name, step.name));
+            }}
+          >
+            <RotateCcw size={compact ? 10 : 11} aria-hidden="true" />
+          </button>
+        ) : null}
       </div>
     );
   };
@@ -918,12 +941,14 @@ function StateMachineDiagramInner({
   agents,
   onStateClick,
   onStepClick,
+  onRerunFromStep,
   onTransitionClick,
   onForceTransition,
   currentState,
   currentStep,
   activeSteps = EMPTY_ACTIVE_STEPS,
   completedSteps = EMPTY_COMPLETED_STEPS,
+  failedSteps = EMPTY_FAILED_STEPS,
   stateHistory = EMPTY_STATE_HISTORY,
   isRunning = false,
   allowForceTransition = isRunning,
@@ -937,6 +962,7 @@ function StateMachineDiagramInner({
   const initialFitDone = useRef(false);
   const fitViewRef = useRef(rfFitView);
   const onStepClickRef = useRef(onStepClick);
+  const onRerunFromStepRef = useRef(onRerunFromStep);
   const onForceTransitionRef = useRef(onForceTransition);
 
   useEffect(() => {
@@ -948,11 +974,19 @@ function StateMachineDiagramInner({
   }, [onStepClick]);
 
   useEffect(() => {
+    onRerunFromStepRef.current = onRerunFromStep;
+  }, [onRerunFromStep]);
+
+  useEffect(() => {
     onForceTransitionRef.current = onForceTransition;
   }, [onForceTransition]);
 
   const handleStepClick = useCallback((step: any) => {
     onStepClickRef.current?.(step);
+  }, []);
+
+  const handleRerunFromStepClick = useCallback((stepName: string) => {
+    onRerunFromStepRef.current?.(stepName);
   }, []);
 
   const handleForceTransitionClick = useCallback((targetState: string) => {
@@ -982,8 +1016,10 @@ function StateMachineDiagramInner({
           currentStep,
           activeSteps,
           completedSteps,
+          failedSteps,
           agents,
           onStepClick: handleStepClick,
+          onRerunFromStep: handleRerunFromStepClick,
           onForceTransition: handleForceTransitionClick,
           isRunning,
           allowForceTransition,
@@ -1017,8 +1053,10 @@ function StateMachineDiagramInner({
         currentStep,
         activeSteps,
         completedSteps,
+        failedSteps,
         agents,
         onStepClick: handleStepClick,
+        onRerunFromStep: handleRerunFromStepClick,
         onForceTransition: handleForceTransitionClick,
         isRunning,
         allowForceTransition,
@@ -1027,7 +1065,7 @@ function StateMachineDiagramInner({
     });
 
     return nodes;
-  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion]);
+  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, failedSteps, handleStepClick, handleRerunFromStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 

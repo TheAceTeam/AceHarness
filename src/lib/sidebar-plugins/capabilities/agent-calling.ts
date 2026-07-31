@@ -1,8 +1,7 @@
 /**
  * Agent Calling Capability Implementation
  *
- * Wraps the streaming agent call pattern (callCollaborationAgent / callWerewolfLabAgent)
- * into a clean capability interface.
+ * Wraps the streaming collaboration agent call pattern into a clean capability interface.
  */
 
 import type { AgentCallingCapability, AgentCallInput } from './types';

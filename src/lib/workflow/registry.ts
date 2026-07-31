@@ -3,15 +3,15 @@
  * Each configFile gets its own manager instance, enabling parallel workflow execution.
  */
 import { EventEmitter } from 'events';
-import { WorkflowManager } from '@/lib/workflow/manager';
 import { StateMachineWorkflowManager } from '@/lib/state-machine/workflow-manager';
 import { readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { parse } from 'yaml';
 import { loadRunState } from '@/lib/run/state-persistence';
 import { ensureRuntimeConfigsSeeded, getBundledWorkflowConfigPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
-export type AnyWorkflowManager = WorkflowManager | StateMachineWorkflowManager;
+export type AnyWorkflowManager = StateMachineWorkflowManager;
 
 export function isStateMachineManagerLike(manager: AnyWorkflowManager | null | undefined): manager is StateMachineWorkflowManager {
   return Boolean(
@@ -29,8 +29,8 @@ export function isStateMachineManagerLike(manager: AnyWorkflowManager | null | u
 interface ManagerEntry {
   managerKey: string;
   configFile: string;
-  manager: AnyWorkflowManager;
-  isStateMachine: boolean;
+  manager: StateMachineWorkflowManager;
+  isStateMachine: true;
   createdAt: number;
   implementationVersion?: symbol;
 }
@@ -62,7 +62,7 @@ function compactRegistryEventPayload(input: any): any {
 
 class WorkflowRegistry extends EventEmitter {
   private managers = new Map<string, ManagerEntry>();
-  private pendingManagerCreations = new Map<string, Promise<AnyWorkflowManager>>();
+  private pendingManagerCreations = new Map<string, Promise<StateMachineWorkflowManager>>();
   private managerKeysByRunId = new Map<string, string>();
   private implementationVersion = WORKFLOW_REGISTRY_IMPLEMENTATION_VERSION;
 
@@ -82,15 +82,7 @@ class WorkflowRegistry extends EventEmitter {
     return status === 'running' || status === 'preparing';
   }
 
-  /** All event types that workflow managers emit */
-  private static PHASE_EVENTS = [
-    'status', 'phase', 'step', 'result', 'checkpoint', 'agents',
-    'log',
-    'iteration', 'iteration-complete', 'escalation', 'token-usage',
-    'feedback-injected', 'feedback-recalled', 'context-updated',
-    'route-decision',
-  ];
-  private static SM_EVENTS = [
+  private static EVENTS = [
     'state-change', 'step-start', 'step-complete', 'transition',
     'force-transition', 'transition-forced', 'human-approval-required',
     'human-question-required', 'human-question-answered', 'human-question-updated',
@@ -98,6 +90,7 @@ class WorkflowRegistry extends EventEmitter {
     'log',
     'feedback-injected', 'feedback-recalled',
     'route-decision', 'agent-flow', 'supervisor-review',
+    'runtime-transcript',
     'state-executing', 'parallel-group-start', 'parallel-group-complete',
     'subworkflow-start', 'subworkflow-status', 'subworkflow-waiting-human',
     'subworkflow-complete', 'subworkflow-failed', 'subworkflow-stopped',
@@ -109,39 +102,39 @@ class WorkflowRegistry extends EventEmitter {
    * If the manager already exists and is idle, reuse it.
    * If it's running, return the existing running instance.
    */
-  async getManager(configFile: string): Promise<AnyWorkflowManager> {
+  async getManager(configFile: string): Promise<StateMachineWorkflowManager> {
+    await this.assertStateMachineConfig(configFile);
     const managerKey = this.topLevelManagerKey(configFile);
     const pending = this.pendingManagerCreations.get(managerKey);
     if (pending) return pending;
 
-    const expectedIsStateMachine = await this.detectStateMachine(configFile);
     const existing = this.managers.get(managerKey);
     if (existing) {
-      if (this.canReuseManager(existing, expectedIsStateMachine)) {
+      if (this.canReuseManager(existing)) {
         return existing.manager;
       }
       this.removeManagerEntry(managerKey, existing);
     }
-    return this.createManagerOnce(configFile, expectedIsStateMachine, managerKey);
+    return this.createManagerOnce(configFile, managerKey);
   }
 
-  async getManagerForRun(input: { configFile: string; managerKey: string; isStateMachine?: boolean }): Promise<AnyWorkflowManager> {
-    const expectedIsStateMachine = input.isStateMachine ?? await this.detectStateMachine(input.configFile);
+  async getManagerForRun(input: { configFile: string; managerKey: string }): Promise<StateMachineWorkflowManager> {
+    await this.assertStateMachineConfig(input.configFile);
     const existing = this.managers.get(input.managerKey);
     if (existing) {
-      if (this.canReuseManager(existing, expectedIsStateMachine)) {
+      if (this.canReuseManager(existing)) {
         return existing.manager;
       }
       this.removeManagerEntry(input.managerKey, existing);
     }
-    return this.createManagerOnce(input.configFile, expectedIsStateMachine, input.managerKey);
+    return this.createManagerOnce(input.configFile, input.managerKey);
   }
 
-  private createManagerOnce(configFile: string, isSM: boolean, managerKey = this.topLevelManagerKey(configFile)): Promise<AnyWorkflowManager> {
+  private createManagerOnce(configFile: string, managerKey: string): Promise<StateMachineWorkflowManager> {
     const pending = this.pendingManagerCreations.get(managerKey);
     if (pending) return pending;
 
-    const creation = this.createManager(configFile, isSM, managerKey)
+    const creation = this.createManager(configFile, managerKey)
       .finally(() => {
         if (this.pendingManagerCreations.get(managerKey) === creation) {
           this.pendingManagerCreations.delete(managerKey);
@@ -151,21 +144,20 @@ class WorkflowRegistry extends EventEmitter {
     return creation;
   }
 
-  private async createManager(configFile: string, isSM?: boolean, managerKey = this.topLevelManagerKey(configFile)): Promise<AnyWorkflowManager> {
-    const resolvedIsSM = isSM ?? await this.detectStateMachine(configFile);
-    const manager = resolvedIsSM ? new StateMachineWorkflowManager() : new WorkflowManager();
+  private async createManager(configFile: string, managerKey: string): Promise<StateMachineWorkflowManager> {
+    await this.assertStateMachineConfig(configFile);
+    const manager = new StateMachineWorkflowManager();
     const entry: ManagerEntry = {
       managerKey,
       configFile,
       manager,
-      isStateMachine: resolvedIsSM,
+      isStateMachine: true,
       createdAt: Date.now(),
       implementationVersion: this.implementationVersion,
     };
     this.managers.set(managerKey, entry);
-    const events = resolvedIsSM ? WorkflowRegistry.SM_EVENTS : WorkflowRegistry.PHASE_EVENTS;
-    for (const evt of events) {
-      manager.on(evt, (data: any) => {
+    for (const eventName of WorkflowRegistry.EVENTS) {
+      manager.on(eventName, (data: any) => {
         const tagged = { ...data, __configFile: configFile };
         const runId = typeof data?.runId === 'string' && data.runId
           ? data.runId
@@ -173,9 +165,9 @@ class WorkflowRegistry extends EventEmitter {
         if (runId) {
           this.managerKeysByRunId.set(runId, managerKey);
         }
-        this.emit(evt, tagged);
-        if (runId) {
-          getWorkflowEventStore().append(runId, `workflow.${evt}`, {
+        this.emit(eventName, tagged);
+        if (runId && eventName !== 'runtime-transcript') {
+          getWorkflowEventStore().append(runId, `workflow.${eventName}`, {
             configFile,
             managerKey,
             ...compactRegistryEventPayload(data),
@@ -186,13 +178,12 @@ class WorkflowRegistry extends EventEmitter {
     return manager;
   }
 
-  async getManagerByRunId(runId: string): Promise<AnyWorkflowManager | null> {
+  async getManagerByRunId(runId: string): Promise<StateMachineWorkflowManager | null> {
     const managerKey = this.managerKeysByRunId.get(runId);
     if (managerKey) {
       const entry = this.managers.get(managerKey);
       if (entry) {
-        const status = entry.manager.getStatus().status;
-        if (this.isActiveStatus(status) || entry.implementationVersion === this.implementationVersion) {
+        if (this.canReuseManager(entry)) {
           return entry.manager;
         }
         this.removeManagerEntry(managerKey, entry);
@@ -200,14 +191,11 @@ class WorkflowRegistry extends EventEmitter {
     }
 
     const runState = await loadRunState(runId);
-    const expectedIsStateMachine = runState
-      ? await this.detectStateMachineRun(runState)
-      : false;
+    if (!runState?.configFile || runState.mode !== 'state-machine') return null;
 
     for (const [key, entry] of this.managers) {
-      const s = entry.manager.getStatus();
-      if (s.runId !== runId) continue;
-      if (runState && !this.canReuseManager(entry, expectedIsStateMachine)) {
+      if (entry.manager.getStatus().runId !== runId) continue;
+      if (!this.canReuseManager(entry)) {
         this.removeManagerEntry(key, entry);
         break;
       }
@@ -215,40 +203,39 @@ class WorkflowRegistry extends EventEmitter {
       return entry.manager;
     }
 
-    if (!runState?.configFile) return null;
     const restoredManagerKey = runState.parentRunId ? `run:${runId}` : this.topLevelManagerKey(runState.configFile);
     const existing = this.managers.get(restoredManagerKey);
     if (existing) {
-      if (this.canReuseManager(existing, expectedIsStateMachine)) {
+      if (this.canReuseManager(existing)) {
         return existing.manager;
       }
       this.removeManagerEntry(restoredManagerKey, existing);
     }
-    const manager = await this.createManagerOnce(runState.configFile, expectedIsStateMachine, restoredManagerKey);
+    const manager = await this.createManagerOnce(runState.configFile, restoredManagerKey);
     this.managerKeysByRunId.set(runId, restoredManagerKey);
     return manager;
   }
 
-  getRunningManagers(): { configFile: string; manager: AnyWorkflowManager; isStateMachine: boolean }[] {
-    const result: { configFile: string; manager: AnyWorkflowManager; isStateMachine: boolean }[] = [];
-    for (const [, entry] of this.managers) {
+  getRunningManagers(): Array<{ configFile: string; manager: StateMachineWorkflowManager; isStateMachine: true }> {
+    const result: Array<{ configFile: string; manager: StateMachineWorkflowManager; isStateMachine: true }> = [];
+    for (const entry of this.managers.values()) {
       if (this.isActiveStatus(entry.manager.getStatus().status)) {
-        result.push({ configFile: entry.configFile, manager: entry.manager, isStateMachine: entry.isStateMachine });
+        result.push({ configFile: entry.configFile, manager: entry.manager, isStateMachine: true });
       }
     }
     return result;
   }
 
-  getRunningManager(configFile?: string): AnyWorkflowManager | null {
+  getRunningManager(configFile?: string): StateMachineWorkflowManager | null {
     if (configFile) {
       const topLevel = this.managers.get(this.topLevelManagerKey(configFile));
       if (topLevel && this.isActiveStatus(topLevel.manager.getStatus().status)) return topLevel.manager;
-      const entry = Array.from(this.managers.values()).find((item) => item.configFile === configFile && this.isActiveStatus(item.manager.getStatus().status));
-      if (entry) return entry.manager;
-      return null;
+      const entry = Array.from(this.managers.values()).find((item) => (
+        item.configFile === configFile && this.isActiveStatus(item.manager.getStatus().status)
+      ));
+      return entry?.manager || null;
     }
-    const running = this.getRunningManagers();
-    return running.length > 0 ? running[0].manager : null;
+    return this.getRunningManagers()[0]?.manager || null;
   }
 
   getAllManagers(): ManagerEntry[] {
@@ -264,33 +251,18 @@ class WorkflowRegistry extends EventEmitter {
     }
   }
 
-  private async detectStateMachine(configFile: string): Promise<boolean> {
-    try {
-      await ensureRuntimeConfigsSeeded();
-      let p = await getRuntimeWorkflowConfigPath(configFile);
-      const { existsSync } = await import('fs');
-      if (!existsSync(p)) p = getBundledWorkflowConfigPath(configFile);
-      const content = await readFile(p, 'utf-8');
-      const config = parse(content);
-      return config.workflow?.mode === 'state-machine';
-    } catch { return false; }
-  }
-
-  private async detectStateMachineRun(runState: { configFile?: string; mode?: string; currentState?: string | null; stateHistory?: unknown[] }): Promise<boolean> {
-    if (runState.mode === 'state-machine') return true;
-    if (runState.mode === 'phase-based') return false;
-    if (runState.currentState || (Array.isArray(runState.stateHistory) && runState.stateHistory.length > 0)) return true;
-    return runState.configFile ? this.detectStateMachine(runState.configFile) : false;
-  }
-
-  private managerMatchesMode(manager: AnyWorkflowManager, isStateMachine: boolean): boolean {
-    return isStateMachine ? isStateMachineManagerLike(manager) : !isStateMachineManagerLike(manager);
-  }
-
-  private canReuseManager(entry: ManagerEntry, expectedIsStateMachine: boolean): boolean {
-    if (entry.isStateMachine !== expectedIsStateMachine || !this.managerMatchesMode(entry.manager, expectedIsStateMachine)) {
-      return false;
+  private async assertStateMachineConfig(configFile: string): Promise<void> {
+    await ensureRuntimeConfigsSeeded();
+    let configPath = await getRuntimeWorkflowConfigPath(configFile);
+    if (!existsSync(configPath)) configPath = getBundledWorkflowConfigPath(configFile);
+    const config = parse(await readFile(configPath, 'utf-8')) as any;
+    if (config?.workflow?.mode !== 'state-machine') {
+      throw new Error('Only state-machine workflow configurations are supported');
     }
+  }
+
+  private canReuseManager(entry: ManagerEntry): boolean {
+    if (!isStateMachineManagerLike(entry.manager)) return false;
     return this.isActiveStatus(entry.manager.getStatus().status)
       || entry.implementationVersion === this.implementationVersion;
   }

@@ -3,9 +3,9 @@ import type {
   UnifiedWorkflowConfig,
   WorkflowStep,
 } from '@/lib/core/schemas';
-import { extractWorkflowCreationItemResult, WORKFLOW_PATCH_ITEM_KIND } from '@/lib/ai/workflow-creation-items';
+import { extractWorkflowPatchItemResult, WORKFLOW_PATCH_ITEM_KIND } from '@/lib/ai/workflow-patch-items';
 
-export type DesignOptimizationWorkflowMode = 'phase-based' | 'state-machine';
+export type DesignOptimizationWorkflowMode = 'state-machine';
 
 export type DesignOptimizationTarget =
   | {
@@ -16,7 +16,7 @@ export type DesignOptimizationTarget =
   | {
       scope: 'step';
       workflowMode: DesignOptimizationWorkflowMode;
-      containerType: 'phase' | 'state';
+      containerType: 'state';
       containerIndex: number;
       containerName: string;
       stepIndex: number;
@@ -139,14 +139,14 @@ function formatSpecTaskList(tasks: PromptSpecTaskOption[]): string {
     .join('\n');
 }
 
-export function getWorkflowMode(config: UnifiedWorkflowConfig | Record<string, any>): DesignOptimizationWorkflowMode {
-  return (config as any)?.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based';
+export function getWorkflowMode(_config: UnifiedWorkflowConfig | Record<string, any>): DesignOptimizationWorkflowMode {
+  return 'state-machine';
 }
 
 export function getDesignOptimizationTargetLabel(target: DesignOptimizationTarget): string {
   if (target.scope === 'workflow') return `工作流 ${target.workflowName}`;
   if (target.scope === 'state') return `状态 ${target.stateName}`;
-  return `${target.containerType === 'state' ? '状态' : '阶段'} ${target.containerName} / 步骤 ${target.stepName}`;
+  return `状态 ${target.containerName} / 步骤 ${target.stepName}`;
 }
 
 export function getDesignOptimizationDialogTitle(target: DesignOptimizationTarget): string {
@@ -162,7 +162,7 @@ export function getDesignOptimizationScopeHint(target: DesignOptimizationTarget)
   if (target.scope === 'state') {
     return '只生成当前状态的 patch，允许调整状态描述、内部步骤和转移，不直接改动其他状态。';
   }
-  return '只生成当前步骤的 patch，允许优化 agent、任务、约束与 spec 绑定，不直接改动其他节点；步骤不再保存 skills，技能归属 Agent 配置。';
+  return '只生成当前步骤的 patch，允许优化 agent、任务、约束、skills 与 spec 绑定，不直接改动其他节点。';
 }
 
 export function extractDesignOptimizationSnapshot(
@@ -175,9 +175,7 @@ export function extractDesignOptimizationSnapshot(
     const state = Array.isArray(workflow.states) ? workflow.states[target.stateIndex] : null;
     return state ? cloneValue(state) : null;
   }
-  const containers = target.containerType === 'state'
-    ? (Array.isArray(workflow.states) ? workflow.states : [])
-    : (Array.isArray(workflow.phases) ? workflow.phases : []);
+  const containers = Array.isArray(workflow.states) ? workflow.states : [];
   const container = containers[target.containerIndex];
   const step = Array.isArray(container?.steps) ? container.steps[target.stepIndex] : null;
   return step ? cloneValue(step) : null;
@@ -235,9 +233,7 @@ function patchStepIntoConfig(
 ): Record<string, any> | null {
   const nextConfig = cloneValue(baseConfig);
   const nextWorkflow = nextConfig?.workflow || {};
-  const nextContainers = target.containerType === 'state'
-    ? (Array.isArray(nextWorkflow.states) ? nextWorkflow.states : [])
-    : (Array.isArray(nextWorkflow.phases) ? nextWorkflow.phases : []);
+  const nextContainers = Array.isArray(nextWorkflow.states) ? nextWorkflow.states : [];
   const nextContainer = nextContainers[target.containerIndex];
   if (!nextContainer || !Array.isArray(nextContainer.steps) || !nextContainer.steps[target.stepIndex]) return null;
   nextContainer.steps[target.stepIndex] = cloneValue(stepPatch);
@@ -294,8 +290,8 @@ function buildScopeRules(target: DesignOptimizationTarget, hasSpecArtifacts: boo
   if (target.scope === 'workflow') {
     return [
       hasSpecArtifacts
-        ? '- 允许根据当前 Spec 和需求调整阶段/状态、步骤拆分、Agent 分工、状态转移与 specTaskBinding。'
-        : '- 允许根据当前需求和 workflow 配置调整阶段/状态、步骤拆分、Agent 分工与状态转移；禁止新增 specTaskBinding。',
+        ? '- 允许根据当前 Spec 和需求调整状态、步骤拆分、Agent 分工、状态转移与 specTaskBinding。'
+        : '- 允许根据当前需求和 workflow 配置调整状态、步骤拆分、Agent 分工与状态转移；禁止新增 specTaskBinding。',
       '- patch.workflow 是新的 workflow 对象；context.projectRoot、workspaceMode、executionPolicy、skills、mcpServers 等运行时设置由系统保留。',
       hasSpecArtifacts
         ? '- 保留已有的 preCommands、并发分组、人工审查和 supervisor 配置，除非用户要求或最新 Spec 明确冲突。'
@@ -306,16 +302,16 @@ function buildScopeRules(target: DesignOptimizationTarget, hasSpecArtifacts: boo
     return [
       `- 优化状态 "${target.stateName}"。`,
       `- 保持状态名称 "${target.stateName}" 不变。`,
-      '- 可以调整该状态的描述、内部步骤、Agent 选择、人工审查、最大自循环次数和转移规则；不要在步骤对象中写 skills。',
+      '- 可以调整该状态的描述、内部步骤、Agent 选择、人工审查、最大自循环次数和转移规则；步骤可以使用 skills。',
       '- patch.state 是这个状态对象；workflow mode、其他状态顺序、context 和运行时设置由系统保持原样。',
     ];
   }
   return [
-    `- 优化 ${target.containerType === 'state' ? '状态' : '阶段'} "${target.containerName}" 内的步骤 "${target.stepName}"。`,
+    `- 优化状态 "${target.containerName}" 内的步骤 "${target.stepName}"。`,
     `- 保持该步骤在容器中的位置不变。`,
     hasSpecArtifacts
-      ? '- 可以调整步骤的 agent、task、constraints、enableReviewPanel 与 specTaskBinding；不要在步骤对象中写 skills，技能归属 Agent 配置。'
-      : '- 可以调整步骤的 agent、task、constraints、enableReviewPanel；禁止新增 specTaskBinding；不要在步骤对象中写 skills，技能归属 Agent 配置。',
+      ? '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel 与 specTaskBinding。'
+      : '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel；禁止新增 specTaskBinding。',
     '- patch.step 是这个步骤对象；其他步骤、容器内容和 workflow mode 由系统保持原样。',
   ];
 }
@@ -357,9 +353,7 @@ export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationProm
       ? '- 如果需要引用 spec 任务，specTaskBinding.taskIds 只能使用下面列出的真实 task id。'
       : '- 当前没有 Spec 制品；不要新增 specTaskBinding，也不要把优化目标改成“创建/修订 Spec”。',
     '- 保持现有主语言、术语和重要命名风格一致。',
-    workflowMode === 'state-machine'
-      ? '- 状态机 verdict 流向必须显式：pass / conditional_pass / fail 都只是转移条件枚举，下一步完全由当前状态 transitions 配置决定。不要根据名称假设 conditional_pass 一定前进或一定回退；优化时必须让目标状态和步骤说明保持一致。'
-      : '',
+    '- 状态机 verdict 流向必须显式：pass / conditional_pass / fail 都只是转移条件枚举，下一步完全由当前状态 transitions 配置决定。不要根据名称假设 conditional_pass 一定前进或一定回退；优化时必须让目标状态和步骤说明保持一致。',
     '',
     '用户优化要求：',
     input.instruction.trim(),
@@ -430,7 +424,7 @@ export function extractWorkflowPatchItemPayload(
   markdown: string,
   fallbackFilename?: string,
 ): { payload: WorkflowPatchPayload | null; parseError?: string } {
-  const extracted = extractWorkflowCreationItemResult(markdown, WORKFLOW_PATCH_ITEM_KIND);
+  const extracted = extractWorkflowPatchItemResult(markdown);
   if (!extracted.ok) {
     return { payload: null, parseError: extracted.error };
   }
@@ -441,9 +435,7 @@ export function extractWorkflowPatchItemPayload(
     : undefined;
   const workflowMode = data.workflowMode === 'state-machine'
     ? 'state-machine'
-    : data.workflowMode === 'phase-based'
-      ? 'phase-based'
-      : undefined;
+    : undefined;
   const patch = data.patch && typeof data.patch === 'object' ? data.patch : null;
   const dataKeys = Object.keys(data || {});
   const describe = (value: unknown) => {
@@ -468,8 +460,8 @@ export function extractWorkflowPatchItemPayload(
       payload: null,
       parseError: [
         '错误字段：data.workflowMode。',
-        `问题：workflow_patch item 的 data.workflowMode 必须是 phase-based/state-machine，当前值为 ${describe(data.workflowMode)}。`,
-        '修改方式：按当前工作流模式填写 "workflowMode":"phase-based" 或 "workflowMode":"state-machine"。',
+        `问题：workflow_patch item 的 data.workflowMode 必须是 state-machine，当前值为 ${describe(data.workflowMode)}。`,
+        '修改方式：填写 "workflowMode":"state-machine"。',
       ].join(''),
     };
   }
