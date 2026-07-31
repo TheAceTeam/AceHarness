@@ -1,9 +1,11 @@
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { execSyncMock } = vi.hoisted(() => ({
+const { execFileSyncMock, execSyncMock, isWindowsMock } = vi.hoisted(() => ({
+  execFileSyncMock: vi.fn(),
   execSyncMock: vi.fn(),
+  isWindowsMock: vi.fn(),
 }));
 
 const TEST_ACE_HOME = `/tmp/aceharness-process-manager-test-${process.pid}`;
@@ -13,9 +15,14 @@ vi.mock('child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('child_process')>();
   return {
     ...original,
+    execFileSync: execFileSyncMock,
     execSync: execSyncMock,
   };
 });
+
+vi.mock('@/lib/core/runtime-platform', () => ({
+  isWindows: isWindowsMock,
+}));
 
 import { processManager } from '@/lib/core/process-manager';
 
@@ -24,7 +31,10 @@ import { processManager } from '@/lib/core/process-manager';
 beforeEach(() => {
   process.env.ACE_HOME = TEST_ACE_HOME;
   rmSync(TEST_ACE_HOME, { recursive: true, force: true });
+  execFileSyncMock.mockReset();
   execSyncMock.mockReset();
+  isWindowsMock.mockReset();
+  isWindowsMock.mockReturnValue(false);
 
   // Kill any leftover processes from previous tests
   for (const proc of processManager.getAllProcesses()) {
@@ -42,10 +52,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function writeAcpSessionRecord(recordId: string, record: Record<string, unknown>): void {
+function writeAcpSessionRecord(recordId: string, record: Record<string, unknown>): string {
   const sessionsDir = join(TEST_ACE_HOME, 'data', 'acpx-runtime', 'sessions');
   mkdirSync(sessionsDir, { recursive: true });
-  writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify(record), 'utf-8');
+  const path = join(sessionsDir, `${encodeURIComponent(recordId)}.json`);
+  writeFileSync(path, JSON.stringify(record), 'utf-8');
+  return path;
 }
 
 describe('ProcessManager', () => {
@@ -222,6 +234,23 @@ describe('ProcessManager', () => {
     expect(execSyncMock).not.toHaveBeenCalled();
   });
 
+  test('killAllSystem cleans queued registered processes for matching run ids', async () => {
+    const proc = processManager.registerExternalProcess('kill-all-queued', 'dev', 'step', 'run-queued');
+    proc.status = 'queued';
+    const childKill = vi.fn();
+    const cancelFn = vi.fn();
+    (proc as any).childProcess = { kill: childKill };
+    (proc as any)._cancelFn = cancelFn;
+
+    const result = await processManager.killAllSystem({ runIds: ['run-queued'] });
+
+    expect(result.registeredKilled).toBe(1);
+    expect(result.registeredProcessIds).toEqual(['kill-all-queued']);
+    expect(processManager.getProcess('kill-all-queued')!.status).toBe('killed');
+    expect(childKill).toHaveBeenCalledWith('SIGTERM');
+    expect(cancelFn).toHaveBeenCalledOnce();
+  });
+
   test('killAllSystem supports explicit global registered-process cleanup', async () => {
     processManager.registerExternalProcess('kill-all-global-run', 'dev', 'step', 'run-global');
     processManager.registerExternalProcess('kill-all-global-unscoped', 'dev', 'step');
@@ -284,6 +313,215 @@ describe('ProcessManager', () => {
       acpxRecordIds: ['record-run-a'],
     });
 
+    expect(result.agentRootsMatched).toBe(1);
+    expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
+    expect(killSpy).toHaveBeenCalledWith(91001, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(92001, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(92002, 'SIGTERM');
+    vi.clearAllTimers();
+  });
+
+  test('killAllSystem reaps an exact closed ACP record after runtime cleanup', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const workspace = '/tmp/aceharness-process-manager-closed-record';
+    writeAcpSessionRecord('record-run-a', {
+      acpx_record_id: 'record-run-a',
+      pid: 91001,
+      cwd: workspace,
+      agent_started_at: 'Tue Jul 28 10:05:00 2026',
+      closed: true,
+    });
+    writeAcpSessionRecord('record-run-b', {
+      acpx_record_id: 'record-run-b',
+      pid: 92001,
+      cwd: workspace,
+      agent_started_at: 'Tue Jul 28 10:06:00 2026',
+      closed: true,
+    });
+    execSyncMock.mockReturnValue([
+      `91001 ${process.pid} Tue Jul 28 10:05:00 2026 /tmp/acpx-wrapper-a`,
+      `91002 91001 Tue Jul 28 10:05:01 2026 /tmp/agent-a`,
+      `92001 ${process.pid} Tue Jul 28 10:06:00 2026 /tmp/acpx-wrapper-b`,
+      `92002 92001 Tue Jul 28 10:06:01 2026 /tmp/agent-b`,
+    ].join('\n'));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: [workspace],
+      acpxRecordIds: ['record-run-a'],
+    });
+
+    expect(result.agentRootsMatched).toBe(1);
+    expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
+    expect(killSpy).toHaveBeenCalledWith(91001, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(92001, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(92002, 'SIGTERM');
+    vi.clearAllTimers();
+  });
+
+  test('killAllSystem reaps an exact ACP record when run workspace metadata is unavailable', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    writeAcpSessionRecord('record-run-a', {
+      acpx_record_id: 'record-run-a',
+      pid: 91001,
+      cwd: '/unknown-workspace-a',
+      agent_started_at: 'Tue Jul 28 10:05:00 2026',
+    });
+    writeAcpSessionRecord('record-run-b', {
+      acpx_record_id: 'record-run-b',
+      pid: 92001,
+      cwd: '/unknown-workspace-b',
+      agent_started_at: 'Tue Jul 28 10:06:00 2026',
+    });
+    execSyncMock.mockReturnValue([
+      `91001 ${process.pid} Tue Jul 28 10:05:00 2026 /tmp/acpx-wrapper-a`,
+      `91002 91001 Tue Jul 28 10:05:01 2026 /tmp/agent-a`,
+      `92001 ${process.pid} Tue Jul 28 10:06:00 2026 /tmp/acpx-wrapper-b`,
+      `92002 92001 Tue Jul 28 10:06:01 2026 /tmp/agent-b`,
+    ].join('\n'));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: [],
+      acpxRecordIds: ['record-run-a'],
+    });
+
+    expect(result.agentRootsMatched).toBe(1);
+    expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
+    expect(killSpy).not.toHaveBeenCalledWith(92001, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(92002, 'SIGTERM');
+    vi.clearAllTimers();
+  });
+
+  test('killAllSystem keeps a directly scoped ACP record eligible after the maintenance age window', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const workspace = '/tmp/aceharness-process-manager-long-run';
+    const recordPath = writeAcpSessionRecord('record-run-a', {
+      acpx_record_id: 'record-run-a',
+      pid: 91001,
+      cwd: workspace,
+      agent_started_at: 'Tue Jul 28 10:05:00 2026',
+    });
+    const staleTime = new Date(Date.now() - (25 * 60 * 60 * 1000));
+    utimesSync(recordPath, staleTime, staleTime);
+    execSyncMock.mockReturnValue([
+      `91001 ${process.pid} Tue Jul 28 10:05:00 2026 /tmp/acpx-wrapper-a`,
+      `91002 91001 Tue Jul 28 10:05:01 2026 /tmp/agent-a`,
+    ].join('\n'));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: [workspace],
+      acpxRecordIds: ['record-run-a'],
+    });
+
+    expect(result.agentRootsMatched).toBe(1);
+    expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
+    expect(killSpy).toHaveBeenCalledWith(91001, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
+    vi.clearAllTimers();
+  });
+
+  test('killAllSystem reaps a detached exact ACP target despite closed and mismatched cwd metadata', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    writeAcpSessionRecord('record-run-a', {
+      acpx_record_id: 'record-run-a',
+      pid: 91001,
+      cwd: '/different/workspace',
+      agent_started_at: 'Tue Jul 28 10:05:00 2026',
+      closed: true,
+    });
+    execSyncMock.mockReturnValue([
+      '91001 1 Tue Jul 28 10:05:00 2026 /tmp/acpx-wrapper-a',
+      '91002 91001 Tue Jul 28 10:05:01 2026 /tmp/agent-a',
+    ].join('\n'));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: ['/expected/workspace'],
+      acpxRecordIds: ['record-run-a'],
+    });
+
+    expect(result.agentRootsMatched).toBe(1);
+    expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
+    expect(killSpy).toHaveBeenCalledWith(91001, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
+    vi.clearAllTimers();
+  });
+
+  test('killAllSystem matches an old one-shot ACP record through record.name', async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const oneShotName = 'session-key:oneshot:db9c90b1';
+    const recordPath = writeAcpSessionRecord('opaque-record-id', {
+      name: oneShotName,
+      pid: 91001,
+      cwd: '/different/workspace',
+      agent_started_at: 'Tue Jul 28 10:05:00 2026',
+      closed: true,
+    });
+    const staleTime = new Date(Date.now() - (48 * 60 * 60 * 1000));
+    utimesSync(recordPath, staleTime, staleTime);
+    execSyncMock.mockReturnValue([
+      '91001 1 Tue Jul 28 10:05:00 2026 /tmp/acpx-wrapper-a',
+      '91002 91001 Tue Jul 28 10:05:01 2026 /tmp/agent-a',
+    ].join('\n'));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: ['/expected/workspace'],
+      acpxRecordIds: [oneShotName],
+    });
+
+    expect(result.agentRootsMatched).toBe(1);
+    expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
+    expect(killSpy).toHaveBeenCalledWith(91001, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(91002, 'SIGTERM');
+    vi.clearAllTimers();
+  });
+
+  test('killAllSystem applies exact ACP targeting on Windows', async () => {
+    vi.useFakeTimers();
+    isWindowsMock.mockReturnValue(true);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const workspace = 'C:\\Repo\\Workflow';
+    writeAcpSessionRecord('record-run-a', {
+      acpx_record_id: 'record-run-a',
+      pid: 91001,
+      cwd: 'c:\\repo\\workflow\\src',
+      agent_started_at: '2026-07-28T10:05:00.000Z',
+    });
+    writeAcpSessionRecord('record-run-b', {
+      acpx_record_id: 'record-run-b',
+      pid: 92001,
+      cwd: 'C:\\Repo\\Workflow\\src',
+      agent_started_at: '2026-07-28T10:06:00.000Z',
+    });
+    execFileSyncMock.mockReturnValue(JSON.stringify([
+      { pid: 91001, ppid: process.pid, startedAt: '2026-07-28T10:05:00.000Z', command: 'acpx-wrapper-a' },
+      { pid: 91002, ppid: 91001, startedAt: '2026-07-28T10:05:01.000Z', command: 'agent-a' },
+      { pid: 92001, ppid: process.pid, startedAt: '2026-07-28T10:06:00.000Z', command: 'acpx-wrapper-b' },
+      { pid: 92002, ppid: 92001, startedAt: '2026-07-28T10:06:01.000Z', command: 'agent-b' },
+    ]));
+
+    const result = await processManager.killAllSystem({
+      sweepAgentProcesses: true,
+      workspacePaths: [workspace],
+      acpxRecordIds: ['record-run-a'],
+    });
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      'powershell.exe',
+      expect.arrayContaining(['-NoProfile', '-NonInteractive', '-Command']),
+      expect.objectContaining({ windowsHide: true }),
+    );
+    expect(execSyncMock).not.toHaveBeenCalled();
     expect(result.agentRootsMatched).toBe(1);
     expect(new Set(result.pids)).toEqual(new Set([91001, 91002]));
     expect(killSpy).toHaveBeenCalledWith(91001, 'SIGTERM');

@@ -21,13 +21,12 @@ const summary = {
   category: '软件研发',
   tags: ['研发'],
   featured: true,
-  mode: 'phase-based',
+  mode: 'state-machine',
   digest: 'a'.repeat(64),
   versions: ['1.0.0'],
   visibility: 'builtin',
   editable: false,
-  stateCount: 0,
-  phaseCount: 2,
+  stateCount: 2,
   stepCount: 2,
   parameterCount: 2,
   preCommandCount: 0,
@@ -55,7 +54,7 @@ const detail = {
     },
     spec: {
       entrypoint: 'workflow.yaml',
-      mode: 'phase-based',
+      mode: 'state-machine',
       compatibility: { aceharness: '^1.0.0' },
       parameters: [
         { id: 'workflowName', label: '工作流名称', type: 'string', bind: '/workflow/name', required: true, default: '软件交付' },
@@ -68,7 +67,7 @@ const detail = {
     workflow: {
       name: '软件交付',
       supervisor: { enabled: true, agent: 'default-supervisor' },
-      phases: [
+      states: [
         { name: '设计', steps: [{ name: '设计方案', agent: 'developer', task: 'design' }] },
         { name: '实现', steps: [{ name: '编码实现', agent: 'developer', task: 'implement' }] },
       ],

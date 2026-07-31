@@ -1,7 +1,6 @@
 import { createRequire } from 'node:module';
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import projectPackageJson from '../package.json';
 import { describe, expect, test, vi } from 'vitest';
 import { createRuntimeAdapterRegistry, resolveRuntimeForAgent } from '@/lib/runtime-agent/adapters/adapter-registry';
 import { AcpxAdapter, normalizeAcpxRuntimeEvent, resolveAcpxCommand } from '@/lib/runtime-agent/adapters/acpx-adapter';
@@ -21,12 +20,6 @@ const requireFromProject = createRequire(`${process.cwd()}/package.json`);
 
 describe('runtime adapters', () => {
   test('documents current acpx package exports and public runtime APIs', async () => {
-    // Inspection for Task 6 phase 1:
-    // acpx@0.12.0 is installed and package.json exports real runtime and flow
-    // entrypoints. This adapter remains an injectable wrapper until ACEHarness
-    // wires AcpRuntime construction and session stores deliberately.
-    expect(projectPackageJson.dependencies.acpx).toBe('^0.12.0');
-
     if (!canResolve('acpx')) {
       expect(canResolve('acpx/runtime')).toBe(false);
       expect(canResolve('acpx/flows')).toBe(false);
@@ -231,6 +224,39 @@ describe('runtime adapters', () => {
     });
   });
 
+  test('keeps ACPX file-edit metadata while omitting the file body', () => {
+    const fileBody = 'line one\nline two';
+    const tool = normalizeAcpxRuntimeEvent({
+      type: 'tool_call',
+      toolCallId: 'tool-edit-1',
+      title: 'Editing files',
+      status: 'in_progress',
+      kind: 'edit',
+      content: [{
+        type: 'diff',
+        path: 'docs/dependency-analysis.md',
+        oldText: null,
+        newText: fileBody,
+        _meta: { kind: 'add' },
+      }],
+    });
+
+    expect(tool.payload).toMatchObject({
+      toolCallId: 'tool-edit-1',
+      kind: 'edit',
+      rawInput: {
+        filePath: 'docs/dependency-analysis.md',
+        changes: [{
+          filePath: 'docs/dependency-analysis.md',
+          kind: 'add',
+          addedLines: 2,
+        }],
+      },
+    });
+    expect(JSON.stringify(tool.payload)).not.toContain(fileBody);
+    expect(JSON.stringify(tool.raw)).not.toContain(fileBody);
+  });
+
   test('normalizes acpx usage_update breakdown into ACEHarness token usage', () => {
     const event = normalizeAcpxRuntimeEvent({
       type: 'status',
@@ -416,10 +442,9 @@ describe('runtime adapters', () => {
           runtimeSessionId: onSessionId,
           turnId: 'turn-1',
         },
-        payload: { direct: true },
+        payload: { direct: true, apiKey: 'trace-secret-value' },
       });
       expect(existsSync(onTraceFile)).toBe(true);
-      rmSync(onTraceFile, { force: true });
 
       const runtime = {
         ensureSession: vi.fn(async () => ({
@@ -444,7 +469,9 @@ describe('runtime adapters', () => {
 
       await collect(new AcpxAdapter({ runTurn: client.runTurn }).runTurn(binding, createTurnInput()));
 
-      const lines = readFileSync(onTraceFile, 'utf8')
+      const traceText = readFileSync(onTraceFile, 'utf8');
+      expect(traceText).not.toContain('trace-secret-value');
+      const lines = traceText
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line) as { stage: string });
@@ -498,7 +525,7 @@ describe('runtime adapters', () => {
         };
       }),
     } satisfies AcpRuntime;
-    const client = createAcpxRuntimeClient({ runtime });
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
     const session = createSessionInput('runtime-session-5', 'codegenie', 'acpx');
 
     const handle = await client.ensureSession?.({
@@ -516,7 +543,7 @@ describe('runtime adapters', () => {
     expect(ensureSession).toHaveBeenCalledWith({
       sessionKey: 'runtime-session-5',
       agent: 'codegenie',
-      mode: 'persistent',
+      mode: 'oneshot',
       cwd: session.profileSnapshot.cwd,
       resumeSessionId: 'resume-backend-session',
       sessionOptions: {
@@ -556,7 +583,259 @@ describe('runtime adapters', () => {
     ]);
   });
 
-  test('acpx runtime client preserves codex advertised bracket model names', async () => {
+  test.each(['claude', 'codex', 'opencode', 'gemini'])('passes configured env to %s ACP sessions', async (agentId) => {
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+      sessionKey: input.sessionKey,
+      backend: 'acpx',
+      runtimeSessionName: input.sessionKey,
+      cwd: process.cwd(),
+      backendSessionId: `${input.sessionKey}-backend`,
+    }));
+    const loadConfiguredEnv = vi.fn(async (options?: { userId?: string }) => {
+      expect(options?.userId).toBe('user-env-owner');
+      return {
+        SHARED_TOKEN: 'personal',
+        SYSTEM_ONLY: 'system',
+        EMPTY_CONFIG: '',
+        UNDEFINED_CONFIG: undefined as unknown as string,
+      };
+    });
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv });
+    const session = createSessionInput(
+      `runtime-session-env-${agentId}`,
+      agentId,
+      'acpx',
+      'unrestricted',
+      'user-env-owner',
+    );
+    session.profileSnapshot.env = [
+      {
+        key: 'SHARED_TOKEN',
+        value: '',
+        source: 'process-env',
+        secret: false,
+        readiness: 'unknown',
+      },
+      {
+        key: 'PROFILE_ONLY',
+        value: 'profile',
+        source: 'env-profile',
+        secret: false,
+        readiness: 'ready',
+      },
+      {
+        key: 'SYSTEM_ONLY',
+        value: '',
+        source: 'env-profile',
+        secret: false,
+        readiness: 'unknown',
+      },
+    ];
+
+    await client.ensureSession?.({ session, command: resolveAcpxCommand(agentId) });
+
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionOptions: {
+        model: 'test-model',
+        env: {
+          SHARED_TOKEN: 'personal',
+          SYSTEM_ONLY: 'system',
+          PROFILE_ONLY: 'profile',
+        },
+      },
+    }));
+  });
+
+  test('injects system values while leaving an unconfigured host value to acpx inheritance', async () => {
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+      sessionKey: input.sessionKey,
+      backend: 'acpx',
+      runtimeSessionName: input.sessionKey,
+      cwd: process.cwd(),
+    }));
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({
+      runtime,
+      loadConfiguredEnv: async () => ({ SYSTEM_ONLY: 'system' }),
+    });
+    const session = createSessionInput('runtime-session-system-only', 'claude', 'acpx', 'unrestricted', 'user-env-owner');
+    session.profileSnapshot.env = [{
+      key: 'HOST_ONLY',
+      value: 'host-process',
+      source: 'process-env',
+      secret: false,
+      readiness: 'ready',
+    }];
+
+    await client.ensureSession?.({ session, command: resolveAcpxCommand('claude') });
+
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionOptions: {
+        model: 'test-model',
+        env: { SYSTEM_ONLY: 'system' },
+      },
+    }));
+    expect(JSON.stringify(ensureSession.mock.calls[0]?.[0])).not.toContain('host-process');
+  });
+
+  test('reconnects ACPX sessions with the current configured env and resume id', async () => {
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+      sessionKey: input.sessionKey,
+      backend: 'acpx',
+      runtimeSessionName: input.sessionKey,
+      cwd: process.cwd(),
+      acpxRecordId: `${input.sessionKey}-record-${ensureSession.mock.calls.length}`,
+      backendSessionId: `${input.sessionKey}-backend-${ensureSession.mock.calls.length}`,
+    }));
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const loadConfiguredEnv = vi.fn(async () => ({
+      CLAUDE_CODE_USE_VERTEX: loadConfiguredEnv.mock.calls.length === 1 ? 'initial' : 'latest',
+    }));
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv });
+    const adapter = new AcpxAdapter(client);
+    const session = createSessionInput('runtime-session-reconnect', 'claude', 'acpx', 'unrestricted', 'user-env-owner');
+
+    const first = await adapter.createOrLoadSession(session);
+    await adapter.reconnectSession({ ...session, existingBinding: first });
+
+    expect(ensureSession).toHaveBeenCalledTimes(2);
+    expect(ensureSession.mock.calls[0]?.[0]).toMatchObject({
+      sessionOptions: { env: { CLAUDE_CODE_USE_VERTEX: 'initial' } },
+    });
+    expect(ensureSession.mock.calls[1]?.[0]).toMatchObject({
+      resumeSessionId: 'runtime-session-reconnect-backend-1',
+      sessionOptions: {
+        env: { CLAUDE_CODE_USE_VERTEX: 'latest' },
+      },
+    });
+    expect(loadConfiguredEnv).toHaveBeenCalledTimes(2);
+  });
+
+  test.each(['codex', 'claude', 'opencode', 'gemini'])('starts a fresh ACP session when %s cannot resume a stale session', async (agentId) => {
+    const staleSessionId = 'missing-acp-session';
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => {
+      if (input.resumeSessionId === staleSessionId) {
+        if (agentId === 'codex') {
+          throw Object.assign(new Error('Internal error'), {
+            code: -32603,
+            data: { details: `no rollout found for thread id ${staleSessionId}` },
+          });
+        }
+        throw Object.assign(
+          new Error(`Persistent ACP session ${staleSessionId} could not be resumed: Resource not found: ${staleSessionId}`),
+          { code: -32603 },
+        );
+      }
+      return {
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        cwd: process.cwd(),
+        acpxRecordId: `${input.sessionKey}-record`,
+        backendSessionId: `${input.sessionKey}-backend`,
+      };
+    });
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput(`runtime-session-recovery-${agentId}`, agentId, 'acpx');
+
+    const handle = await client.ensureSession?.({
+      session,
+      command: resolveAcpxCommand(agentId),
+      existingHandle: {
+        sessionKey: session.runtimeSessionId,
+        backend: 'acpx',
+        runtimeSessionName: session.runtimeSessionId,
+        backendSessionId: staleSessionId,
+      },
+    });
+
+    expect(handle?.backendSessionId).toContain(':recovery:');
+    expect(ensureSession).toHaveBeenCalledTimes(2);
+    expect(ensureSession.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: session.runtimeSessionId,
+      resumeSessionId: staleSessionId,
+    });
+    expect(ensureSession.mock.calls[1]?.[0]).toMatchObject({
+      sessionKey: expect.stringContaining(`${session.runtimeSessionId}:recovery:`),
+    });
+    expect(ensureSession.mock.calls[1]?.[0]).not.toHaveProperty('resumeSessionId');
+  });
+
+  test('keeps configured CLI values ahead of inherited process-env snapshots', async () => {
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+      sessionKey: input.sessionKey,
+      backend: 'acpx',
+      runtimeSessionName: input.sessionKey,
+      cwd: process.cwd(),
+    }));
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({
+      runtime,
+      loadConfiguredEnv: async () => ({
+        SHARED_TOKEN: 'personal',
+        SYSTEM_ONLY: 'system',
+      }),
+    });
+    const session = createSessionInput('runtime-session-env-precedence', 'claude', 'acpx', 'unrestricted', 'user-env-owner');
+    session.profileSnapshot.env = [
+      {
+        key: 'SHARED_TOKEN',
+        value: 'host-process',
+        source: 'process-env',
+        secret: false,
+        readiness: 'ready',
+      },
+      {
+        key: 'TURN_OVERRIDE',
+        value: 'explicit',
+        source: 'turn-override',
+        secret: false,
+        readiness: 'ready',
+      },
+    ];
+
+    await client.ensureSession?.({ session, command: resolveAcpxCommand('claude') });
+
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionOptions: {
+        model: 'test-model',
+        env: {
+          SHARED_TOKEN: 'personal',
+          SYSTEM_ONLY: 'system',
+          TURN_OVERRIDE: 'explicit',
+        },
+      },
+    }));
+  });
+
+  test('acpx runtime client maps legacy Codex bracket models to the ACP model and effort option', async () => {
     const ensureSession = vi.fn(async () => ({
       sessionKey: 'runtime-session-codex',
       backend: 'acpx',
@@ -565,6 +844,7 @@ describe('runtime adapters', () => {
     }));
     const runtime = {
       ensureSession,
+      setConfigOption: vi.fn(async () => undefined),
       startTurn: vi.fn((): AcpRuntimeTurn => ({
         requestId: 'request-1',
         events: eventStream([]),
@@ -575,7 +855,7 @@ describe('runtime adapters', () => {
       cancel: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
     } satisfies AcpRuntime;
-    const client = createAcpxRuntimeClient({ runtime });
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
     const session = createSessionInput('runtime-session-codex', 'codex', 'acpx');
     session.modelRoute = {
       ...session.modelRoute,
@@ -595,9 +875,40 @@ describe('runtime adapters', () => {
 
     expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
       sessionOptions: {
-        model: 'gpt-5.5[low]',
+        model: 'gpt-5.5',
       },
     }));
+    expect(runtime.setConfigOption).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'reasoning_effort',
+      value: 'low',
+    }));
+  });
+
+  test('acpx runtime client exposes ACP session initialization diagnostics', async () => {
+    const ensureSession = vi.fn(async () => {
+      throw Object.assign(new Error('Internal error'), {
+        code: -32603,
+        data: { details: 'failed to reload config: config.toml: unknown variant `max`' },
+      });
+    });
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput('runtime-session-acpx-error', 'codex', 'acpx');
+
+    await expect(client.ensureSession?.({ session, command: resolveAcpxCommand('codex') }))
+      .rejects.toMatchObject({
+        code: 'ADAPTER_FAILED',
+        message: expect.stringContaining('failed to reload config'),
+        details: expect.objectContaining({
+          stage: 'session.initialize',
+          nativeError: expect.objectContaining({ code: '-32603' }),
+        }),
+      });
   });
 
   test('acpx runtime client maps ACEHarness permission policies to acpx runtime options only', async () => {
@@ -615,6 +926,7 @@ describe('runtime adapters', () => {
       closeStream: vi.fn(async () => undefined),
     }));
     const client = createAcpxRuntimeClient({
+      loadConfiguredEnv: async () => ({}),
       importRuntime: async () => ({
         createAcpRuntime(runtimeOptions) {
           createdOptions.push(runtimeOptions);
@@ -803,7 +1115,7 @@ describe('runtime adapters', () => {
     await adapter.cancel(binding, { turnId: 'turn-after-finish', requestId: 'cancel-1', reason: 'test' });
     await adapter.close(binding);
 
-    expect(calls).toEqual(['createAcpRuntime', 'ensureSession', 'startTurn', 'cancel', 'close']);
+    expect(calls).toEqual(['createAcpRuntime', 'ensureSession', 'startTurn', 'close', 'cancel']);
     expect(events.map((event) => event.type)).toEqual(['turn.started', 'message.delta', 'turn.completed']);
     expect(status).toMatchObject({
       runtime: 'acpx',
@@ -823,9 +1135,218 @@ describe('runtime adapters', () => {
       handle: expect.objectContaining({
         backendSessionId: 'backend-real-path',
       }),
-      reason: 'aceharness-runtime-close',
+      reason: 'aceharness-runtime-turn-complete',
       discardPersistentState: false,
     });
+  });
+
+  test('acpx runtime client completes tool events when ACP omits the tool result', async () => {
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-tool-without-result',
+        events: eventStream([{
+          type: 'tool_call',
+          toolCallId: 'tool-edit-1',
+          title: 'Edit file',
+          kind: 'edit',
+          rawInput: { filePath: 'docs/dependency-analysis.md' },
+        }]),
+        result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+        cancel: vi.fn(async () => undefined),
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-tool-fallback', 'codex', 'acpx'));
+
+    const events = await collect(adapter.runTurn(binding, createTurnInput()));
+    const completion = events.find((event) => event.type === 'tool.updated' && (event.payload as any)?.status === 'completed');
+
+    expect(completion).toMatchObject({
+      toolCallId: 'tool-edit-1',
+      payload: expect.objectContaining({
+        status: 'completed',
+        rawOutput: expect.objectContaining({
+          resultUnavailable: true,
+        }),
+      }),
+    });
+  });
+
+  test('closes the acpx runtime after normal completion and consumer disconnect', async () => {
+    const completedClose = vi.fn(async () => undefined);
+    const completedRuntime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        acpxRecordId: 'record-completed',
+        backendSessionId: 'backend-completed',
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-completed',
+        events: eventStream([{ type: 'message_delta', payload: { text: 'done' } }]),
+        result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+        cancel: vi.fn(async () => undefined),
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: completedClose,
+    } satisfies AcpRuntime;
+    const completedClient = createAcpxRuntimeClient({ runtime: completedRuntime });
+    const completedAdapter = new AcpxAdapter(completedClient);
+    const completedBinding = await completedAdapter.createOrLoadSession(createSessionInput('runtime-session-completed', 'codex', 'acpx'));
+
+    await collect(completedClient.runTurn!(completedBinding, createTurnInput()));
+
+    expect(completedClose).toHaveBeenCalledTimes(1);
+    expect(completedClose).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'aceharness-runtime-turn-complete',
+      discardPersistentState: false,
+    }));
+
+    await collect(completedClient.runTurn!(completedBinding, createTurnInput()));
+    expect(completedRuntime.startTurn).toHaveBeenCalledTimes(2);
+    expect(completedClose).toHaveBeenCalledTimes(2);
+
+    const detachedClose = vi.fn(async () => undefined);
+    const detachedCancel = vi.fn(async () => undefined);
+    const detachedCloseStream = vi.fn(async () => undefined);
+    const detachedRuntime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        acpxRecordId: 'record-detached',
+        backendSessionId: 'backend-detached',
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-detached',
+        events: eventStream([{ type: 'message_delta', payload: { text: 'partial' } }]),
+        result: new Promise(() => {}),
+        cancel: detachedCancel,
+        closeStream: detachedCloseStream,
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: detachedClose,
+    } satisfies AcpRuntime;
+    const detachedClient = createAcpxRuntimeClient({ runtime: detachedRuntime, cleanupTimeoutMs: 20 });
+    const detachedAdapter = new AcpxAdapter(detachedClient);
+    const detachedBinding = await detachedAdapter.createOrLoadSession(createSessionInput('runtime-session-detached', 'codex', 'acpx'));
+    const iterator = detachedClient.runTurn!(detachedBinding, createTurnInput())[Symbol.asyncIterator]();
+
+    await iterator.next();
+    await iterator.return?.();
+
+    expect(detachedCancel).toHaveBeenCalledWith({ reason: 'acpx turn consumer detached or failed' });
+    expect(detachedCloseStream).toHaveBeenCalledWith({ reason: 'acpx turn consumer detached or failed' });
+    expect(detachedClose).toHaveBeenCalledTimes(1);
+    expect(detachedClose).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'aceharness-runtime-turn-aborted',
+      discardPersistentState: false,
+    }));
+  });
+
+  test('closes the acpx runtime when startTurn throws', async () => {
+    const close = vi.fn(async () => undefined);
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        acpxRecordId: 'record-start-failed',
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => {
+        throw new Error('startTurn failed');
+      }),
+      cancel: vi.fn(async () => undefined),
+      close,
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-start-failed', 'codex', 'acpx'));
+
+    await expect(collect(client.runTurn!(binding, createTurnInput()))).rejects.toThrow('startTurn failed');
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'aceharness-runtime-start-failed',
+    }));
+  });
+
+  test('closes a persistent acpx session when cancel succeeds without an active turn', async () => {
+    const cancel = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        acpxRecordId: 'record-idle-cancel',
+      })),
+      startTurn: vi.fn(),
+      cancel,
+      close,
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, sessionMode: 'persistent' });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-idle-cancel', 'codex', 'acpx'));
+
+    await adapter.cancel(binding, {
+      turnId: 'turn-not-active',
+      requestId: 'cancel-idle',
+      reason: 'user cancel',
+    });
+
+    expect(cancel).toHaveBeenCalledWith({
+      handle: expect.objectContaining({ acpxRecordId: 'record-idle-cancel' }),
+      reason: 'user cancel',
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'aceharness-runtime-cancel',
+      discardPersistentState: false,
+    }));
+  });
+
+  test('closes after cancel failure while preserving the native cancellation error', async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error('native cancel failed');
+    });
+    const close = vi.fn(async () => undefined);
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        acpxRecordId: 'record-cancel-failed',
+      })),
+      startTurn: vi.fn(),
+      cancel,
+      close,
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, sessionMode: 'persistent' });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-cancel-failed', 'codex', 'acpx'));
+
+    await expect(adapter.cancel(binding, {
+      turnId: 'turn-not-active',
+      requestId: 'cancel-failed',
+      reason: 'user cancel',
+    })).rejects.toThrow('native cancel failed');
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'aceharness-runtime-cancel-failed',
+      discardPersistentState: false,
+    }));
   });
 
   test('routes cangjie-magic to MagicAdapter and other agents to AcpxAdapter', () => {
@@ -928,6 +1449,24 @@ describe('runtime adapters', () => {
     expect(close).toHaveBeenCalledWith(binding);
   });
 
+  test('magic adapter closes the runtime when the native stream crashes', async () => {
+    const close = vi.fn(async () => undefined);
+    const magic = new MagicAdapter({
+      async *runTurn() {
+        yield { type: 'assistant_delta', payload: { text: 'partial' } };
+        throw new Error('native stream failed');
+      },
+      close,
+    });
+    const binding = await magic.createOrLoadSession(createSessionInput('magic-session-crash', 'cangjie-magic', 'magic'));
+
+    const iterator = magic.runTurn(binding, createTurnInput())[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.next();
+    await expect(iterator.next()).rejects.toThrow('native stream failed');
+    expect(close).toHaveBeenCalledWith(binding);
+  });
+
   test('cancel fails explicitly when adapter client cannot cancel a running native turn', async () => {
     const acpx = new AcpxAdapter();
     const magic = new MagicAdapter();
@@ -976,9 +1515,11 @@ function createSessionInput(
   agentId: string,
   runtime: 'acpx' | 'magic',
   permissionPolicyId: RuntimePermissionPolicyId = 'unrestricted',
+  ownerUserId?: string,
 ): AdapterSessionInput {
   const profileSnapshot: RuntimeProfileSnapshot = {
     agentId,
+    ownerUserId,
     modelRouteId: `route-${agentId}`,
     cwd: process.cwd(),
     systemPromptHash: 'sha256:test',

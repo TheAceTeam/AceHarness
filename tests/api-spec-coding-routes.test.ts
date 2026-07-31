@@ -33,24 +33,36 @@ async function loadSpecCodingRoutes() {
   return { sessions, sessionById };
 }
 
-function phaseConfig(projectRoot: string) {
+function stateMachineConfig(projectRoot: string) {
   return {
     workflow: {
       name: 'Spec Coding Workflow',
-      phases: [
+      mode: 'state-machine',
+      states: [
         {
           name: 'Design',
-          checkpoint: { name: 'Design review' },
+          description: 'Design the implementation approach',
+          isInitial: true,
+          isFinal: false,
           steps: [
             { name: 'Plan', agent: 'architect', task: 'Design the implementation approach' },
+          ],
+          transitions: [
+            { condition: { verdict: 'pass' }, to: 'Implement', priority: 1 },
+            { condition: { verdict: 'conditional_pass' }, to: 'Implement', priority: 2 },
+            { condition: { verdict: 'fail' }, to: 'Implement', priority: 3 },
           ],
         },
         {
           name: 'Implement',
+          description: 'Implement and verify the agreed change',
+          isInitial: false,
+          isFinal: true,
           steps: [
             { name: 'Code', agent: 'developer', task: 'Implement the agreed change' },
             { name: 'Verify', agent: 'tester', task: 'Verify the implementation' },
           ],
+          transitions: [],
         },
       ],
     },
@@ -67,12 +79,12 @@ function sessionPayload(workspace: string, overrides: Record<string, any> = {}) 
     chatSessionId: 'chat-main',
     filename: 'spec-workflow.yaml',
     workflowName: 'Spec Coding Workflow',
-    mode: 'phase-based',
+    mode: 'state-machine',
     workingDirectory: workspace,
     workspaceMode: 'in-place',
     description: 'Route test spec coding workflow',
     requirements: 'Confirm requirements before generating workflow config',
-    config: phaseConfig(workspace),
+    config: stateMachineConfig(workspace),
     ...overrides,
   };
 }

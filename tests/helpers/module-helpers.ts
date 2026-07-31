@@ -9,7 +9,7 @@ export async function withTempDir<T>(prefix: string, fn: (dir: string) => Promis
   try {
     return await fn(dir);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -32,6 +32,10 @@ export async function withIsolatedAceHome<T>(fn: (aceHome: string) => Promise<T>
       try {
         const { resetWorkflowEventStoreForTests } = await import('@/lib/workflow/event-store');
         resetWorkflowEventStoreForTests();
+      } catch {}
+      try {
+        const { closeChatSessionDatabaseForTests } = await import('@/lib/chat/persistence');
+        closeChatSessionDatabaseForTests();
       } catch {}
       if (previousAceHome === undefined) delete process.env.ACE_HOME;
       else process.env.ACE_HOME = previousAceHome;

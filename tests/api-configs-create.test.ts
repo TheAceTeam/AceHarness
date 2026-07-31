@@ -62,7 +62,7 @@ describe('configs create route', () => {
           workflowName: 'First',
           workingDirectory: workspace,
           workspaceMode: 'in-place',
-          mode: 'phase-based',
+          mode: 'state-machine',
         };
 
         const first = await POST(makeRequest('/api/configs/create', { token, json: body }));
@@ -74,7 +74,7 @@ describe('configs create route', () => {
     });
   });
 
-  test('creates phase-based config with valid YAML structure', async () => {
+  test('creates lightweight config with the locked tasklist step', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token } = await createAuthToken();
@@ -87,23 +87,41 @@ describe('configs create route', () => {
         const response = await POST(makeRequest('/api/configs/create', {
           token,
           json: {
-            filename: 'phase-test.yaml',
-            workflowName: 'Phase Test',
+            filename: 'lightweight-test.yaml',
+            workflowName: 'Lightweight Test',
             workingDirectory: workspace,
             workspaceMode: 'in-place',
-            mode: 'phase-based',
+            mode: 'lightweight',
             description: 'A test workflow',
+            lightweight: {
+              tasklistDirectory: 'docs/tasklists/client-supplied-location',
+              agent: 'developer',
+              task: 'Implement the requested change',
+            },
           },
         }));
         expect(response.status).toBe(200);
         const json = await responseJson<any>(response);
         expect(json.success).toBe(true);
+        expect(json.creationSession).toMatchObject({
+          createdBy: expect.any(String),
+          mode: 'lightweight',
+          lightweight: {
+            agent: 'developer',
+            task: 'Implement the requested change',
+            tasklistDirectory: 'docs/tasklists/lightweight-test',
+          },
+        });
 
-        const yamlContent = parse(await readFile(path.join(aceHome, 'configs', 'phase-test.yaml'), 'utf8'));
-        expect(yamlContent.workflow.name).toBe('Phase Test');
+        const yamlContent = parse(await readFile(path.join(aceHome, 'configs', 'lightweight-test.yaml'), 'utf8'));
+        expect(yamlContent.workflow.name).toBe('Lightweight Test');
         expect(yamlContent.workflow.description).toBe('A test workflow');
-        expect(Array.isArray(yamlContent.workflow.phases)).toBe(true);
-        expect(yamlContent.workflow.phases.length).toBeGreaterThan(0);
+        expect(yamlContent.workflow.mode).toBe('state-machine');
+        expect(yamlContent.workflow.profile).toBe('lightweight');
+        expect(yamlContent.workflow.lightweight.tasklistDirectory).toBe('docs/tasklists/lightweight-test');
+        expect(yamlContent.workflow.states).toHaveLength(1);
+        expect(yamlContent.workflow.states[0]).toMatchObject({ isInitial: true, isFinal: true });
+        expect(yamlContent.workflow.states[0].steps[0].skills).toContain('aceharness-tasklist');
         expect(yamlContent.workflow.supervisor.enabled).toBe(true);
         expect(yamlContent.workflow.supervisor.agent).toBe('default-supervisor');
         expect(yamlContent.context.projectRoot).toBe(workspace);
@@ -114,7 +132,7 @@ describe('configs create route', () => {
   test('creates state-machine config with valid states', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
-        const { token } = await createAuthToken();
+        const { token, user } = await createAuthToken();
         vi.resetModules();
         const { POST } = await import('@/server/api-routes/configs/create/route');
         const { readFile } = await import('fs/promises');
@@ -134,76 +152,174 @@ describe('configs create route', () => {
         expect(response.status).toBe(200);
         const json = await responseJson<any>(response);
         expect(json.success).toBe(true);
-        expect(json.creationSession.generatedConfigSummary.mode).toBe('state-machine');
-
+        expect(json.creationSession).toMatchObject({
+          createdBy: user.id,
+          status: 'config-generated',
+          generatedConfigSummary: { mode: 'state-machine' },
+        });
+        expect(json.creationSession.generatedConfigSummary.stateCount).toBeGreaterThanOrEqual(4);
         const yamlContent = parse(await readFile(path.join(aceHome, 'configs', 'sm-test.yaml'), 'utf8'));
         expect(yamlContent.workflow.mode).toBe('state-machine');
         expect(Array.isArray(yamlContent.workflow.states)).toBe(true);
         expect(yamlContent.workflow.states.some((s: any) => s.isInitial)).toBe(true);
         expect(yamlContent.workflow.states.some((s: any) => s.isFinal)).toBe(true);
         expect(yamlContent.context.workspaceMode).toBe('isolated-copy');
+        const { getConfigMeta } = await import('@/lib/config/metadata');
+        await expect(getConfigMeta('sm-test.yaml')).resolves.toMatchObject({
+          createdBy: user.id,
+          specCodingEnabled: true,
+          specCodingSkipped: false,
+        });
       });
     });
   });
 
-  test('rejects reference workflows with a different mode', async () => {
+  test('preserves a supplied state-machine draft and skipped Spec Coding metadata', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token, user } = await createAuthToken();
+        vi.resetModules();
+        const { POST } = await import('@/server/api-routes/configs/create/route');
+        const { readFile } = await import('fs/promises');
+        const { parse } = await import('yaml');
+        const path = await import('path');
+
+        const configDraft = {
+          workflow: {
+            name: 'Draft-owned workflow',
+            mode: 'state-machine',
+            maxTransitions: 1,
+            supervisor: { enabled: true, agent: 'default-supervisor' },
+            states: [{
+              name: '完成',
+              isInitial: true,
+              isFinal: true,
+              position: { x: 120, y: 160 },
+              steps: [{ name: '草案步骤', type: 'agent', agent: 'developer', task: 'Use the supplied draft.' }],
+              transitions: [],
+            }],
+          },
+          context: {
+            projectRoot: workspace,
+            workspaceMode: 'in-place',
+            requirements: 'Persist this draft unchanged.',
+          },
+        };
+        const response = await POST(makeRequest('/api/configs/create', {
+          token,
+          json: {
+            filename: 'draft-test.yaml',
+            workflowName: 'Ignored outer name',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'state-machine',
+            skipSpecCoding: true,
+            configDraft,
+          },
+        }));
+
+        expect(response.status).toBe(200);
+        expect(await responseJson<any>(response)).toMatchObject({
+          success: true,
+          filename: 'draft-test.yaml',
+          creationSession: null,
+          specCodingSkipped: true,
+        });
+        const yamlContent = parse(await readFile(path.join(aceHome, 'configs', 'draft-test.yaml'), 'utf8'));
+        expect(yamlContent.workflow.name).toBe('Draft-owned workflow');
+        expect(yamlContent.workflow.states[0].steps[0].name).toBe('草案步骤');
+        const { getConfigMeta } = await import('@/lib/config/metadata');
+        await expect(getConfigMeta('draft-test.yaml')).resolves.toMatchObject({
+          createdBy: user.id,
+          specCodingEnabled: false,
+          specCodingSkipped: true,
+        });
+      });
+    });
+  });
+
+  test('keeps reference-workflow authorization for state-machine creation', async () => {
     await withIsolatedAceHome(async () => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const owner = await createAuthToken();
+        const otherUser = await createAuthToken();
+        vi.resetModules();
+        const { POST } = await import('@/server/api-routes/configs/create/route');
+
+        const source = await POST(makeRequest('/api/configs/create', {
+          token: owner.token,
+          json: {
+            filename: 'private-source.yaml',
+            workflowName: 'Private Source',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'state-machine',
+            skipSpecCoding: true,
+          },
+        }));
+        expect(source.status).toBe(200);
+
+        const authorizedReference = await POST(makeRequest('/api/configs/create', {
+          token: owner.token,
+          json: {
+            filename: 'authorized-reference.yaml',
+            workflowName: 'Authorized Reference',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'state-machine',
+            referenceWorkflow: 'private-source.yaml',
+            skipSpecCoding: true,
+          },
+        }));
+        expect(authorizedReference.status).toBe(200);
+
+        const response = await POST(makeRequest('/api/configs/create', {
+          token: otherUser.token,
+          json: {
+            filename: 'forbidden-reference.yaml',
+            workflowName: 'Forbidden Reference',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'state-machine',
+            referenceWorkflow: 'private-source.yaml',
+            skipSpecCoding: true,
+          },
+        }));
+        await assertErrorResponse(response, 403);
+      });
+    });
+  });
+
+  test('ignores client tasklist directory overrides and derives the directory from the filename', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token } = await createAuthToken();
         vi.resetModules();
         const { POST } = await import('@/server/api-routes/configs/create/route');
+        const { readFile } = await import('fs/promises');
+        const { parse } = await import('yaml');
+        const path = await import('path');
 
-        const stateReference = await POST(makeRequest('/api/configs/create', {
+        const response = await POST(makeRequest('/api/configs/create', {
           token,
           json: {
-            filename: 'state-reference.yaml',
-            workflowName: 'State Reference',
+            filename: 'unsafe-lightweight.yaml',
+            workflowName: 'Unsafe Lightweight',
             workingDirectory: workspace,
             workspaceMode: 'in-place',
-            mode: 'state-machine',
+            mode: 'lightweight',
+            lightweight: {
+              tasklistDirectory: '../outside-workspace',
+              agent: 'developer',
+              task: 'Create the derived tasklist workflow',
+            },
           },
         }));
-        expect(stateReference.status).toBe(200);
-
-        const phaseFromState = await POST(makeRequest('/api/configs/create', {
-          token,
-          json: {
-            filename: 'phase-from-state.yaml',
-            workflowName: 'Phase From State',
-            workingDirectory: workspace,
-            workspaceMode: 'in-place',
-            mode: 'phase-based',
-            referenceWorkflow: 'state-reference.yaml',
-          },
-        }));
-        expect(phaseFromState.status).toBe(400);
-        expect((await responseJson<any>(phaseFromState)).message).toContain('阶段式工作流只能参考阶段式工作流');
-
-        const phaseReference = await POST(makeRequest('/api/configs/create', {
-          token,
-          json: {
-            filename: 'phase-reference.yaml',
-            workflowName: 'Phase Reference',
-            workingDirectory: workspace,
-            workspaceMode: 'in-place',
-            mode: 'phase-based',
-          },
-        }));
-        expect(phaseReference.status).toBe(200);
-
-        const stateFromPhase = await POST(makeRequest('/api/configs/create', {
-          token,
-          json: {
-            filename: 'state-from-phase.yaml',
-            workflowName: 'State From Phase',
-            workingDirectory: workspace,
-            workspaceMode: 'in-place',
-            mode: 'state-machine',
-            referenceWorkflow: 'phase-reference.yaml',
-          },
-        }));
-        expect(stateFromPhase.status).toBe(400);
-        expect((await responseJson<any>(stateFromPhase)).message).toContain('状态机工作流只能参考状态机工作流');
+        expect(response.status).toBe(200);
+        const json = await responseJson<any>(response);
+        expect(json.creationSession.lightweight.tasklistDirectory).toBe('docs/tasklists/unsafe-lightweight');
+        const yamlContent = parse(await readFile(path.join(aceHome, 'configs', 'unsafe-lightweight.yaml'), 'utf8'));
+        expect(yamlContent.workflow.lightweight.tasklistDirectory).toBe('docs/tasklists/unsafe-lightweight');
       });
     });
   });

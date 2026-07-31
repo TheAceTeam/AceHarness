@@ -131,6 +131,38 @@ describe('workflow runtime stream projection', () => {
     expect(projected?.content).not.toContain('(in_progress):');
   });
 
+  test('finishes an ACPX file edit from its status event when no tool output arrives', () => {
+    const state: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
+    const fileBody = 'line one\nline two';
+    const started = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'Editing files',
+      status: 'in_progress',
+      kind: 'edit',
+      rawInput: {
+        filePath: 'docs/dependency-analysis.md',
+        changes: [{
+          filePath: 'docs/dependency-analysis.md',
+          kind: 'add',
+          addedLines: 2,
+        }],
+      },
+    }, 'tool-edit-1'), state);
+    const completed = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'tool call',
+      status: 'completed',
+    }, 'tool-edit-1'), state);
+
+    expect(started?.content).toContain('docs/dependency-analysis.md');
+    expect(started?.content).toContain('"addedLines":2');
+    expect(started?.content).not.toContain(fileBody);
+    expect(completed?.content).toContain('"kind":"tool-result"');
+    expect(completed?.content).toContain('"toolId":"tool-edit-1"');
+    expect(completed?.content).toContain('docs/dependency-analysis.md');
+  });
+
   test('ignores empty pending search tool placeholders', () => {
     const state: WorkflowRuntimeProjectionState = {
       hasMessageText: false,

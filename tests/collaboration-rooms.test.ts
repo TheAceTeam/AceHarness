@@ -134,6 +134,9 @@ describe('collaboration room store', () => {
       const archived = await finishCollaborationRoom(first.room.id);
       expect(archived.status).toBe('archived');
       expect(await listCollaborationRooms({ status: 'active' })).toEqual([]);
+
+      const { closeChatSessionDatabaseForTests } = await import('@/lib/chat/persistence');
+      closeChatSessionDatabaseForTests();
     });
   });
 
@@ -191,6 +194,9 @@ describe('collaboration room store', () => {
         agentName: 'missing',
         ownerUserId: 'test-user',
       })).rejects.toThrow('The requested Agent is not a collaboration room participant');
+
+      const { closeChatSessionDatabaseForTests } = await import('@/lib/chat/persistence');
+      closeChatSessionDatabaseForTests();
     });
   });
 });

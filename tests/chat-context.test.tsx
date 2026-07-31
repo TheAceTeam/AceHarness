@@ -113,6 +113,38 @@ function StreamingProbe() {
   );
 }
 
+function NewSessionSendProbe() {
+  const { sessions, activeSession, createSession, isModelSelectionReady, sendMessage } = useChat();
+  return (
+    <div>
+      <div data-testid="new-session-ready">{isModelSelectionReady ? 'ready' : 'loading'}</div>
+      <div data-testid="new-session-count">{sessions.length}</div>
+      <div data-testid="new-session-last">{sessions[0]?.lastMessage || ''}</div>
+      <div data-testid="new-session-messages">{(activeSession?.messages || []).map((message) => message.content).join('|')}</div>
+      <button
+        type="button"
+        onClick={() => {
+          const sessionId = createSession({
+            title: '新对话',
+            agentBinding: { agentName: 'dev-agent' },
+            sessionWorkbenchState: {
+              chatWorkspace: {
+                workingDirectory: '/tmp/project',
+                autoCreated: false,
+                gitBaselineReady: true,
+                updatedAt: Date.now(),
+              },
+            },
+          });
+          void sendMessage('首条消息', { targetSessionId: sessionId });
+        }}
+      >
+        send-first-message
+      </button>
+    </div>
+  );
+}
+
 function LiveStateProbe() {
   const { activeSessionId, activeStreamingSessionIds, recentlyCompletedSessionIds, setActiveSessionId } = useChat();
   return (
@@ -285,6 +317,113 @@ describe('ChatProvider', () => {
 
     expect(screen.getByTestId('active-session').textContent).toBe('none');
     expect(sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  test('keeps a new first message visible while session creation and initial list loading are delayed', async () => {
+    sessionStorage.clear();
+    sessionSummaries = [];
+    sessionStore = {};
+    const initialList = createDeferred<Response>();
+    const createResponse = createDeferred<Response>();
+    let createBody: any = null;
+    const putBodies: any[] = [];
+
+    vi.stubGlobal('fetch', vi.fn((async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || 'GET';
+      if (url === '/api/engine') {
+        return jsonResponse({ engine: 'claude-code', defaultModel: 'claude-sonnet-4-20250514' });
+      }
+      if (url === '/api/chat/settings') {
+        return jsonResponse({ skills: {}, discoveredSkills: [], workingDirectory: '/tmp/project' });
+      }
+      if (url === '/api/chat/sessions') {
+        if (method === 'POST') {
+          const body = JSON.parse(String(init?.body || '{}'));
+          createBody = body;
+          return createResponse.promise.then((response) => {
+            sessionStore[body.id] = body;
+            return response;
+          });
+        }
+        return initialList.promise;
+      }
+      if (url.startsWith('/api/chat/sessions/')) {
+        const sessionId = decodeURIComponent(url.split('/api/chat/sessions/')[1] || '');
+        if (method === 'PUT') {
+          const body = JSON.parse(String(init?.body || '{}'));
+          putBodies.push(body);
+          if (!sessionStore[sessionId]) {
+            return jsonResponse({ error: '会话不存在' }, false);
+          }
+          sessionStore[sessionId] = body;
+          return jsonResponse({ ok: true });
+        }
+        return jsonResponse({ session: sessionStore[sessionId] || null }, Boolean(sessionStore[sessionId]));
+      }
+      if (url === '/api/agents/dev-agent/chat') {
+        return jsonResponse({
+          output: '首条回复',
+          sessionId: 'backend-new-session',
+          engine: 'claude-code',
+          model: 'claude-sonnet-4-20250514',
+        });
+      }
+      if (url.startsWith('/api/chat/stream?checkActive=')) {
+        return jsonResponse({ active: false });
+      }
+      return jsonResponse({});
+    }) as typeof fetch));
+
+    render(
+      <ChatProvider>
+        <NewSessionSendProbe />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('new-session-ready').textContent).toBe('ready');
+    });
+
+    fireEvent.click(screen.getByText('send-first-message'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('new-session-messages').textContent).toContain('首条消息');
+    });
+    await waitFor(() => {
+      expect(createBody).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('new-session-last').textContent).toBe('首条回复');
+    });
+
+    act(() => {
+      initialList.resolve(jsonResponse({
+        sessions: [{
+          id: createBody.id,
+          title: '新对话',
+          model: 'claude-sonnet-4-20250514',
+          createdAt: createBody.createdAt,
+          updatedAt: createBody.updatedAt + 1000,
+          messageCount: 0,
+        }],
+      }));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('new-session-count').textContent).toBe('1');
+    });
+    expect(screen.getByTestId('new-session-last').textContent).toBe('首条回复');
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(putBodies).toEqual([]);
+
+    act(() => {
+      createResponse.resolve(jsonResponse({ ok: true }));
+    });
+    await waitFor(() => {
+      expect(putBodies).toHaveLength(1);
+    });
+    expect(sessionStore[createBody.id].messages.map((message: any) => message.content)).toContain('首条消息');
   });
 
   test('sanitizes the sidebar session preview when recovered assistant content includes a chunk boundary tail', async () => {

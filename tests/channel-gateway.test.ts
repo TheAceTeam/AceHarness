@@ -85,7 +85,7 @@ describe('channel gateway', () => {
           runId: 'run-42',
         }),
       } as any,
-      isStateMachine: false,
+      isStateMachine: true,
     }]);
 
     vi.spyOn(runStateModule, 'loadRunState').mockImplementation(async (runId: string) => {
@@ -171,7 +171,7 @@ describe('channel gateway', () => {
     if ('challenge' in result) return;
     expect(result.ok).toBe(false);
     expect(result.binding?.bindingType).toBe('workflow-run');
-    expect(result.metadata?.workflowAgoraSessionId).toBeUndefined();
+    expect(result.metadata?.workflowFrontendSessionId).toBeUndefined();
     expect(result.replies[0]).toContain('无法识别');
   });
 });

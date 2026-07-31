@@ -35,9 +35,11 @@ describe('workflow templates', () => {
       const body = await responseJson<any>(response);
       expect(body.templates.map((template: any) => template.id)).toEqual(expect.arrayContaining([
         'general-red-blue-review',
-        'software-delivery',
         'issue-fix',
+        'software-delivery',
       ]));
+      expect(body.templates.every((template: any) => template.mode === 'state-machine')).toBe(true);
+      expect(body.templates.every((template: any) => !('phaseCount' in template))).toBe(true);
       expect(body.templates.every((template: any) => template.version === '1.0.0')).toBe(true);
       expect(body.templates.every((template: any) => /^[a-f0-9]{64}$/.test(template.digest))).toBe(true);
       expect(body.issues).toEqual([]);
@@ -53,7 +55,7 @@ describe('workflow templates', () => {
 
         const input = {
           source: 'builtin',
-          id: 'software-delivery',
+          id: 'general-red-blue-review',
           version: '1.0.0',
           filename: 'delivery-from-template.yaml',
           values: {
@@ -66,19 +68,20 @@ describe('workflow templates', () => {
         expect(response.status).toBe(201);
         const body = await responseJson<any>(response);
         expect(body.success).toBe(true);
-        expect(body.templateRef).toMatchObject({ source: 'builtin', id: 'software-delivery', version: '1.0.0' });
+        expect(body.templateRef).toMatchObject({ source: 'builtin', id: 'general-red-blue-review', version: '1.0.0' });
         expect(body.dependencyReport.missingAgents).toEqual([]);
 
         const config = parse(await readFile(path.join(aceHome, 'configs', input.filename), 'utf8'));
         expect(config.workflow.name).toBe('交付实例');
         expect(config.context.projectRoot).toBe(workspace);
-        expect(config.workflow.phases).toHaveLength(4);
+        expect(config.workflow.mode).toBe('state-machine');
+        expect(config.workflow.states).toHaveLength(4);
         expect(config.templateRef).toBeUndefined();
 
         const metadata = JSON.parse(await readFile(path.join(aceHome, 'configs', '.metadata.json'), 'utf8'));
         expect(metadata[input.filename].templateRef).toMatchObject({
           source: 'builtin',
-          id: 'software-delivery',
+          id: 'general-red-blue-review',
           version: '1.0.0',
         });
         expect(metadata[input.filename].templateRef.parameterKeys).toEqual([
@@ -110,7 +113,7 @@ describe('workflow templates', () => {
             workflowName: 'Source Workflow',
             workingDirectory: workspace,
             workspaceMode: 'in-place',
-            mode: 'phase-based',
+            mode: 'state-machine',
             skipSpecCoding: true,
           },
         }));
@@ -118,7 +121,7 @@ describe('workflow templates', () => {
 
         const sourcePath = path.join(aceHome, 'configs', sourceFilename);
         const source = parse(await readFile(sourcePath, 'utf8'));
-        source.workflow.phases[0].steps[0].specTaskBinding = {
+        source.workflow.states[0].steps[0].specTaskBinding = {
           taskIds: ['task-1'],
           requirementIds: ['requirement-1'],
           artifactKeys: [],
@@ -180,7 +183,8 @@ describe('workflow templates', () => {
         const templateWorkflow = parse(await readFile(templateWorkflowPath, 'utf8'));
         expect(templateWorkflow.context.projectRoot).toBe('');
         expect(templateWorkflow.context.requirements).toBe('');
-        expect(templateWorkflow.workflow.phases[0].steps[0].specTaskBinding).toBeUndefined();
+        expect(templateWorkflow.workflow.mode).toBe('state-machine');
+        expect(templateWorkflow.workflow.states[0].steps[0].specTaskBinding).toBeUndefined();
 
         const ownerList = await responseJson<any>(await listTemplates(makeRequest('/api/workflow-templates', { token: owner.token })));
         const savedSummary = ownerList.templates.find((template: any) => template.id === 'source-workflow-template');

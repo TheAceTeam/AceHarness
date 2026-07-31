@@ -82,7 +82,7 @@ describe('chat stream assembly', () => {
       toolName: 'read',
       title: '📖 读取文件',
       rawOutput: {
-        formatted_output: '# Werewolf Tabletalk\n\n- `SKILL.md`\n- `references/speech-templates.md`',
+        formatted_output: '# Example Skill\n\n- `SKILL.md`\n- `references/usage.md`',
         exit_code: 0,
       },
       toolId: 'call_skill_read',
@@ -91,8 +91,8 @@ describe('chat stream assembly', () => {
 
     expect(parsed.blocks).toHaveLength(1);
     expect(parsed.blocks[0].kind).toBe('tool-result');
-    expect(raw).not.toContain('Werewolf Tabletalk');
-    expect(raw).not.toContain('speech-templates.md');
+    expect(raw).not.toContain('Example Skill');
+    expect(raw).not.toContain('usage.md');
     expect(raw).toContain('"exitCode":0');
     expect(raw).toContain('"toolId":"call_skill_read"');
   });

@@ -742,7 +742,7 @@ describe('built-in agora chat panel', () => {
       );
     }
 
-    render(<Harness />);
+    renderWithQuery(<Harness />);
 
     await waitFor(() => {
       const avatars = Array.from(document.querySelectorAll('img')) as HTMLImageElement[];

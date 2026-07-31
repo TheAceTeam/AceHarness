@@ -1,8 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import {
-  extractPlanDraftResult,
-  extractWorkflowPatchPreview,
-} from '@/lib/ai/result-normalizers';
+import { extractPlanDraftResult } from '@/lib/ai/result-normalizers';
 
 describe('result normalizers', () => {
   test('extracts plan_draft result JSON without relying on stream preview rendering', () => {
@@ -35,43 +32,6 @@ describe('result normalizers', () => {
       summary: '批量删除工作流对话',
       goals: ['支持分组多选', '避免误删运行中会话'],
       artifacts: payload.payload.artifacts,
-    });
-  });
-
-  test('extracts workflow_patch result JSON for scoped design optimization', () => {
-    const content = [
-      '<result>',
-      JSON.stringify({
-        kind: 'workflow_patch',
-        payload: {
-          filename: 'cleanup.yaml',
-          summary: '优化删除步骤',
-          scope: 'step',
-          workflowMode: 'phase-based',
-          patch: {
-            step: {
-              name: 'Batch Delete',
-              agent: 'developer',
-              task: 'delete sessions safely',
-            },
-          },
-        },
-      }),
-      '</result>',
-    ].join('\n');
-
-    const preview = extractWorkflowPatchPreview(content);
-
-    expect(preview).toMatchObject({
-      source: 'result-json',
-      filename: 'cleanup.yaml',
-      summary: '优化删除步骤',
-      scope: 'step',
-      workflowMode: 'phase-based',
-    });
-    expect(preview.patch?.step).toMatchObject({
-      name: 'Batch Delete',
-      agent: 'developer',
     });
   });
 });

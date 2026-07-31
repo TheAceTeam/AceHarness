@@ -24,14 +24,13 @@ describe('UniversalCard', () => {
           items: [
             { icon: 'settings', text: 'markit-fix-codeblock-i18n  state-machine | C:/Users/Shawn/markit/markit | 修复 markit 的 toMarkdown 代码块 i18n 过滤，仅输出 targetLanguage 对应语言' },
             { icon: 'search', text: 'message-history-search-workflow  state-machine | C:/Users/Shawn/Desktop/AI_Chat/AI_Chat | 为 AI_Chat 消息页增加历史消息搜索，覆盖分析、设计、实现、验证、评审' },
-            { icon: 'account_tree', text: 'markit-dsl-redesign  phase-based | C:/Users/Shawn/markit/markit | 重设计 markit DSL，覆盖需求分析、DSL 设计、原型编码、回归验证与交付' },
+            { icon: 'account_tree', text: 'markit-dsl-redesign  state-machine | C:/Users/Shawn/markit/markit | 重设计 markit DSL，覆盖需求分析、DSL 设计、原型编码、回归验证与交付' },
           ],
         },
         {
           type: 'badges',
           items: [
-            { text: 'state-machine: 2', color: 'green' },
-            { text: 'phase-based: 1', color: 'yellow' },
+            { text: 'state-machine: 3', color: 'green' },
             { text: 'workspaceMode: in-place', color: 'gray' },
           ],
         },
@@ -64,8 +63,7 @@ describe('UniversalCard', () => {
     const badgeGroup = screen.getByTestId('universal-card-badges');
     const renderedBadges = within(badgeGroup).getAllByText(/.+/);
     expect(renderedBadges.map((node) => node.textContent)).toEqual([
-      'state-machine: 2',
-      'phase-based: 1',
+      'state-machine: 3',
       'workspaceMode: in-place',
     ]);
     renderedBadges.forEach((node) => {

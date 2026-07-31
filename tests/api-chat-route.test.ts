@@ -10,6 +10,8 @@ const routeMocks = vi.hoisted(() => ({
   executeChatRuntimeWithContextRecovery: vi.fn(),
   resolveRecoveredRuntimeSessionId: vi.fn(),
   getWorkspaceRoot: vi.fn(),
+  getWorkspaceRunsDir: vi.fn(),
+  getWorkspaceDataFile: vi.fn(),
   requireAuth: vi.fn(),
 }));
 
@@ -27,6 +29,8 @@ vi.mock('@/lib/chat/request-options', () => ({
 
 vi.mock('@/lib/core/app-paths', () => ({
   getWorkspaceRoot: routeMocks.getWorkspaceRoot,
+  getWorkspaceRunsDir: routeMocks.getWorkspaceRunsDir,
+  getWorkspaceDataFile: routeMocks.getWorkspaceDataFile,
 }));
 
 vi.mock('@/lib/auth/middleware', () => ({
@@ -43,6 +47,8 @@ describe('/api/chat route', () => {
     routeMocks.ensureEngineRuntimeSkillsAvailable.mockResolvedValue(undefined);
     routeMocks.resolveRecoveredRuntimeSessionId.mockImplementation((result: { sessionId?: string }, sessionId?: string) => result.sessionId || sessionId || undefined);
     routeMocks.getWorkspaceRoot.mockReturnValue('/tmp/workspace');
+    routeMocks.getWorkspaceRunsDir.mockReturnValue('/tmp/workspace/runs');
+    routeMocks.getWorkspaceDataFile.mockImplementation((...segments: string[]) => ['/tmp/workspace/data', ...segments].join('/'));
     routeMocks.requireAuth.mockResolvedValue({
       id: 'user-1',
       username: 'Tester',
@@ -61,8 +67,8 @@ describe('/api/chat route', () => {
     const partialRaw = '\n<ace-process>{"kind":"tool-call","toolName":"glob","title":"🔍 搜索文件","pattern":"*","path":"C:\\\\workspace\\\\bin","body":"","toolId":"tool-1"}</ace-process>\n';
 
     routeMocks.createChatRuntimeEngine.mockResolvedValue(engine);
-    routeMocks.executeChatRuntimeWithContextRecovery.mockImplementation(async (target: MockEngine) => {
-      target.emit('stream', { type: 'text', content: partialRaw });
+    routeMocks.executeChatRuntimeWithContextRecovery.mockImplementation(async () => {
+      engine.emit('stream', { type: 'text', content: partialRaw });
       return {
         success: false,
         output: '',
@@ -97,9 +103,14 @@ describe('/api/chat route', () => {
     expect(routeMocks.buildChatRequestContext).toHaveBeenCalledWith(expect.objectContaining({
       personalDir: '/tmp/personal',
     }));
-    expect(routeMocks.executeChatRuntimeWithContextRecovery).toHaveBeenCalledWith(engine, expect.objectContaining({
-      userId: 'user-1',
-    }));
+    expect(routeMocks.executeChatRuntimeWithContextRecovery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        getName: expect.any(Function),
+        on: expect.any(Function),
+      }),
+      expect.objectContaining({ userId: 'user-1' }),
+      expect.any(Object),
+    );
   });
 
   test('hard fails when authentication fails', async () => {

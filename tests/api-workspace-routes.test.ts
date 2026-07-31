@@ -5,7 +5,7 @@ import { describe, expect, test } from 'vitest';
 import { canCreateFileSymlink, createFileSymlink, withTempWorkspace } from './helpers/module-helpers';
 import { assertErrorResponse, makeRequest, responseJson } from './helpers/route-helpers';
 
-type TreeNode = { name: string; path: string; type: string; children?: TreeNode[] };
+type TreeNode = { name: string; path: string; type: string; modifiedTime?: number; children?: TreeNode[] };
 type WorkspaceTreeJson = {
   tree: TreeNode[];
   hasMore?: boolean;
@@ -103,8 +103,9 @@ describe('workspace API routes', () => {
       expect(root.status).toBe(200);
       const rootJson = await responseJson<WorkspaceTreeJson>(root);
       expect(rootJson.tree).toEqual([
-        { name: 'src', path: 'src', type: 'directory' },
+        { name: 'src', path: 'src', type: 'directory', modifiedTime: expect.any(Number) },
       ]);
+      expect(rootJson.tree[0].children).toBeUndefined();
 
       const sub = await tree.GET(makeRequest(`/api/workspace/tree?path=${encodeURIComponent(workspace)}&sub=${encodeURIComponent('src')}&depth=0&limit=10`));
       expect(sub.status).toBe(200);

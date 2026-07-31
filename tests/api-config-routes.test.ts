@@ -11,13 +11,12 @@ interface AuthResult {
 }
 
 async function loadConfigRoutes() {
-  const [validate, create, recommendations, references] = await Promise.all([
+  const [validate, create, references] = await Promise.all([
     import('@/server/api-routes/configs/validate/route'),
     import('@/server/api-routes/configs/create/route'),
-    import('@/server/api-routes/configs/recommendations/route'),
     import('@/server/api-routes/configs/references/route'),
   ]);
-  return { validate, create, recommendations, references };
+  return { validate, create, references };
 }
 
 async function createAuthToken(role: 'admin' | 'user' = 'user'): Promise<AuthResult> {
@@ -38,20 +37,24 @@ async function createAuthToken(role: 'admin' | 'user' = 'user'): Promise<AuthRes
   return { token, user };
 }
 
-function phaseConfig(projectRoot: string, overrides: Record<string, any> = {}) {
+function stateMachineConfig(projectRoot: string, overrides: Record<string, any> = {}) {
   return {
     workflow: {
       name: 'Validated Workflow',
+      mode: 'state-machine',
       supervisor: {
         enabled: true,
         agent: 'default-supervisor',
       },
-      phases: [
+      states: [
         {
           name: 'Build',
+          isInitial: true,
+          isFinal: true,
           steps: [
             { name: 'Implement', agent: 'developer', task: 'Implement the requested change' },
           ],
+          transitions: [],
         },
       ],
       ...overrides.workflow,
@@ -69,7 +72,7 @@ describe('config API routes', () => {
   test('config routes reject unauthenticated requests before mutating state', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
-      const { validate, create, recommendations } = await loadConfigRoutes();
+      const { validate, create } = await loadConfigRoutes();
 
       await assertErrorResponse(
         await validate.POST(makeRequest('/api/configs/validate', { json: {} })),
@@ -83,10 +86,6 @@ describe('config API routes', () => {
             workingDirectory: process.cwd(),
           },
         })),
-        401
-      );
-      await assertErrorResponse(
-        await recommendations.POST(makeRequest('/api/configs/recommendations', { json: {} })),
         401
       );
     });
@@ -105,7 +104,7 @@ describe('config API routes', () => {
 
         const response = await validate.POST(makeRequest('/api/configs/validate', {
           token,
-          json: { config: phaseConfig(workspace) },
+          json: { config: stateMachineConfig(workspace) },
         }));
         expect(response.status).toBe(200);
         const json = await responseJson<any>(response);
@@ -118,7 +117,7 @@ describe('config API routes', () => {
     });
   });
 
-  test('config list treats states-only workflows as state-machine options', async () => {
+  test('config list exposes and filters state-machine and lightweight workflow kinds', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
       const { token } = await createAuthToken();
@@ -128,6 +127,7 @@ describe('config API routes', () => {
       await writeFile(path.join(configsDir, 'states-only-child.yaml'), stringify({
         workflow: {
           name: 'States Only Child',
+          mode: 'state-machine',
           states: [
             {
               name: 'Done',
@@ -142,6 +142,28 @@ describe('config API routes', () => {
           requirements: 'child workflow',
         },
       }), 'utf-8');
+      await writeFile(path.join(configsDir, 'lightweight-child.yaml'), stringify({
+        workflow: {
+          name: 'Lightweight Child',
+          mode: 'state-machine',
+          profile: 'lightweight',
+          lightweight: { tasklistDirectory: 'docs/tasklists/lightweight-child' },
+          states: [{
+            name: 'Execute',
+            isInitial: true,
+            isFinal: true,
+            steps: [{
+              name: 'Implement',
+              type: 'agent',
+              agent: 'developer',
+              task: 'Finish child workflow',
+              skills: ['aceharness-tasklist'],
+            }],
+            transitions: [],
+          }],
+        },
+        context: { requirements: 'child workflow' },
+      }), 'utf-8');
       const route = await import('@/server/api-routes/configs/route');
 
       const response = await route.GET(makeRequest('/api/configs?mode=state-machine&pageSize=100', { token }));
@@ -152,12 +174,26 @@ describe('config API routes', () => {
         expect.objectContaining({
           filename: 'states-only-child.yaml',
           mode: 'state-machine',
+          kind: 'state-machine',
         }),
       ]));
+
+      const lightweightResponse = await route.GET(makeRequest('/api/configs?mode=lightweight&pageSize=100', { token }));
+      const lightweightJson = await responseJson<any>(lightweightResponse);
+      expect(lightweightResponse.status).toBe(200);
+      expect(lightweightJson.configs).toEqual([
+        expect.objectContaining({
+          filename: 'lightweight-child.yaml',
+          mode: 'state-machine',
+          kind: 'lightweight',
+          profile: 'lightweight',
+          stateCount: 1,
+        }),
+      ]);
     });
   });
 
-  test('config create route writes phase and state-machine workflows and rejects duplicates', async () => {
+  test('config create route writes state-machine and lightweight workflows and rejects duplicates', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token, user } = await createAuthToken();
@@ -166,26 +202,33 @@ describe('config API routes', () => {
         let response = await create.POST(makeRequest('/api/configs/create', {
           token,
           json: {
-            filename: 'phase-created.yaml',
-            workflowName: 'Phase Created',
+            filename: 'lightweight-created.yaml',
+            workflowName: 'Lightweight Created',
             workingDirectory: workspace,
             workspaceMode: 'in-place',
-            mode: 'phase-based',
+            mode: 'lightweight',
             description: 'Created from route test',
+            lightweight: {
+              tasklistDirectory: 'docs/tasklists/lightweight-created',
+              agent: 'developer',
+              task: 'Implement the requested change',
+            },
           },
         }));
         expect(response.status).toBe(200);
         let json = await responseJson<any>(response);
         expect(json.success).toBe(true);
-        expect(json.filename).toBe('phase-created.yaml');
+        expect(json.filename).toBe('lightweight-created.yaml');
         expect(json.creationSession.createdBy).toBe(user.id);
         expect(json.creationSession.status).toBe('config-generated');
 
-        const phaseYaml = parse(await readFile(path.join(aceHome, 'configs', 'phase-created.yaml'), 'utf8'));
-        expect(phaseYaml.workflow.name).toBe('Phase Created');
-        expect(phaseYaml.workflow.supervisor.agent).toBe('default-supervisor');
-        expect(phaseYaml.workflow.phases[0].steps[0].agent).toBe('developer');
-        expect(phaseYaml.context.projectRoot).toBe(workspace);
+        const lightweightYaml = parse(await readFile(path.join(aceHome, 'configs', 'lightweight-created.yaml'), 'utf8'));
+        expect(lightweightYaml.workflow.name).toBe('Lightweight Created');
+        expect(lightweightYaml.workflow.mode).toBe('state-machine');
+        expect(lightweightYaml.workflow.profile).toBe('lightweight');
+        expect(lightweightYaml.workflow.states).toHaveLength(1);
+        expect(lightweightYaml.workflow.states[0].steps[0].skills).toContain('aceharness-tasklist');
+        expect(lightweightYaml.context.projectRoot).toBe(workspace);
 
         response = await create.POST(makeRequest('/api/configs/create', {
           token,
@@ -214,7 +257,7 @@ describe('config API routes', () => {
           await create.POST(makeRequest('/api/configs/create', {
             token,
             json: {
-              filename: 'phase-created.yaml',
+              filename: 'lightweight-created.yaml',
               workflowName: 'Duplicate',
               workingDirectory: workspace,
               workspaceMode: 'in-place',
@@ -376,144 +419,13 @@ describe('config API routes', () => {
     });
   });
 
-  test('config recommendations use explicit reference workflow agents and supervisor fallback', async () => {
-    await withIsolatedAceHome(async (aceHome) => {
-      await withTempWorkspace(async ({ workspace }) => {
-        const { token } = await createAuthToken();
-        const configsDir = path.join(aceHome, 'configs');
-        await mkdir(configsDir, { recursive: true });
-        await writeFile(path.join(configsDir, 'reference.yaml'), stringify(phaseConfig(workspace, {
-          workflow: {
-            name: 'Reference Workflow',
-            description: 'Reference for recommendation route',
-            phases: [
-              {
-                name: 'Build',
-                steps: [
-                  { name: 'Design', agent: 'architect', task: 'Design the change' },
-                  { name: 'Review', agent: 'code-auditor', task: 'Review implementation risks' },
-                ],
-              },
-            ],
-          },
-        })), 'utf8');
-
-        const { recommendations } = await loadConfigRoutes();
-        const response = await recommendations.POST(makeRequest('/api/configs/recommendations', {
-          token,
-          json: {
-            workflowName: 'New Workflow',
-            requirements: 'Need architecture and implementation review support',
-            workingDirectory: workspace,
-            referenceWorkflow: 'reference.yaml',
-          },
-        }));
-        expect(response.status).toBe(200);
-        const json = await responseJson<any>(response);
-        expect(json.recommendations.referenceWorkflow.filename).toBe('reference.yaml');
-        expect(json.recommendations.referenceWorkflow.source).toBe('manual');
-        expect(json.recommendations.referenceWorkflow.agents).toEqual(['architect', 'code-auditor']);
-        expect(json.recommendations.recommendedAgents[0]).toBe('architect');
-        expect(json.recommendations.recommendedAgents[1]).toBe('code-auditor');
-        expect(json.recommendations.recommendedSupervisorAgent).toBe('default-supervisor');
-        expect(json.recommendations.recommendedAgents.includes('default-supervisor')).toBe(false);
-      });
-    });
-  });
-
-  test('config recommendations can disable historical experience without disabling manual references', async () => {
-    await withIsolatedAceHome(async (aceHome) => {
-      await withTempWorkspace(async ({ workspace }) => {
-        const { token } = await createAuthToken();
-        const configsDir = path.join(aceHome, 'configs');
-        await mkdir(configsDir, { recursive: true });
-        await writeFile(path.join(configsDir, 'historical-reference.yaml'), stringify(phaseConfig(workspace, {
-          workflow: {
-            name: 'Historical Reference',
-            phases: [
-              {
-                name: 'Historical Build',
-                steps: [
-                  { name: 'Implement', agent: 'developer', task: 'Reuse a known implementation path' },
-                ],
-              },
-            ],
-          },
-        })), 'utf8');
-
-        const { appendWorkflowExperience } = await import('@/lib/workflow/experience-store');
-        await appendWorkflowExperience({
-          runId: 'run-historical-recommendation',
-          configFile: 'historical-reference.yaml',
-          workflowName: 'Historical Recommendation',
-          projectRoot: workspace,
-          workflowMode: 'phase-based',
-          supervisorAgent: 'default-supervisor',
-          status: 'completed',
-          summary: 'Historical recommendation summary',
-          nextFocus: ['Keep the known workflow shape'],
-          experience: ['Reuse historical phase structure'],
-          scoreCards: [],
-          agentNames: ['developer'],
-          keywords: ['historical', 'recommendation'],
-          generatedAt: new Date().toISOString(),
-        });
-
-        const { recommendations } = await loadConfigRoutes();
-        let response = await recommendations.POST(makeRequest('/api/configs/recommendations', {
-          token,
-          json: {
-            workflowName: 'Historical Recommendation',
-            requirements: 'historical recommendation should find known workflow',
-            workingDirectory: workspace,
-          },
-        }));
-        expect(response.status).toBe(200);
-        let json = await responseJson<any>(response);
-        expect(json.recommendations.experiences).toHaveLength(1);
-        expect(json.recommendations.referenceWorkflow.filename).toBe('historical-reference.yaml');
-        expect(json.recommendations.referenceWorkflow.source).toBe('recommended-experience');
-
-        response = await recommendations.POST(makeRequest('/api/configs/recommendations', {
-          token,
-          json: {
-            workflowName: 'Historical Recommendation',
-            requirements: 'historical recommendation should find known workflow',
-            workingDirectory: workspace,
-            useHistoricalExperience: false,
-          },
-        }));
-        expect(response.status).toBe(200);
-        json = await responseJson<any>(response);
-        expect(json.recommendations.experiences).toEqual([]);
-        expect(json.recommendations.referenceWorkflow).toBeNull();
-
-        response = await recommendations.POST(makeRequest('/api/configs/recommendations', {
-          token,
-          json: {
-            workflowName: 'Historical Recommendation',
-            requirements: 'historical recommendation should find known workflow',
-            workingDirectory: workspace,
-            referenceWorkflow: 'historical-reference.yaml',
-            useHistoricalExperience: false,
-          },
-        }));
-        expect(response.status).toBe(200);
-        json = await responseJson<any>(response);
-        expect(json.recommendations.experiences).toEqual([]);
-        expect(json.recommendations.referenceWorkflow.filename).toBe('historical-reference.yaml');
-        expect(json.recommendations.referenceWorkflow.source).toBe('manual');
-      });
-    });
-  });
-
   test('config copy route preserves SpecCoding for the copied workflow', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token, user } = await createAuthToken();
         const configsDir = path.join(aceHome, 'configs');
         await mkdir(configsDir, { recursive: true });
-        const config = phaseConfig(workspace, {
+        const config = stateMachineConfig(workspace, {
           workflow: { name: 'Copy Source' },
           context: { requirements: 'Copy route must preserve SpecCoding' },
         });
@@ -525,7 +437,7 @@ describe('config API routes', () => {
           createdBy: user.id,
           filename: 'copy-source.yaml',
           workflowName: 'Copy Source',
-          mode: 'phase-based',
+          mode: 'state-machine',
           workingDirectory: workspace,
           workspaceMode: 'in-place',
           requirements: 'Copy route must preserve SpecCoding',

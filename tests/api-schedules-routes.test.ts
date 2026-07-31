@@ -46,6 +46,7 @@ describe('schedule API routes', () => {
       await writeRuntimeConfig('scheduled-workflow.yaml', [
         'workflow:',
         '  name: Scheduled Workflow',
+        '  mode: state-machine',
         '  states:',
         '    - id: start',
         '      name: Start',

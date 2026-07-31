@@ -24,9 +24,9 @@ const SYSTEM_PROMPT = `你是 ACEHarness Workflow Creator 分步创建向导。�
 function buildUserPrompt() {
   return `请为在线文档协作编辑器创建 workflow 状态轮廓：
 
-1. 需求确认阶段
-2. 开发实现阶段
-3. 测试验证阶段
+1. 需求确认状态
+2. 开发实现状态
+3. 测试验证状态
 4. 完成状态`;
 }
 

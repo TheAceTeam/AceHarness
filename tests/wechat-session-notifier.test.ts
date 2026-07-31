@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync } from 'fs';
+import { rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -12,10 +13,15 @@ describe('wechat session notifier', () => {
     process.env.ACE_HOME = aceHome;
   });
 
-  afterEach(() => {
-    rmSync(aceHome, { recursive: true, force: true });
-    delete process.env.ACE_HOME;
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    try {
+      const { closeChatSessionDatabaseForTests } = await import('@/lib/chat/persistence');
+      closeChatSessionDatabaseForTests();
+    } finally {
+      await rm(aceHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      delete process.env.ACE_HOME;
+      vi.restoreAllMocks();
+    }
   });
 
   it('resolves delivery target from channel binding when chat session has no wechatBinding snapshot', async () => {

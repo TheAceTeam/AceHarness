@@ -39,6 +39,7 @@ vi.mock('@/components/EngineSelect', () => ({
 }));
 
 vi.mock('@/components/ui/combobox', () => ({
+  ComboboxPortalProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SingleCombobox: ({ value, onValueChange, options = [] }: any) => (
     <select value={value || ''} onChange={(event) => onValueChange?.(event.target.value)}>
       {options.map((option: any) => (

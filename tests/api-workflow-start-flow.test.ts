@@ -2,19 +2,22 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { makeRequest, responseJson, assertErrorResponse } from './helpers/route-helpers';
 
 const chatMocks = vi.hoisted(() => ({
-  loadChatSession: vi.fn(),
-  saveChatSession: vi.fn(),
   updateChatSessionCreationBinding: vi.fn(),
-  updateChatSessionWorkflowBinding: vi.fn(),
 }));
 
-const agoraMocks = vi.hoisted(() => ({
-  appendWorkflowAgoraMessage: vi.fn(),
-  appendWorkflowAgoraOpeningMessages: vi.fn(),
-  createWorkflowAgoraWorkbenchState: vi.fn(),
-  createWorkflowParticipants: vi.fn(),
-  ensureWorkflowAgoraSession: vi.fn(),
-  extractWorkflowParticipantNames: vi.fn(),
+const runtimeSessionMocks = vi.hoisted(() => ({
+  ensureWorkflowRuntimeConversation: vi.fn(),
+  bindWorkflowRunToConversation: vi.fn(),
+}));
+
+const transcriptMocks = vi.hoisted(() => ({
+  appendWorkflowRuntimeTranscript: vi.fn(),
+  toWorkflowRuntimeTranscriptLiveEvent: vi.fn((event) => ({
+    runId: event.runId,
+    seq: event.seq,
+    timestamp: event.timestamp,
+    transcript: event.payload,
+  })),
 }));
 
 // Mock all heavy dependencies before importing the route
@@ -29,6 +32,7 @@ vi.mock('@/lib/workflow/preflight', () => ({
 vi.mock('@/lib/workflow/registry', () => ({
   workflowRegistry: {
     getManager: vi.fn(),
+    emit: vi.fn(),
   },
 }));
 
@@ -38,6 +42,7 @@ vi.mock('@/lib/run/store', () => ({
 
 vi.mock('@/lib/run/state-persistence', () => ({
   saveRunState: vi.fn(),
+  findActiveRuns: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@/lib/spec/coding-store', () => ({
@@ -48,32 +53,35 @@ vi.mock('@/lib/spec/coding-store', () => ({
 }));
 
 vi.mock('@/lib/chat/persistence', () => ({
-  loadChatSession: chatMocks.loadChatSession,
-  saveChatSession: chatMocks.saveChatSession,
   updateChatSessionCreationBinding: chatMocks.updateChatSessionCreationBinding,
-  updateChatSessionWorkflowBinding: chatMocks.updateChatSessionWorkflowBinding,
 }));
 
-vi.mock('@/lib/agora/workflow-topic', () => ({
-  appendWorkflowAgoraMessage: agoraMocks.appendWorkflowAgoraMessage,
-  appendWorkflowAgoraOpeningMessages: agoraMocks.appendWorkflowAgoraOpeningMessages,
-  createWorkflowAgoraWorkbenchState: agoraMocks.createWorkflowAgoraWorkbenchState,
-  createWorkflowParticipants: agoraMocks.createWorkflowParticipants,
-  ensureWorkflowAgoraSession: agoraMocks.ensureWorkflowAgoraSession,
-  extractWorkflowParticipantNames: agoraMocks.extractWorkflowParticipantNames,
+vi.mock('@/lib/workflow/runtime-session', () => ({
+  ensureWorkflowRuntimeConversation: runtimeSessionMocks.ensureWorkflowRuntimeConversation,
+  bindWorkflowRunToConversation: runtimeSessionMocks.bindWorkflowRunToConversation,
+}));
+
+vi.mock('@/lib/workflow/runtime-transcript', () => ({
+  appendWorkflowRuntimeTranscript: transcriptMocks.appendWorkflowRuntimeTranscript,
+  toWorkflowRuntimeTranscriptLiveEvent: transcriptMocks.toWorkflowRuntimeTranscriptLiveEvent,
 }));
 
 vi.mock('@/lib/run/runtime-configs', () => ({
   getRuntimeWorkflowConfigPath: vi.fn().mockResolvedValue('/tmp/config.yaml'),
 }));
 
+vi.mock('@/lib/workflow/subworkflow-config', () => ({
+  createWorkflowConfigSnapshot: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('fs/promises', () => ({
+  mkdir: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn().mockResolvedValue('workflow:\n  name: Test\n'),
   writeFile: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('yaml', () => ({
-  parse: vi.fn().mockReturnValue({ workflow: { name: 'Test' } }),
+  parse: vi.fn().mockReturnValue({ workflow: { name: 'Test', mode: 'state-machine' } }),
 }));
 
 vi.mock('crypto', () => ({
@@ -81,26 +89,20 @@ vi.mock('crypto', () => ({
 }));
 
 describe('workflow start flow', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    chatMocks.loadChatSession.mockReset().mockResolvedValue({
-      id: 'sess-1',
-      title: 'existing session',
-      messages: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    chatMocks.saveChatSession.mockReset().mockResolvedValue(undefined);
+    const { parse } = await import('yaml');
+    (parse as any).mockReset().mockReturnValue({ workflow: { name: 'Test', mode: 'state-machine' } });
     chatMocks.updateChatSessionCreationBinding.mockReset().mockResolvedValue(undefined);
-    chatMocks.updateChatSessionWorkflowBinding.mockReset().mockResolvedValue(undefined);
-    agoraMocks.appendWorkflowAgoraMessage.mockReset().mockResolvedValue(undefined);
-    agoraMocks.appendWorkflowAgoraOpeningMessages.mockReset().mockResolvedValue(undefined);
-    agoraMocks.createWorkflowAgoraWorkbenchState.mockReset().mockReturnValue({ kind: 'workflow-agora' });
-    agoraMocks.createWorkflowParticipants.mockReset().mockImplementation((names: string[] = [], options: any = {}) =>
-      (names.length ? names : [options.coordinatorAgent || 'default-supervisor']).map((name: string) => ({ name }))
-    );
-    agoraMocks.ensureWorkflowAgoraSession.mockReset().mockResolvedValue({ kind: 'workflow-agora' });
-    agoraMocks.extractWorkflowParticipantNames.mockReset().mockReturnValue(['default-supervisor']);
+    runtimeSessionMocks.ensureWorkflowRuntimeConversation.mockReset().mockResolvedValue({
+      sessionId: 'sess-1',
+      sessionWorkbenchState: {
+        conversationMode: 'workflow-running',
+        embeddedWorkflow: { runId: 'run-pending', configFile: 'test.yaml' },
+      },
+    });
+    runtimeSessionMocks.bindWorkflowRunToConversation.mockReset().mockResolvedValue(true);
+    transcriptMocks.appendWorkflowRuntimeTranscript.mockReset().mockResolvedValue(null);
   });
 
   test('returns 401 when no auth token', async () => {
@@ -210,6 +212,98 @@ describe('workflow start flow', () => {
     expect(json.rehearsal.summary).toBeTruthy();
   });
 
+  test('persists lightweight metadata before binding a rehearsal conversation', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
+    const { parse } = await import('yaml');
+    (parse as any).mockReturnValue({
+      workflow: {
+        name: 'Lightweight rehearsal',
+        mode: 'state-machine',
+        profile: 'lightweight',
+        lightweight: { tasklistDirectory: 'tasks/rehearsal' },
+        states: [{
+          name: 'Execute',
+          steps: [{ name: 'Run tasklist', agent: 'default-supervisor', skills: ['aceharness-tasklist'] }],
+        }],
+      },
+      context: { projectRoot: '/tmp/project' },
+      roles: [],
+    });
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'lightweight.yaml', skipPreflight: true, rehearsal: true },
+    }));
+
+    expect(response.status).toBe(200);
+    const { saveRunState } = await import('@/lib/run/state-persistence');
+    expect(saveRunState).toHaveBeenCalledWith(expect.objectContaining({
+      lightweight: expect.objectContaining({
+        profile: 'lightweight',
+        tasklistDirectory: 'tasks/rehearsal',
+      }),
+    }));
+    const persistedRun = (saveRunState as any).mock.calls[0][0];
+    expect(persistedRun.workingDirectory).toBe(persistedRun.lightweight.workspaceRoot);
+    expect(runtimeSessionMocks.bindWorkflowRunToConversation).toHaveBeenCalledWith(expect.objectContaining({
+      requireLightweightMetadata: true,
+      lightweight: expect.objectContaining({ profile: 'lightweight' }),
+    }));
+    expect((saveRunState as any).mock.invocationCallOrder[0]).toBeLessThan(
+      runtimeSessionMocks.bindWorkflowRunToConversation.mock.invocationCallOrder[0],
+    );
+  });
+
+  test('rejects a formal lightweight run with an occupied tasklist directory before binding a conversation', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
+    const { parse } = await import('yaml');
+    (parse as any).mockReturnValue({
+      workflow: {
+        name: 'Lightweight conflict',
+        mode: 'state-machine',
+        profile: 'lightweight',
+        lightweight: { tasklistDirectory: 'tasks/conflict' },
+        states: [{
+          name: 'Execute',
+          steps: [{ name: 'Run tasklist', agent: 'default-supervisor', skills: ['aceharness-tasklist'] }],
+        }],
+      },
+      context: { projectRoot: '/tmp/project' },
+      roles: [],
+    });
+    const { findActiveRuns } = await import('@/lib/run/state-persistence');
+    const path = await import('path');
+    (findActiveRuns as any).mockResolvedValue([{
+      runId: 'run-active-lightweight',
+      lightweight: {
+        profile: 'lightweight',
+        resolvedTasklistDirectory: path.resolve('/tmp/project', 'tasks/conflict'),
+      },
+    }]);
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    (workflowRegistry.getManager as any).mockResolvedValue({
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      start: vi.fn(),
+      emit: vi.fn(),
+    });
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'lightweight.yaml', skipPreflight: true, frontendSessionId: 'sess-1' },
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(responseJson<any>(response)).resolves.toMatchObject({
+      error: '轻量工作流任务文档目录已被活动运行占用',
+      runId: 'run-active-lightweight',
+    });
+    expect(runtimeSessionMocks.ensureWorkflowRuntimeConversation).not.toHaveBeenCalled();
+  });
+
   test('returns 409 when workflow is already running', async () => {
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
@@ -271,6 +365,10 @@ describe('workflow start flow', () => {
     expect(json.success).toBe(true);
     expect(json.message).toContain('启动');
     expect(json.runId).toBeTruthy();
+    expect(runtimeSessionMocks.ensureWorkflowRuntimeConversation).toHaveBeenCalledWith(expect.objectContaining({
+      configFile: 'test.yaml',
+      runId: json.runId,
+    }));
 
     // manager.start() is called asynchronously (fire-and-forget)
     // Wait a tick for the async call
@@ -279,12 +377,51 @@ describe('workflow start flow', () => {
       'test.yaml',
       undefined,
       [{ name: 'env', ok: true }],
-      { globalContext: '', phaseContexts: {} },
+      expect.objectContaining({
+        globalContext: '',
+        phaseContexts: {},
+        taskInput: {},
+      }),
       json.runId
     );
   });
 
-  test('concurrent start requests cannot both pass while run-starting message is pending', async () => {
+  test('fans out persisted start transcripts through the manager runtime event path', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
+    transcriptMocks.appendWorkflowRuntimeTranscript.mockImplementation(async (input: any) => ({
+      runId: input.runId,
+      seq: input.type === 'run-created' ? 1 : 2,
+      timestamp: '2026-07-28T00:00:00.000Z',
+      payload: { type: input.type, title: input.title },
+    }));
+
+    const mockManager = {
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      start: vi.fn().mockResolvedValue(undefined),
+      emit: vi.fn(),
+    };
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'test.yaml', skipPreflight: true },
+    }));
+
+    const json = await responseJson(response);
+    expect(mockManager.emit).toHaveBeenCalledWith('runtime-transcript', expect.objectContaining({
+      runId: json.runId,
+      transcript: expect.objectContaining({ type: 'run-created' }),
+    }));
+    expect(mockManager.emit).toHaveBeenCalledWith('runtime-transcript', expect.objectContaining({
+      runId: json.runId,
+      transcript: expect.objectContaining({ type: 'run-starting' }),
+    }));
+  });
+
+  test('concurrent start requests cannot both pass while the start transcript is pending', async () => {
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
 
@@ -300,7 +437,7 @@ describe('workflow start flow', () => {
     const runStartingMessage = new Promise<void>((resolve) => {
       releaseRunStartingMessage = resolve;
     });
-    agoraMocks.appendWorkflowAgoraMessage.mockImplementation(() => runStartingMessage);
+    transcriptMocks.appendWorkflowRuntimeTranscript.mockImplementation(() => runStartingMessage);
 
     let managerStatus: 'idle' | 'preparing' | 'running' | 'failed' = 'idle';
     const mockManager = {
@@ -328,7 +465,7 @@ describe('workflow start flow', () => {
     }));
 
     await vi.waitFor(() => {
-      expect(agoraMocks.appendWorkflowAgoraMessage).toHaveBeenCalledTimes(1);
+      expect(transcriptMocks.appendWorkflowRuntimeTranscript).toHaveBeenCalledTimes(1);
       expect(mockManager.start).toHaveBeenCalledTimes(1);
     });
     await expect(second).resolves.toHaveProperty('status', 409);

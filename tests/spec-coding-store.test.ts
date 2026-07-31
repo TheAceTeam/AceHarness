@@ -3,13 +3,21 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { withIsolatedAceHome } from './helpers/module-helpers';
 
-interface PhaseConfig {
+interface StateMachineConfig {
   workflow: {
     name: string;
-    phases: Array<{
+    mode: 'state-machine';
+    states: Array<{
       name: string;
-      checkpoint?: { name: string };
+      description?: string;
+      isInitial: boolean;
+      isFinal: boolean;
       steps: Array<{ name: string; agent: string; task: string }>;
+      transitions: Array<{
+        condition: { verdict: 'pass' | 'conditional_pass' | 'fail' };
+        to: string;
+        priority: number;
+      }>;
     }>;
   };
   context: {
@@ -19,24 +27,36 @@ interface PhaseConfig {
   };
 }
 
-function buildPhaseConfig(projectRoot: string): PhaseConfig {
+function buildStateMachineConfig(projectRoot: string): StateMachineConfig {
   return {
     workflow: {
       name: 'Store Test Workflow',
-      phases: [
+      mode: 'state-machine',
+      states: [
         {
           name: 'Design',
-          checkpoint: { name: 'Design review' },
+          description: 'Design the implementation approach',
+          isInitial: true,
+          isFinal: false,
           steps: [
             { name: 'Plan', agent: 'architect', task: 'Design the implementation approach' },
+          ],
+          transitions: [
+            { condition: { verdict: 'pass' }, to: 'Implement', priority: 1 },
+            { condition: { verdict: 'conditional_pass' }, to: 'Implement', priority: 2 },
+            { condition: { verdict: 'fail' }, to: 'Implement', priority: 3 },
           ],
         },
         {
           name: 'Implement',
+          description: 'Implement and verify the change',
+          isInitial: false,
+          isFinal: true,
           steps: [
             { name: 'Code', agent: 'developer', task: 'Implement the change' },
             { name: 'Verify', agent: 'tester', task: 'Verify the implementation' },
           ],
+          transitions: [],
         },
       ],
     },
@@ -54,10 +74,10 @@ async function loadStore() {
 }
 
 describe('spec-coding-store', () => {
-  test('buildSpecCodingFromWorkflowConfig generates phases, assignments, and artifacts from phase-based config', async () => {
+  test('buildSpecCodingFromWorkflowConfig generates phases, assignments, and artifacts from state-machine config', async () => {
     await withIsolatedAceHome(async () => {
       const { buildSpecCodingFromWorkflowConfig } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const doc = buildSpecCodingFromWorkflowConfig({
         workflowName: 'Store Test Workflow',
@@ -79,8 +99,7 @@ describe('spec-coding-store', () => {
       expect(doc.phases[1].ownerAgents).toContain('tester');
 
       expect(doc.assignments.map((a) => a.agent).sort()).toEqual(['architect', 'developer', 'tester']);
-      expect(doc.checkpoints).toHaveLength(1);
-      expect(doc.checkpoints[0].title).toBe('Design review');
+      expect(doc.checkpoints).toHaveLength(0);
 
       expect(doc.artifacts.requirements).toContain('Store Test Workflow');
       expect(doc.artifacts.design).toContain('设计文档');
@@ -125,14 +144,14 @@ describe('spec-coding-store', () => {
   test('buildCreationSession produces a complete session with specCoding, config summary, and artifact snapshots', async () => {
     await withIsolatedAceHome(async () => {
       const { buildCreationSession } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const session = buildCreationSession({
         chatSessionId: 'chat-123',
         createdBy: 'user-1',
         filename: 'session-test.yaml',
         workflowName: 'Store Test Workflow',
-        mode: 'phase-based',
+        mode: 'state-machine',
         workingDirectory: '/test/workspace',
         workspaceMode: 'in-place',
         description: 'Test session creation',
@@ -151,8 +170,8 @@ describe('spec-coding-store', () => {
       expect(session.workflowDraftSummary).toBeDefined();
       const generatedConfigSummary = session.generatedConfigSummary!;
       const workflowDraftSummary = session.workflowDraftSummary!;
-      expect(generatedConfigSummary.mode).toBe('phase-based');
-      expect(generatedConfigSummary.phaseCount).toBe(2);
+      expect(generatedConfigSummary.mode).toBe('state-machine');
+      expect(generatedConfigSummary.stateCount).toBe(2);
       expect(generatedConfigSummary.agentNames).toContain('architect');
       expect(generatedConfigSummary.agentNames).toContain('developer');
       expect(workflowDraftSummary.nodes).toHaveLength(2);
@@ -164,14 +183,14 @@ describe('spec-coding-store', () => {
   test('creation session save-load round-trip preserves all fields', async () => {
     await withIsolatedAceHome(async () => {
       const { buildCreationSession, saveCreationSession, loadCreationSession } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const session = buildCreationSession({
         chatSessionId: 'chat-rt',
         createdBy: 'user-rt',
         filename: 'roundtrip.yaml',
         workflowName: 'Roundtrip Workflow',
-        mode: 'phase-based',
+        mode: 'state-machine',
         workingDirectory: '/test/workspace',
         workspaceMode: 'in-place',
         description: 'Roundtrip test',
@@ -192,16 +211,51 @@ describe('spec-coding-store', () => {
     });
   });
 
+  test('creation session save-load round-trip preserves lightweight form context', async () => {
+    await withIsolatedAceHome(async () => {
+      const { buildCreationSession, saveCreationSession, loadCreationSession } = await loadStore();
+      const config = buildStateMachineConfig('/test/lightweight-workspace');
+
+      const session = buildCreationSession({
+        createdBy: 'user-lightweight',
+        filename: 'lightweight-roundtrip.yaml',
+        workflowName: 'Lightweight Roundtrip',
+        mode: 'lightweight',
+        workingDirectory: '/test/lightweight-workspace',
+        workspaceMode: 'in-place',
+        requirements: 'Run the lightweight tasklist flow',
+        lightweight: {
+          agent: 'developer',
+          task: 'Run the lightweight tasklist flow',
+          skills: ['review-skill'],
+          tasklistDirectory: 'docs/tasklists/lightweight-roundtrip',
+        },
+        config,
+      });
+
+      await saveCreationSession(session);
+
+      const loaded = await loadCreationSession(session.id);
+      expect(loaded?.mode).toBe('lightweight');
+      expect(loaded?.lightweight).toEqual({
+        agent: 'developer',
+        task: 'Run the lightweight tasklist flow',
+        skills: ['review-skill'],
+        tasklistDirectory: 'docs/tasklists/lightweight-roundtrip',
+      });
+    });
+  });
+
   test('loadCreationSession repairs a trailing numeric fragment left after updatedAt', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       const { buildCreationSession, saveCreationSession, loadCreationSession } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const session = buildCreationSession({
         chatSessionId: 'chat-repair',
         filename: 'repair.yaml',
         workflowName: 'Repair Workflow',
-        mode: 'phase-based',
+        mode: 'state-machine',
         workingDirectory: '/test/workspace',
         workspaceMode: 'in-place',
         config,
@@ -231,11 +285,11 @@ describe('spec-coding-store', () => {
   test('listCreationSessions filters by chatSessionId and createdBy', async () => {
     await withIsolatedAceHome(async () => {
       const { buildCreationSession, saveCreationSession, listCreationSessions } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
-      const s1 = buildCreationSession({ chatSessionId: 'chat-A', createdBy: 'user-1', filename: 'a1.yaml', workflowName: 'A1', mode: 'phase-based', workingDirectory: '/tmp', workspaceMode: 'in-place', config });
-      const s2 = buildCreationSession({ chatSessionId: 'chat-A', createdBy: 'user-2', filename: 'a2.yaml', workflowName: 'A2', mode: 'phase-based', workingDirectory: '/tmp', workspaceMode: 'in-place', config });
-      const s3 = buildCreationSession({ chatSessionId: 'chat-B', createdBy: 'user-1', filename: 'b1.yaml', workflowName: 'B1', mode: 'phase-based', workingDirectory: '/tmp', workspaceMode: 'in-place', config });
+      const s1 = buildCreationSession({ chatSessionId: 'chat-A', createdBy: 'user-1', filename: 'a1.yaml', workflowName: 'A1', mode: 'state-machine', workingDirectory: '/tmp', workspaceMode: 'in-place', config });
+      const s2 = buildCreationSession({ chatSessionId: 'chat-A', createdBy: 'user-2', filename: 'a2.yaml', workflowName: 'A2', mode: 'state-machine', workingDirectory: '/tmp', workspaceMode: 'in-place', config });
+      const s3 = buildCreationSession({ chatSessionId: 'chat-B', createdBy: 'user-1', filename: 'b1.yaml', workflowName: 'B1', mode: 'state-machine', workingDirectory: '/tmp', workspaceMode: 'in-place', config });
 
       await saveCreationSession(s1);
       await saveCreationSession(s2);
@@ -265,12 +319,12 @@ describe('spec-coding-store', () => {
   test('updateCreationSession merges patch and syncs artifact snapshots', async () => {
     await withIsolatedAceHome(async () => {
       const { buildCreationSession, saveCreationSession, updateCreationSession, loadCreationSession } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const session = buildCreationSession({
         filename: 'update-test.yaml',
         workflowName: 'Update Workflow',
-        mode: 'phase-based',
+        mode: 'state-machine',
         workingDirectory: '/tmp',
         workspaceMode: 'in-place',
         config,
@@ -308,7 +362,7 @@ describe('spec-coding-store', () => {
   test('appendSpecCodingRevision increments version and appends revision', async () => {
     await withIsolatedAceHome(async () => {
       const { buildSpecCodingFromWorkflowConfig, appendSpecCodingRevision } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       let doc = buildSpecCodingFromWorkflowConfig({
         workflowName: 'Revision Test',
@@ -347,7 +401,7 @@ describe('spec-coding-store', () => {
   test('cloneSpecCodingForRun creates a deep copy with independent id and run context', async () => {
     await withIsolatedAceHome(async () => {
       const { buildSpecCodingFromWorkflowConfig, cloneSpecCodingForRun } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const original = buildSpecCodingFromWorkflowConfig({
         workflowName: 'Clone Test',
@@ -376,7 +430,7 @@ describe('spec-coding-store', () => {
   test('updateSpecCodingTaskStatuses updates matching tasks and syncs markdown checkboxes', async () => {
     await withIsolatedAceHome(async () => {
       const { buildSpecCodingFromWorkflowConfig, updateSpecCodingTaskStatuses } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const doc = buildSpecCodingFromWorkflowConfig({
         workflowName: 'Task Update Test',
@@ -464,7 +518,7 @@ describe('spec-coding-store', () => {
   test('rebuildSpecCodingPreservingArtifacts merges rebuilt structure with existing artifacts', async () => {
     await withIsolatedAceHome(async () => {
       const { buildSpecCodingFromWorkflowConfig, rebuildSpecCodingPreservingArtifacts } = await loadStore();
-      const config = buildPhaseConfig('/test/workspace');
+      const config = buildStateMachineConfig('/test/workspace');
 
       const existing = buildSpecCodingFromWorkflowConfig({
         workflowName: 'Rebuild Test',

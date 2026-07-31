@@ -6,6 +6,7 @@ import {
   getDocumentFolderGroup,
   type DocFile,
 } from '@/components/DocumentsPanel';
+import { queryKeys } from '@/client/query/query-keys';
 
 describe('DocumentsPanel folder grouping', () => {
   test('turns workflow phase ids into readable stage labels', () => {
@@ -19,14 +20,16 @@ describe('DocumentsPanel folder grouping', () => {
     const compact = getDocumentFolderGroup({
       filename: '根因定位-定位空指针路径.md',
       phaseName: '',
+      documentSource: 'runtime-output',
     });
     const spaced = getDocumentFolderGroup({
       filename: '根因定位 - 定位空指针路径.md',
       phaseName: '',
+      documentSource: 'runtime-output',
     });
 
-    expect(compact.label).toBe('根因定位');
-    expect(spaced.label).toBe('根因定位');
+    expect(compact.label).toBe('运行输出 / 根因定位');
+    expect(spaced.label).toBe('运行输出 / 根因定位');
     expect(spaced.key).toBe(compact.key);
   });
 
@@ -34,15 +37,38 @@ describe('DocumentsPanel folder grouping', () => {
     const spaceLabel = getDocumentFolderGroup({
       filename: '2026-03-20T14-30-00-ArkUI DSL 获取-解析 UX DSL.md',
       phaseName: 'ArkUI DSL 获取',
+      documentSource: 'runtime-output',
     });
     const hyphenLabel = getDocumentFolderGroup({
       filename: '2026-03-20T14-30-00-ArkUI-DSL 获取-解析 UX DSL.md',
       phaseName: 'ArkUI-DSL 获取',
+      documentSource: 'runtime-output',
     });
 
-    expect(spaceLabel.label).toBe('ArkUI DSL 获取');
-    expect(hyphenLabel.label).toBe('ArkUI-DSL 获取');
+    expect(spaceLabel.label).toBe('运行输出 / ArkUI DSL 获取');
+    expect(hyphenLabel.label).toBe('运行输出 / ArkUI-DSL 获取');
     expect(hyphenLabel.key).toBe(spaceLabel.key);
+  });
+
+  test('keeps tasklist and runtime-output folders separate for each child run', () => {
+    const tasklist = getDocumentFolderGroup({
+      filename: 'plan.md',
+      phaseName: '',
+      documentSource: 'tasklist',
+      sourceRunId: 'child-run',
+      sourceLabel: '子工作流 / 实现',
+    });
+    const runtimeOutput = getDocumentFolderGroup({
+      filename: 'plan.md',
+      phaseName: '',
+      documentSource: 'runtime-output',
+      sourceRunId: 'child-run',
+      sourceLabel: '子工作流 / 实现',
+    });
+
+    expect(tasklist.label).toBe('任务文档 / 子工作流 / 实现 / plan');
+    expect(runtimeOutput.label).toBe('运行输出 / 子工作流 / 实现 / plan');
+    expect(tasklist.key).not.toBe(runtimeOutput.key);
   });
 });
 
@@ -78,6 +104,21 @@ describe('DocumentsPanel summary highlights', () => {
 });
 
 describe('DocumentsPanel run document links', () => {
+  test('uses source-qualified content cache keys for same-name documents', () => {
+    const tasklistKey = queryKeys.documentContent('run-1', {
+      source: 'tasklist',
+      sourceRunId: 'run-1',
+      file: 'plan.md',
+    });
+    const runtimeOutputKey = queryKeys.documentContent('run-1', {
+      source: 'runtime-output',
+      sourceRunId: 'run-1',
+      file: 'plan.md',
+    });
+
+    expect(tasklistKey).not.toEqual(runtimeOutputKey);
+  });
+
   test('matches an encoded absolute workspace link to its run artifact', () => {
     const file = {
       filename: '2026-07-14T00-56-52-evidence_intake-交叉核验台账列矛盾.md',
@@ -90,5 +131,29 @@ describe('DocumentsPanel run document links', () => {
     );
 
     expect(matched).toBe(file);
+  });
+
+  test('uses the source root for duplicate filenames and leaves ambiguous bare paths unopened', () => {
+    const tasklistFile = {
+      filename: 'plan.md',
+      relativePath: 'plan.md',
+      documentSource: 'tasklist',
+      documentDirectory: '/workspace/docs/tasklists/current',
+    } as DocFile;
+    const runtimeOutputFile = {
+      filename: 'plan.md',
+      relativePath: 'plan.md',
+      documentSource: 'runtime-output',
+      documentDirectory: '/workspace/.aceharness/data/runs/run-1/outputs',
+    } as DocFile;
+
+    expect(findRunDocumentByWorkspacePath(
+      [tasklistFile, runtimeOutputFile],
+      '/workspace/.aceharness/data/runs/run-1/outputs/plan.md',
+    )).toBe(runtimeOutputFile);
+    expect(findRunDocumentByWorkspacePath(
+      [tasklistFile, runtimeOutputFile],
+      '/unrelated/plan.md',
+    )).toBeNull();
   });
 });

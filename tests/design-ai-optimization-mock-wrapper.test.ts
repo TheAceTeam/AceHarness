@@ -13,10 +13,12 @@ describe('design optimization mock wrapper contract', () => {
     const currentConfig = {
       workflow: {
         name: 'feature-delivery',
-        mode: 'phase-based',
-        phases: [
+        mode: 'state-machine',
+        states: [
           {
             name: '实现',
+            isInitial: true,
+            isFinal: true,
             steps: [
               {
                 name: '编码实现',
@@ -25,6 +27,7 @@ describe('design optimization mock wrapper contract', () => {
                 constraints: ['保持现有接口兼容'],
               },
             ],
+            transitions: [],
           },
         ],
       },
@@ -37,8 +40,8 @@ describe('design optimization mock wrapper contract', () => {
     };
     const target: DesignOptimizationTarget = {
       scope: 'step',
-      workflowMode: 'phase-based',
-      containerType: 'phase',
+      workflowMode: 'state-machine',
+      containerType: 'state',
       containerIndex: 0,
       containerName: '实现',
       stepIndex: 0,
@@ -72,7 +75,7 @@ describe('design optimization mock wrapper contract', () => {
     const engine = new MockEngine();
     engine.executeImpl = async (options) => {
       expect(options.prompt).toContain('workflow_patch_item');
-      expect(options.prompt).toContain('阶段 "实现" 内的步骤 "编码实现"');
+      expect(options.prompt).toContain('状态 "实现" 内的步骤 "编码实现"');
       return {
         success: true,
         output: [
@@ -84,7 +87,7 @@ describe('design optimization mock wrapper contract', () => {
               filename: 'feature-delivery.yaml',
               summary: '增强步骤的执行说明与绑定',
               scope: 'step',
-              workflowMode: 'phase-based',
+              workflowMode: 'state-machine',
               patch: {
                 step: {
                   name: '编码实现',
@@ -121,12 +124,12 @@ describe('design optimization mock wrapper contract', () => {
     expect(doesWorkflowPatchMatchTarget(payload, target, currentConfig)).toBe(true);
 
     const nextConfig = applyDesignOptimizationPatch(currentConfig, payload, target);
-    expect(nextConfig?.workflow.phases[0].steps[0]).toMatchObject({
+    expect(nextConfig?.workflow.states[0].steps[0]).toMatchObject({
       name: '编码实现',
       agent: 'developer',
       skills: ['vitest'],
     });
-    expect(nextConfig?.workflow.phases[0].steps[0].task).toContain('补齐关键测试');
+    expect(nextConfig?.workflow.states[0].steps[0].task).toContain('补齐关键测试');
     expect(nextConfig?.context.projectRoot).toBe('/repo/project');
   });
 });

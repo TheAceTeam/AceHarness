@@ -229,7 +229,7 @@ describe('/api/chat runtime model route resolution', () => {
       yield { type: 'text_delta', text: '我会先读取这个 skill 的入口说明。', stream: 'output' };
       yield {
         type: 'tool_call',
-        text: "Get-Content 'C:\\Users\\Shawn\\Documents\\ACEHarness\\skills\\werewolf-tabletalk\\SKILL.md' (in_progress): Get-Content 'C:\\Users\\Shawn\\Documents\\ACEHarness\\skills\\werewolf-tabletalk\\SKILL.md'",
+        text: "Get-Content 'C:\\workspace\\skills\\example\\SKILL.md' (in_progress): Get-Content 'C:\\workspace\\skills\\example\\SKILL.md'",
         title: 'shell',
         status: 'in_progress',
         toolCallId: 'tool-1',
@@ -238,7 +238,7 @@ describe('/api/chat runtime model route resolution', () => {
         type: 'tool_call_update',
         status: 'completed',
         toolCallId: 'tool-1',
-        output: '# Werewolf Tabletalk',
+        output: '# Example Skill',
         exit_code: 0,
       };
       yield { type: 'turn_completed', payload: {} };
@@ -266,7 +266,7 @@ describe('/api/chat runtime model route resolution', () => {
     expect(deltaContent).toContain('"kind":"tool-result"');
     expect(deltaContent).toContain('"toolId":"tool-1"');
     expect(deltaContent).toContain('"toolName":"skill"');
-    expect(deltaContent).toContain('Werewolf Tabletalk');
+    expect(deltaContent).toContain('Example Skill');
     expect(deltaContent).not.toContain('(in_progress): Get-Content');
     expect(String(done?.data.result || '')).toContain('<ace-process>');
     expect(String(done?.data.result || '')).not.toContain('(in_progress): Get-Content');

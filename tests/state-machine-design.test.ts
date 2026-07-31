@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { StateMachineState } from '@/lib/core/schemas';
+import {
+  buildWorkflowStepFromEditData,
+} from '@/components/StateMachineDesignPanel';
 import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
 
 describe('state machine design updates', () => {
@@ -32,5 +35,39 @@ describe('state machine design updates', () => {
     expect(renamed[0].transitions.map((transition) => transition.to)).toEqual(['输入质检1', 'DT设计']);
     expect(renamed[1].transitions[0].to).toBe('输入质检1');
     expect(states[0].name).toBe('输入质检');
+  });
+
+  test('preserves step skills without changing the Agent global configuration', () => {
+    const agentConfig = { name: 'developer', skills: ['global-skill'] };
+    const savedStep = buildWorkflowStepFromEditData({
+      type: 'agent',
+      name: 'review',
+      agent: agentConfig.name,
+      task: 'Review the change',
+      skills: ['review-skill', ' review-skill ', 'aceharness-tasklist'],
+      parallelGroup: 'parallel-review',
+      concurrency: { groupId: 'parallel-review', joinPolicy: { mode: 'all' } },
+      specTaskBinding: { taskId: 'task-1', taskIds: ['task-1'] },
+    });
+
+    expect(savedStep.skills).toEqual(['review-skill', 'aceharness-tasklist']);
+    expect(agentConfig.skills).toEqual(['global-skill']);
+  });
+
+  test('does not carry skills onto a subworkflow step', () => {
+    const savedStep = buildWorkflowStepFromEditData({
+      type: 'subworkflow',
+      name: 'Run child workflow',
+      workflow: 'child.yaml',
+      skills: ['parent-skill'],
+    }, {
+      name: 'Previous step',
+      agent: 'developer',
+      task: 'Previous task',
+      skills: ['stale-skill'],
+    });
+
+    expect(savedStep.type).toBe('subworkflow');
+    expect(savedStep).not.toHaveProperty('skills');
   });
 });

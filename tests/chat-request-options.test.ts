@@ -136,7 +136,29 @@ describe('chat-request-options', () => {
 
     expect(result.runtimeSkillNames).toEqual([]);
     expect(result.systemPrompt).toContain('普通工程对话模式');
-    expect(result.systemPrompt).toContain('不要使用 aceharness-workflow-creator');
+    expect(result.systemPrompt).toContain('不要触发 Agent 创建弹窗');
+    expect(result.systemPrompt).toContain('普通 state-machine 工作流仍可按工程需求进行设计');
+    expect(result.systemPrompt).not.toContain('intent=create-workflow');
+    expect(result.systemPrompt).not.toContain('/workflow');
+    expect(result.systemPrompt).not.toContain('通过旧 creator 创建 workflow');
+  });
+
+  test('resume creation assistant mode keeps Agent creation and state-machine design guidance', async () => {
+    const { buildChatRequestContext } = await import('@/lib/chat/request-options');
+
+    const result = await buildChatRequestContext({
+      mode: 'dashboard',
+      sessionId: 'session-creation',
+      creationAssistantEnabled: true,
+    });
+
+    expect(result.creationAssistantEnabled).toBe(true);
+    expect(result.systemPrompt).toContain('创建 Agent 时');
+    expect(result.systemPrompt).toContain('home_sidebar');
+    expect(result.systemPrompt).toContain('设计普通 state-machine 工作流时');
+    expect(result.systemPrompt).not.toContain('intent=create-workflow');
+    expect(result.systemPrompt).not.toContain('/workflow');
+    expect(result.systemPrompt).not.toContain('通过旧 creator 创建 workflow');
   });
 
   test('links only selected runtime skills and keeps aceharness skills eligible', async () => {

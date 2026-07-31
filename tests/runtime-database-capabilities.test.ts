@@ -1,7 +1,8 @@
+import { existsSync } from 'fs';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   createRuntimeDatabaseGrant,
   expandDatabaseCapabilitySkillNames,
@@ -18,6 +19,8 @@ import {
 } from '@/lib/runtime/sqlite-capability';
 
 let tempDirs: string[] = [];
+let aceHome = '';
+let originalAceHome: string | undefined;
 
 async function tempWorkspace() {
   const dir = await mkdtemp(path.join(tmpdir(), 'ace-runtime-db-'));
@@ -25,9 +28,21 @@ async function tempWorkspace() {
   return dir;
 }
 
+beforeEach(async () => {
+  originalAceHome = process.env.ACE_HOME;
+  aceHome = await tempWorkspace();
+  process.env.ACE_HOME = aceHome;
+});
+
 afterEach(async () => {
+  if (originalAceHome === undefined) {
+    delete process.env.ACE_HOME;
+  } else {
+    process.env.ACE_HOME = originalAceHome;
+  }
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
   tempDirs = [];
+  aceHome = '';
 });
 
 describe('runtime database capabilities', () => {
@@ -51,6 +66,7 @@ describe('runtime database capabilities', () => {
     });
     expect(grant?.rag?.enabled).toBe(true);
     expect(grant?.rag?.knowledgeBases).toEqual(['default']);
+    expect(existsSync(path.join(aceHome, 'data', 'runtime-grants', `${grant!.token}.json`))).toBe(true);
   });
 
   test('rejects sqlite paths outside workspace', async () => {

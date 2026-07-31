@@ -2,9 +2,11 @@
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import ModelDiagnosticsWorkbench from '@/components/models/ModelDiagnosticsWorkbench';
 import type { ModelDiagnosticsResponse } from '@/lib/models/diagnostic-types';
+import { queryKeys } from '@/client/query/query-keys';
 
 const mockToast = vi.fn();
 const mockUpdateToast = vi.fn();
@@ -16,6 +18,24 @@ vi.mock('@/components/ui/toast', () => ({
     updateToast: mockUpdateToast,
     dismissToast: mockDismissToast,
   }),
+}));
+
+// Model selection is covered by tests/model-select.test.tsx; keep this suite
+// focused on the diagnostics workbench stream lifecycle.
+vi.mock('@/components/EngineModelSelect', () => ({
+  EngineModelSelect: ({
+    onEngineChange,
+    onModelChange,
+  }: {
+    onEngineChange: (engine: string) => void;
+    onModelChange: (model: string) => void;
+  }) => {
+    React.useEffect(() => {
+      onEngineChange('claude-code');
+      onModelChange('claude-sonnet-4-20250514');
+    }, [onEngineChange, onModelChange]);
+    return <div data-testid="diagnostics-model-select" />;
+  },
 }));
 
 const storedResult: ModelDiagnosticsResponse = {
@@ -234,6 +254,44 @@ const failedCapabilityResult: ModelDiagnosticsResponse = {
   },
 };
 
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  queryClient.setQueryData(queryKeys.models(), {
+    models: [{
+      value: 'claude-sonnet-4-20250514',
+      label: 'Claude Sonnet 4',
+      engines: ['claude-code'],
+    }],
+  });
+  queryClient.setQueryData([...queryKeys.agents(), 'runtime-engine-options'], [
+    { id: 'claude-code', name: 'Claude Code' },
+  ]);
+  queryClient.setQueryData([...queryKeys.models(), 'runtime-selection'], {
+    engine: 'claude-code',
+    defaultModel: 'claude-sonnet-4-20250514',
+    source: 'runtime-model-routes',
+  });
+  queryClient.setQueryData([
+    ...queryKeys.engineAvailability(),
+    { reports: true, forceRefresh: false, refreshToken: 0 },
+  ], {
+    'claude-code': {
+      engine: 'claude-code',
+      available: true,
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>,
+  );
+}
+
 describe('ModelDiagnosticsWorkbench', () => {
   let clickSpy: ReturnType<typeof vi.spyOn>;
   let createObjectURLSpy: ReturnType<typeof vi.spyOn>;
@@ -261,7 +319,7 @@ describe('ModelDiagnosticsWorkbench', () => {
   });
 
   test('renders diagnostic log title and virtual log list', async () => {
-    render(
+    renderWithQueryClient(
       <ModelDiagnosticsWorkbench
         managedModels={[
           {
@@ -284,7 +342,7 @@ describe('ModelDiagnosticsWorkbench', () => {
   test('downloads diagnostic logs', async () => {
     const user = userEvent.setup();
 
-    render(
+    renderWithQueryClient(
       <ModelDiagnosticsWorkbench
         managedModels={[
           {
@@ -358,7 +416,7 @@ describe('ModelDiagnosticsWorkbench', () => {
       headers: { 'Content-Type': 'application/x-ndjson' },
     }));
 
-    render(
+    renderWithQueryClient(
       <ModelDiagnosticsWorkbench
         managedModels={[
           {
@@ -415,7 +473,7 @@ describe('ModelDiagnosticsWorkbench', () => {
       }));
 
     const user = userEvent.setup();
-    render(
+    renderWithQueryClient(
       <ModelDiagnosticsWorkbench
         managedModels={[
           {
@@ -444,6 +502,7 @@ describe('ModelDiagnosticsWorkbench', () => {
 
   test('shows completed stages and scores during an active stream', async () => {
     localStorage.removeItem('ace-model-diagnostics:last-result');
+    let progressTimer: number | undefined;
     const activeStream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode(`${JSON.stringify({
@@ -465,11 +524,20 @@ describe('ModelDiagnosticsWorkbench', () => {
             startedAt: '2026-05-21T00:00:00.000Z',
           },
         })}\n`));
-        controller.enqueue(new TextEncoder().encode(`${JSON.stringify({
-          type: 'progress',
-          runId: 'diag-progress-1',
-          result: progressResult,
-        })}\n`));
+        // Keep the response open like the real diagnostics stream, but send
+        // progress from a later turn so the reader and React can commit each
+        // lifecycle update independently.
+        progressTimer = window.setTimeout(() => {
+          progressTimer = undefined;
+          controller.enqueue(new TextEncoder().encode(`${JSON.stringify({
+            type: 'progress',
+            runId: 'diag-progress-1',
+            result: progressResult,
+          })}\n`));
+        }, 0);
+      },
+      cancel() {
+        if (progressTimer !== undefined) window.clearTimeout(progressTimer);
       },
     });
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -481,7 +549,7 @@ describe('ModelDiagnosticsWorkbench', () => {
       }));
 
     const user = userEvent.setup();
-    render(
+    renderWithQueryClient(
       <ModelDiagnosticsWorkbench
         managedModels={[
           {
@@ -495,8 +563,14 @@ describe('ModelDiagnosticsWorkbench', () => {
     );
 
     await user.click(screen.getByRole('button', { name: '开始评测' }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('/api/models/diagnostics/stream', expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"action":"start"'),
+      }));
+    });
 
-    expect(await screen.findByRole('heading', { name: '引擎链路调试' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '运行调试' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '模型能力评分' })).toBeInTheDocument();
     expect(screen.getByText('观察到 session, text 事件')).toBeInTheDocument();
     expect(screen.getByText('JSON 输出')).toBeInTheDocument();
@@ -536,7 +610,7 @@ describe('ModelDiagnosticsWorkbench', () => {
     }));
 
     const user = userEvent.setup();
-    const { container } = render(
+    const { container } = renderWithQueryClient(
       <ModelDiagnosticsWorkbench
         managedModels={[
           {

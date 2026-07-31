@@ -114,7 +114,7 @@ describe('ModelSelect', () => {
           }),
         } as Response;
       }
-      if (url.includes('/api/agents')) {
+      if (url.includes('/api/runtime-agents')) {
         return {
           ok: true,
           status: 200,
@@ -180,7 +180,7 @@ describe('ModelSelect', () => {
           }),
         } as Response;
       }
-      if (url.includes('/api/agents')) {
+      if (url.includes('/api/runtime-agents')) {
         return {
           ok: true,
           status: 200,

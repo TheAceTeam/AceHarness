@@ -21,10 +21,6 @@ import { createBreakpointResumeCapability } from '@/lib/sidebar-plugins/capabili
 import { createPersistenceCapability } from '@/lib/sidebar-plugins/capabilities/persistence';
 import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
-}));
-
 afterEach(() => {
   applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: [] });
 });
@@ -33,11 +29,10 @@ describe('sidebar plugin system', () => {
   describe('registry', () => {
     test('getAllPlugins returns enabled built-in plugins', () => {
       const plugins = getAllPlugins();
-      expect(plugins.length).toBeGreaterThanOrEqual(3);
-      expect(plugins.find((p) => p.id === 'werewolf-lab')).toBeFalsy();
+      expect(plugins).toHaveLength(3);
       expect(plugins.find((p) => p.id === 'codespec')).toBeFalsy();
-      expect(plugins.find((p) => p.id === 'create-workflow')).toBeTruthy();
       expect(plugins.find((p) => p.id === 'create-agent')).toBeTruthy();
+      expect(plugins.find((p) => p.id === 'ai-workflow-creator')).toBeTruthy();
       expect(plugins.find((p) => p.id === 'supervisor')).toBeTruthy();
     });
 
@@ -62,7 +57,7 @@ describe('sidebar plugin system', () => {
 
     test('getCategories returns deduplicated sorted categories', () => {
       const categories = getCategories();
-      expect(categories.length).toBeGreaterThanOrEqual(3);
+      expect(categories.map((category) => category.id)).toEqual(['view', 'create', 'optimize']);
       // Check order
       for (let i = 1; i < categories.length; i++) {
         expect((categories[i].order ?? 100) >= (categories[i - 1].order ?? 100)).toBe(true);
@@ -74,28 +69,25 @@ describe('sidebar plugin system', () => {
 
     test('getActions returns all actions sorted by order', () => {
       const actions = getActions();
-      expect(actions.length).toBeGreaterThanOrEqual(8);
-      expect(actions.find((a) => a.id === 'werewolf-lab')).toBeFalsy();
-      expect(actions.find((a) => a.id === 'create-workflow')).toBeTruthy();
+      expect(actions.length).toBeGreaterThan(0);
       expect(actions.find((a) => a.id === 'create-agent')).toBeTruthy();
+      expect(actions.find((a) => a.id === 'ai-workflow-creator')?.prompt).toBe('__HOME_ACTION__:create_workflow');
     });
 
     test('getPinnedActions returns only pinned actions', () => {
       const pinned = getPinnedActions();
       expect(pinned.every((a) => a.pinned)).toBe(true);
-      expect(pinned.find((a) => a.id === 'create-workflow')).toBeTruthy();
       expect(pinned.find((a) => a.id === 'create-agent')).toBeTruthy();
     });
 
     test('getCollapsibleActions excludes pinned', () => {
       const collapsible = getCollapsibleActions();
       expect(collapsible.every((a) => !a.pinned)).toBe(true);
-      expect(collapsible.find((a) => a.id === 'werewolf-lab')).toBeFalsy();
     });
 
     test('getActionsGrouped groups by category', () => {
       const grouped = getActionsGrouped();
-      expect(grouped.length).toBeGreaterThanOrEqual(3);
+      expect(grouped.map((group) => group.category.id)).toEqual(['view', 'create', 'optimize']);
       for (const group of grouped) {
         expect(group.actions.length).toBeGreaterThan(0);
         expect(group.actions.every((a) => a.category === group.category.id)).toBe(true);
@@ -103,11 +95,6 @@ describe('sidebar plugin system', () => {
     });
 
     test('getIntent finds intents from plugins', () => {
-      const intent = getIntent('create-workflow');
-      expect(intent).toBeTruthy();
-      expect(intent!.targetTab).toBe('workflow');
-      expect(intent!.opensModal).toBe(true);
-
       const supervisorIntent = getIntent('supervisor-chat');
       expect(supervisorIntent).toBeTruthy();
       expect(supervisorIntent!.targetTab).toBe('commander');
@@ -153,17 +140,16 @@ describe('sidebar plugin system', () => {
     });
 
     test('breakpoint-resume shouldSkip works correctly', () => {
-      let bp: any = { handler: 'night', resumeFrom: 'witch-action' };
+      let bp: any = { handler: 'workflow', resumeFrom: 'step-3' };
       const cap = createBreakpointResumeCapability(
         () => bp,
         (data) => { bp = data; },
       );
-      const steps = ['wolf-meeting', 'guard-action', 'wolf-kill', 'witch-action', 'seer-check'];
-      expect(cap.shouldSkip('wolf-meeting', steps)).toBe(true);
-      expect(cap.shouldSkip('guard-action', steps)).toBe(true);
-      expect(cap.shouldSkip('wolf-kill', steps)).toBe(true);
-      expect(cap.shouldSkip('witch-action', steps)).toBe(false); // resume FROM this step
-      expect(cap.shouldSkip('seer-check', steps)).toBe(false);
+      const steps = ['step-1', 'step-2', 'step-3', 'step-4'];
+      expect(cap.shouldSkip('step-1', steps)).toBe(true);
+      expect(cap.shouldSkip('step-2', steps)).toBe(true);
+      expect(cap.shouldSkip('step-3', steps)).toBe(false); // resume FROM this step
+      expect(cap.shouldSkip('step-4', steps)).toBe(false);
     });
 
     test('breakpoint-resume set/get/clear', () => {
@@ -173,9 +159,9 @@ describe('sidebar plugin system', () => {
         (data) => { bp = data; },
       );
       expect(cap.get()).toBeNull();
-      cap.set({ handler: 'night', resumeFrom: 'seer-check', error: 'timeout' });
-      expect(cap.get()?.handler).toBe('night');
-      expect(cap.get()?.resumeFrom).toBe('seer-check');
+      cap.set({ handler: 'workflow', resumeFrom: 'step-3', error: 'timeout' });
+      expect(cap.get()?.handler).toBe('workflow');
+      expect(cap.get()?.resumeFrom).toBe('step-3');
       cap.clear();
       expect(cap.get()).toBeNull();
     });
@@ -196,25 +182,40 @@ describe('sidebar plugin system', () => {
   });
 
   describe('QuickActions integration', () => {
-    test('renders all plugin categories and actions', () => {
+    test('renders active plugin categories and actions', () => {
       const onAction = vi.fn();
       render(<QuickActions onAction={onAction} />);
 
       // Categories from built-in actions/plugins
-      expect(screen.getByText('创建')).toBeInTheDocument();
       expect(screen.getByText('查看')).toBeInTheDocument();
+      expect(screen.getByText('创建')).toBeInTheDocument();
+      expect(screen.getByText('优化')).toBeInTheDocument();
 
       // Actions
-      expect(screen.getByText('创建工作流')).toBeInTheDocument();
-      expect(screen.getByText('创建 Agent')).toBeInTheDocument();
-      expect(screen.queryByText('创建狼人杀')).toBeNull();
+      expect(screen.getByRole('button', { name: /工作流列表/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /AI 引导创建工作流/ })).toBeInTheDocument();
     });
 
-    test('werewolf is not exposed as a home quick action', async () => {
+    test('AI workflow creator guide opens the lightweight creation action', async () => {
+      const user = userEvent.setup();
       const onAction = vi.fn();
       render(<QuickActions onAction={onAction} />);
 
-      expect(screen.queryByRole('button', { name: /创建狼人杀/ })).toBeNull();
+      await user.click(screen.getByRole('button', { name: /AI 引导创建工作流/ }));
+      await user.click(screen.getByRole('button', { name: '打开轻量创建' }));
+
+      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:create_workflow');
+    });
+
+    test('Codespec workflow creation opens the lightweight creator action', async () => {
+      const user = userEvent.setup();
+      const onAction = vi.fn();
+      applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: ['codespec'] });
+      render(<QuickActions onAction={onAction} />);
+
+      await user.click(screen.getByRole('button', { name: /根据 Codespec 创建工作流/ }));
+
+      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:create_workflow_from_codespec');
     });
 
     test('QuickActionsBar shows pinned actions and expandable section', async () => {
@@ -223,15 +224,11 @@ describe('sidebar plugin system', () => {
       render(<QuickActionsBar onAction={onAction} />);
 
       // Pinned actions visible
-      expect(screen.getByRole('button', { name: /创建工作流/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /创建 Agent/ })).toBeInTheDocument();
-
-      // Werewolf is an agora extension, not a home quick action
-      expect(screen.queryByRole('button', { name: /创建狼人杀/ })).toBeNull();
 
       // Expand
       await user.click(screen.getByRole('button', { name: /快捷操作/ }));
-      expect(screen.queryByRole('button', { name: /创建狼人杀/ })).toBeNull();
+      expect(screen.getByRole('button', { name: /运行状态/ })).toBeInTheDocument();
     });
 
     test('codespec slash commands become quick actions when codespec plugin is enabled', async () => {
