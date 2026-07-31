@@ -352,7 +352,7 @@ export function AccountContent({
       {!embedded && !isDashboardShell ? (
         <PageHeader
           title="账户设置"
-          subtitle="管理个人资料、账户安全、个人目录和偏好入口。系统运行时配置请前往系统设置。"
+          subtitle="管理个人资料、账户安全、个人目录和常用偏好。"
           eyebrow="GOVERN / ACCOUNT"
           leading={<UserRound className="mt-1 h-5 w-5 text-muted-foreground" />}
           status={<StatusPill tone={statusTone}>{statusLabel}</StatusPill>}
@@ -392,13 +392,12 @@ export function AccountContent({
       <main className="mx-auto grid w-full max-w-5xl gap-6 px-6 py-6">
         <FormSection
           title="个人资料"
-          description="这些信息只描述当前登录用户，不承载系统运行时配置。"
+          description="更新头像、用户名和邮箱，让账户信息保持清晰准确。"
           actions={<StatusPill tone={user.role === 'admin' ? 'accent' : 'neutral'}>{user.role === 'admin' ? '管理员' : '普通用户'}</StatusPill>}
           className="rounded-xl border border-border bg-card px-5"
         >
           <FormField
             label="头像"
-            description="头像会用于个人菜单、协作和账户上下文。"
             control={
               <div className="flex flex-wrap items-center gap-3">
                 <Button
@@ -426,12 +425,12 @@ export function AccountContent({
           />
           <FormField
             label="用户名"
-            description="当前版本只读展示，账号身份修改不在本页提供。"
+            description="用于识别当前账户的登录名称。"
             control={<Input value={user.username} readOnly />}
           />
           <FormField
             label="邮箱"
-            description="邮箱变更保留独立确认弹层。"
+            description="用于接收账户通知与安全提醒。"
             control={
               <div className="flex flex-wrap items-center gap-2">
                 <Input value={user.email} readOnly className="min-w-[240px] flex-1" />
@@ -445,7 +444,7 @@ export function AccountContent({
 
         <FormSection
           title="账户安全"
-          description="密码修改是短阻塞任务，暂保留现有弹层以降低迁移风险。"
+          description="定期更新登录密码，保持账户安全。"
           className="rounded-xl border border-border bg-card px-5"
         >
           <DataCard>
@@ -471,7 +470,7 @@ export function AccountContent({
         >
           <FormField
             label="个人目录"
-            description="只管理当前用户默认目录，不配置全局 runtime root。"
+            description="用于 Notebook 与个人工作区。"
             control={
               <div data-tour-step-id="account-directory" className="grid gap-3">
                 {displayedPersonalDir ? (
@@ -538,7 +537,7 @@ export function AccountContent({
                   </div>
                   <div className="min-w-0">
                     <DataCardTitle>个人环境变量</DataCardTitle>
-                    <DataCardDescription>只保存当前用户的 Claude、Codex、OpenCode 或其他已支持 CLI 变量，不影响系统级设置。</DataCardDescription>
+                    <DataCardDescription>管理 Claude、Codex、OpenCode 和其他受支持 CLI 的启动配置。</DataCardDescription>
                   </div>
                 </div>
               </DataCardHeader>
@@ -552,8 +551,8 @@ export function AccountContent({
         </FormSection>
 
         <FormSection
-          title="治理边界"
-          description="系统运行时和渠道接入只在这里提供入口，不在账户页重复配置。"
+          title="相关设置"
+          description="从这里快速打开系统运行环境与渠道接入设置。"
           className="rounded-xl border border-border bg-card px-5"
         >
           <div className="grid gap-3 md:grid-cols-2">
@@ -561,7 +560,7 @@ export function AccountContent({
               <DataCardHeader>
                 <div className="min-w-0">
                   <DataCardTitle>System Settings</DataCardTitle>
-                  <DataCardDescription>运行时根目录、全局配置和系统策略在系统设置中维护。</DataCardDescription>
+                  <DataCardDescription>集中管理运行环境、全局配置和系统策略。</DataCardDescription>
                 </div>
                 <StatusPill tone="info">Cross-link</StatusPill>
               </DataCardHeader>
@@ -575,7 +574,7 @@ export function AccountContent({
               <DataCardHeader>
                 <div className="min-w-0">
                   <DataCardTitle>Channel Integrations</DataCardTitle>
-                  <DataCardDescription>微信接入、webhook 和渠道测试由 Channels 页面负责。</DataCardDescription>
+                  <DataCardDescription>管理微信接入、Webhook 和渠道测试。</DataCardDescription>
                 </div>
                 <StatusPill tone="info">Cross-link</StatusPill>
               </DataCardHeader>
@@ -625,7 +624,7 @@ export function AccountContent({
         open={emailOpen}
         mode="edit"
         title="修改邮箱"
-        subtitle="邮箱用于账户识别和通知，不影响系统 SMTP 配置。"
+        subtitle="更新账户邮箱并完成确认。"
         dirty={emailDrawerDirty}
         status={emailError ? { label: '修改失败', tone: 'danger' } : emailSuccess ? { label: '已修改', tone: 'success' } : undefined}
         onOpenChange={setEmailOpen}
@@ -660,7 +659,7 @@ export function AccountContent({
         open={dirOpen}
         mode="edit"
         title="修改个人目录"
-        subtitle="个人目录只属于当前用户；系统 runtime root 请在 System Settings 修改。"
+        subtitle="设置工作流与 Notebook 使用的个人目录。"
         dirty={directoryDrawerDirty}
         status={dirError ? { label: '目录错误', tone: 'danger' } : dirSuccess ? { label: '待保存', tone: 'warning' } : undefined}
         onOpenChange={setDirOpen}
@@ -681,7 +680,7 @@ export function AccountContent({
         variant="reset"
         title="丢弃未保存内容"
         objectName={discardTarget === 'password' ? '修改密码' : discardTarget === 'email' ? '修改邮箱' : discardTarget === 'avatar' ? '选择头像' : '修改个人目录'}
-        consequence="关闭后，这个表单中尚未确认的内容会被丢弃。账户页已暂存的更改不受影响。"
+        consequence="确认后返回上一状态，账户页已保存内容保持完整。"
         confirmLabel="丢弃"
         onConfirm={confirmDrawerDiscard}
         onCancel={() => setDiscardTarget(null)}

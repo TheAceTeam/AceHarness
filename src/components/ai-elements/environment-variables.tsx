@@ -17,6 +17,7 @@ export type EnvironmentVariableItem = {
   required?: boolean;
   description?: string;
   maskValue?: boolean;
+  disableKeyEdit?: boolean;
   disableValueEdit?: boolean;
   keyError?: string;
   valueHint?: string;
@@ -80,7 +81,7 @@ export function EnvironmentVariables({
         <div>
           <h3 className="text-base font-semibold">环境变量</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            这些变量会作为运行时回退值保存，并支持逐条启停。
+            按条管理 CLI 启动变量，配置可随时启用或暂停。
           </p>
         </div>
         {onAdd ? (
@@ -193,7 +194,7 @@ export function EnvironmentVariables({
                         "h-10 font-mono text-xs",
                         item.keyError ? "border-destructive focus-visible:ring-destructive" : ""
                       )}
-                      disabled={disabled}
+                      disabled={disabled || item.disableKeyEdit}
                     />
                     {item.keyError ? (
                       <div className="text-xs text-destructive">{item.keyError}</div>
