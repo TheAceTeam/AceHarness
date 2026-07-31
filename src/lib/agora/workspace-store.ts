@@ -72,14 +72,41 @@ async function isGitWorkspace(dir: string) {
     .catch(() => false);
 }
 
-/** 解析 dir 所属仓库的根目录；dir 是某个仓库的子目录时同样能识别出来。 */
+function isNotGitRepositoryError(error: unknown): boolean {
+  const anyError = error as { message?: string; stderr?: string } | null;
+  const text = `${anyError?.message || ''}\n${anyError?.stderr || ''}`;
+  return text.includes('not a git repository') || text.includes('不是一个 git 仓库');
+}
+
+/**
+ * 解析 dir 所属仓库的根目录；dir 是某个仓库的子目录时同样能识别出来。
+ *
+ * 只有"确实不在仓库里"才返回 null。safe.directory 之类的失败必须往上抛，
+ * 否则用户的仓库会被误判成普通目录，进而被重新 init 并写入基线标记文件。
+ */
 async function resolveEnclosingRepoRoot(dir: string): Promise<string | null> {
   try {
     const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
     return top ? path.resolve(top) : null;
-  } catch {
-    return null;
+  } catch (error) {
+    if (isNotGitRepositoryError(error)) return null;
+    throw error;
   }
+}
+
+/**
+ * 清理历史版本写进用户仓库的身份配置。
+ *
+ * 旧实现无条件执行 `git config user.name/user.email`，把用户仓库的本地身份改成了
+ * ACEHarness 的值。只有当两项都精确等于我们写过的哨兵值时才 unset——该取值不可能
+ * 来自用户自己的配置，因此不存在误伤。
+ */
+async function cleanupInjectedGitIdentity(dir: string) {
+  const name = await runGit(dir, ['config', '--local', '--get', 'user.name']).catch(() => '');
+  const email = await runGit(dir, ['config', '--local', '--get', 'user.email']).catch(() => '');
+  if (name !== 'ACEHarness Agora' || email !== 'agora@aceharness.local') return;
+  await runGit(dir, ['config', '--local', '--unset', 'user.name']).catch(() => {});
+  await runGit(dir, ['config', '--local', '--unset', 'user.email']).catch(() => {});
 }
 
 function isGitConfigLockError(error: unknown): boolean {
@@ -120,11 +147,15 @@ async function ensureGitRepositoryReady(dir: string) {
  */
 async function ensureGitBaseline(dir: string, options: { managed: boolean }) {
   if (!options.managed && (await resolveEnclosingRepoRoot(dir))) {
-    // 用户自己的仓库（或其子目录）：已有 git 历史可作基线，无需也不应改动任何东西。
+    // 用户自己的仓库（或其子目录）：不 init、不写配置、不产生提交。
+    // 仓库尚无任何提交时也不补基线——在用户的空仓库里制造第一个提交，
+    // 比让变更视图退化成"全部未跟踪"更具侵入性。
+    await cleanupInjectedGitIdentity(dir);
     return;
   }
 
   await ensureGitRepositoryReady(dir);
+  await cleanupInjectedGitIdentity(dir);
 
   const head = await runGit(dir, ['rev-parse', '--verify', 'HEAD']).catch(() => '');
   if (head) return;
@@ -161,8 +192,11 @@ async function ensureWorkspaceIgnoreRules(dir: string, options: { managed: boole
     return;
   }
 
-  const gitDir = await runGit(dir, ['rev-parse', '--absolute-git-dir']).catch(() => '');
-  if (!gitDir) return;
+  // 必须用 --git-common-dir：linked worktree 下 --absolute-git-dir 指向该 worktree
+  // 私有的 .git/worktrees/<name>，而 git 只读 common dir 里的 info/exclude。
+  const commonDir = await runGit(dir, ['rev-parse', '--git-common-dir']).catch(() => '');
+  if (!commonDir) return;
+  const gitDir = path.resolve(dir, commonDir);
 
   // exclude 里的 `/xxx` 锚定到仓库根，工作区是子目录时要带上相对前缀。
   // 用 git 自己的 --show-prefix 而不是 path.relative：macOS 上 /var 与 /private/var
@@ -326,19 +360,23 @@ export async function ensureAgoraWorkspace(input: {
     }
     await mkdir(dir, { recursive: true });
 
-    const purpose = input.purpose === 'chat' ? 'chat' : 'agora';
-    await writeFile(
-      path.join(dir, 'README.md'),
-      [
-        `# ${input.title?.trim() || (purpose === 'chat' ? '新对话工作区' : '新议题')}`,
-        '',
-        purpose === 'chat'
-          ? '这是对话会话的工作区。对话引擎会以这里作为默认上下文目录，变更视图会展示相对初始基线的文件变化。'
-          : '这是议场的临时工作区。议场嘉宾会在这里协作，变更 tab 会展示相对初始基线的文件变化。',
-        '',
-      ].join('\n'),
-      'utf-8',
-    ).catch(() => {});
+    // README 只写进 ACEHarness 自建的工作区。用户指定的路径即便当前不存在也归用户所有，
+    // 往里放说明文件既不合适，也会在其变更视图里凭空多出一条未跟踪文件。
+    if (managed) {
+      const purpose = input.purpose === 'chat' ? 'chat' : 'agora';
+      await writeFile(
+        path.join(dir, 'README.md'),
+        [
+          `# ${input.title?.trim() || (purpose === 'chat' ? '新对话工作区' : '新议题')}`,
+          '',
+          purpose === 'chat'
+            ? '这是对话会话的工作区。对话引擎会以这里作为默认上下文目录，变更视图会展示相对初始基线的文件变化。'
+            : '这是议场的临时工作区。议场嘉宾会在这里协作，变更 tab 会展示相对初始基线的文件变化。',
+          '',
+        ].join('\n'),
+        'utf-8',
+      ).catch(() => {});
+    }
     await ensureWorkspaceAgentConfig(dir, input).catch(() => {});
     await prepareWorkspaceGitState(dir, { managed });
     await ensureWorkspaceSkillsLink(dir).catch(() => {});
