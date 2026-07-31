@@ -4,6 +4,10 @@ import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-rout
 
 export async function POST(request: Request) {
   try {
+    // 该接口会在请求方指定的路径上落地目录、软链和 git 基线，必须鉴权。
+    const auth = await requireAuth(request);
+    if (auth instanceof Response) return auth;
+
     const body = await readJsonBody<Record<string, any>>(request, {});
     const sessionId = String(body?.sessionId || '').trim();
     if (!sessionId) {

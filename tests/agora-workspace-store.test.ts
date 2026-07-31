@@ -231,6 +231,177 @@ describe('agora workspace store', () => {
     });
   });
 
+  test('does not write git identity into the workspace config', async () => {
+    await withStore(async ({ store }) => {
+      const result = await store.ensureAgoraWorkspace({ sessionId: 'identity-baseline' });
+
+      await expect(git(result.workspacePath, ['config', '--local', 'user.name'])).rejects.toThrow();
+      await expect(git(result.workspacePath, ['config', '--local', 'user.email'])).rejects.toThrow();
+      expect(await readFile(path.join(result.workspacePath, '.git', 'config'), 'utf-8')).not.toContain('ACEHarness Agora');
+      // 基线提交仍然有稳定署名，但只来自单次调用的环境变量。
+      expect(await git(result.workspacePath, ['log', '-1', '--format=%an <%ae>'])).toBe('ACEHarness Agora <agora@aceharness.local>');
+    });
+  });
+
+  test('leaves an existing user repository completely untouched', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-user-repo-', async (userRepo) => {
+        await git(userRepo, ['init']);
+        await git(userRepo, ['config', 'user.name', '张三']);
+        await git(userRepo, ['config', 'user.email', 'zhangsan@example.com']);
+        await writeFile(path.join(userRepo, '.gitignore'), 'node_modules\n', 'utf-8');
+        await writeFile(path.join(userRepo, 'app.ts'), 'export const value = 1;\n', 'utf-8');
+        await git(userRepo, ['add', '-A']);
+        await git(userRepo, ['commit', '-m', 'chore: user baseline']);
+        const headBefore = await git(userRepo, ['rev-parse', 'HEAD']);
+
+        await store.ensureAgoraWorkspace({
+          sessionId: 'user-repo',
+          targetWorkspace: userRepo,
+        });
+
+        expect(await git(userRepo, ['config', '--local', 'user.name'])).toBe('张三');
+        expect(await git(userRepo, ['config', '--local', 'user.email'])).toBe('zhangsan@example.com');
+        expect(await git(userRepo, ['rev-parse', 'HEAD'])).toBe(headBefore);
+        // 用户受版本控制的 .gitignore 不能被改写，改走 .git/info/exclude。
+        expect(await readFile(path.join(userRepo, '.gitignore'), 'utf-8')).toBe('node_modules\n');
+        expect(await readFile(path.join(userRepo, '.git', 'info', 'exclude'), 'utf-8')).toContain('/skills');
+        expect(await readFile(path.join(userRepo, '.git', 'info', 'exclude'), 'utf-8')).toContain('/.agents');
+        expect(await git(userRepo, ['status', '--porcelain'])).toBe('');
+      });
+    });
+  });
+
+  test('does not create a nested repository inside an existing user repository', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-user-repo-sub-', async (userRepo) => {
+        await git(userRepo, ['init']);
+        await writeFile(path.join(userRepo, 'root.txt'), 'root\n', 'utf-8');
+        await git(userRepo, ['add', '-A']);
+        await git(userRepo, ['-c', 'user.name=U', '-c', 'user.email=u@example.com', 'commit', '-m', 'chore: root']);
+        const nested = path.join(userRepo, 'sub', 'workspace');
+        await mkdir(nested, { recursive: true });
+
+        await store.ensureAgoraWorkspace({ sessionId: 'nested', targetWorkspace: nested });
+
+        expect(existsSync(path.join(nested, '.git'))).toBe(false);
+        // exclude 规则必须锚定到工作区在仓库中的相对位置。
+        expect(await readFile(path.join(userRepo, '.git', 'info', 'exclude'), 'utf-8')).toContain('/sub/workspace/skills');
+      });
+    });
+  });
+
+  test('never stages pre-existing user content when initializing a plain directory', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-plain-dir-', async (plainDir) => {
+        await mkdir(path.join(plainDir, '.ssh'), { recursive: true });
+        await writeFile(path.join(plainDir, '.ssh', 'id_rsa'), 'PRIVATE KEY\n', 'utf-8');
+        await writeFile(path.join(plainDir, 'notes.md'), 'private notes\n', 'utf-8');
+
+        await store.ensureAgoraWorkspace({ sessionId: 'plain-dir', targetWorkspace: plainDir });
+
+        // 基线存在（变更视图可用），但提交里只有标记文件，用户既有内容一律未被纳入。
+        expect(await git(plainDir, ['rev-parse', '--verify', 'HEAD'])).toBeTruthy();
+        const tracked = await git(plainDir, ['ls-files']);
+        expect(tracked.split('\n').filter(Boolean)).toEqual(['.ace-agora-baseline']);
+      });
+    });
+  });
+
+  test('clears git identity previously injected into a user repository', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-polluted-repo-', async (userRepo) => {
+        await git(userRepo, ['init']);
+        await writeFile(path.join(userRepo, 'app.ts'), 'export const value = 1;\n', 'utf-8');
+        await git(userRepo, ['add', '-A']);
+        await git(userRepo, ['-c', 'user.name=U', '-c', 'user.email=u@example.com', 'commit', '--no-verify', '-m', 'chore: base']);
+        // 模拟旧版本留下的污染
+        await git(userRepo, ['config', 'user.name', 'ACEHarness Agora']);
+        await git(userRepo, ['config', 'user.email', 'agora@aceharness.local']);
+
+        await store.ensureAgoraWorkspace({ sessionId: 'polluted', targetWorkspace: userRepo });
+
+        await expect(git(userRepo, ['config', '--local', '--get', 'user.name'])).rejects.toThrow();
+        await expect(git(userRepo, ['config', '--local', '--get', 'user.email'])).rejects.toThrow();
+      });
+    });
+  });
+
+  test('keeps a user-chosen identity that merely resembles the injected one', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-similar-identity-', async (userRepo) => {
+        await git(userRepo, ['init']);
+        await git(userRepo, ['config', 'user.name', 'ACEHarness Agora']);
+        await git(userRepo, ['config', 'user.email', 'me@example.com']);
+        await writeFile(path.join(userRepo, 'app.ts'), 'export const value = 1;\n', 'utf-8');
+        await git(userRepo, ['add', '-A']);
+        await git(userRepo, ['commit', '--no-verify', '-m', 'chore: base']);
+
+        await store.ensureAgoraWorkspace({ sessionId: 'similar', targetWorkspace: userRepo });
+
+        // 只有 name 和 email 同时命中哨兵值才清理，避免误伤。
+        expect(await git(userRepo, ['config', '--local', '--get', 'user.name'])).toBe('ACEHarness Agora');
+        expect(await git(userRepo, ['config', '--local', '--get', 'user.email'])).toBe('me@example.com');
+      });
+    });
+  });
+
+  test('writes exclude rules to the common git dir inside a linked worktree', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-worktree-', async (base) => {
+        const mainRepo = path.join(base, 'main');
+        await mkdir(mainRepo, { recursive: true });
+        await git(mainRepo, ['init']);
+        await writeFile(path.join(mainRepo, 'app.ts'), 'export const value = 1;\n', 'utf-8');
+        await git(mainRepo, ['add', '-A']);
+        await git(mainRepo, ['-c', 'user.name=U', '-c', 'user.email=u@example.com', 'commit', '--no-verify', '-m', 'chore: base']);
+        const linked = path.join(base, 'linked');
+        await git(mainRepo, ['worktree', 'add', '-b', 'feature', linked]);
+
+        await store.ensureAgoraWorkspace({ sessionId: 'worktree', targetWorkspace: linked });
+
+        // exclude 必须落在 common dir，否则 git 根本不读，worktree 的 status 会被弄脏。
+        expect(await readFile(path.join(mainRepo, '.git', 'info', 'exclude'), 'utf-8')).toContain('/skills');
+        expect(await git(linked, ['status', '--porcelain'])).toBe('');
+      });
+    });
+  });
+
+  test('does not create files or commits when the target path does not exist yet', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-user-repo-new-', async (userRepo) => {
+        await git(userRepo, ['init']);
+        await writeFile(path.join(userRepo, 'app.ts'), 'export const value = 1;\n', 'utf-8');
+        await git(userRepo, ['add', '-A']);
+        await git(userRepo, ['-c', 'user.name=U', '-c', 'user.email=u@example.com', 'commit', '--no-verify', '-m', 'chore: base']);
+        const headBefore = await git(userRepo, ['rev-parse', 'HEAD']);
+        const nested = path.join(userRepo, 'sub', 'workspace');
+
+        await store.ensureAgoraWorkspace({ sessionId: 'new-path', targetWorkspace: nested });
+
+        // 不写 README，不产生提交，用户仓库的 status 保持干净。
+        expect(existsSync(path.join(nested, 'README.md'))).toBe(false);
+        expect(await git(userRepo, ['rev-parse', 'HEAD'])).toBe(headBefore);
+        expect(await git(userRepo, ['status', '--porcelain'])).toBe('');
+      });
+    });
+  });
+
+  test('does not create the first commit in an empty user repository', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-empty-repo-', async (userRepo) => {
+        await git(userRepo, ['init']);
+        await writeFile(path.join(userRepo, 'app.ts'), 'export const value = 1;\n', 'utf-8');
+
+        await store.ensureAgoraWorkspace({ sessionId: 'empty-repo', targetWorkspace: userRepo });
+
+        // 已知取舍：宁可让变更视图退化为"全部未跟踪"，也不在用户空仓库里制造第一个提交。
+        await expect(git(userRepo, ['rev-parse', '--verify', 'HEAD'])).rejects.toThrow();
+        expect(existsSync(path.join(userRepo, '.ace-agora-baseline'))).toBe(false);
+      });
+    });
+  });
+
   test('removes only the default agora workspace for a session', async () => {
     await withStore(async ({ aceHome, store }) => {
       const workspacePath = path.join(aceHome, 'data', 'agora-workspaces', 'delete-me');
