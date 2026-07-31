@@ -2,6 +2,8 @@
 
 本文档描述 ACEHarness 状态机工作流的“子工作流”能力设计。子工作流指：在一个状态机工作流的某个步骤中，嵌入并执行另一个状态机工作流。目标不是新增一套独立系统，而是让它完整融入现有工作流能力：用户仍然在状态机里添加步骤、启动工作流、查看运行页、处理人工确认、查看运行历史和 Git diff，只是步骤多了一种执行方式。
 
+> **当前契约（2026-07-28）：** 工作流仅支持状态机运行时，不保留阶段式工作流或其迁移/兼容路径。子工作流通过 `subworkflow` 步骤执行；不创建工作流 Agora 多 Agent 群聊。保留的 `/api/workflow/*` 是状态机运行 API，不是已移除的 slash 创建入口。
+
 核心原则：
 
 - 子工作流只支持 `workflow.mode: state-machine`。
@@ -129,7 +131,6 @@
   - agent step：`type?: 'agent'`，`agent/task` 必填。
   - subworkflow step：`type: 'subworkflow'`，`workflow` 或 `subworkflow.configFile` 必填，`agent/task` 不必填。
 - 旧配置不写 `type` 时保持正常运行。
-- phase-based workflow 禁止使用 subworkflow step。
 - 子工作流 config 必须存在。
 - 子工作流 config 必须是 state-machine。
 - 子工作流 step 不参与 agent 存在性校验。
@@ -1114,7 +1115,7 @@ cleanup：
 - 手动绑定 workspace 不自动删。
 - detached child workspace 不隐式删。
 
-## Stage 9：测试、迁移和兼容
+## Stage 9：测试和验证
 
 ### 9.1 单元测试
 
@@ -1122,7 +1123,6 @@ Schema：
 
 - 旧 agent step 兼容。
 - subworkflow step 合法。
-- phase-based 禁止 subworkflow。
 - child 必须 state-machine。
 - child config missing。
 - direct cycle。

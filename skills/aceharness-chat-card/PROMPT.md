@@ -11,7 +11,7 @@
 
 **以下场景不属于本 skill，不要使用 card 类型结果：**
 - `home_sidebar`（侧边栏驱动）→ 用 `<result>` 内裸 JSON 输出
-- workflow/spec 创建小点（如 `workflow_clarification_question`、`spec_requirement`、`workflow_state_steps`）→ 用 `<result>` 内裸 JSON 输出
+- workflow/spec 编辑结果（如 `spec_requirement`、`workflow_patch_item`）→ 用 `<result>` 内裸 JSON 输出
 - 普通文字回答 → 直接输出文字，不需要卡片
 
 **判断标准：** 只有当最终产物是"给用户看的可视化信息展示"时才用 `kind=card`。系统协议要求的机器可读结果（如表单、侧边栏指令）必须输出对应的 `kind` 裸 JSON。

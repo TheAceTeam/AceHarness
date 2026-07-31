@@ -1,0 +1,4 @@
+interface:
+  display_name: "ACEHarness Tasklist"
+  short_description: "Plan verifiable work in a selected tasklist directory"
+  default_prompt: "Use $aceharness-tasklist to create a dependency-aware task list for parallel child-agent execution in the caller-specified tasklist directory."
