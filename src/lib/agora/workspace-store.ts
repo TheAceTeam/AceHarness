@@ -33,13 +33,36 @@ export function isDefaultAgoraWorkspacePathForSession(sessionId: string, workspa
   return path.resolve(normalizedWorkspacePath) === path.resolve(getDefaultAgoraWorkspacePath(sessionId));
 }
 
-async function runGit(cwd: string, args: string[]) {
+const BASELINE_COMMIT_MESSAGE = 'Initial agora workspace baseline';
+
+/**
+ * 基线提交是 ACEHarness 自己的记账行为，必须跳过用户的 commit hook：
+ * 用户配了全局 core.hooksPath（如 commitlint）时，这条非 conventional 的消息会被拒绝，
+ * 失败又被调用处吞掉，最终表现为工作区没有基线、变更视图为空。
+ */
+const BASELINE_COMMIT_ARGS = ['commit', '--no-verify', '-m', BASELINE_COMMIT_MESSAGE];
+
+async function runGit(cwd: string, args: string[], env?: Record<string, string | undefined>) {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
+    env: env ? ({ ...process.env, ...env } as NodeJS.ProcessEnv) : undefined,
     maxBuffer: 16 * 1024 * 1024,
     windowsHide: true,
   });
   return stdout.trim();
+}
+
+/**
+ * 基线提交的身份只通过环境变量传给单次 git 调用，绝不写入仓库的 .git/config，
+ * 否则会覆盖（或遮蔽）用户自己的 user.name / user.email，污染其后续手工提交的署名。
+ */
+function baselineCommitEnv(): Record<string, string | undefined> {
+  return {
+    GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || 'ACEHarness Agora',
+    GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || 'agora@aceharness.local',
+    GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || 'ACEHarness Agora',
+    GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'agora@aceharness.local',
+  };
 }
 
 async function isGitWorkspace(dir: string) {
@@ -47,6 +70,16 @@ async function isGitWorkspace(dir: string) {
   return runGit(dir, ['rev-parse', '--is-inside-work-tree'])
     .then((value) => value.trim() === 'true')
     .catch(() => false);
+}
+
+/** 解析 dir 所属仓库的根目录；dir 是某个仓库的子目录时同样能识别出来。 */
+async function resolveEnclosingRepoRoot(dir: string): Promise<string | null> {
+  try {
+    const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+    return top ? path.resolve(top) : null;
+  } catch {
+    return null;
+  }
 }
 
 function isGitConfigLockError(error: unknown): boolean {
@@ -78,38 +111,90 @@ async function ensureGitRepositoryReady(dir: string) {
   }
 }
 
-async function ensureGitBaseline(dir: string) {
+/**
+ * 建立变更视图所需的 git 基线。
+ *
+ * managed=true 表示这是 ACEHarness 在自己的数据目录下创建的工作区，内容完全由我们掌控，
+ * 可以放心 `git add -A` 建基线；managed=false 表示目录由用户指定，必须保守处理：
+ * 已在任意 git 仓库内就完全不碰，非仓库也只提交基线标记文件，绝不把用户既有内容纳入提交。
+ */
+async function ensureGitBaseline(dir: string, options: { managed: boolean }) {
+  if (!options.managed && (await resolveEnclosingRepoRoot(dir))) {
+    // 用户自己的仓库（或其子目录）：已有 git 历史可作基线，无需也不应改动任何东西。
+    return;
+  }
+
   await ensureGitRepositoryReady(dir);
-  await runGit(dir, ['config', 'user.name', 'ACEHarness Agora']).catch(() => {});
-  await runGit(dir, ['config', 'user.email', 'agora@aceharness.local']).catch(() => {});
+
   const head = await runGit(dir, ['rev-parse', '--verify', 'HEAD']).catch(() => '');
-  if (!head) {
+  if (head) return;
+
+  const env = baselineCommitEnv();
+  if (options.managed) {
     await runGit(dir, ['add', '-A']).catch(() => {});
     const status = await runGit(dir, ['status', '--porcelain']).catch(() => '');
     if (status.trim()) {
-      await runGit(dir, ['commit', '-m', 'Initial agora workspace baseline']).catch(() => {});
-    } else {
-      await writeFile(path.join(dir, '.ace-agora-baseline'), 'baseline\n', 'utf-8');
-      await runGit(dir, ['add', '.ace-agora-baseline']).catch(() => {});
-      await runGit(dir, ['commit', '-m', 'Initial agora workspace baseline']).catch(() => {});
+      await runGit(dir, BASELINE_COMMIT_ARGS, env).catch(() => {});
+      return;
     }
   }
+
+  await writeFile(path.join(dir, '.ace-agora-baseline'), 'baseline\n', 'utf-8');
+  await runGit(dir, ['add', '--', '.ace-agora-baseline']).catch(() => {});
+  await runGit(dir, BASELINE_COMMIT_ARGS, env).catch(() => {});
 }
 
-async function ensureWorkspaceGitIgnore(dir: string) {
-  const gitignorePath = path.join(dir, '.gitignore');
-  const ignoredLines = ['/skills', `/${SHARED_AGENT_CONFIG_DIR}`];
+function toPosixPath(input: string): string {
+  return input.replace(/\\/g, '/');
+}
+
+/**
+ * 让 skills 软链和 .agents 配置目录不出现在 git status 里。
+ *
+ * 自建工作区写 .gitignore（它本身就是基线的一部分）；用户目录改写 .git/info/exclude，
+ * 避免修改用户受版本控制的 .gitignore 而在其工作区制造一处凭空的未提交改动。
+ */
+async function ensureWorkspaceIgnoreRules(dir: string, options: { managed: boolean }) {
+  const entries = ['skills', SHARED_AGENT_CONFIG_DIR];
+  if (options.managed) {
+    await appendMissingLines(path.join(dir, '.gitignore'), entries.map((entry) => `/${entry}`));
+    return;
+  }
+
+  const gitDir = await runGit(dir, ['rev-parse', '--absolute-git-dir']).catch(() => '');
+  if (!gitDir) return;
+
+  // exclude 里的 `/xxx` 锚定到仓库根，工作区是子目录时要带上相对前缀。
+  // 用 git 自己的 --show-prefix 而不是 path.relative：macOS 上 /var 与 /private/var
+  // 这类软链会让手工算出来的相对路径完全失真。
+  const showPrefix = await runGit(dir, ['rev-parse', '--show-prefix']).catch(() => '');
+  const prefix = `/${toPosixPath(showPrefix).replace(/^\/+/, '')}`;
+  await mkdir(path.join(gitDir, 'info'), { recursive: true }).catch(() => {});
+  await appendMissingLines(path.join(gitDir, 'info', 'exclude'), entries.map((entry) => `${prefix}${entry}`));
+}
+
+/**
+ * 自建工作区要先写 .gitignore，好让它成为基线提交的一部分；
+ * 用户目录则必须等仓库归属确定之后，才能往 .git/info/exclude 写规则。
+ */
+async function prepareWorkspaceGitState(dir: string, options: { managed: boolean }) {
+  if (options.managed) await ensureWorkspaceIgnoreRules(dir, options).catch(() => {});
+  await ensureGitBaseline(dir, options);
+  if (!options.managed) await ensureWorkspaceIgnoreRules(dir, options).catch(() => {});
+}
+
+async function appendMissingLines(filePath: string, wanted: string[]) {
   let content = '';
   try {
-    content = await readFile(gitignorePath, 'utf-8');
+    content = await readFile(filePath, 'utf-8');
   } catch {
-    // Missing .gitignore is fine; create one below.
+    // Missing file is fine; create one below.
   }
   const lines = content.split(/\r?\n/).map((item) => item.trim());
-  const missing = ignoredLines.filter((line) => !lines.includes(line));
+  const missing = wanted.filter((line) => !lines.includes(line));
   if (!missing.length) return;
   const next = `${content.replace(/\s*$/, '')}${content.trim() ? '\n' : ''}${missing.join('\n')}\n`;
-  await writeFile(gitignorePath, next, 'utf-8');
+  await writeFile(filePath, next, 'utf-8');
 }
 
 async function ensureWorkspaceSkillsLink(dir: string) {
@@ -227,9 +312,10 @@ export async function ensureAgoraWorkspace(input: {
   const initialization = (async () => {
     const workspaceRoot = getAgoraWorkspacesDir();
     const dir = targetWorkspace ? path.resolve(targetWorkspace) : path.join(workspaceRoot, sessionId);
+    // 只有 ACEHarness 自己数据目录下的工作区才由我们完全掌控；用户指定的路径一律保守处理。
+    const managed = !targetWorkspace;
     if (existsSync(dir)) {
-      await ensureWorkspaceGitIgnore(dir).catch(() => {});
-      await ensureGitBaseline(dir);
+      await prepareWorkspaceGitState(dir, { managed });
       await ensureWorkspaceSkillsLink(dir).catch(() => {});
       await ensureWorkspaceAgentConfig(dir, input).catch(() => {});
       return { workspacePath: dir, created: false, sourceWorkspace: input.sourceWorkspace };
@@ -253,9 +339,8 @@ export async function ensureAgoraWorkspace(input: {
       ].join('\n'),
       'utf-8',
     ).catch(() => {});
-    await ensureWorkspaceGitIgnore(dir).catch(() => {});
     await ensureWorkspaceAgentConfig(dir, input).catch(() => {});
-    await ensureGitBaseline(dir);
+    await prepareWorkspaceGitState(dir, { managed });
     await ensureWorkspaceSkillsLink(dir).catch(() => {});
     return { workspacePath: dir, created: true, sourceWorkspace: input.sourceWorkspace };
   })().finally(() => {
