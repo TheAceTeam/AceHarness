@@ -125,14 +125,14 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 async function resolveWorkflowFrontendSessionId(runId: string, candidate?: unknown): Promise<string | null> {
-  const sessions = await listChatSessions().catch(() => []);
   const persisted = nonEmptyString(candidate);
-  if (persisted && sessions.some((session) => session.id === persisted)) {
-    return persisted;
-  }
+  // A run snapshot already owns this binding. The former lookup returned the
+  // same ID even when its chat record was absent, so avoid opening SQLite here.
+  if (persisted) return persisted;
 
+  const sessions = await listChatSessions().catch(() => []);
   const matched = sessions.find((session) => session.workflowBinding?.runId === runId);
-  return matched?.id || persisted || null;
+  return matched?.id || null;
 }
 
 async function withResolvedWorkflowFrontendSessionId(runId: string, detail: any) {

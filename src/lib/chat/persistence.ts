@@ -204,6 +204,19 @@ function getChatDb(): any {
   return db;
 }
 
+/** Close the process-local SQLite handle when an isolated test workspace is torn down. */
+export function closeChatSessionDatabaseForTests(): void {
+  const db = globalForChatSessionEvents.__chatSessionDb;
+  if (!db) return;
+  try {
+    db.close();
+  } catch {
+    // The handle may already have been closed by the test runner.
+  } finally {
+    globalForChatSessionEvents.__chatSessionDb = undefined;
+  }
+}
+
 function rowToSession(row: any): PersistedChatSession | null {
   const parsed = parseJson<PersistedChatSession>(row?.session_json);
   return parsed ? normalizeSessionWorkbenchConversationMode(parsed) : null;

@@ -82,24 +82,22 @@ export function listWorkbenchSessions<T extends ChatSessionSummaryLike>(
   sessions: T[]
 ): T[] {
   return sessions
-    .filter((session) => session.workflowBinding || session.creationSession)
+    .filter((session) => session.workflowBinding)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function getWorkbenchSessionKind(
-  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession'>
-): 'run' | 'creation' | 'plain' {
+  session: Pick<ChatSessionSummaryLike, 'workflowBinding'>
+): 'run' | 'plain' {
   if (session.workflowBinding) return 'run';
-  if (session.creationSession) return 'creation';
   return 'plain';
 }
 
 export function isWorkflowDirectorySession(
-  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession' | 'sessionWorkbenchState'>
+  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'sessionWorkbenchState'>
 ): boolean {
   return Boolean(
     session.workflowBinding
-    || session.creationSession
     || isWorkflowSidebarHint(session.sessionWorkbenchState?.homeSidebar)
   );
 }

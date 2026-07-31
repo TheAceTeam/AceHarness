@@ -10,7 +10,6 @@ import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { RobotLogo } from '@/components/brand/RobotLogo';
-import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
 import { Message, MessageContent, MessageActions, MessageAction } from '@/components/ai-elements/message';
@@ -39,16 +38,6 @@ import type { BundledLanguage } from 'shiki';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
-const WEREWOLF_CHAT_COLORS = [
-  { avatar: 'border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-300', name: 'text-rose-700 dark:text-rose-300', bubble: 'border-rose-500/30 bg-rose-50 text-rose-950 dark:bg-rose-950/75 dark:text-rose-100' },
-  { avatar: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', name: 'text-sky-700 dark:text-sky-300', bubble: 'border-sky-500/30 bg-sky-50 text-sky-950 dark:bg-sky-950/75 dark:text-sky-100' },
-  { avatar: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', name: 'text-emerald-700 dark:text-emerald-300', bubble: 'border-emerald-500/30 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/75 dark:text-emerald-100' },
-  { avatar: 'border-violet-500/30 bg-violet-500/15 text-violet-700 dark:text-violet-300', name: 'text-violet-700 dark:text-violet-300', bubble: 'border-violet-500/30 bg-violet-50 text-violet-950 dark:bg-violet-950/75 dark:text-violet-100' },
-  { avatar: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300', name: 'text-amber-700 dark:text-amber-300', bubble: 'border-amber-500/30 bg-amber-50 text-amber-950 dark:bg-amber-950/75 dark:text-amber-100' },
-  { avatar: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-700 dark:text-cyan-300', name: 'text-cyan-700 dark:text-cyan-300', bubble: 'border-cyan-500/30 bg-cyan-50 text-cyan-950 dark:bg-cyan-950/75 dark:text-cyan-100' },
-  { avatar: 'border-lime-500/30 bg-lime-500/15 text-lime-700 dark:text-lime-300', name: 'text-lime-700 dark:text-lime-300', bubble: 'border-lime-500/30 bg-lime-50 text-lime-950 dark:bg-lime-950/75 dark:text-lime-100' },
-  { avatar: 'border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300', name: 'text-fuchsia-700 dark:text-fuchsia-300', bubble: 'border-fuchsia-500/30 bg-fuchsia-50 text-fuchsia-950 dark:bg-fuchsia-950/75 dark:text-fuchsia-100' },
-] as const;
 const CHUNK_BOUNDARY_PATTERN = /<!--\s*chunk-boundary\s*-->/gi;
 const VISIBLE_SESSION_TAG_SEPARATOR = ' · ';
 const VISIBLE_SESSION_TAGS = {
@@ -561,8 +550,9 @@ function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
       const target = entries[targetIndex];
       clearPendingToolIdentity(targetIndex, target);
       target.result = mergeProcessText(target.result, resultBody);
-      target.toolName = toolName;
-      target.title = toolName === 'skill' ? getAceToolTitle('skill') : target.title;
+      const shouldKeepRequestToolName = isGenericToolName(toolName) && !isGenericToolName(target.toolName);
+      target.toolName = shouldKeepRequestToolName ? target.toolName : toolName;
+      target.title = target.toolName === 'skill' ? getAceToolTitle('skill') : target.title;
       target.toolId = target.toolId || toolId;
       target.toolFingerprint = target.toolFingerprint || toolFingerprint;
       target.resultMeta = meta;
@@ -589,6 +579,11 @@ function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
   }
 
   return entries;
+}
+
+function isGenericToolName(name: string): boolean {
+  const normalized = String(name || '').trim().toLowerCase();
+  return !normalized || normalized === 'tool' || normalized === 'tool call' || normalized === 'unknown';
 }
 
 function isProcessEntryRunning(state: ProcessEntryState, isStreaming: boolean): boolean {
@@ -720,6 +715,24 @@ function describeLineChange(oldText: string, newText: string): string {
   return stats;
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function describeFileChange(change: Record<string, unknown>): string {
+  const changedLines = finiteNumber(change.changedLines);
+  const addedLines = finiteNumber(change.addedLines);
+  const removedLines = finiteNumber(change.removedLines);
+  if (changedLines !== undefined || addedLines !== undefined || removedLines !== undefined) {
+    return [
+      changedLines ? `${changedLines} 行修改` : '',
+      addedLines ? `+${addedLines} 行` : '',
+      removedLines ? `-${removedLines} 行` : '',
+    ].filter(Boolean).join(', ');
+  }
+  return describeLineChange(asString(change.oldString), asString(change.newString));
+}
+
 function renderJsonCode(value: unknown, language?: string) {
   if (value == null) return null;
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -849,9 +862,20 @@ function renderPathPreview(pathText: string) {
 function buildProcessTimelineState(content: string, isStreaming: boolean): ProcessTimelineState {
   const source = stripResultBlocks(content);
   const { blocks } = extractAceProcessBlocks(source);
-  const toolEntries = buildToolEntries(blocks).map((entry) => (!isStreaming && entry.state !== 'output-available'
-    ? { ...entry, state: 'output-available' as const }
-    : entry));
+  const hasFollowUpAssistantText = (entry: ToolProcessEntry) => {
+    let cursor = entry.anchorEnd;
+    for (const block of blocks) {
+      if (block.start < cursor) continue;
+      if (sanitizeTimelineText(source.slice(cursor, block.start), isStreaming)) return true;
+      cursor = block.end;
+    }
+    return Boolean(sanitizeTimelineText(source.slice(cursor), isStreaming));
+  };
+  const toolEntries = buildToolEntries(blocks).map((entry) => (
+    !isStreaming || entry.state === 'output-available' || !hasFollowUpAssistantText(entry)
+      ? entry
+      : { ...entry, state: 'output-available' as const }
+  ));
   const subtaskEntries = buildSubtaskEntries(blocks).map((entry) => (!isStreaming && entry.state !== 'output-available'
     ? { ...entry, state: 'output-available' as const }
     : entry));
@@ -1302,7 +1326,21 @@ function renderStructuredToolRequest(entry: ToolProcessEntry) {
     case 'write': {
       const filePath = asString(meta.filePath);
       const content = asString(meta.content);
+      const changes = asArray((meta as any).changes);
       const language = inferCodeLanguage(filePath);
+      if (changes.length > 0) {
+        return (
+          <div className="space-y-2">
+            {changes.map((change, index) => (
+              <WriteFileMetaLine
+                key={`request-change-${index}`}
+                filePath={asString(change?.filePath)}
+                stats={describeFileChange(change || {})}
+              />
+            ))}
+          </div>
+        );
+      }
       return (
         <div className="space-y-2">
           <WriteFileMetaLine filePath={filePath} stats={content ? `${countLines(content)} 行` : ''} />
@@ -1316,8 +1354,22 @@ function renderStructuredToolRequest(entry: ToolProcessEntry) {
       const filePath = asString(meta.filePath);
       const oldText = asString(meta.oldString);
       const newText = asString(meta.newString);
+      const changes = asArray((meta as any).changes);
+      if (changes.length > 0) {
+        return (
+          <div className="space-y-2">
+            {changes.map((change, index) => (
+              <WriteFileMetaLine
+                key={`request-change-${index}`}
+                filePath={asString(change?.filePath)}
+                stats={describeFileChange(change || {})}
+              />
+            ))}
+          </div>
+        );
+      }
       const diff = buildUnifiedDiff(oldText, newText);
-      const stats = describeLineChange(oldText, newText);
+      const stats = oldText || newText ? describeLineChange(oldText, newText) : '';
       return (
         <div className="space-y-2">
           {(filePath || stats) ? <div className="text-xs text-muted-foreground">{[filePath, stats].filter(Boolean).join(' · ')}</div> : null}
@@ -1417,7 +1469,7 @@ function renderStructuredToolResult(entry: ToolProcessEntry) {
               const filePath = String(change?.filePath || '');
               const oldText = String(change?.oldString || '');
               const newText = String(change?.newString || '');
-              const stats = oldText || newText ? describeLineChange(oldText, newText) : '';
+              const stats = describeFileChange(change || {});
               const diff = String(change?.diff || '') || buildUnifiedDiff(oldText, newText);
               const content = String(change?.content || '');
               const language = diff ? 'diff' : inferCodeLanguage(filePath);
@@ -1828,11 +1880,6 @@ interface ChatMessageProps {
   onContinue?: (messageId: string) => void; // For timeout recovery
   onSaveAsNotebook?: (messageId: string) => void;
   onQuoteMessage?: (messageId: string) => void;
-  werewolfView?: {
-    mode: 'god' | 'night';
-    viewer?: string;
-    viewerRole?: 'werewolf' | 'seer' | 'witch' | 'hunter' | 'idiot' | 'guard' | 'villager';
-  };
   currentUser?: {
     username?: string;
     avatar?: string;
@@ -1874,41 +1921,12 @@ function UserAvatar({ user }: { user?: ChatMessageProps['currentUser'] }) {
   );
 }
 
-function getWerewolfCard(message: ChatMessageProps['message']) {
-  return (message.cards || []).find((card) => card?.type === 'werewolf_speech') || null;
-}
-
-function getWerewolfExtraCards(message: ChatMessageProps['message']) {
-  return (message.cards || []).filter((card) => card?.type !== 'werewolf_speech');
-}
-
 function getCollaborationCard(message: ChatMessageProps['message']) {
   return (message.cards || []).find((card) => card?.type === 'collaboration_speech') || null;
 }
 
 function getCollaborationExtraCards(message: ChatMessageProps['message']) {
   return (message.cards || []).filter((card) => card?.type !== 'collaboration_speech');
-}
-
-function getWerewolfInitial(name: string): string {
-  return name.replace(/\s+/g, '').slice(0, 1) || '?';
-}
-
-function canSeeWerewolfCard(card: any, view?: ChatMessageProps['werewolfView']): boolean {
-  if (!card?.visibility || card.visibility === 'public') return true;
-  if (view?.mode === 'god') return true;
-  if (card.visibility === 'god') return false;
-  if (!view?.viewer) return false;
-  if (card.visibility === 'private') return Array.isArray(card.audience) && card.audience.includes(view.viewer);
-  if (card.visibility === 'werewolves') {
-    if (view.viewerRole === 'werewolf') return true;
-    return Array.isArray(card.audience) && card.audience.includes(view.viewer);
-  }
-  return true;
-}
-
-function formatHiddenWerewolfContent(card: any): string {
-  return '当前视角不可见。切换到上帝视角或绑定相关玩家后可查看。';
 }
 
 function stripResultBlocks(content: string): string {
@@ -1962,162 +1980,6 @@ function MetadataPill({ children }: { children: React.ReactNode }) {
   );
 }
 
-function WolfPaw({ className = '', delayMs = 0 }: { className?: string; delayMs?: number }) {
-  return (
-    <svg
-      viewBox="0 0 1106 1024"
-      aria-hidden="true"
-      className={className}
-      style={{ animation: `werewolfPawPulse 1.2s ease-in-out ${delayMs}ms infinite` }}
-      fill="currentColor"
-    >
-      <path d="M492.264146 893.926726H402.634679c-17.279934 0-31.289314 7.814687-31.289314 17.442952 0 9.633359 14.00938 17.442952 31.289314 17.442952h4.172248c17.279934 0 31.289314 7.809593 31.289314 17.442952s-14.00938 17.442952-31.289314 17.442952H214.129554c-17.279934 0-31.284219 7.804498-31.284219 17.442951 0 9.633359 14.004286 17.442952 31.284219 17.442952H918.954204c17.279934 0 31.289314-7.809593 31.289313-17.442952 0-9.638454-14.00938-17.442952-31.289313-17.442951h-53.475078c-17.279934 0-31.289314-7.809593-31.289313-17.442952s14.00938-17.442952 31.289313-17.442952h210.023533c17.279934 0 31.289314-7.809593 31.289313-17.442952 0-9.628265-14.00938-17.442952-31.289313-17.442952h-15.680317H492.264146zM31.116107 1019.440584c-12.628819 0-22.863308-7.498839-22.863309-16.74503 0-9.236002 10.234489-16.729747 22.863309-16.729747h70.072372c12.628819 0 22.868403 7.493745 22.868403 16.729747 0 9.246191-10.239583 16.74503-22.868403 16.74503H31.116107z" />
-      <path d="M487.404164 354.820308c-208.469765 0-364.294826 214.959928-364.294826 407.138058 0 61.315236 15.568242 103.460546 47.46378 128.906674 33.729493 26.954047 80.902897 30.382525 118.193319 30.382525 26.872538 0 56.124124-2.047917 87.138345-4.223192 71.483499-4.982245 151.596776-4.982245 223.03952 0 31.009126 2.175275 60.311655 4.223191 87.097589 4.223192 81.947232 0 165.652005-18.920305 165.652005-159.289199 0-192.178129-155.779213-407.138058-364.289732-407.138058zM189.029839 473.762492c24.732924-10.122414 43.612474-30.214412 53.113381-56.496009 12.552405-34.697414 8.120346-76.588008-12.180519-114.92786-35.283261-66.628612-113.042962-103.786582-169.630669-80.520823-24.778773 10.127508-43.612474 30.260261-53.159229 56.582613C-5.379602 313.051978-0.942449 354.947666 19.358416 393.323179c27.83027 52.568289 80.61252 87.892304 131.290816 87.892303 13.479571 0 26.414049-2.5115 38.380607-7.45299zM389.802087 347.999013a82.884587 82.884587 0 0 0 16.322201-1.630182C469.951024 333.312089 508.41314 247.768267 493.761876 151.633353 479.15646 55.661458 415.370479-11.425643 351.380725 1.626005c-63.872585 13.021082-102.288852 98.529244-87.642682 194.704912 13.392967 87.887209 66.37899 151.668096 126.064044 151.668096zM967.671186 278.400413c-9.500907-26.276503-28.416117-46.455104-53.154135-56.582613-56.709971-23.352363-134.347408 13.892211-169.630669 80.520823-20.300865 38.380607-24.732924 80.276295-12.180519 114.92786 9.495813 26.281597 28.380457 46.332841 53.113381 56.496009 11.966558 4.900736 24.901036 7.412236 38.416267 7.412236h0.045849c50.642636 0 103.333188-35.318921 131.168553-87.851549 20.295771-38.329664 24.773678-80.230446 12.221273-114.922766zM611.624064 346.368831a82.782701 82.782701 0 0 0 16.281447 1.630182h0.040755c59.59845 0 112.625227-63.780887 126.064043-151.668096 14.64617-96.175668-23.856701-181.68383-87.642682-194.704912-64.076357-13.051648-127.81649 54.035453-142.386245 150.007348-14.727679 96.134914 23.775192 181.678736 87.642682 194.735478z" />
-    </svg>
-  );
-}
-
-function WerewolfSpeakingIndicator({ compact = false }: { compact?: boolean }) {
-  return (
-    <>
-      <style>{`
-        @keyframes werewolfPawPulse {
-          0%, 80%, 100% { opacity: 0.28; transform: translateY(0) scale(0.92); }
-          40% { opacity: 1; transform: translateY(-1px) scale(1); }
-        }
-      `}</style>
-      <div className={`inline-flex items-center gap-2 ${compact ? 'text-[11px]' : 'text-sm'} opacity-90`}>
-        <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
-          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={0} />
-          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={140} />
-          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={280} />
-        </span>
-        <span>选手正在发言中</span>
-      </div>
-    </>
-  );
-}
-
-function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card: any; message: ChatMessageProps['message']; view?: ChatMessageProps['werewolfView']; isStreaming?: boolean }) {
-  const sentAt = formatMessageTime(message.timestamp);
-  const color = WEREWOLF_CHAT_COLORS[Math.max(0, Number(card.colorIndex || 0)) % WEREWOLF_CHAT_COLORS.length];
-  const isSupervisor = card.speakerType === 'supervisor';
-  const isSystem = card.speakerType === 'system';
-  const visible = canSeeWerewolfCard(card, view);
-  const spriteStyle = visible && !isSupervisor && !isSystem ? getWerewolfRoleSpriteStyle(card.role) : null;
-  const avatarClass = isSupervisor
-    ? 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300'
-    : isSystem
-      ? 'border-muted bg-muted/70 text-muted-foreground'
-      : visible
-        ? color.avatar
-        : 'border-muted bg-muted/70 text-muted-foreground';
-  const bubbleClass = isSupervisor
-    ? 'border-amber-500/30 bg-amber-50 text-amber-950 dark:bg-amber-950/75 dark:text-amber-100'
-    : isSystem
-      ? 'border-border bg-background text-foreground dark:bg-muted/85 dark:text-foreground'
-      : visible
-        ? color.bubble
-        : 'border-border bg-background text-foreground dark:bg-muted/85 dark:text-foreground';
-  const nameClass = isSupervisor
-    ? 'text-amber-700 dark:text-amber-300'
-    : isSystem
-      ? 'text-muted-foreground'
-      : visible
-        ? color.name
-        : 'text-muted-foreground';
-  const displayName = visible ? (card.speakerName || 'Agent') : '隐藏行动';
-  const displayActionLabel = visible ? card.actionLabel : '黑夜记录';
-  const isPending = isStreaming || message.content?.includes('正在推进') || message.content?.includes('处理中');
-  const visibleContent = visible ? (message.rawContent || message.content || '') : formatHiddenWerewolfContent(card);
-  const hasVisibleContent = Boolean(visibleContent.trim());
-  const roleBadgeText = visible
-    ? (card.roleLabel || (isSupervisor ? '法官' : isSystem ? '系统' : '玩家'))
-    : '夜间行动';
-  const visibilityLabel = visible && card.visibility && card.visibility !== 'public'
-    ? (card.visibility === 'werewolves' ? '狼队可见' : card.visibility === 'private' ? '私聊' : '上帝')
-    : null;
-  const bubbleShellClass = isSupervisor
-    ? 'border-amber-400/35 bg-[linear-gradient(145deg,rgba(66,42,17,0.96),rgba(33,24,16,0.96))] text-amber-50'
-    : isSystem
-      ? 'border-slate-400/20 bg-[linear-gradient(145deg,rgba(32,38,54,0.95),rgba(20,24,37,0.95))] text-slate-100'
-      : visible
-        ? bubbleClass
-        : 'border-border bg-[linear-gradient(145deg,rgba(40,44,56,0.95),rgba(25,27,35,0.95))] text-foreground';
-  const roleBadgeClass = isSupervisor
-    ? 'border-amber-400/30 bg-amber-400/12 text-amber-100'
-    : isSystem
-      ? 'border-slate-300/15 bg-slate-300/10 text-slate-100'
-      : visible
-        ? 'border-amber-300/20 bg-black/20 text-amber-50'
-        : 'border-slate-300/15 bg-slate-300/10 text-slate-100';
-  const avatarShellClass = spriteStyle
-    ? 'border-amber-300/45'
-    : avatarClass;
-  return (
-    <div className="group flex items-start gap-3">
-      {spriteStyle ? (
-        <div
-          className={`mt-1 h-14 w-10 shrink-0 rounded-[20px] border bg-cover ${avatarShellClass} ${isPending ? 'animate-pulse' : ''}`}
-          style={spriteStyle}
-          title={visible ? (card.roleLabel || card.speakerName) : undefined}
-        />
-      ) : (
-        <div className={`mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarShellClass} ${isPending ? 'animate-pulse' : ''}`}>
-          {visible ? (isSystem ? '系' : getWerewolfInitial(card.speakerName || 'A')) : '隐'}
-        </div>
-      )}
-      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
-        <div className={`relative overflow-hidden rounded-xl rounded-tl-md border px-4 py-3 text-sm ${bubbleShellClass}`}>
-          <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
-          <span className="pointer-events-none absolute -left-1 top-8 h-4 w-4 rotate-45 border-b border-l border-current/10 bg-inherit" />
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className={`font-semibold tracking-[0.02em] ${nameClass}`}>{displayName}</span>
-            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${roleBadgeClass}`}>
-              <span className="text-[11px]">{isSupervisor ? '✦' : isSystem ? '•' : visible ? '☽' : '◌'}</span>
-              <span>{roleBadgeText}</span>
-            </span>
-            {displayActionLabel ? (
-              <span className="rounded-full border border-white/10 bg-background/25 px-2 py-0.5 text-[10px] text-current/80">
-                {displayActionLabel}
-              </span>
-            ) : null}
-            {isPending ? (
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-300/15 bg-amber-300/10 px-2 py-0.5 text-[10px] text-amber-100">
-                <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-                推进中
-              </span>
-            ) : null}
-            {visibilityLabel ? (
-              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] text-current/80">
-                {visibilityLabel}
-              </span>
-            ) : null}
-          </div>
-          {isStreaming && !hasVisibleContent ? (
-            <div className="flex min-h-[56px] items-center">
-              <WerewolfSpeakingIndicator />
-            </div>
-          ) : (
-            <div className="prose-sm prose-neutral max-w-none leading-6 text-current/95 dark:prose-invert [&_p]:my-1">
-              <WrapperProcessBlocks content={visibleContent} isStreaming={isStreaming} />
-              {isStreaming ? (
-                <div className="mt-3 inline-flex rounded-full border border-current/15 bg-background/30 px-2 py-1 opacity-85">
-                  <WerewolfSpeakingIndicator compact />
-                </div>
-              ) : null}
-            </div>
-          )}
-        </div>
-        {sentAt ? (
-          <div className="px-1 text-[11px] text-muted-foreground opacity-70">
-            {sentAt}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
 
 function CollaborationChatBubble({ card, message, isStreaming = false }: { card: any; message: ChatMessageProps['message']; isStreaming?: boolean }) {
   const sentAt = formatMessageTime(message.timestamp);
@@ -2183,14 +2045,13 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
   );
 }
 
-export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onReloadActionResult, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, werewolfView, currentUser }: ChatMessageProps) {
+export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onReloadActionResult, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, currentUser }: ChatMessageProps) {
   const { toast } = useToast();
   const rawMessageContent = message.rawContent || message.content || '';
   const processSource = stripResultBlocks(rawMessageContent);
   const streamingResult = isStreaming ? getStreamingResultDisplay(rawMessageContent) : null;
   const [modelLabel, setModelLabel] = useState(message.model || '');
   const visibleSessionTag = message.role === 'user' ? parseVisibleSessionTag(message.content || '') : null;
-  const werewolfCard = getWerewolfCard(message);
   const collaborationCard = getCollaborationCard(message);
   const sourceLabel = message.source?.label?.trim() || (message.source?.type === 'wechat' ? '微信' : '');
   const isWorkflowThinkingMessage = Boolean(message.workflowThinking);
@@ -2364,48 +2225,6 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
 
   if (message.role === 'error') {
     const isTimeout = message.content.includes('超时') || message.content.includes('timeout');
-    if (werewolfCard) {
-      const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
-      return (
-        <div className="group">
-          <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} isStreaming={isStreaming} />
-          {!isStreaming ? (
-            <div className={`ml-10 ${actionBarClass}`}>
-              <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
-                <span className="material-symbols-outlined text-sm">content_copy</span>
-              </button>
-              {onQuoteMessage && (
-                <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
-                  {quoteActionIcon}
-                </button>
-              )}
-              {isTimeout && onContinue && (
-                <button onClick={() => onContinue(message.id)} className={actionButtonClass} title="继续">
-                  <span className="material-symbols-outlined text-sm">play_arrow</span>
-                </button>
-              )}
-              {onSaveAsNotebook && (
-                <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
-                  <span className="material-symbols-outlined text-sm">note_add</span>
-                </button>
-              )}
-              {onDelete && (
-                <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
-                  <span className="material-symbols-outlined text-sm">delete</span>
-                </button>
-              )}
-            </div>
-          ) : null}
-          {visibleExtraCards.length ? (
-            <div className="ml-10 max-w-[85%] space-y-2">
-              {visibleExtraCards.map((card, index) => (
-                <UniversalCard key={index} card={card} onAction={onAction} />
-              ))}
-            </div>
-          ) : null}
-        </div>
-      );
-    }
     if (collaborationCard) {
       const extraCards = getCollaborationExtraCards(message);
       return (
@@ -2489,44 +2308,6 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             )}
           </div>
         </div>
-      </div>
-    );
-  }
-
-  if (werewolfCard) {
-    const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
-    return (
-      <div className="group">
-        <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} isStreaming={isStreaming} />
-        {!isStreaming ? (
-          <div className={`ml-10 ${actionBarClass}`}>
-            <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
-              <span className="material-symbols-outlined text-sm">content_copy</span>
-            </button>
-            {onQuoteMessage && (
-              <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
-                {quoteActionIcon}
-              </button>
-            )}
-            {onSaveAsNotebook && (
-              <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
-                <span className="material-symbols-outlined text-sm">note_add</span>
-              </button>
-            )}
-            {onDelete && (
-              <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
-                <span className="material-symbols-outlined text-sm">delete</span>
-              </button>
-            )}
-          </div>
-        ) : null}
-        {visibleExtraCards.length ? (
-          <div className="ml-10 max-w-[85%] space-y-2">
-            {visibleExtraCards.map((card, index) => (
-              <UniversalCard key={index} card={card} onAction={onAction} />
-            ))}
-          </div>
-        ) : null}
       </div>
     );
   }

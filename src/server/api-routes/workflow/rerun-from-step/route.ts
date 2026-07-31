@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       );
     }
 
-    manager.rerunFromStep(runId, stepName, { id: auth.id, name: auth.username }).catch(() => {});
+    await manager.rerunFromStepInBackground(runId, stepName, { id: auth.id, name: auth.username });
     await appendWorkflowAuditEvent({
       action: 'rerun-from-step',
       runId,

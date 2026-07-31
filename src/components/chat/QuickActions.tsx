@@ -18,6 +18,7 @@ import {
   type HomePluginQuickAction,
 } from '@/lib/sidebar-plugins';
 import { Suggestions, Suggestion } from '@/components/ai-elements/suggestion';
+import { CODESPEC_WORKFLOW_CREATOR_ACTION, isAiWorkflowCreatorAction } from '@/lib/chat/workflow-creator-entry';
 
 type SlashCommandLike = {
   id: string;
@@ -71,7 +72,7 @@ function buildCodespecQuickActions(slashCommands?: SlashCommandLike[]): HomePlug
     label: '根据 Codespec 创建工作流',
     icon: 'account_tree',
     color: 'from-indigo-600 to-sky-600',
-    prompt: '根据仓库下codespec文档需求创建工作流',
+    prompt: CODESPEC_WORKFLOW_CREATOR_ACTION,
     pinned: false,
     category: 'codespec',
     order: 30,
@@ -262,11 +263,11 @@ const ACTION_GUIDES: Record<string, {
 
 export default function QuickActions({ onAction, skillSettings, slashCommands }: QuickActionsProps) {
   const [guideAction, setGuideAction] = useState<HomePluginQuickAction | null>(null);
-  const guide = guideAction ? ACTION_GUIDES[guideAction.label] : null;
+  const guide = guideAction ? ACTION_GUIDES[guideAction.label] || guideAction.guide || null : null;
   const actionsGrouped = mergeGroupedActions(getActionsGrouped(), buildCodespecQuickActions(slashCommands));
 
   const handleActionClick = (action: HomePluginQuickAction) => {
-    if (ACTION_GUIDES[action.label]) {
+    if (ACTION_GUIDES[action.label] || action.guide) {
       setGuideAction(action);
       return;
     }
@@ -280,6 +281,13 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
   const handleInsertGuidePrompt = () => {
     if (!guide) return;
     onAction(`${guide.samplePrompt}\n`);
+    setGuideAction(null);
+  };
+
+  const handleOpenWorkflowCreator = () => {
+    const action = guideAction;
+    if (!action || !isAiWorkflowCreatorAction(action.prompt)) return;
+    onAction(action.prompt);
     setGuideAction(null);
   };
 
@@ -383,6 +391,11 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
             <Button variant="outline" onClick={() => setGuideAction(null)}>
               稍后再说
             </Button>
+            {isAiWorkflowCreatorAction(guideAction?.prompt) ? (
+              <Button variant="secondary" onClick={handleOpenWorkflowCreator}>
+                打开轻量创建
+              </Button>
+            ) : null}
             <Button onClick={handleInsertGuidePrompt}>
               把示例消息放入输入框
             </Button>

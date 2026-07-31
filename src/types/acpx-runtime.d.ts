@@ -117,6 +117,7 @@ declare module 'acpx/runtime' {
     cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
     close(input: { handle: AcpRuntimeHandle; reason: string; discardPersistentState?: boolean }): Promise<void>;
     getStatus?(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
+    setConfigOption?(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
     [key: string]: unknown;
   }
 

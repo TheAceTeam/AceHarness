@@ -26,7 +26,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { agentApi, agoraApi, configApi, workflowApi, workspaceApi, type NotebookScope } from '@/lib/core/api';
+import { agentApi, agoraApi, workspaceApi, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
@@ -45,6 +45,16 @@ import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
 import HomeCommandSidebar from '@/components/chat/HomeCommandSidebar';
 import ConversationRightRail from '@/components/chat/ConversationRightRail';
 import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
+import NewConfigModal from '@/components/NewConfigModal';
+import {
+  CODESPEC_WORKFLOW_CREATOR_REQUIREMENTS,
+  DEFAULT_AI_WORKFLOW_DESCRIPTION,
+  DEFAULT_AI_WORKFLOW_REQUIREMENTS,
+  isAiWorkflowCreatorAction,
+  isCodespecWorkflowCreatorAction,
+  isAiWorkflowCreatorStarterAction,
+  shouldOpenAiWorkflowCreatorFromConversation,
+} from '@/lib/chat/workflow-creator-entry';
 import CliRunDialog, { type CliRunDialogRequest } from '@/components/chat/CliRunDialog';
 import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
@@ -54,7 +64,7 @@ import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
   inferHomeSidebarTab,
-  isWorkflowSidebarHint,
+  normalizeHomeSidebarHint,
   normalizeHomeSidebarTab,
   normalizeHomeSidebarTabs,
   type HomeSidebarHint,
@@ -82,27 +92,8 @@ import { cn } from '@/lib/core/utils';
 import { fetchRuntimeCommandMetadataCompat } from '@/client/query/engines';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
-import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, storeWorkflowSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
+import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { useAgentMessageRows } from '@/client/db/collections';
-import {
-  WORKFLOW_CLARIFICATION_FACTS_KIND,
-  WORKFLOW_CLARIFICATION_GAPS_KIND,
-  WORKFLOW_CLARIFICATION_QUESTION_KIND,
-  WORKFLOW_CLARIFICATION_SUMMARY_KIND,
-  WORKFLOW_STATE_OUTLINE_KIND,
-  WORKFLOW_STATE_STEPS_KIND,
-  applyWorkflowCreationItem,
-  assembleClarificationForm,
-  assembleWorkflowConfigFromItems,
-  createEmptyWorkflowCreationState,
-  describeWorkflowCreationItem,
-  extractWorkflowCreationItemResult,
-  type WorkflowCreationItemKind,
-  type WorkflowCreationItemResult,
-  type WorkflowCreationState,
-  type WorkflowCreationItemValidationContext,
-} from '@/lib/ai/workflow-creation-items';
-import type { ClarificationFormResult, ClarificationQuestionItem } from '@/lib/ai/result-normalizers';
 import pkgJson from '../../../package.json';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
@@ -181,1271 +172,13 @@ export function isChatAiBusy(input: {
   loading?: boolean;
   streamingMessageId?: string | null;
   messages?: Array<{ workflowThinking?: boolean }>;
-  sessionWorkbenchState?: Pick<SessionWorkbenchState, 'lightweightWorkflowDraft'> | null;
 }): boolean {
   return Boolean(
     input.loading
     || input.streamingMessageId
-    || input.messages?.some((message) => message?.workflowThinking)
-    || input.sessionWorkbenchState?.lightweightWorkflowDraft?.busy
+    || input.messages?.some((message) => message.workflowThinking)
   );
 }
-type LightweightWorkflowAnswers = {
-  initialRequirements?: string;
-  goal?: string;
-  scope?: 'current-repo' | 'specific-directory' | 'decide-later';
-  acceptance?: string[];
-  agents?: string;
-  constraints?: string;
-  clarificationAnswerContext?: string;
-  executionDirectory?: string;
-  workspaceMode?: 'in-place' | 'isolated-copy';
-  autoStart?: 'yes' | 'no';
-};
-
-type WorkflowCreationItemStep = {
-  kind: WorkflowCreationItemKind;
-  name: string;
-  title: string;
-  guidance: string;
-};
-
-type LightweightWorkflowDraft = {
-  name: string;
-  filename: string;
-  requirements: string;
-  description: string;
-  acceptance: string[];
-  agents: string;
-  configDraft?: any;
-  stepPlan?: Array<{
-    state: string;
-    steps: Array<{ name: string; agent: string; task: string }>;
-  }>;
-};
-
-const WORKFLOW_DRAFT_ACTION_PREFIX = '__WORKFLOW_DRAFT__:';
-const WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE = 'workflow-lightweight-planning';
-const MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS = 2;
-const SPEC_LANGUAGE_RULE = '语言一致性规则：先判断用户原始需求、补充说明和澄清回答的主语言；所有 summary、clarification、requirements.md、design.md、tasks.md 必须统一使用该主语言。';
-
-function normalizeRuntimeSessionId(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function hasDroppedFiles(dataTransfer: DataTransfer | null): boolean {
-  if (!dataTransfer) return false;
-  if (Array.from(dataTransfer.types || []).includes('Files')) return true;
-  return Array.from(dataTransfer.items || []).some((item) => item.kind === 'file');
-}
-
-function getDroppedDirectoryEntry(dataTransfer: DataTransfer): WebkitFileSystemEntryLike | null {
-  for (const item of Array.from(dataTransfer.items || [])) {
-    const entry = (item as DataTransferItemWithEntry).webkitGetAsEntry?.();
-    if (entry?.isDirectory) return entry;
-  }
-  return null;
-}
-
-function formatAttachmentSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${bytes}B`;
-}
-
-function decodeWorkflowDraftAction(prompt: string): { action: string; values: Record<string, unknown> } | null {
-  if (!prompt.startsWith(WORKFLOW_DRAFT_ACTION_PREFIX)) return null;
-  const rest = prompt.slice(WORKFLOW_DRAFT_ACTION_PREFIX.length);
-  const separator = rest.indexOf(':');
-  const action = separator >= 0 ? rest.slice(0, separator) : rest;
-  const encoded = separator >= 0 ? rest.slice(separator + 1) : '';
-  try {
-    const values = encoded ? JSON.parse(decodeURIComponent(encoded)) : {};
-    return { action, values: values && typeof values === 'object' ? values : {} };
-  } catch {
-    return { action, values: {} };
-  }
-}
-
-function sanitizeWorkflowSlug(value: string): string {
-  const ascii = value
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 42);
-  return ascii || `workflow-${Date.now().toString(36)}`;
-}
-
-function stringifyWorkflowAnswer(value: unknown): string {
-  if (Array.isArray(value)) return value.map(String).filter(Boolean).join('、');
-  return String(value || '').trim();
-}
-
-function normalizeWorkflowAnswers(input: Record<string, unknown>): LightweightWorkflowAnswers {
-  const acceptance = Array.isArray(input.acceptance)
-    ? input.acceptance.map(String).filter(Boolean)
-    : stringifyWorkflowAnswer(input.acceptance) ? [stringifyWorkflowAnswer(input.acceptance)] : [];
-  return {
-    initialRequirements: stringifyWorkflowAnswer(input.initialRequirements),
-    goal: stringifyWorkflowAnswer(input.goal),
-    scope: ['current-repo', 'specific-directory', 'decide-later'].includes(String(input.scope))
-      ? String(input.scope) as LightweightWorkflowAnswers['scope']
-      : undefined,
-    acceptance,
-    agents: stringifyWorkflowAnswer(input.agents),
-    constraints: stringifyWorkflowAnswer(input.constraints),
-    clarificationAnswerContext: stringifyWorkflowAnswer(input.clarificationAnswerContext),
-    executionDirectory: stringifyWorkflowAnswer(input.executionDirectory),
-    workspaceMode: String(input.workspaceMode) === 'isolated-copy' ? 'isolated-copy' : String(input.workspaceMode) === 'in-place' ? 'in-place' : undefined,
-    autoStart: String(input.autoStart) === 'no' ? 'no' : String(input.autoStart) === 'yes' ? 'yes' : undefined,
-  };
-}
-
-export function mergeWorkflowAnswers(current: unknown, next: Record<string, unknown>): LightweightWorkflowAnswers {
-  const base = normalizeWorkflowAnswers((current && typeof current === 'object' ? current as Record<string, unknown> : {}));
-  const patch = normalizeWorkflowAnswers(next);
-  const merged: LightweightWorkflowAnswers = { ...base };
-  for (const [key, value] of Object.entries(patch) as Array<[keyof LightweightWorkflowAnswers, any]>) {
-    if (Array.isArray(value)) {
-      if (value.length > 0 || Object.prototype.hasOwnProperty.call(next, key)) {
-        (merged as any)[key] = value;
-      }
-      continue;
-    }
-    if (value !== undefined && value !== '') {
-      (merged as any)[key] = value;
-      continue;
-    }
-    if (Object.prototype.hasOwnProperty.call(next, key) && value === '') {
-      (merged as any)[key] = value;
-    }
-  }
-  return merged;
-}
-
-function buildLightweightWorkflowDraft(answers: LightweightWorkflowAnswers): LightweightWorkflowDraft {
-  const primaryGoal = answers.goal || answers.initialRequirements || '自动化任务';
-  const name = primaryGoal.length > 26 ? `工作流：${primaryGoal.slice(0, 26)}` : `工作流：${primaryGoal}`;
-  const acceptance = answers.acceptance?.length ? answers.acceptance : ['文件变更摘要', '人工确认'];
-  const requirements = [
-    `目标：${primaryGoal}`,
-    answers.constraints ? `约束：${answers.constraints}` : '',
-    acceptance.length ? `验收：${acceptance.join('、')}` : '',
-    answers.agents ? `Agent 偏好：${answers.agents}` : '',
-  ].filter(Boolean).join('\n');
-  return {
-    name,
-    filename: `${sanitizeWorkflowSlug(primaryGoal)}-${Date.now().toString(36)}.yaml`,
-    requirements,
-    description: requirements,
-    acceptance,
-    agents: answers.agents || '默认开发/评审 Agent',
-  };
-}
-
-function createWorkflowDiscoveryCard(initialRequirements: string, workingDirectory: string) {
-  return {
-    header: {
-      icon: 'account_tree',
-      title: '工作流需求确认',
-      subtitle: '填写目标、交付物与代码仓范围后，系统将生成补充问题并起草工作流。',
-      gradient: 'from-sky-500/25 to-emerald-500/25',
-    },
-    blocks: [
-      { type: 'steps', current: 1, total: 4 },
-      {
-        type: 'form',
-        id: 'workflow-discovery',
-        submitLabel: '开始分析并生成补充问题',
-        submitPrompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}discovery_submit:{{payload}}`,
-        fields: [
-          {
-            id: 'initialRequirements',
-            label: '工作流目标',
-            inputType: 'textarea',
-            required: true,
-            defaultValue: initialRequirements,
-            placeholder: '例如：分析某个模块的风险、修复一个问题、生成测试与评审流程...',
-          },
-          {
-            id: 'goal',
-            label: '最终交付物',
-            inputType: 'text',
-            required: false,
-            placeholder: '例如：补丁、分析报告、测试结果、迁移计划',
-          },
-          {
-            id: 'constraints',
-            label: '约束或范围',
-            inputType: 'textarea',
-            required: false,
-            placeholder: '例如：只改某个目录、不能改 API、需要兼容 Windows/Linux',
-          },
-          {
-            id: 'scope',
-            label: '代码仓探索范围',
-            inputType: 'single',
-            required: true,
-            defaultValue: 'current-repo',
-            options: [
-              { value: 'current-repo', label: '当前工作目录', description: workingDirectory || '使用当前聊天工作目录' },
-              { value: 'specific-directory', label: '指定目录', description: '后续在补充问答中说明具体路径' },
-              { value: 'decide-later', label: '稍后决定', description: '先按通用流程创建' },
-            ],
-            helperText: '该范围会影响后续补充问题和草案编排。',
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function buildWorkflowCreationItemExample(kind: WorkflowCreationItemKind, name: string): Record<string, any> {
-  if (kind === WORKFLOW_CLARIFICATION_SUMMARY_KIND) {
-    return { kind, data: { summary: '用 1-2 句话概括当前目标、对象和成功结果。' } };
-  }
-  if (kind === WORKFLOW_CLARIFICATION_FACTS_KIND) {
-    return { kind, data: { facts: ['已确认事实 1，最好带来源。', '已确认事实 2。'] } };
-  }
-  if (kind === WORKFLOW_CLARIFICATION_GAPS_KIND) {
-    return { kind, data: { gaps: ['blocking: 会影响方案的缺口。', 'optional: 可后续补充的偏好。'] } };
-  }
-  return {
-    kind,
-    data: {
-      id: name,
-      label: '问题标签',
-      question: '具体问题，并说明这个答案会影响什么决策。',
-      selectionMode: 'single',
-      options: [
-        { id: 'recommended', label: '推荐选项', description: '说明默认方案和影响。', recommended: true },
-        { id: 'alternative', label: '备选方案', description: '说明取舍。' },
-      ],
-      placeholder: '跳过时系统采用的保守假设。',
-      required: true,
-    },
-  };
-}
-
-function truncateForPrompt(input: string | undefined, limit = 5000) {
-  const text = (input || '').trim();
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit)}\n\n...[已截断，原文过长]`;
-}
-
-function summarizeWorkflowCreationStateForPrompt(state: WorkflowCreationState): string {
-  return truncateForPrompt(JSON.stringify({ clarification: state.clarification }, null, 2), 5000);
-}
-
-export function buildWorkflowConversationContext(messages: Array<{ role?: string; content?: string; rawContent?: string }> | undefined) {
-  const relevant = (messages || [])
-    .filter((message) => message.role === 'user' || message.role === 'assistant')
-    .map((message) => {
-      const text = String(message.rawContent || message.content || '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!text) return '';
-      return `${message.role === 'user' ? '用户' : '系统'}：${text}`;
-    })
-    .filter(Boolean)
-    .slice(-12);
-  return truncateForPrompt(relevant.join('\n'), 4000);
-}
-
-function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, baseContext: string): string {
-  return [
-    '你正在 ACEHarness 的分步工作流创建向导中工作。',
-    `当前小点名称：${step.name}`,
-    `当前小点类型：${step.kind}`,
-    '请完成当前小点，并在回复末尾输出机器可读结果。',
-    '机器可读结果必须放在 <result>...</result> 内，且 <result> 内只放一个裸 JSON 对象，不使用 Markdown 代码块。',
-    `JSON 顶层固定为 {"kind":"${step.kind}","data":{...}}。`,
-    '可以在 <result> 外用 1-3 句简短说明你的判断。',
-    '输出 </result> 后不要追加任何文字。',
-    SPEC_LANGUAGE_RULE,
-    '',
-    '当前小点说明：',
-    step.guidance,
-    '',
-    '格式示例：',
-    '<result>',
-    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name), null, 2),
-    '</result>',
-    '',
-    '创建上下文：',
-    baseContext,
-  ].join('\n\n');
-}
-
-function buildWorkflowCreationItemUserMessage(step: WorkflowCreationItemStep, state: WorkflowCreationState): string {
-  return [
-    `请生成小点：${step.title}`,
-    `小点名称：${step.name}`,
-    `小点类型：${step.kind}`,
-    '',
-    step.guidance,
-    '',
-    '系统已确认的小点：',
-    '```json',
-    summarizeWorkflowCreationStateForPrompt(state),
-    '```',
-  ].join('\n\n');
-}
-
-function buildWorkflowCreationItemRepairMessage(
-  step: WorkflowCreationItemStep,
-  previousOutput: string,
-  reason: string,
-): string {
-  return [
-    `当前小点「${step.title}」没有通过系统解析或校验。`,
-    '错误定位：',
-    reason,
-    '',
-    `请补发一个顶层 kind 精确为 "${step.kind}" 的 <result> JSON 块，只补发当前小点。`,
-    '',
-    '当前小点说明：',
-    step.guidance,
-    '',
-    '格式示例：',
-    '<result>',
-    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name), null, 2),
-    '</result>',
-    '',
-    '上一轮输出：',
-    '```text',
-    previousOutput.slice(0, 6000),
-    '```',
-  ].join('\n\n');
-}
-
-function resolveWorkflowCreationItemAttempt(input: {
-  finalContent: string;
-  step: WorkflowCreationItemStep;
-  attempt: number;
-  maxAttempts: number;
-  validationContext?: WorkflowCreationItemValidationContext;
-}): { status: 'accepted'; result: WorkflowCreationItemResult } | { status: 'retry'; reason: string; repairPrompt: string; nextAttempt: number } | { status: 'failed'; reason: string } {
-  const extracted = extractWorkflowCreationItemResult(input.finalContent, input.step.kind, input.validationContext);
-  if (extracted.ok) return { status: 'accepted', result: extracted.result };
-  if (input.attempt < input.maxAttempts) {
-    return {
-      status: 'retry',
-      reason: extracted.error,
-      repairPrompt: buildWorkflowCreationItemRepairMessage(input.step, input.finalContent, extracted.error),
-      nextAttempt: input.attempt + 1,
-    };
-  }
-  return { status: 'failed', reason: extracted.error };
-}
-
-function createWorkflowClarificationLoadingCard(
-  initialRequirements: string,
-  progress?: {
-    activeTitle?: string;
-    clarification?: ClarificationFormResult | null;
-    completedTitles?: string[];
-  },
-) {
-  const clarification = progress?.clarification;
-  const completedTitles = progress?.completedTitles || [];
-  return {
-    header: {
-      icon: 'account_tree',
-      title: '工作流创建',
-      subtitle: '先在当前对话补全关键信息，生成草案后再决定是否运行。',
-      gradient: 'from-emerald-500/25 to-sky-500/25',
-    },
-    blocks: [
-      { type: 'steps', current: 1, total: 4 },
-      {
-        type: 'status',
-        state: progress?.activeTitle
-          ? `正在生成：${progress.activeTitle}`
-          : '正在按 AI 引导逻辑生成补充问答',
-        color: 'blue',
-        animated: true,
-      },
-      { type: 'text', content: initialRequirements ? `初始需求：${initialRequirements}` : '我会先理解目标、识别已知事实和关键缺口，再生成 3-5 个会影响工作流编排的问题。' },
-      completedTitles.length ? { type: 'badges', items: completedTitles.map((text) => ({ text, color: 'green' })) } : { type: 'divider' },
-      clarification?.summary ? { type: 'text', content: clarification.summary } : { type: 'divider' },
-      clarification?.knownFacts?.length ? { type: 'list', items: clarification.knownFacts.slice(0, 5).map((text) => ({ icon: 'check_circle', color: 'green', text })) } : { type: 'divider' },
-      clarification?.missingFields?.length ? { type: 'badges', items: clarification.missingFields.slice(0, 6).map((text) => ({ text, color: text.startsWith('blocking') ? 'orange' : 'gray' })) } : { type: 'divider' },
-      clarification?.questions?.length ? {
-        type: 'list',
-        items: clarification.questions.map((question, index) => ({
-          icon: 'help',
-          color: 'text-sky-500',
-          text: `${index + 1}. ${question.label}：${question.question}`,
-        })),
-      } : { type: 'divider' },
-    ],
-  };
-}
-
-function createWorkflowClarificationCard(
-  clarification: ClarificationFormResult,
-  options?: { pending?: boolean; pendingText?: string },
-) {
-  const fields = clarification.questions.flatMap((question) => {
-    const baseField = {
-      id: `q:${question.id}`,
-      label: question.label,
-      inputType: question.selectionMode === 'multiple' ? 'multiple' as const : 'single' as const,
-      required: question.required !== false,
-      defaultValue: question.options.filter((option) => option.recommended).map((option) => option.id).slice(0, question.selectionMode === 'multiple' ? undefined : 1),
-      helperText: question.question,
-      options: question.options.map((option) => ({
-        value: option.id,
-        label: option.label,
-        description: option.description,
-      })),
-    };
-    return [
-      baseField,
-      {
-        id: `note:${question.id}`,
-        label: `${question.label}：补充说明`,
-        inputType: 'text' as const,
-        required: false,
-        placeholder: question.placeholder || '可选：补充你的具体偏好或约束',
-      },
-    ];
-  });
-
-  return {
-    header: {
-      icon: 'account_tree',
-      title: '补充问答',
-      subtitle: clarification.summary || '这些问题由 AI 根据目标、已知事实和待补缺口动态生成。',
-      gradient: 'from-emerald-500/25 to-sky-500/25',
-    },
-    blocks: [
-      { type: 'steps', current: 1, total: 4 },
-      clarification.knownFacts.length ? { type: 'list', items: clarification.knownFacts.slice(0, 5).map((text) => ({ icon: 'check_circle', color: 'green', text })) } : { type: 'text', content: '暂无已确认事实。' },
-      clarification.missingFields.length ? { type: 'badges', items: clarification.missingFields.slice(0, 6).map((text) => ({ text, color: text.startsWith('blocking') ? 'orange' : 'gray' })) } : { type: 'divider' },
-      {
-        type: 'form',
-        id: 'workflow-clarification',
-        submitLabel: '生成草案',
-        submitPrompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}clarify:{{payload}}`,
-        fields,
-        pending: options?.pending,
-        pendingText: options?.pendingText,
-      },
-    ],
-  };
-}
-
-function buildClarificationAnswerContext(
-  questions: ClarificationQuestionItem[],
-  values: Record<string, unknown>,
-): string {
-  return questions
-    .map((question) => {
-      const selectedValue = values[`q:${question.id}`];
-      const optionIds = Array.isArray(selectedValue)
-        ? selectedValue.map(String)
-        : stringifyWorkflowAnswer(selectedValue) ? [stringifyWorkflowAnswer(selectedValue)] : [];
-      const note = stringifyWorkflowAnswer(values[`note:${question.id}`]);
-      const selectedOptions = question.options.filter((option) => optionIds.includes(option.id));
-      if (!selectedOptions.length && !note) return '';
-      const parts = [
-        selectedOptions.length ? `选择：${selectedOptions.map((option) => option.label).join('、')}` : '',
-        note ? `补充：${note}` : '',
-      ].filter(Boolean);
-      return `- ${question.label}：${parts.join('；')}`;
-    })
-    .filter(Boolean)
-    .join('\n');
-}
-
-function formatLightweightClarificationProgressMessage(input: {
-  step: WorkflowCreationItemStep;
-  clarification: ClarificationFormResult;
-}): string {
-  const { step, clarification } = input;
-  if (step.kind === WORKFLOW_CLARIFICATION_SUMMARY_KIND) {
-    return [
-      `### ${step.title}`,
-      '',
-      clarification.summary || '已完成当前理解摘要。',
-    ].join('\n');
-  }
-  if (step.kind === WORKFLOW_CLARIFICATION_FACTS_KIND) {
-    return [
-      `### ${step.title}`,
-      '',
-      clarification.knownFacts.length
-        ? clarification.knownFacts.map((item) => `- ${item}`).join('\n')
-        : '暂未识别到明确事实。',
-    ].join('\n');
-  }
-  if (step.kind === WORKFLOW_CLARIFICATION_GAPS_KIND) {
-    return [
-      `### ${step.title}`,
-      '',
-      clarification.missingFields.length
-        ? clarification.missingFields.map((item) => `- ${item}`).join('\n')
-        : '暂未识别到阻塞缺口。',
-    ].join('\n');
-  }
-  const latestQuestion = clarification.questions[clarification.questions.length - 1];
-  if (latestQuestion) {
-    return [
-      `### ${step.title}`,
-      '',
-      latestQuestion.question,
-      '',
-      ...latestQuestion.options.map((option) => `- ${option.recommended ? '推荐：' : ''}${option.label}${option.description ? `：${option.description}` : ''}`),
-    ].join('\n');
-  }
-  return `### ${step.title}\n\n已生成。`;
-}
-
-function createWorkflowDraftCard(draft: LightweightWorkflowDraft) {
-  return {
-    header: {
-      icon: 'edit_note',
-      title: '工作流草案',
-      subtitle: draft.name,
-      gradient: 'from-cyan-500/25 to-emerald-500/25',
-    },
-    blocks: [
-      { type: 'steps', current: 2, total: 4 },
-      {
-        type: 'info',
-        rows: [
-          { label: '配置文件', value: draft.filename, icon: 'description' },
-          { label: '验收', value: draft.acceptance.join('、'), icon: 'fact_check' },
-          { label: '分工', value: draft.agents, icon: 'groups' },
-        ],
-      },
-      { type: 'text', content: draft.requirements },
-      {
-        type: 'actions',
-        items: [
-          { label: '继续设置执行目录', prompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}draft_confirm:` },
-        ],
-      },
-    ],
-  };
-}
-
-type LightweightWorkflowDraftProgress = {
-  activeTitle?: string;
-  completedTitles: string[];
-  state: WorkflowCreationState;
-  retryNotice?: {
-    title: string;
-    attempt: number;
-    maxAttempts: number;
-    reason: string;
-  } | null;
-};
-
-function formatWorkflowValidationIssues(validation: any): string {
-  const issues = Array.isArray(validation?.issues) ? validation.issues : Array.isArray(validation?.details) ? validation.details : [];
-  if (!issues.length) {
-    return validation?.message || validation?.error || '工作流草案结构未通过校验。';
-  }
-  return issues
-    .map((issue: any) => {
-      const path = Array.isArray(issue?.path) ? issue.path.join('.') : String(issue?.path || '').trim();
-      const message = String(issue?.message || issue?.error || issue || '').trim();
-      return [path, message].filter(Boolean).join(': ');
-    })
-    .filter(Boolean)
-    .slice(0, 10)
-    .join('\n');
-}
-
-function createWorkflowDraftProgressCard(progress: LightweightWorkflowDraftProgress) {
-  const outline = progress.state.workflow.outline || [];
-  const stepPlan = Object.entries(progress.state.workflow.stateSteps || {})
-    .map(([stateName, value]: [string, any]) => ({
-      stateName,
-      steps: Array.isArray(value) ? value : Array.isArray(value?.steps) ? value.steps : [],
-    }))
-    .filter((item) => item.steps.length > 0);
-  const retryNotice = progress.retryNotice;
-  return {
-    header: {
-      icon: 'schema',
-      title: '生成工作流草案',
-      subtitle: '正在把补充问答转换为可执行状态机、执行步骤和 Agent 分工。',
-      gradient: 'from-cyan-500/25 to-emerald-500/25',
-    },
-    blocks: [
-      { type: 'steps', current: 2, total: 4 },
-      {
-        type: 'status',
-        state: retryNotice
-          ? `正在自动修正：${retryNotice.title}`
-          : progress.activeTitle ? `正在生成：${progress.activeTitle}` : '正在装配工作流草案',
-        color: retryNotice ? 'orange' : 'blue',
-        animated: true,
-        rows: retryNotice ? [
-          { label: '尝试', value: `第 ${retryNotice.attempt}/${retryNotice.maxAttempts} 次` },
-          { label: '原因', value: retryNotice.reason },
-        ] : undefined,
-      },
-      progress.completedTitles.length ? {
-        type: 'badges',
-        items: progress.completedTitles.map((text) => ({ text, color: 'green' })),
-      } : { type: 'text', content: '将依次生成状态轮廓、各状态执行步骤与 Agent 分配。' },
-      outline.length ? {
-        type: 'list',
-        items: outline.map((state: any, index: number) => ({
-          icon: state?.isFinal ? 'flag' : index === 0 ? 'play_circle' : 'radio_button_checked',
-          color: state?.isFinal ? 'text-emerald-500' : 'text-sky-500',
-          text: `${state?.name || `状态 ${index + 1}`}${state?.description ? `：${state.description}` : ''}`,
-        })),
-      } : { type: 'divider' },
-      stepPlan.length ? {
-        type: 'table',
-        columns: [
-          { key: 'state', label: '状态', width: '32%' },
-          { key: 'steps', label: '执行步骤', width: '68%' },
-        ],
-        rows: stepPlan.map((item) => ({
-          id: item.stateName,
-          state: item.stateName,
-          steps: item.steps.map((step: any) => `${step?.name || '步骤'} · ${step?.agent || 'agent'}`).join(' / '),
-          detailTitle: item.stateName,
-          detailBlocks: [{
-            type: 'list',
-            items: item.steps.map((step: any) => ({
-              icon: 'task_alt',
-              color: 'text-emerald-500',
-              text: `${step?.name || '步骤'}（${step?.agent || 'agent'}）：${step?.task || step?.description || ''}`,
-            })),
-          }],
-        })),
-        maxHeight: 240,
-      } : { type: 'divider' },
-    ],
-  };
-}
-
-function createWorkflowExecutionOptionsCard(defaultDirectory: string) {
-  return {
-    header: {
-      icon: 'play_circle',
-      title: '执行设置',
-      subtitle: '确认目录和运行方式后才会创建配置；启动后右侧才显示运行状态。',
-      gradient: 'from-sky-500/25 to-lime-500/25',
-    },
-    blocks: [
-      { type: 'steps', current: 3, total: 4 },
-      {
-        type: 'form',
-        id: 'workflow-execution-options',
-        submitLabel: '创建配置',
-        submitPrompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}execution_options:{{payload}}`,
-        fields: [
-          {
-            id: 'executionDirectory',
-            label: '执行目录',
-            inputType: 'text',
-            required: true,
-            defaultValue: defaultDirectory,
-            placeholder: defaultDirectory || '输入工作目录绝对路径',
-          },
-          {
-            id: 'workspaceMode',
-            label: '运行方式',
-            inputType: 'single',
-            required: true,
-            defaultValue: 'in-place',
-            options: [
-              { value: 'in-place', label: '直接当前目录运行' },
-              { value: 'isolated-copy', label: '隔离副本运行' },
-            ],
-          },
-          {
-            id: 'autoStart',
-            label: '创建后是否立即启动',
-            inputType: 'single',
-            required: true,
-            defaultValue: 'yes',
-            options: [
-              { value: 'yes', label: '创建并启动' },
-              { value: 'no', label: '只创建配置' },
-            ],
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function createWorkflowCreationIssueCard(errorMessage: string) {
-  return {
-    header: {
-      icon: 'build',
-      title: '工作流草案需要调整',
-      subtitle: '系统没有直接保存当前草案。我会根据当前需求继续修正结构，你也可以补充具体要求后重新生成。',
-      gradient: 'from-amber-500/25 to-orange-500/25',
-    },
-    blocks: [
-      {
-        type: 'status',
-        state: '等待修正',
-        color: 'orange',
-      },
-      {
-        type: 'text',
-        content: '建议补充状态数量、关键步骤、需要使用的 Agent 或验收标准；系统会继续按当前对话上下文生成可保存的工作流。',
-      },
-      {
-        type: 'collapse',
-        title: '技术详情',
-        icon: 'terminal',
-        defaultOpen: false,
-        blocks: [{ type: 'code', lang: 'text', code: errorMessage || '未知错误' }],
-      },
-    ],
-  };
-}
-
-function createWorkflowCreatedCard(input: { filename: string; autoStart: boolean }) {
-  return {
-    header: {
-      icon: input.autoStart ? 'rocket_launch' : 'check_circle',
-      title: input.autoStart ? '配置已创建，准备启动' : '配置已创建',
-      subtitle: input.filename,
-      gradient: 'from-lime-500/25 to-cyan-500/25',
-    },
-    blocks: [
-      { type: 'steps', current: input.autoStart ? 4 : 3, total: 4 },
-      { type: 'text', content: input.autoStart ? '正在启动工作流。启动成功后右侧会打开运行状态面板。' : '尚未启动，右侧运行面板保持关闭。' },
-      {
-        type: 'actions',
-        items: input.autoStart
-          ? []
-          : [{ label: '现在启动', prompt: `${WORKFLOW_DRAFT_ACTION_PREFIX}start:${encodeURIComponent(JSON.stringify({ filename: input.filename }))}` }],
-      },
-    ],
-  };
-}
-
-function createWorkflowStartedCard(input: { filename: string; runId?: string }) {
-  return {
-    header: {
-      icon: 'account_tree',
-      title: '工作流运行中',
-      subtitle: input.runId ? `Run ${input.runId}` : input.filename,
-      gradient: 'from-lime-500/25 to-sky-500/25',
-      badges: [{ text: '运行中', color: 'green' }],
-    },
-    blocks: [
-      { type: 'steps', current: 4, total: 4 },
-      {
-        type: 'status',
-        state: '右侧运行监控已打开',
-        color: 'green',
-        animated: true,
-        rows: [
-          { label: '配置', value: input.filename },
-          { label: 'Run', value: input.runId || '等待运行 ID' },
-          { label: '下一步', value: '请在右侧查看状态图、事件、待回答问题和实时输出。' },
-        ],
-      },
-    ],
-  };
-}
-
-async function runLightweightWorkflowCreationItem(input: {
-  step: WorkflowCreationItemStep;
-  message: string;
-  systemPrompt: string;
-  frontendSessionId: string;
-  runtimeSessionId?: string;
-  workingDirectory?: string;
-  engine?: string;
-  model?: string;
-  maxAttempts?: number;
-  validationContext?: WorkflowCreationItemValidationContext;
-  onRetry?: (notice: { title: string; attempt: number; maxAttempts: number; reason: string }) => Promise<void> | void;
-}): Promise<{ result: WorkflowCreationItemResult; finalContent: string; runtimeSessionId?: string }> {
-  let activeRuntimeSessionId = input.runtimeSessionId;
-  const maxAttempts = input.maxAttempts ?? MAX_LIGHTWEIGHT_CREATION_REPAIR_ATTEMPTS;
-
-  const runAttempt = async (message: string, attempt: number): Promise<{ result: WorkflowCreationItemResult; finalContent: string; runtimeSessionId?: string }> => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const startRes = await apiFetch('/api/chat/stream', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({
-        message,
-        model: input.model,
-        engine: input.engine,
-        sessionId: activeRuntimeSessionId || undefined,
-        frontendSessionId: input.frontendSessionId,
-        streamScope: WORKFLOW_LIGHTWEIGHT_STREAM_SCOPE,
-        mode: 'dashboard',
-        workingDirectory: input.workingDirectory || undefined,
-        extraSystemPrompt: input.systemPrompt,
-      }),
-    });
-    const startData = await startRes.json().catch(() => null);
-    if (!startRes.ok || !startData?.chatId) {
-      throw new Error(startData?.error || startData?.message || `启动「${input.step.title}」生成失败`);
-    }
-
-    return new Promise((resolve, reject) => {
-      const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
-      let accumulated = '';
-      let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
-
-      es.addEventListener('delta', (event) => {
-        try {
-          const data = parseAceSseEventData(event.data);
-          const content = data.content || '';
-          accumulated += content;
-          const row = storeWorkflowSseEventAsAgentMessage({
-            type: 'chat-stream-delta',
-            data: {
-              ...data,
-              id: startData.chatId,
-              chatId: startData.chatId,
-              delta: content,
-              frontendSessionId: input.frontendSessionId,
-              stepKey: input.step.name,
-              provider: input.engine,
-              model: input.model,
-            },
-          }, aiPrevious);
-          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-        } catch (error) {
-          es.close();
-          reject(error);
-        }
-      });
-
-      es.addEventListener('done', async (event) => {
-        try {
-          const data = parseAceSseEventData(event.data);
-          es.close();
-          const finalContent = data.result || accumulated;
-          const row = storeWorkflowSseEventAsAgentMessage({
-            type: 'done',
-            data: {
-              ...data,
-              id: startData.chatId,
-              chatId: startData.chatId,
-              content: aiPrevious ? '' : finalContent,
-              frontendSessionId: input.frontendSessionId,
-              stepKey: input.step.name,
-              provider: input.engine,
-              model: input.model,
-            },
-          }, aiPrevious);
-          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-          if (Object.prototype.hasOwnProperty.call(data, 'sessionId')) {
-            activeRuntimeSessionId = normalizeRuntimeSessionId(data.sessionId);
-          }
-          const decision = resolveWorkflowCreationItemAttempt({
-            finalContent,
-            step: input.step,
-            attempt,
-            maxAttempts,
-            validationContext: input.validationContext,
-          });
-          if (decision.status === 'retry') {
-            await input.onRetry?.({
-              title: input.step.title,
-              attempt: decision.nextAttempt,
-              maxAttempts,
-              reason: decision.reason,
-            });
-            const repaired = await runAttempt(decision.repairPrompt, decision.nextAttempt);
-            resolve(repaired);
-            return;
-          }
-          if (decision.status === 'failed') {
-            reject(new Error(`${input.step.title} 未返回合法结果：${decision.reason}`));
-            return;
-          }
-          resolve({
-            result: decision.result,
-            finalContent,
-            runtimeSessionId: activeRuntimeSessionId,
-          });
-        } catch (error) {
-          reject(error);
-        }
-      });
-
-      es.addEventListener('error', () => {
-        es.close();
-        reject(new Error(`「${input.step.title}」生成流中断`));
-      });
-    });
-  };
-
-  return runAttempt(input.message, 0);
-}
-
-async function generateLightweightWorkflowClarification(input: {
-  requirements: string;
-  workflowName: string;
-  filename: string;
-  workingDirectory: string;
-  workspaceMode: 'in-place' | 'isolated-copy';
-  frontendSessionId: string;
-  engine?: string;
-  model?: string;
-  onProgress?: (progress: {
-    activeStep?: WorkflowCreationItemStep;
-    completedSteps: WorkflowCreationItemStep[];
-    state: WorkflowCreationState;
-    clarification: ClarificationFormResult;
-  }) => Promise<void> | void;
-}): Promise<{ clarification: ClarificationFormResult; runtimeSessionId?: string; creationContextSummary: string }> {
-  let creationState = createEmptyWorkflowCreationState();
-  let runtimeSessionId: string | undefined;
-  const completedSteps: WorkflowCreationItemStep[] = [];
-  const baseContext = [
-    `工作流名称：${input.workflowName}`,
-    `目标文件：configs/${input.filename}`,
-    `工作目录：${input.workingDirectory}`,
-    `工作区模式：${input.workspaceMode}`,
-    `需求描述：${input.requirements}`,
-    '创建模式：首页对话内工作流，默认跳过完整 Spec，但必须先做补充问答和草案确认。',
-  ].filter(Boolean).join('\n\n');
-  const steps: WorkflowCreationItemStep[] = [
-    {
-      kind: WORKFLOW_CLARIFICATION_SUMMARY_KIND,
-      name: 'current_understanding',
-      title: '当前理解摘要',
-      guidance: '用用户主语言概括当前目标、业务对象、预期结果和最关键的不确定性。',
-    },
-    {
-      kind: WORKFLOW_CLARIFICATION_FACTS_KIND,
-      name: 'confirmed_facts',
-      title: '已确认事实',
-      guidance: '列出 3-6 条已经从表单、需求、补充说明或模板中确认的信息；不要把推测写成事实。',
-    },
-    {
-      kind: WORKFLOW_CLARIFICATION_GAPS_KIND,
-      name: 'decision_gaps',
-      title: '待补信息',
-      guidance: '列出会影响方案、范围、兼容、验收或任务拆分的缺口；用 blocking/optional 前缀标出优先级。',
-    },
-    {
-      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-      name: 'target_outcome',
-      title: '澄清问题：目标结果',
-      guidance: '生成一个关于目标用户、成功结果或交付形态的问题。id 固定为 target_outcome，提供 2-4 个选项和默认推荐项。',
-    },
-    {
-      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-      name: 'scope_boundaries',
-      title: '澄清问题：范围边界',
-      guidance: '生成一个关于本次必须覆盖与明确排除范围的问题。id 固定为 scope_boundaries，selectionMode 优先 multiple。',
-    },
-    {
-      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-      name: 'failure_compatibility',
-      title: '澄清问题：异常兼容',
-      guidance: '生成一个关于失败路径、兼容策略、旧数据或外部依赖异常时系统行为的问题。id 固定为 failure_compatibility。',
-    },
-    {
-      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-      name: 'validation_evidence',
-      title: '澄清问题：验证证据',
-      guidance: '生成一个关于自动检查、人工验收或制品审阅证据的问题。id 固定为 validation_evidence，required 可以为 false。',
-    },
-  ];
-
-  for (const step of steps) {
-    await input.onProgress?.({
-      activeStep: step,
-      completedSteps,
-      state: creationState,
-      clarification: assembleClarificationForm(creationState),
-    });
-    const output = await runLightweightWorkflowCreationItem({
-      step,
-      frontendSessionId: input.frontendSessionId,
-      runtimeSessionId,
-      systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
-      message: buildWorkflowCreationItemUserMessage(step, creationState),
-      workingDirectory: input.workingDirectory,
-      engine: input.engine,
-      model: input.model,
-    });
-    runtimeSessionId = output.runtimeSessionId;
-    creationState = applyWorkflowCreationItem(creationState, output.result);
-    completedSteps.push(step);
-    await input.onProgress?.({
-      activeStep: steps[completedSteps.length],
-      completedSteps,
-      state: creationState,
-      clarification: assembleClarificationForm(creationState),
-    });
-  }
-
-  const clarification = assembleClarificationForm(creationState);
-  if (!clarification.questions.length) {
-    throw new Error('AI 已返回澄清小点，但没有可展示的问题');
-  }
-  const creationContextSummary = [
-    clarification.summary ? `理解摘要：${clarification.summary}` : '',
-    clarification.knownFacts?.length ? `已确认事实：\n${clarification.knownFacts.map((item) => `- ${item}`).join('\n')}` : '',
-    clarification.missingFields?.length ? `待补信息：\n${clarification.missingFields.map((item) => `- ${item}`).join('\n')}` : '',
-    clarification.questions?.length ? `澄清问题：\n${clarification.questions.map((item) => `- ${item.label || item.id}: ${item.question}`).join('\n')}` : '',
-  ].filter(Boolean).join('\n\n');
-  return { clarification, runtimeSessionId, creationContextSummary };
-}
-
-function extractWorkflowStepPlan(configDraft: any): NonNullable<LightweightWorkflowDraft['stepPlan']> {
-  const states = Array.isArray(configDraft?.workflow?.states) ? configDraft.workflow.states : [];
-  return states.map((state: any) => ({
-    state: String(state?.name || '未命名状态'),
-    steps: (Array.isArray(state?.steps) ? state.steps : []).map((step: any) => ({
-      name: String(step?.name || '未命名步骤'),
-      agent: String(step?.agent || 'developer'),
-      task: String(step?.task || ''),
-    })),
-  })).filter((item: { steps: Array<{ name: string; agent: string; task: string }> }) => item.steps.length > 0);
-}
-
-function formatWorkflowStepPlan(stepPlan: NonNullable<LightweightWorkflowDraft['stepPlan']>): string {
-  if (!stepPlan.length) return '暂无执行步骤。';
-  return stepPlan.map((stateDoc, stateIndex) => [
-    `${stateIndex + 1}. ${stateDoc.state}`,
-    ...stateDoc.steps.map((step, stepIndex) => `   ${stateIndex + 1}.${stepIndex + 1} ${step.name}（${step.agent}）：${step.task}`),
-  ].join('\n')).join('\n');
-}
-
-function summarizeWorkflowAgents(configDraft: any): string {
-  const agents = new Set<string>();
-  const states = Array.isArray(configDraft?.workflow?.states) ? configDraft.workflow.states : [];
-  states.forEach((state: any) => {
-    (Array.isArray(state?.steps) ? state.steps : []).forEach((step: any) => {
-      const agent = String(step?.agent || '').trim();
-      if (agent) agents.add(agent);
-    });
-  });
-  return Array.from(agents).join('、') || '默认开发/评审 Agent';
-}
-
-function collectWorkflowAgentNames(configDraft: any): string[] {
-  const agents = new Set<string>();
-  const states = Array.isArray(configDraft?.workflow?.states) ? configDraft.workflow.states : [];
-  states.forEach((state: any) => {
-    (Array.isArray(state?.steps) ? state.steps : []).forEach((step: any) => {
-      const agent = String(step?.agent || '').trim();
-      if (agent && !['default-supervisor', 'supervisor', 'commander'].includes(agent)) agents.add(agent);
-    });
-  });
-  return Array.from(agents);
-}
-
-function buildWorkflowAgoraRoom(input: {
-  previous?: SessionWorkbenchState;
-  configDraft: any;
-  workflowName: string;
-  workingDirectory: string;
-  availableAgents: Array<{ name: string; description?: string; systemPrompt?: string; engine?: string; model?: string }>;
-}): NonNullable<SessionWorkbenchState['collaborationRoom']> {
-  const topic = `${input.workflowName} · 工作流议场`;
-  const base = createPlainConversationRoomState({ topic, responseMode: 'facilitated' });
-  const currentRoom = input.previous?.collaborationRoom || base;
-  const currentChatroom = currentRoom.chatroom || base.chatroom!;
-  const existingRoster = currentChatroom.participantRoster || [];
-  const existingNames = new Set(existingRoster.map((participant) => participant.name));
-  const nextAgents = collectWorkflowAgentNames(input.configDraft).filter((name) => !existingNames.has(name));
-  const nextRoster: CollaborationChatroomParticipant[] = [
-    ...existingRoster,
-    ...nextAgents.map((name) => {
-      const agent = input.availableAgents.find((item) => item.name === name);
-      return {
-        id: `workflow-agent-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        name,
-        sourceType: 'agent' as const,
-        sourceAgent: name,
-        runtimeAgentName: name,
-        systemPrompt: typeof agent?.systemPrompt === 'string' ? agent.systemPrompt : undefined,
-        useDefaultModel: !agent?.model,
-        engine: typeof agent?.engine === 'string' ? agent.engine : '',
-        model: typeof agent?.model === 'string' ? agent.model : '',
-        createdAt: Date.now(),
-      };
-    }),
-  ];
-  const participantNames = nextRoster.map((participant) => participant.name);
-  return {
-    ...currentRoom,
-    topic,
-    selectedAgents: participantNames,
-    mode: 'group-chat',
-    chatroom: {
-      ...base.chatroom!,
-      ...currentChatroom,
-      status: 'running',
-      topic,
-      participants: participantNames,
-      participantRoster: nextRoster,
-      settings: {
-        ...base.chatroom!.settings,
-        ...(currentChatroom.settings || {}),
-        responseMode: 'facilitated',
-        workspacePath: input.workingDirectory,
-      },
-    },
-  };
-}
-
-async function generateLightweightWorkflowDraft(input: {
-  answers: LightweightWorkflowAnswers;
-  frontendSessionId: string;
-  runtimeSessionId?: string;
-  creationContextSummary?: string;
-  conversationContext?: string;
-  workingDirectory: string;
-  workspaceMode: 'in-place' | 'isolated-copy';
-  engine?: string;
-  model?: string;
-  availableAgents?: string[];
-  onProgress?: (progress: LightweightWorkflowDraftProgress) => Promise<void> | void;
-}): Promise<LightweightWorkflowDraft> {
-  const fallbackDraft = buildLightweightWorkflowDraft(input.answers);
-  let runtimeSessionId: string | undefined = normalizeRuntimeSessionId(input.runtimeSessionId);
-  const requirements = fallbackDraft.requirements;
-  const availableStepAgents = (input.availableAgents || [])
-    .map((name) => String(name || '').trim())
-    .filter((name) => name && !['default-supervisor', 'supervisor', 'commander'].includes(name));
-  const recommendedAgents = availableStepAgents.length ? availableStepAgents : ['developer', 'architect', 'tester'];
-  const buildBaseContext = (repairContext?: string) => [
-    `工作流名称：${fallbackDraft.name}`,
-    `目标文件：configs/${fallbackDraft.filename}`,
-    `工作目录：${input.workingDirectory}`,
-    `工作区模式：${input.workspaceMode}`,
-    `需求描述：${requirements}`,
-    input.creationContextSummary ? `创建期上下文（来自刷新前已生成内容，必须继承）：\n${input.creationContextSummary}` : '',
-    input.conversationContext ? `当前对话中已确认的用户输入和系统卡片摘要，必须继承目标与约束：\n${input.conversationContext}` : '',
-    `可用普通执行 Agent：${recommendedAgents.join('、')}`,
-    '创建模式：首页对话内工作流；必须生成真正可执行的状态机工作流草案、执行步骤设计，并为每个步骤分配普通执行 Agent。',
-    '所有 state.steps[].agent 必须从“可用普通执行 Agent”中选择；不要编造 reviewer、developer 等不存在的 Agent 名称，除非它们明确出现在可用列表里。',
-    '禁止退化为单阶段单步骤占位流程。根据目标拆成 2-5 个状态；每个非终态 1-4 个步骤；最后有汇总状态。',
-    repairContext ? `上一版草案校验未通过，请只围绕下面问题修正结构，不要改变用户目标：\n${repairContext}` : '',
-  ].filter(Boolean).join('\n\n');
-
-  let repairContext = '';
-  const maxDraftAttempts = 3;
-  for (let draftAttempt = 1; draftAttempt <= maxDraftAttempts; draftAttempt += 1) {
-    let creationState = createEmptyWorkflowCreationState();
-    const completedTitles: string[] = draftAttempt > 1 ? ['已根据校验结果进入自动修正'] : [];
-    const baseContext = buildBaseContext(repairContext);
-    const outlineStep: WorkflowCreationItemStep = {
-      kind: WORKFLOW_STATE_OUTLINE_KIND,
-      name: 'workflow_outline',
-      title: draftAttempt > 1 ? '修正工作流状态轮廓' : '工作流状态轮廓',
-      guidance: '基于用户目标生成 2-5 个状态。必须包含初始状态和最终汇总状态；状态要体现真实执行阶段、评审/验证和收尾。',
-    };
-    await input.onProgress?.({
-      activeTitle: outlineStep.title,
-      completedTitles,
-      state: creationState,
-      retryNotice: draftAttempt > 1 ? {
-        title: '工作流草案校验',
-        attempt: draftAttempt,
-        maxAttempts: maxDraftAttempts,
-        reason: repairContext,
-      } : null,
-    });
-    const outlineOutput = await runLightweightWorkflowCreationItem({
-      step: outlineStep,
-      frontendSessionId: input.frontendSessionId,
-      runtimeSessionId,
-      systemPrompt: buildWorkflowCreationItemSystemPrompt(outlineStep, baseContext),
-      message: buildWorkflowCreationItemUserMessage(outlineStep, creationState),
-      workingDirectory: input.workingDirectory,
-      engine: input.engine,
-      model: input.model,
-      onRetry: (retryNotice) => input.onProgress?.({
-        activeTitle: outlineStep.title,
-        completedTitles,
-        state: creationState,
-        retryNotice,
-      }),
-    });
-    runtimeSessionId = outlineOutput.runtimeSessionId;
-    creationState = applyWorkflowCreationItem(creationState, outlineOutput.result);
-    completedTitles.push(outlineStep.title);
-    await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
-
-    for (const state of (creationState.workflow.outline || []).filter((item: any) => !item.isFinal)) {
-      const stateName = String(state?.name || '').trim();
-      if (!stateName) continue;
-      const step: WorkflowCreationItemStep = {
-        kind: WORKFLOW_STATE_STEPS_KIND,
-        name: `steps_${sanitizeWorkflowSlug(stateName)}`,
-        title: `状态步骤：${stateName}`,
-        guidance: `只为状态 "${stateName}" 生成 1-4 个可执行步骤。每步必须有 name、agent、task；agent 使用普通执行 Agent，不要用 supervisor。`,
-      };
-      await input.onProgress?.({ activeTitle: step.title, completedTitles, state: creationState });
-      const output = await runLightweightWorkflowCreationItem({
-        step,
-        frontendSessionId: input.frontendSessionId,
-        runtimeSessionId,
-        systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
-        message: [buildWorkflowCreationItemUserMessage(step, creationState), '', `当前必须补全的 stateName：${stateName}`].join('\n'),
-        workingDirectory: input.workingDirectory,
-        engine: input.engine,
-        model: input.model,
-        validationContext: {
-          expectedStateName: stateName,
-          availableStepAgents: recommendedAgents,
-          supervisorAgents: ['default-supervisor', 'supervisor', 'commander'],
-        },
-        onRetry: (retryNotice) => input.onProgress?.({ activeTitle: step.title, completedTitles, state: creationState, retryNotice }),
-      });
-      runtimeSessionId = output.runtimeSessionId;
-      creationState = applyWorkflowCreationItem(creationState, output.result);
-      completedTitles.push(step.title);
-      await input.onProgress?.({ activeTitle: undefined, completedTitles, state: creationState });
-    }
-
-    const configDraft = assembleWorkflowConfigFromItems(creationState, {
-      workflowName: fallbackDraft.name,
-      description: fallbackDraft.description,
-      requirements,
-      workingDirectory: input.workingDirectory,
-      workspaceMode: input.workspaceMode,
-      recommendedAgents,
-      recommendedSupervisorAgent: 'default-supervisor',
-      includeSpecTaskBindings: false,
-    });
-    const validation = await configApi.validateConfig({ config: configDraft }).then((data) => data.validation).catch((error) => ({
-      ok: false,
-      issues: [{ path: ['workflow'], message: error?.message || '配置校验失败' }],
-    }));
-    if (validation?.ok) {
-      const normalizedDraft = validation.normalized || configDraft;
-      const stepPlan = extractWorkflowStepPlan(normalizedDraft);
-      return {
-        ...fallbackDraft,
-        agents: summarizeWorkflowAgents(normalizedDraft),
-        configDraft: normalizedDraft,
-        stepPlan,
-      };
-    }
-    repairContext = formatWorkflowValidationIssues(validation);
-    if (draftAttempt >= maxDraftAttempts) {
-      throw new Error(repairContext || '工作流草案未通过校验');
-    }
-  };
-  throw new Error('工作流草案未通过校验');
-}
-
 function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
   switch (team) {
     case 'blue':
@@ -1510,6 +243,26 @@ function writeStoredSessionDirectoryView(view: SessionDirectoryView): void {
 
 function hasInlineCommandWhitespace(value: string): boolean {
   return Array.from(value).some((char) => char.trim().length === 0);
+}
+
+function hasDroppedFiles(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false;
+  if (Array.from(dataTransfer.types || []).includes('Files')) return true;
+  return Array.from(dataTransfer.items || []).some((item) => item.kind === 'file');
+}
+
+function getDroppedDirectoryEntry(dataTransfer: DataTransfer): WebkitFileSystemEntryLike | null {
+  for (const item of Array.from(dataTransfer.items || [])) {
+    const entry = (item as DataTransferItemWithEntry).webkitGetAsEntry?.();
+    if (entry?.isDirectory) return entry;
+  }
+  return null;
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${bytes}B`;
 }
 
 function createAgoraWorkbenchState(title = '新议题') {
@@ -1983,9 +736,11 @@ export function ChatPageContent({
     if (!Number.isFinite(saved)) return DEFAULT_HOME_SIDEBAR_SIZE;
     return Math.min(MAX_HOME_SIDEBAR_SIZE, Math.max(MIN_HOME_SIDEBAR_SIZE, saved));
   });
+  const [workflowCreatorOpen, setWorkflowCreatorOpen] = useState(false);
+  const [workflowCreatorSessionId, setWorkflowCreatorSessionId] = useState<string | null>(null);
+  const [workflowCreatorRequirements, setWorkflowCreatorRequirements] = useState(DEFAULT_AI_WORKFLOW_REQUIREMENTS);
   const starterHandledRef = useRef(false);
   const homeEntryResetHandledRef = useRef(false);
-  const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
   const lastHomeSidebarSyncRef = useRef('');
   const lastSessionDirectoryAutoSwitchRef = useRef('');
   const autoCreatedSessionIdRef = useRef<string | null>(null);
@@ -2007,10 +762,12 @@ export function ChatPageContent({
     return null;
   }, [activeSession?.messages, activeSession?.sessionWorkbenchState?.homeSidebar]);
 
-  const latestSidebarHint = activeSession?.sessionWorkbenchState?.homeSidebar || parsedSidebarHint;
+  const persistedSidebarHint = normalizeHomeSidebarHint(activeSession?.sessionWorkbenchState?.homeSidebar);
+  const latestSidebarHint = persistedSidebarHint || parsedSidebarHint;
   const activeChatWorkspacePath = String(activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
   const fallbackWorkingDirectory = String(workingDirectory || '').trim();
   const effectiveWorkingDirectory = activeChatWorkspacePath || fallbackWorkingDirectory;
+
   useEffect(() => {
     if (activeSessionId || activeSession?.id) {
       autoCreatedSessionIdRef.current = activeSessionId || activeSession?.id || null;
@@ -2021,9 +778,7 @@ export function ChatPageContent({
     (activeSession?.workflowBinding?.configFile && activeSession?.workflowBinding?.runId)
     || (activeSession?.sessionWorkbenchState?.embeddedWorkflow?.configFile && activeSession?.sessionWorkbenchState?.embeddedWorkflow?.runId)
   );
-  const hasCreationSidebarContext = Boolean(activeSession?.creationSession);
   const hasCollaborationSidebarContext = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom);
-  const isWerewolfLabMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled);
   const isBuiltInAgoraMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
   const renderDedicatedAgoraShell = false;
   const collaborationRoomCore = useCollaborationRoom({
@@ -2042,23 +797,20 @@ export function ChatPageContent({
   const hasCommanderSidebarContext = hasWorkflowSidebarContext;
   const hasHintSidebarContext = Boolean(
     latestSidebarHint?.intent
-    || latestSidebarHint?.workflowDraft
     || latestSidebarHint?.agentDraft
     || latestSidebarHint?.tabs?.length
   );
   const derivedHomeSidebarTab = useMemo(
     () => inferHomeSidebarTab(latestSidebarHint, {
       hasWorkflowBinding: hasCommanderSidebarContext,
-      hasCreationSession: hasCreationSidebarContext,
     }),
-    [hasCommanderSidebarContext, hasCreationSidebarContext, latestSidebarHint]
+    [hasCommanderSidebarContext, latestSidebarHint]
   );
   const derivedHomeSidebarMode = useMemo(
     () => inferHomeSidebarMode(latestSidebarHint, {
       hasWorkflowBinding: hasCommanderSidebarContext,
-      hasCreationSession: hasCreationSidebarContext,
     }),
-    [hasCommanderSidebarContext, hasCreationSidebarContext, latestSidebarHint]
+    [hasCommanderSidebarContext, latestSidebarHint]
   );
 
   const sessionScopedSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
@@ -2074,17 +826,11 @@ export function ChatPageContent({
       if (hasCommanderSidebarContext) {
         tabs.add('commander');
       }
-      if (hasWorkflowSidebarContext) {
-        tabs.add('workflow');
-      }
-      if (hasCreationSidebarContext) {
-        tabs.add('workflow');
-      }
     }
     if (tabs.size === 0 && hasCommanderSidebarContext) tabs.add('commander');
     if (tabs.size === 0 && latestSidebarHint) tabs.add(derivedHomeSidebarTab);
     return Array.from(tabs);
-  }, [derivedHomeSidebarTab, hasCommanderSidebarContext, hasCreationSidebarContext, hasWorkflowSidebarContext, latestSidebarHint, latestSidebarHint?.tabs]);
+  }, [derivedHomeSidebarTab, hasCommanderSidebarContext, latestSidebarHint, latestSidebarHint?.tabs]);
 
   const availableHomeSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
     const tabs = new Set<HomeSidebarTab>(sessionScopedSidebarTabs);
@@ -2094,7 +840,6 @@ export function ChatPageContent({
     return Array.from(tabs);
   }, [derivedHomeSidebarMode, derivedHomeSidebarTab, sessionScopedSidebarTabs]);
   const hasHomeSidebarContext = hasWorkflowSidebarContext
-    || hasCreationSidebarContext
     || hasHintSidebarContext;
   const availableHomeSidebarTabsKey = availableHomeSidebarTabs.join('|');
 
@@ -2104,13 +849,13 @@ export function ChatPageContent({
 
   useEffect(() => {
     if (!parsedSidebarHint) return;
-    const persisted = activeSession?.sessionWorkbenchState?.homeSidebar;
+    const persisted = persistedSidebarHint;
     if (JSON.stringify(parsedSidebarHint) === JSON.stringify(persisted || null)) return;
     setSessionWorkbenchState((prev) => ({
       ...(prev || {}),
       homeSidebar: parsedSidebarHint,
     }));
-  }, [activeSession?.sessionWorkbenchState?.homeSidebar, parsedSidebarHint, setSessionWorkbenchState]);
+  }, [parsedSidebarHint, persistedSidebarHint, setSessionWorkbenchState]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -2217,7 +962,6 @@ export function ChatPageContent({
       hasCollaborationSidebarContext
       && !hasCollaborationParticipants
       && !hasWorkflowSidebarContext
-      && !hasCreationSidebarContext
       && !hasHintSidebarContext
       && activeSession?.sessionWorkbenchState?.rightRail?.collapsed
     ) {
@@ -2244,7 +988,6 @@ export function ChatPageContent({
     hasHomeSidebarContext,
     hasCollaborationParticipants,
     hasCollaborationSidebarContext,
-    hasCreationSidebarContext,
     hasHintSidebarContext,
     hasMessages,
     hasWorkflowSidebarContext,
@@ -2263,7 +1006,6 @@ export function ChatPageContent({
     lastSessionDirectoryAutoSwitchRef.current = '';
     setSessionDirectoryView((prev) => (prev === 'conversation' ? prev : 'conversation'));
   }, [
-    activeSession?.creationSession?.creationSessionId,
     activeSession?.id,
     activeSession?.sessionWorkbenchState?.collaborationRoom,
     activeSession?.sessionWorkbenchState?.homeSidebar,
@@ -2325,7 +1067,7 @@ export function ChatPageContent({
 
     starterHandledRef.current = true;
     const sidebarTab = searchParams.get('sidebarTab');
-    if (sidebarTab === 'agent' || sidebarTab === 'workflow' || sidebarTab === 'commander') {
+    if (sidebarTab === 'agent' || sidebarTab === 'commander') {
       openHomeSidebar(sidebarTab);
     }
     const targetSession = sessions.find((session) => session.id === targetSessionId);
@@ -2361,7 +1103,7 @@ export function ChatPageContent({
       },
     });
 
-    if (sidebarTab === 'agent' || sidebarTab === 'workflow' || sidebarTab === 'commander') {
+    if (sidebarTab === 'agent' || sidebarTab === 'commander') {
       openHomeSidebar(sidebarTab);
     }
 
@@ -2394,7 +1136,7 @@ export function ChatPageContent({
       createSession({ title: sessionTitle?.trim() || '新对话' });
     }
 
-    if (sidebarTab === 'agent' || sidebarTab === 'workflow' || sidebarTab === 'commander') {
+    if (sidebarTab === 'agent' || sidebarTab === 'commander') {
       openHomeSidebar(sidebarTab);
     }
 
@@ -2416,14 +1158,6 @@ export function ChatPageContent({
   const canSubmitMessage = Boolean(input.trim() || pendingAttachment);
 
   const homepageSlashCommands = useMemo<HomepageSlashCommand[]>(() => ([
-    {
-      id: 'workflow',
-      command: '/workflow',
-      title: '创建工作流',
-      subtext: '在当前对话里启动 AI 引导的工作流创建',
-      icon: 'account_tree',
-      aliases: ['workflow', '工作流', 'plan'],
-    },
     {
       id: 'compact',
       command: '/compact',
@@ -2652,6 +1386,38 @@ export function ChatPageContent({
     setShowScrollBtn(false);
   }, []);
 
+  const openWorkflowCreator = useCallback((requirements?: string, targetSessionId?: string | null) => {
+    const sessionId = targetSessionId || activeSessionId || activeSession?.id || createAndActivateSession({ title: 'AI 引导创建工作流' });
+    setWorkflowCreatorSessionId(sessionId || null);
+    setWorkflowCreatorRequirements(requirements?.trim() || DEFAULT_AI_WORKFLOW_REQUIREMENTS);
+    setWorkflowCreatorOpen(true);
+    unlockAutoScroll();
+    setInput('');
+    editorRef.current?.clear();
+    if (loading) stopStreaming();
+  }, [activeSession?.id, activeSessionId, createAndActivateSession, loading, stopStreaming, unlockAutoScroll]);
+
+  const closeWorkflowCreator = useCallback(() => {
+    setWorkflowCreatorOpen(false);
+    setWorkflowCreatorSessionId(null);
+  }, []);
+
+  const handleWorkflowCreatorSuccess = useCallback((filename: string) => {
+    closeWorkflowCreator();
+    if (embedded && dockWorkspace) {
+      dockWorkspace.openTab({
+        id: `workbench:${filename}:design`,
+        title: filename,
+        kind: 'workbench',
+        config: filename,
+        mode: 'design',
+        search: 'mode=design',
+      });
+      return;
+    }
+    router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
+  }, [closeWorkflowCreator, dockWorkspace, embedded, router]);
+
   const scrollToBottom = useCallback(() => {
     unlockAutoScroll();
     isProgrammaticScrollRef.current = true;
@@ -2679,10 +1445,8 @@ export function ChatPageContent({
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
       ...(patch.shouldOpenModal !== undefined ? { shouldOpenModal: patch.shouldOpenModal } : {}),
     });
-    const shouldSwitchSessionDirectoryToWorkflow = patch.tab === 'workflow'
-      || patch.intent === 'create-workflow'
-      || patch.intent === 'workflow-run'
-      || patch.intent === 'workflow-review';
+    const shouldSwitchSessionDirectoryToWorkflow = patch.intent === 'workflow-run'
+      || patch.intent === 'supervisor-chat';
 
     if (patch.tab) setHomeSidebarTab((prev) => (prev === patch.tab ? prev : patch.tab!));
     if (patch.mode) setHomeSidebarMode((prev) => (prev === patch.mode ? prev : patch.mode!));
@@ -2937,701 +1701,8 @@ export function ChatPageContent({
     setStreamingMessageId(null);
     if (activeSessionId) {
       unmarkSessionStreaming(activeSessionId);
-      activeSession?.messages
-        .filter((message: any) => message?.workflowThinking)
-        .forEach((message) => {
-          void updateSessionMessage(activeSessionId, message.id, { workflowThinking: false } as any);
-        });
-      setSessionWorkbenchState((prev) => prev?.lightweightWorkflowDraft
-        ? { ...prev, lightweightWorkflowDraft: { ...prev.lightweightWorkflowDraft, busy: false } }
-        : (prev || {}));
     }
-  }, [activeSession?.messages, activeSessionId, setSessionWorkbenchState, stopStreaming, setStreamingMessageId, unmarkSessionStreaming, updateSessionMessage]);
-
-  const beginLightweightWorkflowClarification = useCallback(async (
-    requirements: string,
-    options?: { appendInitialUserMessage?: boolean },
-  ) => {
-    const normalizedRequirements = requirements.trim();
-    const now = Date.now();
-    const loadingMessageId = genLocalMessageId();
-    const clarificationFormMessageId = genLocalMessageId();
-    let clarificationFormMessageCreated = false;
-    let lastThinkingMessageId = loadingMessageId;
-    const title = normalizedRequirements
-      ? `工作流：${normalizedRequirements.slice(0, 32)}`
-      : '工作流';
-    const draft = buildLightweightWorkflowDraft({ initialRequirements: normalizedRequirements });
-    const nextState = {
-      conversationMode: 'workflow-drafting' as const,
-      lightweightWorkflowDraft: {
-        stage: 'clarification' as const,
-        busy: true,
-        clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
-        draft,
-      },
-      homeSidebar: null,
-      rightRail: null,
-    };
-
-    let targetSessionId = activeSessionId || activeSession?.id;
-    if (!activeSessionId && !activeSession) {
-      targetSessionId = createSession({
-        title,
-        sessionWorkbenchState: nextState,
-        messages: [
-          ...(normalizedRequirements ? [{
-            role: 'user' as const,
-            content: `/workflow ${normalizedRequirements}`,
-            timestamp: now,
-          }] : []),
-          {
-            id: loadingMessageId,
-            role: 'assistant' as const,
-            content: '我先按 AI 引导逻辑生成补充问答。接下来会把理解摘要、已知事实、待补缺口和问题逐段发在当前对话里。',
-            cards: [createWorkflowClarificationLoadingCard(normalizedRequirements)],
-            workflowThinking: true,
-            timestamp: now + 1,
-          },
-        ],
-      });
-      setActiveSessionId(targetSessionId);
-    } else {
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        ...nextState,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || {}),
-          ...nextState.lightweightWorkflowDraft,
-        },
-      }));
-      if (activeSessionId && normalizedRequirements && options?.appendInitialUserMessage !== false) {
-        await appendSessionMessage(activeSessionId, {
-          role: 'user',
-          content: `/workflow ${normalizedRequirements}`,
-          timestamp: now,
-        });
-      }
-      if (activeSessionId) {
-        await appendSessionMessage(activeSessionId, {
-          id: loadingMessageId,
-          role: 'assistant',
-          content: '我先按 AI 引导逻辑生成补充问答。接下来会把理解摘要、已知事实、待补缺口和问题逐段发在当前对话里。',
-          cards: [createWorkflowClarificationLoadingCard(normalizedRequirements)],
-          workflowThinking: true,
-          timestamp: now + 1,
-        });
-      }
-    }
-
-    setInput('');
-    editorRef.current?.clear();
-    setSlashMenuOpen(false);
-    setSessionDirectoryView('conversation');
-    setHomeSidebarMode('hidden');
-    toast('success', '开始分析需求并生成补充问题');
-
-    if (!targetSessionId) return;
-    try {
-      const clarificationResult = await generateLightweightWorkflowClarification({
-        requirements: normalizedRequirements || '用户希望创建一个工作流，但尚未补充具体目标。',
-        workflowName: draft.name,
-        filename: draft.filename,
-        workingDirectory: effectiveWorkingDirectory,
-        workspaceMode: 'in-place',
-        frontendSessionId: targetSessionId,
-        engine: effectiveEngine || engine,
-        model,
-        onProgress: async (progress) => {
-          await updateSessionMessage(targetSessionId!, loadingMessageId, {
-            content: '我先按 AI 引导逻辑生成补充问答。接下来会把理解摘要、已知事实、待补缺口和问题逐段发在当前对话里。',
-            cards: [createWorkflowClarificationLoadingCard(normalizedRequirements, {
-              activeTitle: progress.activeStep?.title,
-              completedTitles: progress.completedSteps.map((step) => step.title),
-              clarification: progress.clarification,
-            })],
-          });
-
-          const completedStep = progress.completedSteps[progress.completedSteps.length - 1];
-          if (!completedStep) return;
-          const hasQuestions = progress.clarification.questions.length > 0;
-          if (!hasQuestions || completedStep.kind !== WORKFLOW_CLARIFICATION_QUESTION_KIND) {
-            await updateSessionMessage(targetSessionId!, lastThinkingMessageId, { workflowThinking: false });
-            const progressMessageId = genLocalMessageId();
-            lastThinkingMessageId = progressMessageId;
-            await appendSessionMessage(targetSessionId!, {
-              id: progressMessageId,
-              role: 'assistant',
-              content: formatLightweightClarificationProgressMessage({
-                step: completedStep,
-                clarification: progress.clarification,
-              }),
-              workflowThinking: true,
-              timestamp: Date.now(),
-            });
-            return;
-          }
-
-          const pendingText = progress.activeStep
-            ? `正在生成：${progress.activeStep.title}`
-            : '正在收尾补充问答...';
-          if (!clarificationFormMessageCreated) {
-            clarificationFormMessageCreated = true;
-            await updateSessionMessage(targetSessionId!, lastThinkingMessageId, { workflowThinking: false });
-            lastThinkingMessageId = clarificationFormMessageId;
-            await appendSessionMessage(targetSessionId!, {
-              id: clarificationFormMessageId,
-              role: 'assistant',
-              content: '澄清问题开始生成了。已完成的问题会实时出现在下面，生成期间先不要提交。',
-              cards: [createWorkflowClarificationCard(progress.clarification, {
-                pending: true,
-                pendingText,
-              })],
-              workflowThinking: true,
-              timestamp: Date.now(),
-            });
-            return;
-          }
-
-          await updateSessionMessage(targetSessionId!, clarificationFormMessageId, {
-            content: '澄清问题正在继续生成。已完成的问题会实时出现在下面，生成期间先不要提交。',
-            cards: [createWorkflowClarificationCard(progress.clarification, {
-              pending: true,
-              pendingText,
-            })],
-            workflowThinking: true,
-          });
-        },
-      });
-      const clarification = clarificationResult.clarification;
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        conversationMode: 'workflow-drafting',
-        homeSidebar: null,
-        rightRail: null,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || {}),
-          stage: 'clarification',
-          busy: false,
-          runtimeSessionId: clarificationResult.runtimeSessionId,
-          creationContextSummary: clarificationResult.creationContextSummary,
-          clarificationForm: clarification,
-          clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
-          draft,
-        },
-      }));
-      await updateSessionMessage(targetSessionId, loadingMessageId, {
-        content: '前置信息整理完成，澄清问题已生成。',
-        cards: [],
-        workflowThinking: false,
-      });
-      if (clarificationFormMessageCreated) {
-        await updateSessionMessage(targetSessionId, clarificationFormMessageId, {
-          content: '补充问答已生成。先回答这些会影响编排的问题，再生成工作流草案。',
-          cards: [createWorkflowClarificationCard(clarification)],
-          workflowThinking: false,
-        });
-      } else {
-        await appendSessionMessage(targetSessionId, {
-          id: clarificationFormMessageId,
-          role: 'assistant',
-          content: '补充问答已生成。先回答这些会影响编排的问题，再生成工作流草案。',
-          cards: [createWorkflowClarificationCard(clarification)],
-          timestamp: Date.now(),
-        });
-      }
-    } catch (error: any) {
-      await appendSessionMessage(targetSessionId, {
-        role: 'assistant',
-        content: `生成补充问答失败：${error?.message || '未知错误'}\n\n请补充更明确的目标后重新输入 /workflow。`,
-        cards: [],
-        timestamp: Date.now(),
-      });
-      setSessionWorkbenchState((prev) => prev?.lightweightWorkflowDraft
-        ? { ...prev, lightweightWorkflowDraft: { ...prev.lightweightWorkflowDraft, busy: false } }
-        : (prev || {}));
-      await updateSessionMessage(targetSessionId, lastThinkingMessageId, { workflowThinking: false });
-    }
-  }, [
-    activeSession,
-    activeSessionId,
-    appendSessionMessage,
-    createSession,
-    effectiveEngine,
-    effectiveWorkingDirectory,
-    engine,
-    model,
-    setActiveSessionId,
-    setSessionWorkbenchState,
-    toast,
-    updateSessionMessage,
-  ]);
-
-  const startLightweightWorkflowDraft = useCallback(async (requirements: string) => {
-    const normalizedRequirements = requirements.trim();
-    const now = Date.now();
-    const title = normalizedRequirements
-      ? `工作流：${normalizedRequirements.slice(0, 32)}`
-      : '工作流';
-    const nextState = {
-      conversationMode: 'workflow-drafting' as const,
-      lightweightWorkflowDraft: {
-        stage: 'discovery' as const,
-        clarificationAnswers: normalizedRequirements ? { initialRequirements: normalizedRequirements } : {},
-      },
-      homeSidebar: null,
-      rightRail: null,
-    };
-    const introMessage = {
-      role: 'assistant' as const,
-      content: [
-        '请补充工作流目标与范围。',
-        '',
-        '提交后将结合当前代码仓语境生成补充问题，并据此起草工作流。',
-      ].join('\n'),
-      cards: [createWorkflowDiscoveryCard(normalizedRequirements, effectiveWorkingDirectory)],
-      timestamp: now + 1,
-    };
-
-    let targetSessionId = activeSessionId || activeSession?.id;
-    if (!targetSessionId && !activeSession) {
-      targetSessionId = createSession({
-        title,
-        sessionWorkbenchState: nextState,
-        messages: [
-          ...(normalizedRequirements ? [{
-            role: 'user' as const,
-            content: `/workflow ${normalizedRequirements}`,
-            timestamp: now,
-          }] : []),
-          introMessage,
-        ],
-      });
-      setActiveSessionId(targetSessionId);
-    } else {
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        ...nextState,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || {}),
-          ...nextState.lightweightWorkflowDraft,
-        },
-      }));
-      if (targetSessionId && normalizedRequirements) {
-        await appendSessionMessage(targetSessionId, {
-          role: 'user',
-          content: `/workflow ${normalizedRequirements}`,
-          timestamp: now,
-        });
-      }
-      if (targetSessionId) {
-        await appendSessionMessage(targetSessionId, introMessage);
-      }
-    }
-
-    setInput('');
-    editorRef.current?.clear();
-    setSlashMenuOpen(false);
-    setSessionDirectoryView('conversation');
-    setHomeSidebarMode('hidden');
-    toast('success', '已启动工作流需求探索');
-  }, [
-    activeSession,
-    activeSessionId,
-    appendSessionMessage,
-    createSession,
-    effectiveWorkingDirectory,
-    setActiveSessionId,
-    setSessionWorkbenchState,
-    toast,
-  ]);
-
-  const handleLightweightWorkflowDraftAction = useCallback(async (prompt: string) => {
-    const parsed = decodeWorkflowDraftAction(prompt);
-    if (!parsed) return false;
-    const sessionId = activeSessionId || activeSession?.id;
-    if (!sessionId) return true;
-    const now = Date.now();
-    const currentDraftState = activeSession?.sessionWorkbenchState?.lightweightWorkflowDraft;
-    const currentAnswers = currentDraftState?.clarificationAnswers;
-
-    if (parsed.action === 'discovery_submit') {
-      const answers = mergeWorkflowAnswers(currentAnswers, parsed.values);
-      const initialRequirements = [
-        answers.initialRequirements,
-        answers.goal ? `交付物：${answers.goal}` : '',
-        answers.constraints ? `约束/范围：${answers.constraints}` : '',
-        answers.scope ? `代码仓探索范围：${answers.scope}` : '',
-      ].filter(Boolean).join('\n');
-      await appendSessionMessage(sessionId, {
-        role: 'user',
-        content: `工作流需求：\n${initialRequirements || '请帮我创建一个工作流'}`,
-        timestamp: now,
-      });
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        conversationMode: 'workflow-drafting',
-        homeSidebar: null,
-        rightRail: null,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || {}),
-          stage: 'clarification',
-          clarificationAnswers: answers,
-        },
-      }));
-      await beginLightweightWorkflowClarification(
-        initialRequirements || answers.initialRequirements || answers.goal || '',
-        { appendInitialUserMessage: false },
-      );
-      return true;
-    }
-
-    if (parsed.action === 'clarify') {
-      const clarificationForm = currentDraftState?.clarificationForm as ClarificationFormResult | undefined;
-      const answerContext = clarificationForm
-        ? buildClarificationAnswerContext(clarificationForm.questions || [], parsed.values)
-        : '';
-      const previousAnswers = mergeWorkflowAnswers(currentAnswers, {});
-      const answers = {
-        ...previousAnswers,
-        clarificationAnswers: parsed.values,
-        clarificationAnswerContext: answerContext,
-        goal: previousAnswers.initialRequirements || answerContext || '自动化任务',
-        constraints: answerContext,
-      };
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        conversationMode: 'workflow-drafting',
-        homeSidebar: null,
-        rightRail: null,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || {}),
-          stage: 'generating',
-          busy: true,
-          runtimeSessionId: currentDraftState?.runtimeSessionId,
-          creationContextSummary: currentDraftState?.creationContextSummary,
-          clarificationForm: currentDraftState?.clarificationForm,
-          draft: currentDraftState?.draft,
-          clarificationAnswers: answers,
-        },
-      }));
-      await appendSessionMessage(sessionId, {
-        role: 'user',
-        content: answerContext ? `已提交补充问答：\n${answerContext}` : '已提交补充问答',
-        timestamp: now,
-      });
-      const progressMessageId = `workflow-draft-progress-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await appendSessionMessage(sessionId, {
-        id: progressMessageId,
-        role: 'assistant',
-        content: '正在生成工作流草案。',
-        cards: [createWorkflowDraftProgressCard({
-          completedTitles: [],
-          state: createEmptyWorkflowCreationState(),
-        })],
-        timestamp: now + 1,
-        workflowThinking: true,
-      });
-      let draft: LightweightWorkflowDraft;
-      try {
-        draft = await generateLightweightWorkflowDraft({
-          answers,
-          frontendSessionId: sessionId,
-          runtimeSessionId: currentDraftState?.runtimeSessionId,
-          creationContextSummary: [
-            currentDraftState?.creationContextSummary,
-            answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
-          ].filter(Boolean).join('\n\n'),
-          conversationContext: buildWorkflowConversationContext(activeSession?.messages),
-          workingDirectory: effectiveWorkingDirectory,
-          workspaceMode: 'in-place',
-          engine: effectiveEngine || engine,
-          model,
-          availableAgents: availableMentionAgents.map((agent) => agent.name),
-          onProgress: async (progress) => {
-            if (!progressMessageId) return;
-            await updateSessionMessage(sessionId, progressMessageId, {
-              content: progress.activeTitle ? `正在生成：${progress.activeTitle}` : '正在生成工作流草案。',
-              cards: [createWorkflowDraftProgressCard(progress)],
-              workflowThinking: true,
-            });
-          },
-        });
-      } catch (error: any) {
-        await updateSessionMessage(sessionId, progressMessageId, {
-          content: '工作流草案还需要继续修正。我已经保留当前上下文，请补充你的偏好后继续生成。',
-          cards: [createWorkflowCreationIssueCard(error?.message || '工作流草案未通过校验')],
-          workflowThinking: false,
-        });
-        setSessionWorkbenchState((prev) => ({
-          ...(prev || {}),
-          conversationMode: 'workflow-drafting',
-          homeSidebar: null,
-          rightRail: null,
-          lightweightWorkflowDraft: {
-            ...(prev?.lightweightWorkflowDraft || {}),
-            stage: 'clarification',
-            busy: false,
-            runtimeSessionId: currentDraftState?.runtimeSessionId,
-            creationContextSummary: currentDraftState?.creationContextSummary,
-            clarificationForm: currentDraftState?.clarificationForm,
-            clarificationAnswers: answers,
-          },
-        }));
-        return true;
-      }
-      if (progressMessageId) {
-        await updateSessionMessage(sessionId, progressMessageId, {
-          content: '工作流草案已生成，下面是状态结构、执行步骤和 Agent 分配。',
-          workflowThinking: false,
-        });
-      }
-      await appendSessionMessage(sessionId, {
-        role: 'assistant',
-        content: [
-          '我已生成真正的工作流草案。确认后再设置执行目录和是否立即运行。',
-          '',
-          '执行步骤：',
-          formatWorkflowStepPlan(draft.stepPlan || []),
-        ].join('\n'),
-        cards: [createWorkflowDraftCard(draft)],
-        timestamp: Date.now(),
-      });
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        conversationMode: 'workflow-drafting',
-        homeSidebar: null,
-        rightRail: null,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || {}),
-          stage: 'draft',
-          busy: false,
-          runtimeSessionId: currentDraftState?.runtimeSessionId,
-          creationContextSummary: [
-            currentDraftState?.creationContextSummary,
-            answers.clarificationAnswerContext ? `补充问答回答：\n${answers.clarificationAnswerContext}` : '',
-          ].filter(Boolean).join('\n\n'),
-          clarificationForm: currentDraftState?.clarificationForm,
-          clarificationAnswers: answers,
-          draft,
-        },
-      }));
-      return true;
-    }
-
-    if (parsed.action === 'draft_confirm') {
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        conversationMode: 'workflow-drafting',
-        homeSidebar: null,
-        rightRail: null,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || { stage: 'draft' }),
-          stage: 'confirming',
-          busy: false,
-        },
-      }));
-      await appendSessionMessage(sessionId, {
-        role: 'assistant',
-        content: '确认一下执行设置。只有选择启动后，我才会打开右侧工作流运行状态。',
-        cards: [createWorkflowExecutionOptionsCard(effectiveWorkingDirectory)],
-        timestamp: now,
-      });
-      return true;
-    }
-
-    if (parsed.action === 'execution_options') {
-      const previousAnswers = mergeWorkflowAnswers(currentAnswers, {});
-      const options = mergeWorkflowAnswers(previousAnswers, parsed.values);
-      const draft = (currentDraftState?.draft && typeof currentDraftState.draft === 'object'
-        ? currentDraftState.draft
-        : buildLightweightWorkflowDraft(options)) as LightweightWorkflowDraft;
-      const workingDir = options.executionDirectory || effectiveWorkingDirectory;
-      const workspaceMode = options.workspaceMode || 'in-place';
-      const autoStart = options.autoStart !== 'no';
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        conversationMode: 'workflow-drafting',
-        homeSidebar: null,
-        rightRail: null,
-        lightweightWorkflowDraft: {
-          ...(prev?.lightweightWorkflowDraft || {}),
-          stage: 'generating',
-          busy: true,
-          clarificationAnswers: options,
-          draft,
-        },
-      }));
-      await appendSessionMessage(sessionId, {
-        role: 'user',
-        content: `执行目录：${workingDir}\n运行方式：${workspaceMode === 'in-place' ? '直接当前目录运行' : '隔离副本运行'}\n创建后：${autoStart ? '立即启动' : '暂不启动'}`,
-        timestamp: now,
-      });
-      try {
-        const created = await configApi.createConfig({
-          filename: draft.filename,
-          workflowName: draft.name,
-          workingDirectory: workingDir,
-          workspaceMode,
-          description: draft.description,
-          requirements: draft.requirements,
-          mode: 'state-machine',
-          skipSpecCoding: true,
-          frontendSessionId: sessionId,
-          configDraft: draft.configDraft,
-        });
-        const filename = created.filename || draft.filename;
-        await appendSessionMessage(sessionId, {
-          role: 'assistant',
-          content: [
-            autoStart ? '配置创建完成，开始启动工作流。' : '配置创建完成，尚未启动。',
-            '',
-            '已升级为工作流议场，并按步骤分配 Agent：',
-            draft.agents,
-          ].join('\n'),
-          cards: [createWorkflowCreatedCard({ filename, autoStart })],
-          timestamp: now + 1,
-        });
-        setSessionWorkbenchState((prev) => ({
-          ...(prev || {}),
-          conversationMode: autoStart ? 'workflow-running' : 'workflow-drafting',
-          homeSidebar: null,
-          rightRail: autoStart ? { activePluginId: 'workflow-monitor', collapsed: false, pinned: true, updatedAt: Date.now() } : null,
-          embeddedWorkflow: {
-            ...(prev?.embeddedWorkflow || {}),
-            configFile: filename,
-            activePanel: 'status',
-          },
-          collaborationRoom: draft.configDraft ? buildWorkflowAgoraRoom({
-            previous: prev,
-            configDraft: draft.configDraft,
-            workflowName: draft.name,
-            workingDirectory: workingDir,
-            availableAgents: availableMentionAgents,
-          }) : prev?.collaborationRoom,
-          chatWorkspace: {
-            ...(prev?.chatWorkspace || {}),
-            workingDirectory: workingDir,
-            sourceWorkspace: workingDir,
-            updatedAt: Date.now(),
-          },
-          lightweightWorkflowDraft: {
-            ...(prev?.lightweightWorkflowDraft || {}),
-            stage: autoStart ? 'starting' : 'confirming',
-            busy: autoStart,
-            clarificationAnswers: options,
-            draft: { ...draft, filename },
-          },
-        }));
-        if (!autoStart) return true;
-        const startResult = await workflowApi.start(filename, sessionId, { skipPreflight: true });
-        const runId = startResult.runId || '';
-        setSessionWorkbenchState((prev) => ({
-          ...(prev || {}),
-          conversationMode: 'workflow-running',
-          homeSidebar: null,
-          rightRail: { activePluginId: 'workflow-monitor', collapsed: false, pinned: true, updatedAt: Date.now() },
-          embeddedWorkflow: {
-            ...(prev?.embeddedWorkflow || {}),
-            configFile: filename,
-            runId: runId || prev?.embeddedWorkflow?.runId,
-            activePanel: 'status',
-          },
-          collaborationRoom: draft.configDraft ? buildWorkflowAgoraRoom({
-            previous: prev,
-            configDraft: draft.configDraft,
-            workflowName: draft.name,
-            workingDirectory: workingDir,
-            availableAgents: availableMentionAgents,
-          }) : prev?.collaborationRoom,
-          lightweightWorkflowDraft: null,
-        }));
-        setHomeSidebarTab('workflow');
-        setHomeSidebarMode('active');
-        await appendSessionMessage(sessionId, {
-          role: 'assistant',
-          content: runId ? `工作流已启动：${runId}` : '工作流已启动。',
-          cards: [createWorkflowStartedCard({ filename, runId })],
-          timestamp: Date.now(),
-        });
-      } catch (error: any) {
-        setSessionWorkbenchState((prev) => ({
-          ...(prev || {}),
-          conversationMode: 'workflow-drafting',
-          homeSidebar: null,
-          rightRail: null,
-          lightweightWorkflowDraft: {
-            ...(prev?.lightweightWorkflowDraft || {}),
-            stage: 'confirming',
-            busy: false,
-          },
-        }));
-        await appendSessionMessage(sessionId, {
-          role: 'assistant',
-          content: '当前工作流草案还不能直接保存，需要继续调整结构。',
-          cards: [createWorkflowCreationIssueCard(error?.message || '未知错误')],
-          timestamp: Date.now(),
-        });
-      }
-      return true;
-    }
-
-    if (parsed.action === 'start') {
-      const filename = stringifyWorkflowAnswer(parsed.values.filename);
-      if (!filename) {
-        toast('warning', '缺少工作流配置文件');
-        return true;
-      }
-      try {
-        const startResult = await workflowApi.start(filename, sessionId, { skipPreflight: true });
-        const runId = startResult.runId || '';
-        setSessionWorkbenchState((prev) => ({
-          ...(prev || {}),
-          conversationMode: 'workflow-running',
-          homeSidebar: null,
-          rightRail: { activePluginId: 'workflow-monitor', collapsed: false, pinned: true, updatedAt: Date.now() },
-          embeddedWorkflow: {
-            ...(prev?.embeddedWorkflow || {}),
-            configFile: filename,
-            runId: runId || prev?.embeddedWorkflow?.runId,
-            activePanel: 'status',
-          },
-          lightweightWorkflowDraft: null,
-        }));
-        setHomeSidebarTab('workflow');
-        setHomeSidebarMode('active');
-        await appendSessionMessage(sessionId, {
-          role: 'assistant',
-          content: runId ? `工作流已启动：${runId}` : '工作流已启动。',
-          cards: [createWorkflowStartedCard({ filename, runId })],
-          timestamp: Date.now(),
-        });
-      } catch (error: any) {
-        await appendSessionMessage(sessionId, {
-          role: 'assistant',
-          content: `启动失败：${error?.message || '未知错误'}`,
-          timestamp: Date.now(),
-        });
-      }
-      return true;
-    }
-
-    return true;
-  }, [
-    activeSession,
-    activeSessionId,
-    appendSessionMessage,
-    availableMentionAgents,
-    effectiveEngine,
-    effectiveWorkingDirectory,
-    engine,
-    beginLightweightWorkflowClarification,
-    model,
-    setHomeSidebarMode,
-    setSessionWorkbenchState,
-    toast,
-    updateSessionMessage,
-  ]);
+  }, [activeSessionId, stopStreaming, setStreamingMessageId, unmarkSessionStreaming]);
 
   const sendUnifiedAgentChatMessage = useCallback(async (message: string) => {
     const knownAgentNames = availableMentionAgents.map((agent) => String(agent.name || '').trim()).filter(Boolean);
@@ -4014,6 +2085,17 @@ export function ChatPageContent({
     const displayMessage = pendingAttachment
       ? [normalized || '请查看附件', `\n[附件] ${pendingAttachment.name} (${formatAttachmentSize(pendingAttachment.size)})`].join('\n')
       : normalized;
+    const shouldOpenWorkflowCreator = shouldOpenAiWorkflowCreatorFromConversation(normalized, {
+      creationAssistantEnabled: creationAssistantDefaultEnabled,
+      sessionCreationAssistantEnabled: activeSession?.sessionWorkbenchState?.creationAssistantEnabled,
+      hasWorkflowBinding: Boolean(activeSession?.workflowBinding),
+      hasAgentBinding: Boolean(activeSession?.agentBinding),
+      hasCollaboration: hasCollaborationSidebarContext,
+    });
+    if (!pendingAttachment && shouldOpenWorkflowCreator) {
+      openWorkflowCreator(normalized);
+      return;
+    }
     if (!pendingAttachment && normalized === '/compact') {
       if (loading) {
         toast('warning', '当前正在生成，请先停止后再压缩上下文');
@@ -4031,11 +2113,6 @@ export function ChatPageContent({
       } finally {
         editorRef.current?.focus();
       }
-      return;
-    }
-    if (!pendingAttachment && (normalized === '/workflow' || normalized.startsWith('/workflow '))) {
-      const requirements = normalized.replace(/^\/workflow\b/i, '').trim();
-      await startLightweightWorkflowDraft(requirements);
       return;
     }
     if (!isModelSelectionReady) {
@@ -4075,7 +2152,7 @@ export function ChatPageContent({
     }
     await sendMessage(messageToSend, { displayText: displayMessage, targetSessionId });
     editorRef.current?.focus();
-  }, [activeSession?.id, activeSessionId, attachmentUploading, compactActiveSession, createAndActivateSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, pendingAttachment, sendMessage, sendUnifiedAgentChatMessage, startLightweightWorkflowDraft, stopStreaming, toast, unlockAutoScroll]);
+  }, [activeSession?.agentBinding, activeSession?.id, activeSession?.sessionWorkbenchState?.creationAssistantEnabled, activeSession?.workflowBinding, activeSessionId, attachmentUploading, compactActiveSession, createAndActivateSession, creationAssistantDefaultEnabled, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, openWorkflowCreator, pendingAttachment, sendMessage, sendUnifiedAgentChatMessage, stopStreaming, toast, unlockAutoScroll]);
 
   const applySlashCommand = useCallback(async (commandId: string) => {
     if (commandId === 'compact') {
@@ -4083,17 +2160,12 @@ export function ChatPageContent({
       await submitMessage('/compact');
       return;
     }
-    if (commandId === 'workflow') {
-      setSlashMenuOpen(false);
-      await startLightweightWorkflowDraft('');
-      return;
-    }
     const command = homepageSlashCommands.find((item) => item.id === commandId);
     if (command?.prompt) {
       setSlashMenuOpen(false);
       await submitMessage(command.prompt);
     }
-  }, [homepageSlashCommands, startLightweightWorkflowDraft, submitMessage]);
+  }, [homepageSlashCommands, submitMessage]);
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
@@ -4215,11 +2287,6 @@ export function ChatPageContent({
   }, [dockWorkspace, embedded, loading, router, stopStreaming, toast, unlockAutoScroll]);
 
   const handleQuickAction = useCallback((prompt: string) => {
-    if (prompt.startsWith(WORKFLOW_DRAFT_ACTION_PREFIX)) {
-      void handleLightweightWorkflowDraftAction(prompt);
-      return;
-    }
-
     if (prompt.startsWith('__HOME_ACTION__:workflow_open:')) {
       const workflowOpenConfig = decodeWorkflowActionFilename(prompt, '__HOME_ACTION__:workflow_open:');
       handleWorkflowOpenAction(workflowOpenConfig);
@@ -4232,12 +2299,13 @@ export function ChatPageContent({
       return;
     }
 
-    if (prompt === '__HOME_ACTION__:create_workflow') {
-      unlockAutoScroll();
-      setInput('');
-      editorRef.current?.clear();
-      if (loading) stopStreaming();
-      void startLightweightWorkflowDraft('');
+    if (isAiWorkflowCreatorAction(prompt)) {
+      openWorkflowCreator();
+      return;
+    }
+
+    if (isCodespecWorkflowCreatorAction(prompt)) {
+      openWorkflowCreator(CODESPEC_WORKFLOW_CREATOR_REQUIREMENTS);
       return;
     }
 
@@ -4298,6 +2366,7 @@ export function ChatPageContent({
     handleWorkflowStartAction,
     loading,
     openHomeSidebar,
+    openWorkflowCreator,
     sendMessage,
     setActiveSessionId,
     setHomeSidebarMode,
@@ -4306,8 +2375,6 @@ export function ChatPageContent({
     toast,
     unlockAutoScroll,
     effectiveWorkingDirectory,
-    handleLightweightWorkflowDraftAction,
-    startLightweightWorkflowDraft,
   ]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
@@ -4350,24 +2417,24 @@ export function ChatPageContent({
     const sidebarTab = searchParams.get('sidebarTab');
     const sessionTitle = searchParams.get('sessionTitle');
     const existingSessionId = searchParams.get('sessionId');
+    const targetSessionId = existingSessionId || createSession({ title: sessionTitle?.trim() || '新对话' });
     if (existingSessionId) {
       const targetSession = sessions.find((session) => session.id === existingSessionId);
       if (targetSession) {
         setSessionDirectoryView('conversation');
       }
       setActiveSessionId(existingSessionId);
-    } else {
-      createSession({ title: sessionTitle?.trim() || '新对话' });
     }
 
-    if (sidebarTab === 'agent' || sidebarTab === 'workflow' || sidebarTab === 'commander') {
+    if (sidebarTab === 'agent' || sidebarTab === 'commander') {
       openHomeSidebar(sidebarTab);
     }
 
     if (starterAction === 'create_agent') {
       handleQuickAction('__HOME_ACTION__:create_agent');
-    } else if (starterAction === 'create_workflow') {
-      handleQuickAction('__HOME_ACTION__:create_workflow');
+    }
+    if (isAiWorkflowCreatorStarterAction(starterAction)) {
+      openWorkflowCreator(undefined, targetSessionId);
     }
 
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -4377,15 +2444,14 @@ export function ChatPageContent({
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, handleQuickAction, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
+  }, [createSession, handleQuickAction, openWorkflowCreator, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
 
   const messages = dbBackedActiveSession?.messages || [];
   const isCurrentSessionLoading = Boolean(activeSessionId && sessionLoadingId === activeSessionId);
   const activeAiBusy = isChatAiBusy({
     loading,
     streamingMessageId,
-    messages: messages as any[],
-    sessionWorkbenchState: activeSession?.sessionWorkbenchState,
+    messages: messages as Array<{ workflowThinking?: boolean }>,
   });
 
   useEffect(() => {
@@ -4659,11 +2725,10 @@ export function ChatPageContent({
   const isChatroomCentralTranscript = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
   const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(messages as any[], {
     streamingMessageId,
-    forceFullWindow: Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled),
     ...(isChatroomCentralTranscript
       ? { minRecentMessages: 100, maxRecentMessages: 100, targetWeight: Number.MAX_SAFE_INTEGER }
       : {}),
-  }), [messages, streamingMessageId, activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled, isChatroomCentralTranscript]);
+  }), [messages, streamingMessageId, isChatroomCentralTranscript]);
 
   const renderedMessages = useMemo(() => {
     const hiddenCount = Math.max(0, messages.length - recentWindowSize);
@@ -4682,8 +2747,7 @@ export function ChatPageContent({
       const isStreaming = msg.id === streamingMessageId;
       let displayMsg = msg;
       let hasSidebarHint = false;
-      const isWerewolfMessage = Boolean((msg.cards || []).some((card: any) => card?.type === 'werewolf_speech'));
-      if (msg.role === 'assistant' && !isWerewolfMessage) {
+      if (msg.role === 'assistant') {
         const raw = msg.rawContent || msg.content || '';
         const normalized = normalizeAssistantDisplay(raw, isStreaming);
         hasSidebarHint = normalized.hasSidebarHint;
@@ -4708,7 +2772,6 @@ export function ChatPageContent({
             onContinue={msg.role === 'error' ? continueFromMessage : undefined}
             onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
             onQuoteMessage={handleQuoteMessage}
-            werewolfView={activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolfView}
             currentUser={currentUser}
           />
           {hasSidebarHint && (
@@ -4922,28 +2985,6 @@ export function ChatPageContent({
     setChatWorkspaceDraft('');
     toast('success', '已恢复会话默认工作区');
   }, [defaultChatWorkspacePath, setSessionWorkbenchState, toast]);
-
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const root = document.documentElement;
-
-    if (isWerewolfLabMode) {
-      if (werewolfPreviousDarkClassRef.current === null) {
-        werewolfPreviousDarkClassRef.current = root.classList.contains('dark');
-      }
-      root.classList.add('dark');
-      return;
-    }
-
-    const previousHadDarkClass = werewolfPreviousDarkClassRef.current;
-    if (previousHadDarkClass === null) return;
-    werewolfPreviousDarkClassRef.current = null;
-    if (previousHadDarkClass) {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
-  }, [activeSession?.id, isWerewolfLabMode]);
 
   const activeAgentAvatarSrc = activeAgentBinding
     ? resolveAgentAvatarSrc(undefined, activeAgentBinding.agentName, {
@@ -5286,7 +3327,6 @@ export function ChatPageContent({
       ref={containerRef}
       className={cn(
         embedded ? 'h-full min-h-0 flex overflow-hidden bg-background' : 'h-screen flex overflow-hidden bg-background',
-        isWerewolfLabMode && 'werewolf-wood-bg'
       )}
       {...composerDropProps}
     >
@@ -5332,12 +3372,11 @@ export function ChatPageContent({
         ) : null}
 
         <ResizablePanel id="chat-primary-main-panel" defaultSize={100} minSize={35} className="min-w-0">
-      <div className={cn('flex h-full min-w-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
+      <div className="flex h-full min-w-0 flex-col">
         {!isDashboardShell ? (
           <PageHeader
             className={cn(
               'shrink-0 bg-card px-4 py-3',
-              isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-900/35'
             )}
             eyebrow="Start"
             title={chatTitle === '首页' ? '对话' : chatTitle}
@@ -5571,11 +3610,11 @@ export function ChatPageContent({
           <>
           <ResizablePanelGroup
             orientation="horizontal"
-            className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}
+            className="h-full"
             onLayoutChanged={handleHomeSidebarLayout}
           >
             <ResizablePanel id="home-main-panel" defaultSize={homeSidebarMode === 'active' ? `${100 - homeSidebarSize}%` : '100%'} minSize="42%">
-              <div className={cn('flex h-full min-h-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
+              <div className="flex h-full min-h-0 flex-col">
                 <div className="flex-1 relative min-h-0">
                   {embedded && hideSidebar && onOpenSecondarySidebar ? (
                     <Button
@@ -5596,7 +3635,6 @@ export function ChatPageContent({
                     ref={scrollContainerRef}
                     className={cn(
                       'home-chat-scroll absolute inset-0 overflow-y-auto px-4 pb-6 pt-8 md:px-8 lg:px-16',
-                      isWerewolfLabMode && 'werewolf-wood-main'
                     )}
                   >
                     {messages.length === 0 && isCurrentSessionLoading ? (
@@ -5618,7 +3656,7 @@ export function ChatPageContent({
                           className="w-full max-w-2xl border-border bg-card"
                           icon={<RobotLogo size={26} />}
                           title={activeAgentBinding?.agentName ? `与 ${activeAgentBinding.agentName} 对话` : '开始一个任务对话'}
-                          description={activeAgentBinding?.agentName ? '当前会话已绑定 Agent，发送消息即可继续协作。' : `描述需求、附加文件，或从下方工具区创建 workflow / agent。v${pkgJson.version}`}
+                          description={activeAgentBinding?.agentName ? '当前会话已绑定 Agent，发送消息即可继续协作。' : `描述需求、附加文件，或从下方工具区继续操作。v${pkgJson.version}`}
                         />
                         <QuickActions onAction={handleQuickAction} skillSettings={skillSettings} slashCommands={engineSlashCommands} />
                       </div>
@@ -5658,7 +3696,6 @@ export function ChatPageContent({
                   <div
                     className={cn(
                       'home-chat-input-tray relative z-30 shrink-0 isolate border-t bg-[#F7F7F4] px-4 py-3 dark:bg-[#11111A] md:px-8 lg:px-16',
-                      isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
                     )}
                   >
                     {messages.length > 0 && (
@@ -5851,19 +3888,17 @@ export function ChatPageContent({
                         onExpand={() => openHomeSidebar(homeSidebarTab)}
                         expanded={homeSidebarMode === 'active'}
                         ensureSessionId={createSession}
-                        werewolfMode={isWerewolfLabMode}
                       />
                     )}
                   />
                 </ResizablePanel>
               </>
             ) : homeSidebarMode === 'peek' ? (
-              <div className={cn('hidden lg:flex items-start border-l bg-card/20', isWerewolfLabMode && 'werewolf-wood-panel border-l-stone-700/60')}>
+              <div className="hidden lg:flex items-start border-l bg-card/20">
                 <button
                   type="button"
                   className={cn(
                     'm-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-lg border bg-background/82 px-2 py-4 text-[12px] text-muted-foreground backdrop-blur-sm transition-colors duration-150 hover:bg-muted/30 hover:text-foreground',
-                    isWerewolfLabMode && 'border-stone-600/70 bg-stone-950/35 text-stone-300 hover:text-stone-100'
                   )}
                   onClick={() => openHomeSidebar(homeSidebarTab)}
                   title="展开右侧上下文与指挥区"
@@ -6144,6 +4179,20 @@ export function ChatPageContent({
       </div>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <NewConfigModal
+        isOpen={workflowCreatorOpen}
+        onClose={closeWorkflowCreator}
+        onSuccess={handleWorkflowCreatorSuccess}
+        homepageCompact
+        initialMode="lightweight"
+        initialWorkflowName="轻量工作流"
+        initialRequirements={workflowCreatorRequirements}
+        initialDescription={DEFAULT_AI_WORKFLOW_DESCRIPTION}
+        initialWorkingDirectory={effectiveWorkingDirectory}
+        frontendSessionId={workflowCreatorSessionId}
+        aiGuidedEntry
+      />
 
       <WeChatSessionBindDialog
         open={wechatBindDialogOpen}

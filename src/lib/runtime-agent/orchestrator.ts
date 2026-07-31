@@ -22,9 +22,10 @@ import type {
   RuntimeSessionRef,
   RuntimeSessionStatus,
   RuntimeTurnStatus,
-  TokenUsage,
-  CancelTurnInput,
-  SessionStatusInput,
+    TokenUsage,
+    CancelTurnInput,
+    CancelSessionInput,
+    SessionStatusInput,
 } from './contracts';
 import { defaultPermissionPolicy } from './contracts';
 import {
@@ -98,7 +99,7 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
     });
 
     const adapter = this.adapterRegistry.getAdapterForAgent(input.agentId);
-    let binding: RuntimeBinding;
+    let binding: RuntimeBinding | undefined;
     try {
       binding = await adapter.createOrLoadSession({
         runtimeSessionId: session.id,
@@ -108,6 +109,9 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
       });
       this.persistBinding(binding);
     } catch (error) {
+      if (binding) {
+        await adapter.close(binding).catch(() => {});
+      }
       const runtimeFailure = toRuntimeError(error);
       this.store.updateSessionStatus({ sessionId: session.id, status: 'invalid' });
       this.store.appendTrace({
@@ -146,6 +150,7 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
       cwd: session.workingDirectory,
       kind: session.kind,
       modelRouteId: modelRoute.modelRouteId,
+      ownerUserId: session.ownerUserId,
     }, modelRoute);
     const interruptPolicy = input.interruptPolicy ?? profileSnapshot.interruptPolicy;
 
@@ -341,6 +346,14 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
         redacted: true,
       });
     } finally {
+      await this.closeBindingAfterTurn({
+        adapter,
+        binding,
+        sessionId: session.id,
+        turnId: claimed.id,
+        traceId: claimed.traceId,
+        reason: adapterFinished ? 'turn terminal' : 'turn consumer detached',
+      });
       if (!adapterFinished) {
         this.store.appendTrace({
           traceId: claimed.traceId,
@@ -454,6 +467,17 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
       type: 'turn.canceling',
       payload: { reason: input.reason ?? 'cancel requested' },
       redacted: true,
+    });
+  }
+
+  async cancelSession(input: CancelSessionInput): Promise<void> {
+    const active = this.store.getActiveTurn(input.runtimeSessionId);
+    if (!active) return;
+    await this.cancelTurn({
+      runtimeSessionId: input.runtimeSessionId,
+      turnId: active.id,
+      requestId: input.requestId,
+      reason: input.reason,
     });
   }
 
@@ -676,15 +700,70 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
     profileSnapshot: RuntimeProfileSnapshot,
   ): Promise<RuntimeBinding> {
     const existing = this.store.getPrimaryBinding(runtimeSessionId);
-    if (existing) return bindingRecordToRuntimeBinding(existing);
-    const binding = await adapter.createOrLoadSession({
-      runtimeSessionId,
-      agentId,
-      modelRoute,
-      profileSnapshot,
-    });
-    this.persistBinding(binding);
-    return binding;
+    if (existing) {
+      const existingBinding = bindingRecordToRuntimeBinding(existing);
+      if (adapter.reconnectSession) {
+        const refreshedBinding = await adapter.reconnectSession({
+          runtimeSessionId,
+          agentId,
+          modelRoute,
+          profileSnapshot,
+          existingBinding,
+        });
+        this.persistBinding(refreshedBinding);
+        return refreshedBinding;
+      }
+      return existingBinding;
+    }
+    let binding: RuntimeBinding | undefined;
+    try {
+      binding = await adapter.createOrLoadSession({
+        runtimeSessionId,
+        agentId,
+        modelRoute,
+        profileSnapshot,
+      });
+      this.persistBinding(binding);
+      return binding;
+    } catch (error) {
+      if (binding) await adapter.close(binding).catch(() => {});
+      throw error;
+    }
+  }
+
+  private async closeBindingAfterTurn(input: {
+    adapter: RuntimeAdapter;
+    binding: RuntimeBinding;
+    sessionId: string;
+    turnId: string;
+    traceId: string;
+    reason: string;
+  }): Promise<void> {
+    try {
+      await input.adapter.close(input.binding);
+      this.store.appendTrace({
+        traceId: input.traceId,
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        level: 'info',
+        source: 'orchestrator',
+        payload: { event: 'turn.runtime.closed', reason: input.reason },
+        redacted: true,
+      });
+    } catch (error) {
+      // Cleanup failures must be observable without replacing the turn result. A later turn will
+      // reconnect from the persisted session record, while this trace keeps the leak signal in
+      // the backend diagnostics rather than relying on a process-manager sweep.
+      this.store.appendTrace({
+        traceId: input.traceId,
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        level: 'error',
+        source: 'orchestrator',
+        payload: { event: 'turn.runtime.close.failed', reason: input.reason, error: toRuntimeError(error) },
+        redacted: true,
+      });
+    }
   }
 
   private persistBinding(binding: RuntimeBinding): void {
@@ -812,12 +891,13 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
 }
 
 function createProfileSnapshot(
-  input: Pick<OpenRuntimeSessionInput, 'agentId' | 'cwd' | 'runtimeProfileId' | 'modelRouteId' | 'mcpServers'> & { kind?: string },
+  input: Pick<OpenRuntimeSessionInput, 'agentId' | 'cwd' | 'runtimeProfileId' | 'modelRouteId' | 'mcpServers' | 'ownerUserId'> & { kind?: string },
   modelRoute: ResolvedModelRoute,
 ): RuntimeProfileSnapshot {
   const definition = getBuiltinAgentDefinition(input.agentId);
   return {
     agentId: input.agentId,
+    ownerUserId: input.ownerUserId,
     modelRouteId: modelRoute.modelRouteId,
     cwd: input.cwd,
     systemPromptHash: 'sha256:runtime-default',

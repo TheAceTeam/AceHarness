@@ -170,6 +170,7 @@ export interface RuntimeEnvVarSnapshot {
 
 export interface RuntimeProfileSnapshot {
   agentId: string;
+  ownerUserId?: string;
   modelRouteId: string;
   cwd: string;
   systemPromptHash: string;
@@ -304,6 +305,12 @@ export interface CancelTurnInput {
   reason?: string;
 }
 
+export interface CancelSessionInput {
+  runtimeSessionId: string;
+  requestId: string;
+  reason?: string;
+}
+
 export interface SessionStatusInput {
   runtimeSessionId: string;
 }
@@ -342,6 +349,7 @@ export interface RuntimeOrchestrator {
   openSession(input: OpenRuntimeSessionInput): Promise<RuntimeSessionRef>;
   runTurn(input: RunRuntimeTurnInput): AsyncIterable<RuntimeEvent>;
   cancelTurn(input: CancelTurnInput): Promise<void>;
+  cancelSession(input: CancelSessionInput): Promise<void>;
   getSessionStatus(input: SessionStatusInput): Promise<RuntimeSessionStatus>;
   compactSession(input: CompactSessionInput): Promise<CompactResult>;
   forkSession(input: ForkSessionInput): Promise<ForkResult>;
@@ -450,6 +458,7 @@ export interface AdapterRuntimeStatus {
 
 export interface RuntimeAdapter {
   createOrLoadSession(input: AdapterSessionInput): Promise<RuntimeBinding>;
+  reconnectSession?(input: AdapterSessionInput): Promise<RuntimeBinding>;
   runTurn(binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<AdapterRuntimeEvent>;
   cancel(binding: RuntimeBinding, input: AdapterCancelInput): Promise<void>;
   invokeCommand?(binding: RuntimeBinding, input: AdapterCommandInput): AsyncIterable<AdapterRuntimeEvent>;

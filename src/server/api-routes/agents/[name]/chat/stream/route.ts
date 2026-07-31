@@ -40,13 +40,6 @@ type StreamBody = {
   mcpServers?: string[] | Record<string, boolean>;
 };
 
-function hasWerewolfResult(rawOutput: string): boolean {
-  return Boolean(extractStructuredResult<Record<string, any>>(
-    rawOutput,
-    (value: any): value is Record<string, any> => Boolean(value && typeof value === 'object' && !Array.isArray(value)),
-  ));
-}
-
 function hasAgoraResult(rawOutput: string, expectedType: 'speech' | 'summary' | 'vote'): boolean {
   return Boolean(extractStructuredResult<{ kind: 'agora_result'; payload: Record<string, any> }>(
     rawOutput,
@@ -118,13 +111,12 @@ export async function POST(
         personalDir: user.personalDir,
       },
     } satisfies ExecuteAgentChatInput);
-    const suppressIntermediateStream = prepared.isTemporaryWerewolf;
-
     const onEngineStream = (evt: any) => {
       if (!evt) return;
-      if (suppressIntermediateStream) return;
-      if ((evt?.type === 'text' || evt?.type === 'tool') && evt.content) {
+      if (evt?.type === 'text' && evt.content) {
         agentStreamEvents.emit(streamId, { type: 'delta', content: evt.content });
+      } else if (evt?.type === 'tool' && evt.tool) {
+        agentStreamEvents.emit(streamId, { type: 'tool', tool: evt.tool });
       } else if (evt?.type === 'thought' && evt.content) {
         agentStreamEvents.emit(streamId, { type: 'thinking', content: evt.content });
       } else if (evt?.type === 'error' && evt.content) {
@@ -135,7 +127,7 @@ export async function POST(
     prepared.engine.on('stream', onEngineStream);
 
     const execPromise = (async () => {
-      if (!prepared.isTemporaryWerewolf && !prepared.isTemporaryAgora) {
+      if (!prepared.isTemporaryAgora) {
         return executeChatRuntimeWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
           step: prepared.mode,
@@ -156,29 +148,15 @@ export async function POST(
         });
       }
 
-      const maxAttempts = 3;
       const expectedAgoraType = prepared.agoraExpectedResultType || 'speech';
       let latestSessionId = prepared.resumeSessionId || undefined;
       let lastResult: any = null;
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         const isRetry = attempt > 0;
         const result = await executeChatRuntimeWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
-          step: isRetry
-            ? `${prepared.mode}-${prepared.isTemporaryWerewolf ? 'result' : 'agora-result'}-retry-${attempt}`
-            : prepared.mode,
-          prompt: isRetry
-            ? (
-              prepared.isTemporaryWerewolf
-                ? [
-                    '你上一条回复不合规：缺少 `<result>JSON</result>` 结果块。',
-                    '不要重复过程说明，不要展示任何工具、规则、草稿或解释。',
-                    '现在仅基于同一回合补发一个合规的 `<result>JSON</result>`。',
-                    '如果需要给人看的内容，把它放进 `display` 字段；如果这是机器决策回合，也把 action / target / save / poisonTarget / reason 等字段一起放进同一个 JSON。',
-                  ].join('\n')
-                : buildAgoraResultRetryPrompt(expectedAgoraType)
-            )
-            : prepared.prompt,
+          step: isRetry ? `${prepared.mode}-agora-result-retry-${attempt}` : prepared.mode,
+          prompt: isRetry ? buildAgoraResultRetryPrompt(expectedAgoraType) : prepared.prompt,
           systemPrompt: prepared.roleConfig.systemPrompt || `你是 ${prepared.roleConfig.name}。`,
           model: prepared.model,
           workingDirectory: prepared.workingDirectory,
@@ -196,10 +174,6 @@ export async function POST(
         });
         lastResult = result;
         latestSessionId = resolveRecoveredRuntimeSessionId(result, latestSessionId) || undefined;
-        if (prepared.isTemporaryWerewolf) {
-          if (hasWerewolfResult(result.output || '')) return result;
-          continue;
-        }
         if (hasAgoraResult(result.output || '', expectedAgoraType)) return result;
       }
       return lastResult;
@@ -282,6 +256,8 @@ export async function GET(request: Request) {
         if (!evt) return;
         if (evt.type === 'delta') {
           send('delta', { content: evt.content });
+        } else if (evt.type === 'tool' && evt.tool) {
+          send('tool', { tool: evt.tool });
         } else if (evt.type === 'thinking') {
           send('thinking', { content: evt.content });
         } else if (evt.type === 'engine_error') {

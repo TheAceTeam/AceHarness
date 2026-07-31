@@ -16,15 +16,13 @@ import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 export const dynamic = 'force-dynamic';
 
 type WorkflowStructureMapping = {
-  mode: 'phase-based' | 'state-machine' | 'unknown';
+  mode: 'state-machine' | 'unknown';
   yamlSourceOfTruth: string[];
   derivedIntoSpecCoding: string[];
   runtimeSpecCodingSourceOfTruth: string[];
   counts: {
-    yamlPhases: number;
     yamlStates: number;
     yamlSteps: number;
-    yamlCheckpoints: number;
     specCodingPhases: number;
     specCodingTasks: number;
     specCodingAssignments: number;
@@ -38,22 +36,15 @@ async function buildWorkflowStructureMapping(configFile: string, specCoding: Spe
     const raw = await readFile(configPath, 'utf-8');
     const config = parse(raw) as any;
     const workflow = config?.workflow || {};
-    const phases = Array.isArray(workflow.phases) ? workflow.phases : [];
     const states = Array.isArray(workflow.states) ? workflow.states : [];
-    const yamlSteps = (phases.length > 0 ? phases : states)
-      .reduce((sum: number, item: any) => sum + (Array.isArray(item?.steps) ? item.steps.length : 0), 0);
-    const yamlCheckpoints = phases.reduce((sum: number, phase: any) => sum + (phase?.checkpoint ? 1 : 0), 0);
+    const yamlSteps = states
+      .reduce((sum: number, state: any) => sum + (Array.isArray(state?.steps) ? state.steps.length : 0), 0);
 
     return {
-      mode: workflow.mode === 'state-machine'
-        ? 'state-machine'
-        : phases.length > 0
-          ? 'phase-based'
-          : 'unknown',
+      mode: workflow.mode === 'state-machine' && states.length > 0 ? 'state-machine' : 'unknown',
       yamlSourceOfTruth: [
         'workflow.name / workflow.description',
-        phases.length > 0 ? 'workflow.phases[].name / steps[] / checkpoint' : '',
-        states.length > 0 ? 'workflow.states[].name / description / steps[] / transitions[]' : '',
+        'workflow.states[].name / description / steps[] / transitions[]',
         'roles[]',
         'context.projectRoot / workspaceMode / requirements',
         'workflow.supervisor',
@@ -61,11 +52,8 @@ async function buildWorkflowStructureMapping(configFile: string, specCoding: Spe
       derivedIntoSpecCoding: [
         'specCoding.workflowName <- workflow.name',
         'specCoding.summary <- workflow.description / requirements',
-        phases.length > 0
-          ? 'specCoding.phases <- workflow.phases[].name + steps[].task'
-          : 'specCoding.phases <- workflow.states[].name + description / steps[].task',
+        'specCoding.phases <- workflow.states[].name + description / steps[].task',
         'specCoding.assignments <- steps[].agent 聚合',
-        'specCoding.checkpoints <- workflow.phases[].checkpoint',
       ],
       runtimeSpecCodingSourceOfTruth: [
         'specCoding.progress',
@@ -75,10 +63,8 @@ async function buildWorkflowStructureMapping(configFile: string, specCoding: Spe
         'Supervisor 非状态修订摘要',
       ],
       counts: {
-        yamlPhases: phases.length,
         yamlStates: states.length,
         yamlSteps,
-        yamlCheckpoints,
         specCodingPhases: specCoding.phases.length,
         specCodingTasks: specCoding.tasks.length,
         specCodingAssignments: specCoding.assignments.length,

@@ -32,16 +32,6 @@ function parseTemporaryRoleConfig(body: any): RoleConfig | null {
   } as RoleConfig;
 }
 
-function isTemporaryWerewolfChat(body: any): boolean {
-  return body?.workflowContext?.temporaryLab === 'werewolf'
-    || body?.temporaryRoleConfig?.category === 'werewolf-lab'
-    || (
-      body?.workflowContext?.temporaryLab !== 'agora'
-      && Array.isArray(body?.temporaryRoleConfig?.tags)
-      && body.temporaryRoleConfig.tags.includes('werewolf-lab')
-    );
-}
-
 export async function POST(
   request: Request,
   { params }: { params: { name: string } | Promise<{ name: string }> }
@@ -53,9 +43,6 @@ export async function POST(
     const { name } = await params;
     const body = await readJsonBody<Record<string, any>>(request, {});
     const temporaryRoleConfig = parseTemporaryRoleConfig(body);
-    if (isTemporaryWerewolfChat(body) && !temporaryRoleConfig) {
-      return jsonError('临时狼人杀 Agent 配置缺失或无效，已拒绝回退到业务 Agent 配置。', 400);
-    }
     const executeStartedAt = Date.now();
     const result = await executeAgentChat({
       agentName: name,

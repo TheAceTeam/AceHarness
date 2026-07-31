@@ -1233,7 +1233,9 @@ export class RuntimeSqliteStore {
             WHERE active.session_id = candidate.session_id
               AND active.status IN ('running','canceling')
           )
-        ORDER BY candidate.queued_at ASC, candidate.id ASC
+        -- queued_at is only millisecond precision; rowid preserves insertion order
+        -- when multiple turns are enqueued in the same tick.
+        ORDER BY candidate.queued_at ASC, candidate.rowid ASC
         LIMIT 1
       `).get() as RuntimeTurnRow | undefined;
 

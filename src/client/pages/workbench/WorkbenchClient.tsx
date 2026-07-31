@@ -31,14 +31,12 @@ import {
 import { useGitBrowserSummaryQuery } from '@/client/query/workspace';
 
 const { ClipLoader } = ReactSpinners;
-import FlowDiagram from '@/components/FlowDiagram';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
+import LightweightWorkflowExecutionView from '@/components/workflow/LightweightWorkflowExecutionView';
 import AgentFormationDiagram from '@/components/AgentFormationDiagram';
 import AgentPanel from '@/components/AgentPanel';
-import AgentConfigPanel from '@/components/AgentConfigPanel';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import NewConfigModal from '@/components/NewConfigModal';
-import EditNodeModal from '@/components/EditNodeModal';
 import WorkflowPreflightManagerDialog from '@/components/WorkflowPreflightManagerDialog';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
@@ -66,7 +64,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Switch } from '@/components/ui/switch';
-import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
+import { useDashboardDockWorkspace } from '@/components/dashboard/dashboard-dock-workspace-context';
 import { EngineSelect } from '@/components/EngineSelect';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -91,11 +89,10 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { WrapperProcessBlocks } from '@/components/chat/ChatMessage';
+import { RuntimeToolEventCard, RuntimeToolEventGroup } from '@/components/chat/RuntimeToolEventList';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { Shimmer } from '@/components/ai-elements/shimmer';
-import WorkflowSupervisorAgoraPanel from '@/components/workflow/WorkflowSupervisorAgoraPanel';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
-import { WorkflowMemoryHandoffPanel } from '@/components/memory-v2/WorkflowMemoryHandoffPanel';
 import { calculateWorkflowRunTiming } from '@/lib/workflow/run-timing';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
@@ -139,6 +136,7 @@ import type { TasksMarkdownValidationIssue } from '@/lib/spec/coding-store';
 import {
   buildWorkflowConversationDirectory,
 } from '@/lib/agent/conversations';
+import { isLightweightWorkflowConfig } from '@/lib/workflow/lightweight';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
@@ -157,6 +155,7 @@ import { resolveDockviewTabPolicy } from '@/lib/navigation/dockview-tab-policy';
 import { resolveWorkspaceLinkTarget, resolveWorkspaceRootFromRoute } from '@/lib/workspace/link-target';
 import { VirtualList } from '@/client/virtual/VirtualList';
 import { parseAceSseEventData, storeAceAgentMessage, storeChatStreamSseEventAsAgentMessage, storeWorkflowSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
+import { mergeRuntimeToolEvents, type RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 import styles from './page.module.css';
 
 const loadingPanel = () => (
@@ -211,19 +210,10 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
   ssr: false,
   loading: () => <div className="h-24 rounded-[24px] border bg-muted/30" />,
 });
-const StateMachineDiagram = dynamic(() => import('@/components/StateMachineDiagram'), {
-  ssr: false,
-  loading: () => designTabLoadingPanel('正在加载状态图...'),
-});
 const StateMachineDesignPanel = dynamic(() => import('@/components/StateMachineDesignPanel'), {
   ssr: false,
   loading: () => designTabLoadingPanel('正在加载状态机编排...'),
 });
-const DesignPanel = dynamic(() => import('@/components/DesignPanel'), {
-  ssr: false,
-  loading: () => designTabLoadingPanel('正在加载流程编排...'),
-});
-
 const MonacoEditor = dynamic(
   async () => {
     const monaco = await import('monaco-editor');
@@ -239,13 +229,36 @@ const MonacoEditor = dynamic(
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
-type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'conversation' | 'changes' | 'documents' | 'plan' | 'agents' | 'agora' | 'live' | 'spec' | 'handoffs';
-type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec' | 'handoffs';
+type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
+type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
 type RunLeftPanelTab = 'summary' | 'directory';
 type RunRightPanelTab = 'detail' | 'live' | 'context' | 'questions' | 'diff';
 const WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX = 'aceharness:workflow-run:panel-tabs';
 const WORKFLOW_RUN_DELETED_EVENT = 'ace:workflow-run-deleted';
 const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'crashed']);
+type StopProgressStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+export type WorkbenchStopProgressStep = {
+  id: string;
+  label: string;
+  status: StopProgressStatus;
+  detail?: string;
+  durationMs?: number;
+};
+
+export function selectCurrentStepAttemptLogs<T extends { superseded?: boolean }>(logs: T[]): T[] {
+  return logs.filter((log) => !log?.superseded);
+}
+
+const USER_VISIBLE_STOP_PROGRESS_PHASES: ReadonlyArray<Pick<WorkbenchStopProgressStep, 'id' | 'label'>> = [
+  { id: 'request', label: '发送停止请求' },
+  { id: 'manager-stop', label: '停止运行实例' },
+  { id: 'process-cleanup', label: '清理运行资源' },
+  { id: 'state-persist', label: '保存停止状态' },
+  { id: 'refresh', label: '刷新运行状态' },
+];
+const USER_VISIBLE_STOP_PROGRESS_PHASE_BY_ID = new Map(
+  USER_VISIBLE_STOP_PROGRESS_PHASES.map((step) => [step.id, step]),
+);
 
 function isTerminalWorkflowStatus(status: unknown): boolean {
   return typeof status === 'string' && TERMINAL_WORKFLOW_STATUSES.has(status);
@@ -253,6 +266,102 @@ function isTerminalWorkflowStatus(status: unknown): boolean {
 
 function isRuntimeWorkflowStatusActive(status: unknown): boolean {
   return status === 'running' || status === 'preparing' || status === 'waiting';
+}
+
+function hasNonEmptyText(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function shouldEnableWorkbenchStatusSync(input: {
+  viewMode: ViewMode;
+  isHistoryRunView: boolean;
+  configFile?: string | null;
+  runId?: string | null;
+}): boolean {
+  if (input.viewMode === 'history' || !hasNonEmptyText(input.configFile)) return false;
+  return !input.isHistoryRunView || hasNonEmptyText(input.runId);
+}
+
+export function shouldConnectWorkbenchRunStatusStream(input: {
+  viewMode: ViewMode;
+  isHistoryRunView: boolean;
+  configFile?: string | null;
+  runId?: string | null;
+}): boolean {
+  return input.viewMode === 'run' && shouldEnableWorkbenchStatusSync(input);
+}
+
+export async function applyAcceptedWorkbenchRecovery<T>(
+  request: () => Promise<T>,
+  applyAcceptedState: () => void,
+): Promise<T> {
+  const response = await request();
+  applyAcceptedState();
+  return response;
+}
+
+function normalizeStopProgressStatus(value: unknown): StopProgressStatus | null {
+  return value === 'pending'
+    || value === 'running'
+    || value === 'success'
+    || value === 'failed'
+    || value === 'skipped'
+    ? value
+    : null;
+}
+
+function createStopProgressSteps(): WorkbenchStopProgressStep[] {
+  return USER_VISIBLE_STOP_PROGRESS_PHASES.map((phase) => ({
+    ...phase,
+    status: phase.id === 'request' ? 'running' : 'pending',
+  }));
+}
+
+export function mergeUserVisibleStopProgressSteps(
+  currentSteps: WorkbenchStopProgressStep[],
+  backendSteps: unknown,
+): WorkbenchStopProgressStep[] {
+  const stepsById = new Map<string, WorkbenchStopProgressStep>();
+  const addStep = (candidate: WorkbenchStopProgressStep) => {
+    const phase = USER_VISIBLE_STOP_PROGRESS_PHASE_BY_ID.get(candidate.id);
+    if (!phase) return;
+    stepsById.set(candidate.id, {
+      id: phase.id,
+      label: phase.label,
+      status: candidate.status,
+      durationMs: candidate.durationMs,
+    });
+  };
+
+  currentSteps.forEach(addStep);
+  if (Array.isArray(backendSteps)) {
+    for (const rawStep of backendSteps) {
+      if (!rawStep || typeof rawStep !== 'object') continue;
+      const raw = rawStep as Record<string, unknown>;
+      const id = typeof raw.id === 'string' ? raw.id : '';
+      const phase = USER_VISIBLE_STOP_PROGRESS_PHASE_BY_ID.get(id);
+      if (!phase) continue;
+      const current = stepsById.get(id);
+      addStep({
+        id,
+        label: phase.label,
+        status: normalizeStopProgressStatus(raw.status) || current?.status || 'pending',
+        durationMs: typeof raw.durationMs === 'number' && Number.isFinite(raw.durationMs)
+          ? raw.durationMs
+          : current?.durationMs,
+      });
+    }
+  }
+
+  return USER_VISIBLE_STOP_PROGRESS_PHASES.map((phase) => (
+    stepsById.get(phase.id) || { ...phase, status: 'pending' }
+  ));
+}
+
+function completeStopProgressSteps(steps: WorkbenchStopProgressStep[]): WorkbenchStopProgressStep[] {
+  return steps.map((step) => (
+    step.status === 'pending' ? { ...step, status: 'skipped' } : step
+  ));
 }
 
 function workflowStepKeyMatchesName(stepKey: string | null | undefined, stepName: string | null | undefined): boolean {
@@ -356,6 +465,22 @@ function formatRunClockTime(value: unknown): string {
   return time.toLocaleString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+export function formatLiveOutputTimestamp(value: unknown): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const time = new Date(raw);
+  if (Number.isNaN(time.getTime())) return null;
+  return time.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -524,7 +649,6 @@ function isAbsoluteProjectPath(path: string) {
 
 function getRunWorkbenchTabFromSearchParams(searchParams: { get: (key: string) => string | null }): RunWorkbenchTab {
   const tab = searchParams.get('tab');
-  if (tab === 'conversation') return 'agora';
   if (isRunWorkbenchTab(tab)) return tab;
   if (searchParams.get('changes') === '1') return 'changes';
   if (searchParams.get('workspace') === '1') return 'workspace';
@@ -537,9 +661,7 @@ function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailab
   if (tab === 'changes') return 'changes';
   if (tab === 'documents') return 'documents';
   if (tab === 'agents') return 'agents';
-  if (tab === 'agora') return 'agora';
   if (tab === 'live') return 'live';
-  if (tab === 'handoffs') return 'handoffs';
   if (tab === 'spec' && runtimeSpecAvailable) return 'spec';
   return 'overview';
 }
@@ -579,15 +701,11 @@ function isRunWorkbenchTab(value: unknown): value is RunWorkbenchTab {
   return value === 'overview'
     || value === 'state'
     || value === 'workspace'
-    || value === 'conversation'
     || value === 'changes'
     || value === 'documents'
-    || value === 'plan'
     || value === 'agents'
-    || value === 'agora'
     || value === 'live'
-    || value === 'spec'
-    || value === 'handoffs';
+    || value === 'spec';
 }
 
 function normalizeViewMode(value: string | null): ViewMode {
@@ -610,15 +728,11 @@ function readWorkflowRunPanelTabs(configFile: string): {
         : parsed.center === 'overview'
           || parsed.center === 'state'
           || parsed.center === 'workspace'
-          || parsed.center === 'conversation'
           || parsed.center === 'changes'
           || parsed.center === 'documents'
-          || parsed.center === 'plan'
           || parsed.center === 'agents'
-          || parsed.center === 'agora'
           || parsed.center === 'live'
           || parsed.center === 'spec'
-          || parsed.center === 'handoffs'
             ? parsed.center
             : undefined,
     };
@@ -1525,9 +1639,6 @@ export default function WorkbenchPage({
   const [executionPolicyDialogOpen, setExecutionPolicyDialogOpen] = useState(false);
   const [runDetail, setRunDetail] = useState<any>(null);
   const [viewingHistoryRun, setViewingHistoryRun] = useState(false);
-  const [pendingCheckpointPhase, setPendingCheckpointPhase] = useState<string | null>(null);
-  const [fullStepOutput, setFullStepOutput] = useState<string | null>(null);
-  const [loadingOutput, setLoadingOutput] = useState(false);
   const [specCodingModalOpen, setSpecCodingModalOpen] = useState(false);
   const [specCodingModalFullscreen, setSpecCodingModalFullscreen] = useState(false);
   const [specCodingExplorerTab, setSpecCodingExplorerTab] = useState<'artifacts' | 'revisions'>('artifacts');
@@ -1599,6 +1710,7 @@ export default function WorkbenchPage({
     filename?: string;
   } | null>(null);
   const [liveStream, setLiveStream] = useState<string[]>([]);
+  const [liveToolEvents, setLiveToolEvents] = useState<RuntimeToolEvent[]>([]);
   const [showLiveStream, setShowLiveStream] = useState(false);
   const [liveStreamFullscreen, setLiveStreamFullscreen] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<RunRightPanelTab>(() => readWorkflowRunPanelTabs(configFile).right || 'detail');
@@ -1634,7 +1746,6 @@ export default function WorkbenchPage({
     center: true,
     right: true,
   });
-  const [isNewNode, setIsNewNode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
   const [availableMcpServers, setAvailableMcpServers] = useState<ManagedMcpServer[]>([]);
@@ -1644,13 +1755,7 @@ export default function WorkbenchPage({
   const [stopping, setStopping] = useState(false);
   const [stopProgressDialogOpen, setStopProgressDialogOpen] = useState(false);
   const [stopProgressSummary, setStopProgressSummary] = useState('');
-  const [stopProgressSteps, setStopProgressSteps] = useState<Array<{
-    id: string;
-    label: string;
-    status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
-    detail?: string;
-    durationMs?: number;
-  }>>([]);
+  const [stopProgressSteps, setStopProgressSteps] = useState<WorkbenchStopProgressStep[]>([]);
   const [forceTransitioning, setForceTransitioning] = useState(false);
   const [forceCompleting, setForceCompleting] = useState(false);
   const [rehearsalMode, setRehearsalMode] = useState(false);
@@ -1665,7 +1770,6 @@ export default function WorkbenchPage({
   const [runtimeAgentDraft, setRuntimeAgentDraft] = useState<AgentDraftState>(createInitialAgentDraft());
   const [showDesignRequirements, setShowDesignRequirements] = useState(true);
   const [showAllSkills, setShowAllSkills] = useState(false);
-  const [iterationFeedback, setIterationFeedback] = useState('');
   const [supervisorFlow, setSupervisorFlow] = useState<{
     type: string;
     from: string;
@@ -1936,7 +2040,10 @@ export default function WorkbenchPage({
     id: string;
     stepName: string;
     agent: string;
-    status: 'completed' | 'failed';
+    status: 'running' | 'completed' | 'failed';
+    superseded?: boolean;
+    supersededAt?: string;
+    supersededByStep?: string;
     output: string;
     error: string;
     costUsd: number;
@@ -2048,7 +2155,7 @@ export default function WorkbenchPage({
     };
   } | null>(null);
   const [specCodingSourceOfTruth, setSpecCodingSourceOfTruth] = useState<{
-    mode: 'phase-based' | 'state-machine' | 'unknown';
+    mode: 'state-machine' | 'unknown';
     yamlSourceOfTruth: string[];
     derivedIntoSpecCoding: string[];
     runtimeSpecCodingSourceOfTruth: string[];
@@ -2081,8 +2188,6 @@ export default function WorkbenchPage({
   } | null>(null);
   const [qualityChecks, setQualityChecks] = useState<QualityCheckRecord[]>([]);
   const [preflightChecks, setPreflightChecks] = useState<QualityCheckRecord[]>([]);
-  const [workflowFrontendSessionId, setWorkflowFrontendSessionId] = useState<string | null>(null);
-  const [workbenchConversationSessionId, setWorkbenchConversationSessionId] = useState<string | null>(null);
   const liveStreamFeedbackRef = useRef<HTMLTextAreaElement>(null);
   const liveFeedbackEditorRef = useRef<RichTextEditorHandle>(null);
   const [liveFeedbackDraft, setLiveFeedbackDraft] = useState('');
@@ -2235,19 +2340,6 @@ export default function WorkbenchPage({
   const startupInProgressRef = useRef(false);
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
-  const openWorkbenchConversation = useCallback((sessionId?: string | null, agent?: any) => {
-    const targetSessionId = sessionId || workflowFrontendSessionId;
-    if (!targetSessionId) return;
-
-    setWorkbenchConversationSessionId(targetSessionId);
-    setExecutionViewTabOverride('supervisor');
-    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'workflow' });
-
-    if (agent) {
-      dispatch({ type: 'SET_SELECTED_AGENT', payload: agent });
-    }
-  }, [dispatch, workflowFrontendSessionId]);
-
   type DesignTab = 'orchestration' | 'spec' | 'config';
   const normalizeDesignTab = (value: string | null): DesignTab => (
     value === 'orchestration' || value === 'spec' || value === 'config'
@@ -2336,9 +2428,9 @@ export default function WorkbenchPage({
   const {
     viewMode, workflowConfig, editingConfig, agentConfigs,
     workflowStatus, runId, currentPhase, currentStep, agents, logs, completedSteps, failedSteps,
-    showCheckpoint, checkpointMessage, checkpointIsIterative, activeTab, selectedAgent, selectedStep,
+    activeTab, selectedAgent, selectedStep,
     projectRoot, workspaceMode, requirements, timeoutMinutes, engine, skills, mcpServers, ragKnowledgeBases, showProcessPanel,
-    showEditNodeModal, editingNode, iterationStates, stepResults, stepIdMap,
+    stepResults, stepIdMap,
     globalContext, phaseContexts,
   } = state;
   const latestEditingConfigRef = useRef<any>(editingConfig);
@@ -2371,16 +2463,23 @@ export default function WorkbenchPage({
     setDesignTab('orchestration');
     updateUrl({ designTab: 'orchestration' });
   }, [designTab, specDesignEnabled, updateUrl]);
+  const isHistoryRunView = viewingHistoryRun || initialHistoryRun;
   const activeRuntimeRunId = runId || selectedRun?.id || initialRunId || '';
   const statusQueryRunId = startupExpectedRunIdRef.current
     || runId
     || selectedRun?.id
     || (startupInProgressRef.current ? undefined : initialRunId)
     || undefined;
+  const shouldSyncWorkbenchStatus = shouldEnableWorkbenchStatusSync({
+    viewMode,
+    isHistoryRunView,
+    configFile,
+    runId: statusQueryRunId,
+  });
   const statusCompactQuery = useQuery({
     queryKey: queryKeys.workflowStatusCompact(configFile, statusQueryRunId),
     queryFn: () => fetchWorkflowStatusCompact(configFile, statusQueryRunId),
-    enabled: Boolean(configFile) && viewMode !== 'history' && !viewingHistoryRun,
+    enabled: shouldSyncWorkbenchStatus,
     staleTime: 1_000,
     refetchInterval: isRuntimeWorkflowStatusActive(workflowStatus) ? 2_000 : false,
   });
@@ -2657,9 +2756,7 @@ export default function WorkbenchPage({
     const addName = (value?: string | null) => {
       if (value && value.trim()) names.add(value.trim());
     };
-    const nodes = workflow.mode === 'state-machine'
-      ? (workflow?.states || [])
-      : (workflow?.phases || []);
+    const nodes = workflow?.states || [];
     for (const node of nodes) {
       addName(node?.agent);
       for (const step of node?.steps || []) {
@@ -2683,12 +2780,9 @@ export default function WorkbenchPage({
   const startContextTargets = useMemo(() => {
     const workflow = workflowConfig?.workflow;
     if (!workflow) return [] as string[];
-    if (workflow.mode === 'state-machine') {
-      return (workflow.states || []).map((state: any) => state.name).filter((value: string) => !!value);
-    }
-    return (workflow.phases || []).map((phase: any) => phase.name).filter((value: string) => !!value);
+    return (workflow.states || []).map((state: any) => state.name).filter((value: string) => !!value);
   }, [workflowConfig]);
-  const startContextScopeLabel = workflowConfig?.workflow?.mode === 'state-machine' ? '状态' : '阶段';
+  const startContextScopeLabel = '状态';
 
   // Explicitly convert viewMode to string for conditional rendering
   const isDesignMode = state.viewMode === 'design';
@@ -2838,14 +2932,6 @@ export default function WorkbenchPage({
   }, [configFile, leftRunPanelTab, rightPanelTab, runWorkbenchTab]);
 
   useEffect(() => {
-    if (runWorkbenchTab === 'conversation') {
-      handleRunWorkbenchTabChange('agora');
-      return;
-    }
-    if (runWorkbenchTab === 'plan') {
-      handleRunWorkbenchTabChange('overview');
-      return;
-    }
     if (runWorkbenchTab === 'changes' && !currentRunWorkspacePath) {
       handleRunWorkbenchTabChange('overview');
     }
@@ -3013,15 +3099,9 @@ export default function WorkbenchPage({
       }
     };
 
-    if (workflow.mode === 'state-machine') {
-      (workflow.states || []).forEach((state: any) => {
-        (state.steps || []).forEach((step: any) => bindStepStatus(step, state.name));
-      });
-    } else {
-      (workflow.phases || []).forEach((phase: any) => {
-        (phase.steps || []).forEach((step: any) => bindStepStatus(step, phase.name));
-      });
-    }
+    (workflow.states || []).forEach((state: any) => {
+      (state.steps || []).forEach((step: any) => bindStepStatus(step, state.name));
+    });
 
     return mapRuntimeSpecTasks(tasks, (task) => {
       if (task.status === 'completed' || task.status === 'blocked') return task;
@@ -4006,24 +4086,6 @@ export default function WorkbenchPage({
       workflowName: sourceConfig.workflow.name || configFile,
     });
   }, [configFile, editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
-  const handleOptimizePhaseStep = useCallback((phaseIndex: number, stepIndex: number) => {
-    const sourceConfig = editingConfig || workflowConfig;
-    const phase = sourceConfig?.workflow?.phases?.[phaseIndex];
-    const step = phase?.steps?.[stepIndex];
-    if (!phase || !step) {
-      toast('warning', '找不到要优化的步骤');
-      return;
-    }
-    openDesignOptimizationDialog({
-      scope: 'step',
-      workflowMode: 'phase-based',
-      containerType: 'phase',
-      containerIndex: phaseIndex,
-      containerName: phase.name || `阶段 ${phaseIndex + 1}`,
-      stepIndex,
-      stepName: step.name || `步骤 ${stepIndex + 1}`,
-    });
-  }, [editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
   const handleOptimizeStateMachineState = useCallback((stateIndex: number) => {
     const sourceConfig = editingConfig || workflowConfig;
     const stateNode = sourceConfig?.workflow?.states?.[stateIndex];
@@ -4522,9 +4584,7 @@ export default function WorkbenchPage({
     const supervisorFromRoles = agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name;
     addName(supervisorFromWorkflow || supervisorFromRoles || 'default-supervisor');
 
-    const nodes = workflow?.mode === 'state-machine'
-      ? (workflow.states || [])
-      : (workflow?.phases || []);
+    const nodes = workflow?.states || [];
     for (const node of nodes) {
       addName(node?.agent);
       for (const step of node?.steps || []) {
@@ -4686,14 +4746,7 @@ export default function WorkbenchPage({
   }, [formatWorkflowLocation, runStartedAtForOverview, smStateHistory]);
   const runStepTimeline = useMemo(() => {
     const workflow = workflowConfig?.workflow;
-    const formationStates = !workflow
-      ? [] as StateMachineState[]
-      : workflow.mode === 'state-machine'
-        ? (workflow.states || []) as StateMachineState[]
-        : (workflow.phases || []).map((phase: any) => ({
-            name: String(phase?.name || '').trim() || '未命名阶段',
-            steps: phase?.steps || [],
-          })) as StateMachineState[];
+    const formationStates = (workflow?.states || []) as StateMachineState[];
     const resolveStepMeta = (stepName?: string | null) => {
       const rawName = String(stepName || '').trim();
       if (!rawName) return { stateName: '', stepName: '', agent: '' };
@@ -4727,6 +4780,8 @@ export default function WorkbenchPage({
       const outputRef = String(log?.outputRef || '').trim();
       const outputBytes = typeof log?.outputBytes === 'number' && Number.isFinite(log.outputBytes) ? log.outputBytes : undefined;
       const status = String(log?.status || (error ? 'failed' : output ? 'completed' : 'unknown')).trim();
+      const timestamp = log?.timestamp || log?.createdAt || log?.endTime || log?.startTime || null;
+      const timestampMs = timestamp ? new Date(timestamp).getTime() : NaN;
       const tokenUsage = normalizeAggregatedTokenUsage(log?.tokenUsage);
       const agentName = String(log?.agent || meta.agent || '').trim();
       const runtimeAgent = agentName ? agents.find((agent) => agent.name === agentName) : null;
@@ -4739,8 +4794,10 @@ export default function WorkbenchPage({
         stateName: meta.stateName,
         agent: agentName,
         status,
-        timestamp: log?.timestamp || log?.createdAt || log?.endTime || log?.startTime || null,
-        durationMs: typeof log?.durationMs === 'number' ? log.durationMs : undefined,
+        timestamp,
+        durationMs: status === 'running' && Number.isFinite(timestampMs)
+          ? Math.max(0, runClockNow - timestampMs)
+          : (typeof log?.durationMs === 'number' ? log.durationMs : undefined),
         tokenUsage,
         engineName: String(log?.engineName || '').trim(),
         modelName: String(log?.modelName || log?.model || log?.payload?.modelName || log?.payload?.model || (runtimeAgent as any)?.model || roleConfig?.model || '').trim(),
@@ -4753,11 +4810,13 @@ export default function WorkbenchPage({
       };
     });
 
-    const existingStepKeys = new Set(items.flatMap((item) => [item.rawStepName, item.stepName].filter(Boolean)));
+    const runningStepKeys = new Set(items
+      .filter((item) => item.status === 'running')
+      .flatMap((item) => [item.rawStepName, item.stepName].filter(Boolean)));
     const activeKeys = Array.from(new Set([currentStep, ...activeSteps].map((value) => String(value || '').trim()).filter(Boolean)));
     activeKeys.forEach((activeKey) => {
       const meta = resolveStepMeta(activeKey);
-      if (existingStepKeys.has(activeKey) || existingStepKeys.has(meta.stepName)) return;
+      if (runningStepKeys.has(activeKey) || runningStepKeys.has(meta.stepName)) return;
       items.push({
         id: `active:${activeKey}`,
         index: items.length,
@@ -4786,7 +4845,7 @@ export default function WorkbenchPage({
       if (!Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime !== bTime) return aTime - bTime;
       return a.index - b.index;
     });
-  }, [activeSteps, agentConfigs, agents, currentStep, persistedStepLogs, workflowConfig?.workflow]);
+  }, [activeSteps, agentConfigs, agents, currentStep, persistedStepLogs, runClockNow, workflowConfig?.workflow]);
   const openOverviewStepRecordFromLog = useCallback((log: any) => {
     const matched = runStepTimeline.find((item) => item.id === log?.id)
       || runStepTimeline.find((item) => item.rawStepName === log?.stepName && item.timestamp === log?.timestamp)
@@ -5030,33 +5089,16 @@ export default function WorkbenchPage({
       }
     });
     const workflow = workflowConfig?.workflow;
-    if (workflow?.mode === 'state-machine') {
-      for (const stateNode of workflow.states || []) {
-        for (const step of stateNode.steps || []) {
-          if (step?.type !== 'subworkflow') pushAgent(step?.agent);
-        }
-      }
-    } else {
-      for (const phaseNode of workflow?.phases || []) {
-        for (const step of phaseNode.steps || []) {
-          pushAgent(step?.agent);
-        }
+    for (const stateNode of workflow?.states || []) {
+      for (const step of stateNode.steps || []) {
+        if (step?.type !== 'subworkflow') pushAgent(step?.agent);
       }
     }
     return result;
   }, [agentConfigs, orderedWorkflowAgents, runtimeSupervisorAgent, workflowConfig?.workflow]);
   const workflowFormationStates = useMemo(() => {
     const workflow = workflowConfig?.workflow;
-    if (!workflow) return [] as StateMachineState[];
-    if (workflow.mode === 'state-machine') return (workflow.states || []) as StateMachineState[];
-    return (workflow.phases || []).map((phase: any) => ({
-      name: String(phase?.name || '').trim() || '未命名阶段',
-      description: phase?.description,
-      steps: Array.isArray(phase?.steps) ? phase.steps : [],
-      transitions: [],
-      isInitial: false,
-      isFinal: false,
-    })) as StateMachineState[];
+    return (workflow?.states || []) as StateMachineState[];
   }, [workflowConfig?.workflow]);
   const activeFormationAgentNames = useMemo(() => {
     const activeKeys = new Set([currentStep, ...activeSteps].map((value) => String(value || '').trim()).filter(Boolean));
@@ -5075,39 +5117,11 @@ export default function WorkbenchPage({
     }
     return Array.from(result);
   }, [activeSteps, currentStep, workflowFormationStates]);
-  const workflowAgoraInitialGuests = useMemo(() => (
-    supervisorFormationAgents.map((agent) => ({
-      name: agent.name,
-      sourceAgent: agent.name,
-      runtimeAgentName: agent.name,
-      engine: agent.engine || '',
-      model: agent.model || '',
-    }))
-  ), [supervisorFormationAgents]);
-  const workflowAgoraAgentSessionIds = useMemo(() => {
-    const result: Record<string, string> = {};
-    displayWorkflowAgents.forEach((agent) => {
-      const sessionId = String(agent.sessionId || '').trim();
-      if (agent.name && sessionId) result[agent.name] = sessionId;
-    });
-    if (runtimeSupervisorAgent && runtimeSupervisorSessionId) {
-      result[runtimeSupervisorAgent] = runtimeSupervisorSessionId;
-    }
-    return result;
-  }, [displayWorkflowAgents, runtimeSupervisorAgent, runtimeSupervisorSessionId]);
   const workflowTokenAnalytics = useMemo(() => {
     const stepNameToPhase = new Map<string, string>();
-    if (workflowConfig?.workflow?.mode === 'state-machine') {
-      for (const stateNode of workflowConfig.workflow.states || []) {
-        for (const step of stateNode.steps || []) {
-          if (step?.name) stepNameToPhase.set(step.name, stateNode.name);
-        }
-      }
-    } else {
-      for (const phaseNode of workflowConfig?.workflow?.phases || []) {
-        for (const step of phaseNode.steps || []) {
-          if (step?.name) stepNameToPhase.set(step.name, phaseNode.name);
-        }
+    for (const stateNode of workflowConfig?.workflow?.states || []) {
+      for (const step of stateNode.steps || []) {
+        if (step?.name) stepNameToPhase.set(step.name, stateNode.name);
       }
     }
 
@@ -5306,21 +5320,15 @@ export default function WorkbenchPage({
 
   useDocumentTitle(embeddedInDashboard ? null : attentionSignal.active ? attentionSignal.title || null : workflowTitle);
 
-  const totalSteps = workflowConfig?.workflow?.mode === 'state-machine'
-    ? (workflowConfig?.workflow?.states?.reduce(
-        (sum: number, state: any) => sum + (state.steps?.length ?? 0), 0
-      ) ?? 0)
-    : (workflowConfig?.workflow?.phases?.reduce(
-        (sum: number, phase: any) => sum + phase.steps.length, 0
-      ) ?? 0);
+  const totalSteps = workflowConfig?.workflow?.states?.reduce(
+    (sum: number, state: any) => sum + (state.steps?.length ?? 0), 0
+  ) ?? 0;
   const editingPreflightSummary = useMemo(() => {
     const workflow = editingConfig?.workflow;
     if (!workflow) {
       return { configuredSteps: 0, totalCommands: 0 };
     }
-    const steps = workflow.mode === 'state-machine'
-      ? (workflow.states || []).flatMap((state: any) => state?.steps || [])
-      : (workflow.phases || []).flatMap((phase: any) => phase?.steps || []);
+    const steps = (workflow.states || []).flatMap((state: any) => state?.steps || []);
     return steps.reduce((summary: { configuredSteps: number; totalCommands: number }, step: any) => {
       const commandCount = Array.isArray(step?.preCommands) ? step.preCommands.filter((item: any) => typeof item === 'string' && item.trim()).length : 0;
       if (commandCount > 0) {
@@ -5414,9 +5422,13 @@ export default function WorkbenchPage({
   const cacheWorkflowStatusPayload = useCallback((status: any, requestedRunId?: string) => {
     if (!status) return;
     const resolvedRunId = resolveRuntimeRunId(status, requestedRunId) || requestedRunId;
-    queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, requestedRunId), status);
+    const mergeStatusPayload = (current: any) => ({
+      ...(current && typeof current === 'object' ? current : {}),
+      ...status,
+    });
+    queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, requestedRunId), mergeStatusPayload);
     if (resolvedRunId && resolvedRunId !== requestedRunId) {
-      queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, resolvedRunId), status);
+      queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, resolvedRunId), mergeStatusPayload);
     }
     const parentRunId = String(resolvedRunId || requestedRunId || status.runId || '').trim();
     if (parentRunId && Array.isArray(status.subworkflowRuns)) {
@@ -5623,7 +5635,7 @@ export default function WorkbenchPage({
     }
     mergeLiveRunStatus(status, requestedRunId);
       const smStatus = status as typeof status & {
-        mode?: 'state-machine' | 'phase-based';
+        mode?: 'state-machine';
         currentState?: string | null;
         pendingCheckpoint?: {
           suggestedNextState?: string;
@@ -5660,8 +5672,8 @@ export default function WorkbenchPage({
         runStatusReasonLogRef.current = null;
       }
       if (status.runId) dispatch({ type: 'SET_RUN_ID', payload: status.runId });
-      setWorkflowFrontendSessionId((status as any).workflowFrontendSessionId || null);
-      if (typeof status.currentPhase === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: status.currentPhase });
+      if (typeof (status as any).currentState === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: (status as any).currentState });
+      else if (typeof status.currentPhase === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: status.currentPhase });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
       if (statusIsTerminal) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       else if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
@@ -5840,12 +5852,23 @@ export default function WorkbenchPage({
       currentState: (status as any).currentState || null,
       currentStep: (status as any).currentStep || null,
       transitionCount: (status as any).transitionCount ?? null,
-      stepLogs: Array.isArray((status as any).stepLogs) ? (status as any).stepLogs.length : null,
+      stepLogs: Array.isArray((status as any).stepLogs)
+        ? (status as any).stepLogs.slice(-8).map((log: any) => ({
+            id: log?.id || null,
+            status: log?.status || null,
+            outputRef: log?.outputRef || null,
+            outputBytes: log?.outputBytes ?? null,
+            outputLength: typeof log?.output === 'string' ? log.output.length : null,
+            errorLength: typeof log?.error === 'string' ? log.error.length : null,
+            timestamp: log?.timestamp || null,
+          }))
+        : null,
       stateHistory: Array.isArray((status as any).stateHistory) ? (status as any).stateHistory.length : null,
       humanQuestions: Array.isArray((status as any).humanQuestions) ? (status as any).humanQuestions.length : null,
       pendingHumanQuestionId: (status as any).pendingHumanQuestion?.id || null,
       accumulatedWaitMs: (status as any).accumulatedWaitMs ?? null,
       waitStartedAt: (status as any).waitStartedAt || null,
+      eventSeq: (status as any).eventSeq ?? null,
     });
     if (appliedStatusCacheSignatureRef.current === signature) return;
     appliedStatusCacheSignatureRef.current = signature;
@@ -5854,11 +5877,7 @@ export default function WorkbenchPage({
 
   const fetchCurrentStatus = async () => {
     try {
-      const requestedRunId = startupExpectedRunIdRef.current
-        || runId
-        || selectedRun?.id
-        || (startupInProgressRef.current ? undefined : initialRunId)
-        || undefined;
+      const requestedRunId = statusQueryRunId;
       const status = await queryClient.fetchQuery({
         queryKey: queryKeys.workflowStatusCompact(configFile, requestedRunId),
         queryFn: () => fetchWorkflowStatusCompact(configFile, requestedRunId),
@@ -5869,15 +5888,20 @@ export default function WorkbenchPage({
   };
 
   useEffect(() => {
-    if (viewMode !== 'run' || viewingHistoryRun) return;
-    const activeRunId = startupExpectedRunIdRef.current || runId || selectedRun?.id || initialRunId;
+    if (!shouldConnectWorkbenchRunStatusStream({
+      viewMode,
+      isHistoryRunView,
+      configFile,
+      runId: statusQueryRunId,
+    })) return;
+    const activeRunId = statusQueryRunId;
     if (!activeRunId && !isRuntimeWorkflowStatusActive(workflowStatus)) return;
     void fetchCurrentStatus();
     const timer = window.setInterval(() => {
       void fetchCurrentStatus();
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [initialRunId, runId, selectedRun?.id, viewMode, viewingHistoryRun, workflowStatus]);
+  }, [configFile, isHistoryRunView, statusQueryRunId, viewMode, workflowStatus]);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -5908,13 +5932,13 @@ export default function WorkbenchPage({
 
   const entryRefreshKeyRef = useRef('');
   useEffect(() => {
-    if (viewMode !== 'run' || viewingHistoryRun) return;
+    if (viewMode !== 'run' || isHistoryRunView) return;
     const key = `${configFile}:${runId || initialRunId || 'latest'}`;
     if (entryRefreshKeyRef.current === key) return;
     entryRefreshKeyRef.current = key;
     void loadHistory();
     void fetchCurrentStatus();
-  }, [configFile, initialRunId, loadHistory, runId, viewMode, viewingHistoryRun]);
+  }, [configFile, initialRunId, isHistoryRunView, loadHistory, runId, viewMode]);
 
   useEffect(() => {
     if (viewMode !== 'run') return;
@@ -6029,10 +6053,10 @@ export default function WorkbenchPage({
         return Array.from(byKey.values());
       });
     }
-    if (!safeLogs.length) return;
+    const activeLogs = selectCurrentStepAttemptLogs(safeLogs);
     const restoredResults: Record<string, { output: string; error?: string; costUsd?: number; durationMs?: number }> = {};
     const restoredIdMap: Record<string, string> = {};
-    for (const log of safeLogs) {
+    for (const log of activeLogs) {
       const key = log.id || log.stepName;
       if (!key) continue;
       restoredResults[key] = {
@@ -6045,11 +6069,16 @@ export default function WorkbenchPage({
         restoredIdMap[log.stepName] = log.id;
       }
     }
-    if (Object.keys(restoredResults).length > 0) {
-      dispatch({ type: mode === 'set' ? 'SET_STEP_RESULTS' : 'MERGE_STEP_RESULTS', payload: restoredResults });
-    }
-    if (Object.keys(restoredIdMap).length > 0) {
-      dispatch({ type: mode === 'set' ? 'SET_STEP_ID_MAP' : 'MERGE_STEP_ID_MAP', payload: restoredIdMap });
+    if (mode === 'set') {
+      dispatch({ type: 'SET_STEP_RESULTS', payload: restoredResults });
+      dispatch({ type: 'SET_STEP_ID_MAP', payload: restoredIdMap });
+    } else {
+      if (Object.keys(restoredResults).length > 0) {
+        dispatch({ type: 'MERGE_STEP_RESULTS', payload: restoredResults });
+      }
+      if (Object.keys(restoredIdMap).length > 0) {
+        dispatch({ type: 'MERGE_STEP_ID_MAP', payload: restoredIdMap });
+      }
     }
   }, [dispatch]);
 
@@ -6273,9 +6302,6 @@ export default function WorkbenchPage({
     if (snapshot.runId) {
       dispatch({ type: 'SET_RUN_ID', payload: snapshot.runId });
     }
-    if (snapshot.workflowFrontendSessionId !== undefined) {
-      setWorkflowFrontendSessionId(snapshot.workflowFrontendSessionId || null);
-    }
     const statusIsActive = isRuntimeWorkflowStatusActive(snapshot.status);
     const statusIsTerminal = isTerminalWorkflowStatus(snapshot.status);
     const nextPhase = typeof snapshot.currentPhase === 'string'
@@ -6401,8 +6427,6 @@ export default function WorkbenchPage({
     setSelectedRun(null);
     setRunDetail(null);
     setViewingHistoryRun(false);
-    setPendingCheckpointPhase(null);
-    setFullStepOutput(null);
     setActiveSteps([]);
     setActiveConcurrencyGroups([]);
     setPersistedStepLogs([]);
@@ -6440,7 +6464,6 @@ export default function WorkbenchPage({
     if (historyRuns.some((item: any) => item.id === pendingRunId)) return;
     clearPendingHumanQuestion();
     clearHumanApprovalData();
-    setPendingCheckpointPhase(null);
   }, [
     clearHumanApprovalData,
     clearPendingHumanQuestion,
@@ -6470,7 +6493,6 @@ export default function WorkbenchPage({
       setRunWorkbenchTab('overview');
       setViewingHistoryRun(false);
       setRunDetail(null);
-      setPendingCheckpointPhase(null);
       setActiveSteps([]);
       setActiveConcurrencyGroups([]);
       setPersistedStepLogs([]);
@@ -6500,7 +6522,6 @@ export default function WorkbenchPage({
     if (pendingHumanQuestion?.runId === deletedRunId) {
       clearPendingHumanQuestion();
       clearHumanApprovalData();
-      setPendingCheckpointPhase(null);
     }
   }, [
     clearHumanApprovalData,
@@ -6565,10 +6586,6 @@ export default function WorkbenchPage({
   }, [dispatch, focusTarget, focusQuestionId]);
 
   useEffect(() => {
-    setWorkbenchConversationSessionId(null);
-  }, [runId, workflowFrontendSessionId]);
-
-  useEffect(() => {
     if (!pendingHumanQuestion) return;
     // 已停止/已结束的工作流不再跳转人工审查
     if (workflowStatus === 'stopped' || workflowStatus === 'completed' || workflowStatus === 'failed' || workflowStatus === 'crashed') return;
@@ -6630,20 +6647,19 @@ export default function WorkbenchPage({
 
     if (isRunMode) {
       void loadHistory();
-      // 如果正在查看历史运行，不连接实时事件流
-      if (viewingHistoryRun) {
+      // History links use the scoped status stream below. Do not let the global stream
+      // switch the page away from the explicitly selected run.
+      if (isHistoryRunView) {
         return;
       }
-      // 否则连接实时事件流
       fetchCurrentStatus();
       const eventSource = workflowApi.connectEventStream((event: any) => {
-        // If we receive a live event, we're no longer viewing history
         setViewingHistoryRun(false);
         handleEventRef.current(event);
       });
       return () => eventSource?.close();
     }
-  }, [viewMode, viewingHistoryRun, initialRunId, runId]);
+  }, [viewMode, isHistoryRunView, initialRunId, runId]);
 
   useEffect(() => {
     const modeFromUrl = normalizeViewMode(effectiveSearchParams.get('mode'));
@@ -6731,12 +6747,13 @@ export default function WorkbenchPage({
 
   // Live status stream replaces periodic /api/workflow/status polling.
   useEffect(() => {
-    if (viewMode !== 'run' || viewingHistoryRun) return;
-    const requestedRunId = startupExpectedRunIdRef.current
-      || runId
-      || selectedRun?.id
-      || (startupInProgressRef.current ? undefined : initialRunId)
-      || undefined;
+    const requestedRunId = statusQueryRunId;
+    if (!shouldConnectWorkbenchRunStatusStream({
+      viewMode,
+      isHistoryRunView,
+      configFile,
+      runId: requestedRunId,
+    })) return;
     const eventSource = workflowApi.connectStatusStream(
       { configFile, runId: requestedRunId },
       (status, event) => {
@@ -6748,7 +6765,7 @@ export default function WorkbenchPage({
       },
     );
     return () => eventSource.close();
-  }, [viewMode, viewingHistoryRun, configFile, initialRunId, runId, selectedRun?.id, applyWorkflowStatusSnapshot, cacheWorkflowStatusPayload, syncRuntimePayloadToDb]);
+  }, [viewMode, isHistoryRunView, configFile, statusQueryRunId, applyWorkflowStatusSnapshot, cacheWorkflowStatusPayload, syncRuntimePayloadToDb]);
 
   useEffect(() => {
     if (isDesignMode && workflowConfig && !hasUnsavedDesignConfigChangesRef.current) {
@@ -6841,7 +6858,6 @@ export default function WorkbenchPage({
       // Restore all state into the run view
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: detail.status === 'crashed' ? 'failed' : detail.status });
       setRunStatusReason(detail.statusReason || null);
-      setWorkflowFrontendSessionId(detail.workflowFrontendSessionId || null);
       dispatch({ type: 'SET_RUN_ID', payload: runId });
       dispatch({ type: 'SET_AGENTS', payload: agents });
       dispatch({ type: 'SET_COMPLETED_STEPS', payload: detail.completedSteps || [] });
@@ -6933,16 +6949,6 @@ export default function WorkbenchPage({
       if (agents.length > 0) {
         dispatch({ type: 'SET_SELECTED_AGENT', payload: agents[0] });
       }
-      // If there's a pending checkpoint, show the checkpoint dialog (阶段模式专属)
-      if (detail.pendingCheckpoint && detail.mode !== 'state-machine') {
-        dispatch({ type: 'SET_CHECKPOINT_MESSAGE', payload: detail.pendingCheckpoint.message });
-        dispatch({ type: 'SET_CHECKPOINT_IS_ITERATIVE', payload: !!detail.pendingCheckpoint.isIterativePhase });
-        dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: true });
-        setPendingCheckpointPhase(detail.pendingCheckpoint.phase || null);
-      } else {
-        setPendingCheckpointPhase(null);
-      }
-
       // Restore state-machine human approval dialog when viewing a historical run
       if (!restoreHumanApprovalFromDetail(detail)) {
         clearHumanApprovalData();
@@ -7026,7 +7032,7 @@ export default function WorkbenchPage({
     syncRuntimePayloadToDb(event);
     if (event?.data?.statusSnapshot?.status) {
       cacheWorkflowStatusPayload(event.data.statusSnapshot, resolveRuntimeRunId(event));
-    } else if (['phase', 'step', 'result', 'sm-transition', 'agents', 'state-executing', 'agent-flow'].includes(String(event?.type || ''))) {
+    } else if (['state', 'state-change', 'step', 'result', 'sm-transition', 'agents', 'state-executing', 'agent-flow'].includes(String(event?.type || ''))) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflowStatusCompact(configFile, statusQueryRunId) });
     }
 
@@ -7053,45 +7059,78 @@ export default function WorkbenchPage({
         addLog('system', 'info', event.data.message);
         break;
       }
-      case 'phase':
+      case 'state': {
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
-        dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.phase });
+        const stateName = String(event.data.state || event.data.currentState || event.data.statusSnapshot?.currentState || '').trim();
+        if (stateName) dispatch({ type: 'SET_CURRENT_PHASE', payload: stateName });
         addLog('system', 'info', `📍 ${event.data.message}`);
         break;
-      case 'step':
+      }
+      case 'state-change': {
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
-        dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.step });
+        const from = String(event.data.from || event.data.previousState || '').trim();
+        const to = String(event.data.to || event.data.targetState || event.data.state || event.data.currentState || event.data.statusSnapshot?.currentState || '').trim();
+        if (to) {
+          dispatch({ type: 'SET_CURRENT_PHASE', payload: to });
+          setSmStateHistory((previous) => {
+            const timestamp = event.data.timestamp || new Date().toISOString();
+            if (previous.some((item) => item.from === from && item.to === to && item.timestamp === timestamp)) return previous;
+            return [...previous, {
+              from,
+              to,
+              reason: event.data.reason || event.data.message || '',
+              issues: Array.isArray(event.data.issues) ? event.data.issues : [],
+              timestamp,
+            }];
+          });
+        }
+        if (typeof event.data.transitionCount === 'number') setSmTransitionCount(event.data.transitionCount);
+        addLog('system', 'info', `状态切换: ${from || '-'} -> ${to || '-'}`);
+        break;
+      }
+      case 'step':
+      case 'step-start':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
+        if (event.data.step) dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.step });
         if (event.data.id) {
           dispatch({ type: 'MAP_STEP_ID', payload: { stepName: event.data.step, stepId: event.data.id } });
         }
-        addLog(event.data.agent, 'info', `开始执行: ${event.data.step}`);
+        if (event.data.step) setActiveSteps((current) => Array.from(new Set([event.data.step, ...current].filter(Boolean))));
+        addLog(event.data.agent || 'system', 'info', `开始执行: ${event.data.step || ''}`);
         break;
-      case 'result': {
+      case 'result':
+      case 'step-complete': {
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         const resultKey = event.data.id || event.data.step;
         if (event.data.error) {
-          addLog(event.data.agent, 'error', event.data.output);
+          addLog(event.data.agent || 'system', 'error', event.data.output || event.data.errorDetail || '步骤执行失败');
           dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
           setRunStatusReason(event.data.errorDetail || event.data.output || '步骤执行失败');
-          setActiveSteps([]);
-          setActiveConcurrencyGroups([]);
-          dispatch({ type: 'ADD_FAILED_STEP', payload: event.data.step });
+          setActiveSteps((current) => current.filter((step) => step !== event.data.step));
+          if (event.data.step) dispatch({ type: 'ADD_FAILED_STEP', payload: event.data.step });
           dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
-          dispatch({ type: 'SET_STEP_RESULT', payload: {
-            step: resultKey,
-            result: { output: '', error: event.data.errorDetail || event.data.output },
-          }});
+          if (resultKey) {
+            dispatch({ type: 'SET_STEP_RESULT', payload: {
+              step: resultKey,
+              result: { output: '', error: event.data.errorDetail || event.data.output },
+            }});
+          }
         } else {
-          addLog(event.data.agent, 'success', `完成: ${event.data.step}`);
-          dispatch({ type: 'ADD_COMPLETED_STEP', payload: event.data.step });
-          dispatch({ type: 'SET_STEP_RESULT', payload: {
-            step: resultKey,
-            result: {
-              output: event.data.fullOutput || event.data.output,
-              costUsd: event.data.costUsd,
-              durationMs: event.data.durationMs,
-            },
-          }});
+          addLog(event.data.agent || 'system', 'success', `完成: ${event.data.step || ''}`);
+          if (event.data.step) {
+            dispatch({ type: 'ADD_COMPLETED_STEP', payload: event.data.step });
+            setActiveSteps((current) => current.filter((step) => step !== event.data.step));
+          }
+          if (resultKey) {
+            dispatch({ type: 'SET_STEP_RESULT', payload: {
+              step: resultKey,
+              result: {
+                output: event.data.fullOutput || event.data.output,
+                costUsd: event.data.costUsd,
+                durationMs: event.data.durationMs,
+              },
+            }});
+          }
         }
         break;
       }
@@ -7100,16 +7139,6 @@ export default function WorkbenchPage({
         if (!selectedAgent && event.data.agents.length > 0) {
           dispatch({ type: 'SET_SELECTED_AGENT', payload: event.data.agents[0] });
         }
-        break;
-      case 'checkpoint':
-        // 阶段模式专属，状态机模式下不弹出
-        if (workflowConfig?.workflow?.mode !== 'state-machine') {
-          dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: true });
-          dispatch({ type: 'SET_CHECKPOINT_MESSAGE', payload: event.data.message });
-          dispatch({ type: 'SET_CHECKPOINT_IS_ITERATIVE', payload: !!event.data.isIterativePhase });
-          setPendingCheckpointPhase(event.data.phase || null);
-        }
-        addLog('system', 'warning', `✋ 检查点: ${event.data.checkpoint}`);
         break;
       case 'iteration':
         dispatch({
@@ -7528,7 +7557,6 @@ export default function WorkbenchPage({
       latestRunIdRef.current = null;
       startupExpectedRunIdRef.current = null;
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'preparing' });
-      setWorkflowFrontendSessionId(null);
       addLog('system', 'info', isRehearsalStart ? '正在启动演练模式...' : '正在启动工作流...');
       setRehearsalProgressSteps((prev) => [...prev, isRehearsalStart ? '已通过检查，正在创建演练运行并等待结果' : '已通过检查，正在创建正式运行']);
       const startResult = await workflowApi.start(configFile, undefined, {
@@ -7579,7 +7607,6 @@ export default function WorkbenchPage({
           workspaceColumn: null,
         });
       }
-      setWorkflowFrontendSessionId(startResult.frontendSessionId || null);
       if (isRehearsalStart && (startResult as any).rehearsal) {
         setRehearsalProgressSteps((prev) => [...prev, '演练执行完成，正在整理结果']);
         setRehearsalProgressDialogOpen(false);
@@ -7629,32 +7656,24 @@ export default function WorkbenchPage({
     setStopping(true);
     setStopProgressDialogOpen(true);
     setStopProgressSummary('正在发送停止请求。');
-    setStopProgressSteps([
-      { id: 'request', label: '发送停止请求', status: 'running' },
-      { id: 'manager-stop', label: '停止运行实例', status: 'pending' },
-      { id: 'process-cleanup', label: '清理残留进程', status: 'pending' },
-      { id: 'state-persist', label: '落盘停止状态', status: 'pending' },
-      { id: 'refresh', label: '刷新运行状态', status: 'pending' },
-    ]);
+    setStopProgressSteps(createStopProgressSteps());
     try {
       const targetRunId = actionRunId || runId || selectedRun?.id || initialRunId || undefined;
       const stopResult = await workflowApi.stop(configFile, targetRunId) as {
         success?: boolean;
-        message?: string;
         runIds?: string[];
-        steps?: Array<{ id: string; label: string; status: 'pending' | 'running' | 'success' | 'failed' | 'skipped'; detail?: string; durationMs?: number }>;
-        cleanupErrors?: string[];
+        steps?: unknown;
       };
       setStopProgressSteps((prev) => {
-        const backendSteps = Array.isArray(stopResult.steps) ? stopResult.steps : [];
-        const byId = new Map(prev.map((step) => [step.id, step]));
-        for (const step of backendSteps) byId.set(step.id, step);
-        byId.set('request', { ...(byId.get('request') || { id: 'request', label: '发送停止请求' }), status: 'success' });
-        return Array.from(byId.values());
+        const merged = mergeUserVisibleStopProgressSteps(prev, stopResult.steps);
+        const requested = merged.map((step) => (
+          step.id === 'request' ? { ...step, status: 'success' as const } : step
+        ));
+        return stopResult.success === false ? requested : completeStopProgressSteps(requested);
       });
-      setStopProgressSummary(stopResult.message || (stopResult.success === false ? '停止工作流失败。' : '停止请求已完成。'));
+      setStopProgressSummary(stopResult.success === false ? '停止工作流失败。' : '停止请求已完成。');
       if (stopResult.success === false) {
-        throw new Error(stopResult.message || stopResult.cleanupErrors?.join('; ') || '停止工作流失败');
+        throw new Error('停止工作流失败。');
       }
       const stoppedAt = new Date().toISOString();
       const stoppedRunIds = new Set(
@@ -7670,7 +7689,6 @@ export default function WorkbenchPage({
       setActiveConcurrencyGroups([]);
       clearHumanApprovalData();
       clearPendingHumanQuestion();
-      setPendingCheckpointPhase(null);
       for (const stoppedRunId of stoppedRunIds) {
         queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, stoppedRunId), (current: any) => ({
           ...(current || {}),
@@ -7712,13 +7730,13 @@ export default function WorkbenchPage({
       setStopProgressSteps((prev) => prev.map((step) => (
         step.id === 'refresh' ? { ...step, status: 'success', detail: '运行状态已刷新。' } : step
       )));
-      setStopProgressSummary(stopResult.message || '工作流已停止。');
+      setStopProgressSummary('工作流已停止。');
     } catch (error: any) {
       setStopProgressSteps((prev) => prev.map((step) => (
-        step.status === 'running' ? { ...step, status: 'failed', detail: error.message || '停止失败' } : step
+        step.status === 'running' ? { ...step, status: 'failed', detail: '停止请求未完成。' } : step
       )));
-      setStopProgressSummary(error.message || '停止工作流失败。');
-      addLog('system', 'error', `停止失败: ${error.message}`);
+      setStopProgressSummary('停止工作流失败。');
+      addLog('system', 'error', '停止工作流失败。');
     } finally {
       setStopping(false);
     }
@@ -7770,15 +7788,18 @@ export default function WorkbenchPage({
       const rid = runId || selectedRun?.id;
       if (rid) {
         // 对人工审查跳转统一走专用 runId 驱动接口，避免服务热重载后丢失内存 manager。
-        setViewingHistoryRun(false);
-        dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
-        dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
-        patchRunStatusLocally(rid, 'running');
-        await workflowApi.forceTransition(
-          forceTransitionModal.targetState,
-          forceTransitionModal.instruction || undefined,
-          configFile,
-          rid,
+        await applyAcceptedWorkbenchRecovery(
+          () => workflowApi.forceTransition(
+            forceTransitionModal.targetState,
+            forceTransitionModal.instruction || undefined,
+            configFile,
+            rid,
+          ),
+          () => {
+            setViewingHistoryRun(false);
+            dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
+            patchRunStatusLocally(rid, 'running');
+          },
         );
       } else {
         // 兜底：没有 runId 时再直接命中当前内存态
@@ -7790,11 +7811,7 @@ export default function WorkbenchPage({
       setForceTransitionModal(null);
       clearHumanApprovalData();
       clearPendingHumanQuestion();
-      setPendingCheckpointPhase(null);
     } catch (e: any) {
-      const rid = runId || selectedRun?.id;
-      if (rid) patchRunStatusLocally(rid, 'failed', e.message || '强制恢复失败');
-      setRunStatusReason(e.message || '强制恢复失败');
       addLog('system', 'error', `强制恢复失败: ${e.message || '未知错误'}`);
       toast('error', e.message);
     } finally {
@@ -7816,7 +7833,6 @@ export default function WorkbenchPage({
       toast('success', '已提交 Supervisor 回复');
       clearPendingHumanQuestion();
       clearHumanApprovalData();
-      setPendingCheckpointPhase(null);
       fetchCurrentStatus();
     } catch (error: any) {
       toast('error', error.message || '提交回复失败');
@@ -7874,13 +7890,13 @@ export default function WorkbenchPage({
 
   const submitHumanApprovalFromBanner = async () => {
     if (!pendingHumanQuestion) {
-      await approveCheckpoint();
+      toast('warning', '当前没有待处理的人工问题');
       return;
     }
     const selectedState = resolveHumanApprovalPassTarget();
     if (pendingHumanQuestion.answerSchema?.type === 'approval-transition' && !selectedState) {
       toast('warning', '请选择审查通过后的目标状态');
-      openRunDetailSection('agora');
+      openRunDetailSection('live');
       return;
     }
     await handleSubmitHumanQuestion({
@@ -7891,7 +7907,7 @@ export default function WorkbenchPage({
 
   const rejectHumanApprovalFromBanner = async () => {
     if (!pendingHumanQuestion) {
-      await rejectCheckpoint();
+      toast('warning', '当前没有待处理的人工问题');
       return;
     }
     const ok = await confirm({
@@ -7908,7 +7924,6 @@ export default function WorkbenchPage({
       await stopWorkflow();
       clearPendingHumanQuestion();
       clearHumanApprovalData();
-      setPendingCheckpointPhase(null);
       toast('success', '已停止当前工作流');
       fetchCurrentStatus();
     } catch (error: any) {
@@ -7925,7 +7940,6 @@ export default function WorkbenchPage({
     try {
       setViewingHistoryRun(false);
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
-      dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
       dispatch({ type: 'SET_RUN_ID', payload: rid });
       patchRunStatusLocally(rid, 'running');
       addLog('system', 'info', `正在恢复运行: ${rid}...`);
@@ -7951,99 +7965,6 @@ export default function WorkbenchPage({
     }
     void resumeWorkflow(actionRunId);
   }, [actionRunId, canResumeWorkflow, resumeWorkflowDisabledReason, resumeWorkflow, toast]);
-
-  const approveCheckpoint = async () => {
-    try {
-      const rid = runId || selectedRun?.id;
-
-      // 先查后端内存里的实际状态，避免重复 resume
-      const liveStatus = await workflowApi.getStatus(configFile, undefined, { compact: true });      const alreadyRunningInMemory = liveStatus.status === 'running' || liveStatus.status === 'preparing';
-
-      if (!alreadyRunningInMemory) {
-        // 内存里没有运行中的 workflow，先弹确认再 resume
-        dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false });
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        const confirmed = await confirm({
-          title: '恢复运行后继续批准？',
-          description: '检测到该工作流当前可能未在服务内存中运行。这通常发生在服务重启或打开历史运行记录时。是否先恢复该运行，再自动执行"批准"？',
-          confirmLabel: '恢复并批准',
-          cancelLabel: '取消',
-        });
-
-        if (!confirmed) {
-          dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: true });
-          return;
-        }
-
-        if (rid) {
-          setViewingHistoryRun(false);
-          dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
-          dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
-          await workflowApi.resume(rid, 'approve');
-          dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
-          fetchCurrentStatus();
-        }
-      } else {
-        // 内存里已经有运行中的 workflow，直接 approve
-        await workflowApi.approve(configFile);
-      }
-
-      dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false });
-      setIterationFeedback('');
-      setPendingCheckpointPhase(null);
-      addLog('system', 'success', '✓ 检查点已批准，继续执行');
-    } catch (error: any) {
-      addLog('system', 'error', `批准失败: ${error.message}`);
-    }
-  };
-
-  const rejectCheckpoint = async () => {
-    const ok = await confirm({
-      title: '确认拒绝并停止',
-      description: '拒绝后将停止当前工作流运行。是否继续？',
-      confirmLabel: '拒绝并停止',
-      cancelLabel: '取消',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false });
-    setIterationFeedback(''); // 清空反馈
-    setPendingCheckpointPhase(null);
-    if (isRunning) {
-      await stopWorkflow();
-    }
-    addLog('system', 'warning', '✗ 检查点被拒绝，工作流已停止');
-  };
-
-  const iterateCheckpoint = async () => {
-    if (!iterationFeedback.trim()) {
-      toast('error', '请输入迭代意见');
-      return;
-    }
-    try {
-      if (isRunning) {
-        await workflowApi.iterate(iterationFeedback, configFile);
-      } else {
-        // Workflow not running — resume with iterate action
-        const rid = runId || selectedRun?.id;
-        if (rid) {
-          setViewingHistoryRun(false);
-          dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
-          dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
-          await workflowApi.resume(rid, 'iterate', iterationFeedback);
-          dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
-          fetchCurrentStatus();
-        }
-      }
-      dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false });
-      setIterationFeedback('');
-      setPendingCheckpointPhase(null);
-      addLog('system', 'info', '↻ 继续迭代，重新执行当前阶段');
-    } catch (error: any) {
-      addLog('system', 'error', `请求迭代失败: ${error.message}`);
-    }
-  };
 
   const getStatusText = (status: string) => {
     const texts: Record<string, string> = { idle: '空闲', preparing: '准备中', running: '运行中', completed: '已完成', failed: '失败', stopped: '已停止', crashed: '崩溃' };
@@ -8196,7 +8117,6 @@ export default function WorkbenchPage({
     setRightPanelTab('detail');
     setRunInspectorPanelOpen(true);
     setShowSystemPrompt(false);
-    setFullStepOutput(null);
     const agent = agents.find((a) => a.name === step.agent);
     if (agent) {
       dispatch({ type: 'SET_SELECTED_AGENT', payload: agent });
@@ -8298,7 +8218,19 @@ export default function WorkbenchPage({
           </Badge>
         </div>
         <div className="min-h-0 flex-1 p-4">
-          {childWorkflow?.mode === 'state-machine' ? (
+          {isLightweightWorkflowConfig(childConfig) ? (
+            <LightweightWorkflowExecutionView
+              workflow={childWorkflow}
+              runId={active.runId || null}
+              status={childStatus.status || active.child?.status || 'idle'}
+              currentState={childStatus.currentState || childStatus.currentPhase || null}
+              currentStep={childStatus.currentStep || null}
+              activeSteps={Array.isArray(childStatus.activeSteps) ? childStatus.activeSteps : []}
+              completedSteps={Array.isArray(childStatus.completedSteps) ? childStatus.completedSteps : []}
+              failedSteps={Array.isArray(childStatus.failedSteps) ? childStatus.failedSteps : []}
+              workspaceAvailable={false}
+            />
+          ) : (
             <StateMachineExecutionView
               states={childWorkflow.states || []}
               agents={active.agents || []}
@@ -8332,17 +8264,6 @@ export default function WorkbenchPage({
               onStateClick={setFocusedState}
               onStepClick={handleChildStepClick}
             />
-          ) : (
-            <FlowDiagram
-              workflow={childWorkflow}
-              currentPhase={childStatus.currentPhase || null}
-              currentStep={childStatus.currentStep || null}
-              agents={active.agents || []}
-              completedSteps={Array.isArray(childStatus.completedSteps) ? childStatus.completedSteps : []}
-              failedSteps={Array.isArray(childStatus.failedSteps) ? childStatus.failedSteps : []}
-              iterationStates={childStatus.iterationStates || {}}
-              onSelectStep={selectStep}
-            />
           )}
         </div>
       </div>
@@ -8371,11 +8292,9 @@ export default function WorkbenchPage({
   };
 
   const selectStepByLogName = (logStepName: string) => {
-    const allSteps = workflowConfig?.workflow?.mode === 'state-machine'
-      ? (workflowConfig.workflow.states || []).flatMap((state: any) =>
-          (state.steps || []).map((step: any) => ({ ...step, __stateName: state.name }))
-        )
-      : (workflowConfig?.workflow?.phases || []).flatMap((phase: any) => phase.steps || []);
+    const allSteps = (workflowConfig?.workflow?.states || []).flatMap((state: any) =>
+      (state.steps || []).map((step: any) => ({ ...step, __stateName: state.name }))
+    );
 
     const matchedStep = allSteps.find((step: any) =>
       step.name === logStepName ||
@@ -8402,19 +8321,6 @@ export default function WorkbenchPage({
     setOverviewStepRecord(null);
   };
 
-  const loadFullOutput = async (stepName: string) => {
-    const rid = runId || selectedRun?.id;
-    if (!rid) return;
-    setLoadingOutput(true);
-    try {
-      const { content } = await runsApi.getStepOutput(rid, stepName);
-      setFullStepOutput(content);
-    } catch {
-      setFullStepOutput(null);
-    }
-    setLoadingOutput(false);
-  };
-
   const openRunRecordDocument = (input: { stepName: string; filename?: string }) => {
     setDocumentFocusRequest({
       requestId: Date.now(),
@@ -8431,7 +8337,7 @@ export default function WorkbenchPage({
     id: string;
     stepName: string;
     rawStepName?: string;
-    status: 'completed' | 'failed';
+    status: 'running' | 'completed' | 'failed';
     output?: string;
     error?: string;
   }) => {
@@ -8584,55 +8490,34 @@ export default function WorkbenchPage({
 
     const rawBase = trimmed.replace(/-迭代\d+$/, '');
 
-    if (workflowConfig?.workflow?.mode === 'state-machine') {
-      const preferredStates = new Set<string>();
-      if ((selectedStep as any)?.__stateName) preferredStates.add((selectedStep as any).__stateName);
-      if (currentPhase) preferredStates.add(currentPhase);
-      const states = workflowConfig.workflow.states || [];
-      const sortedStates = [
-        ...states.filter((state: any) => preferredStates.has(state.name)),
-        ...states.filter((state: any) => !preferredStates.has(state.name)),
-      ];
+    const preferredStates = new Set<string>();
+    if ((selectedStep as any)?.__stateName) preferredStates.add((selectedStep as any).__stateName);
+    if (currentPhase) preferredStates.add(currentPhase);
+    const states = workflowConfig?.workflow?.states || [];
+    const sortedStates = [
+      ...states.filter((state: any) => preferredStates.has(state.name)),
+      ...states.filter((state: any) => !preferredStates.has(state.name)),
+    ];
 
-      for (const state of sortedStates) {
-        for (const step of state.steps || []) {
-          const stepName = String(step?.name || '').trim();
-          if (!stepName) continue;
-          const stepBase = stepName.replace(/-迭代\d+$/, '');
-          const fullName = `${state.name}-${stepName}`;
-          const fullBaseName = `${state.name}-${stepBase}`;
-          if (
-            rawBase === stepName
-            || rawBase === stepBase
-            || rawBase === fullName
-            || rawBase === fullBaseName
-            || rawBase.endsWith(`-${stepName}`)
-            || rawBase.endsWith(`-${stepBase}`)
-          ) {
-            return {
-              stateName: state.name,
-              stepName,
-            };
-          }
-        }
-      }
-    } else {
-      for (const phase of workflowConfig?.workflow?.phases || []) {
-        for (const step of phase.steps || []) {
-          const stepName = String(step?.name || '').trim();
-          if (!stepName) continue;
-          const stepBase = stepName.replace(/-迭代\d+$/, '');
-          if (
-            rawBase === stepName
-            || rawBase === stepBase
-            || rawBase.endsWith(`-${stepName}`)
-            || rawBase.endsWith(`-${stepBase}`)
-          ) {
-            return {
-              stateName: phase.name,
-              stepName,
-            };
-          }
+    for (const state of sortedStates) {
+      for (const step of state.steps || []) {
+        const stepName = String(step?.name || '').trim();
+        if (!stepName) continue;
+        const stepBase = stepName.replace(/-迭代\d+$/, '');
+        const fullName = `${state.name}-${stepName}`;
+        const fullBaseName = `${state.name}-${stepBase}`;
+        if (
+          rawBase === stepName
+          || rawBase === stepBase
+          || rawBase === fullName
+          || rawBase === fullBaseName
+          || rawBase.endsWith(`-${stepName}`)
+          || rawBase.endsWith(`-${stepBase}`)
+        ) {
+          return {
+            stateName: state.name,
+            stepName,
+          };
         }
       }
     }
@@ -8816,6 +8701,7 @@ export default function WorkbenchPage({
     const activeStep = selectedLiveStreamSource.stepKey || liveStreamTarget.stepKey || '';
     if (!rid || !activeStep) {
       setLiveStream(getCachedLiveStreamChunks(rid, activeStep));
+      setLiveToolEvents([]);
       return;
     }
 
@@ -8828,8 +8714,11 @@ export default function WorkbenchPage({
 
     const cachedChunks = getCachedLiveStreamChunks(rid, activeStep);
     let content = '';
+    let toolEvents: RuntimeToolEvent[] = [];
     try {
-      content = await streamApi.getStreamContent(rid, activeStep);
+      const stream = await streamApi.getStream(rid, activeStep);
+      content = stream.content;
+      toolEvents = stream.toolEvents;
     } catch {
       content = '';
     }
@@ -8840,6 +8729,7 @@ export default function WorkbenchPage({
         const matched = workflowProcesses.find((p: any) => p.runId === rid && p.step === activeStep)
           || workflowProcesses.find((p: any) => p.runId === rid);
         content = matched?.streamContent || '';
+        toolEvents = Array.isArray(matched?.toolEvents) ? matched.toolEvents : toolEvents;
       } catch {
         content = '';
       }
@@ -8856,6 +8746,7 @@ export default function WorkbenchPage({
     liveStreamRawRef.current = content || raw;
     liveStreamLenRef.current = liveStreamRawRef.current.length;
     setLiveStream(chunks);
+    setLiveToolEvents(toolEvents);
     setLiveStreamVisibleCount(LIVE_STREAM_PAGE_SIZE);
   }, [
     getCachedLiveStreamChunks,
@@ -9024,6 +8915,7 @@ export default function WorkbenchPage({
     liveStreamLenRef.current = cachedRaw.length;
     liveStreamRawRef.current = cachedRaw;
     setLiveStream(normalizeLiveStreamChunks(cachedChunks));
+    setLiveToolEvents([]);
     liveStreamRunRef.current = rid;
     liveStreamStepRef.current = activeStep;
     setLiveStreamSource({
@@ -9033,6 +8925,9 @@ export default function WorkbenchPage({
 
     // Try SSE live stream if we have runId + step
     if (rid && activeStep) {
+      void streamApi.getStream(rid, activeStep)
+        .then((stream) => setLiveToolEvents(stream.toolEvents))
+        .catch(() => {});
       let sseBuffer = '';
       let sseRaw = cachedRaw;
       const liveMessageId = `workflow:${rid}:${activeStep}:live`;
@@ -9097,6 +8992,9 @@ export default function WorkbenchPage({
           }
           // Stream done — don't auto-close panel, user may still be reading
         },
+        (tool) => {
+          setLiveToolEvents((current) => mergeRuntimeToolEvents(current, tool));
+        },
       );
       liveStreamRef.current = es;
       return;
@@ -9134,16 +9032,20 @@ export default function WorkbenchPage({
           liveStreamLenRef.current = nextCachedRaw.length;
           liveStreamRawRef.current = nextCachedRaw;
           setLiveStream(normalizeLiveStreamChunks(nextCachedChunks));
+          setLiveToolEvents([]);
           setInlineFeedbacks(pendingLiveFeedbackRef.current);
         }
 
         let content: string | null = null;
         if (curRid && curStep) {
-          content = await streamApi.getStreamContent(curRid, curStep);
+          const stream = await streamApi.getStream(curRid, curStep);
+          content = stream.content;
+          setLiveToolEvents(stream.toolEvents);
         }
         if (!content) {
           const running = workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid && (!curStep || p.step === curStep))
             || workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid);
+          if (Array.isArray(running?.toolEvents)) setLiveToolEvents(running.toolEvents);
           content = running?.streamContent || workflowProcesses
             .filter((p: any) => p.runId === curRid)
             .sort((a: any, b: any) =>
@@ -9296,7 +9198,8 @@ export default function WorkbenchPage({
   const renderLiveStreamItems = () => {
     const renderLiveThinkingIndicator = () => {
       const lastChunk = liveStream[liveStream.length - 1] || '';
-      const isExecuting = /\*\*🔧 .+?\*\*[^]*$/.test(lastChunk) && !/<\/details>\s*$/.test(lastChunk.trim());
+      const isExecuting = liveToolEvents.some((tool) => tool.status === 'running')
+        || (/\*\*🔧 .+?\*\*[^]*$/.test(lastChunk) && !/<\/details>\s*$/.test(lastChunk.trim()));
       const statusText = isExecuting ? '执行中' : '思考中';
       return (
         <div className={cn(styles.thinkingBot, 'mx-4 mb-3 mt-1')} aria-live="polite">
@@ -9307,14 +9210,16 @@ export default function WorkbenchPage({
       );
     };
 
-    if (liveStream.length === 0 && inlineFeedbacks.length === 0) {
+    if (liveStream.length === 0 && inlineFeedbacks.length === 0 && liveToolEvents.length === 0) {
       if (isRunning) return <div className="py-3">{renderLiveThinkingIndicator()}</div>;
       return <div className="py-8 text-center text-sm text-muted-foreground">(等待输出...)</div>;
     }
 
     type ChunkItem = { type: 'chunk'; content: string; index: number | string; page?: number; pageCount?: number };
+    type ToolItem = { type: 'tool'; tool: RuntimeToolEvent; index: string };
+    type ToolGroupItem = { type: 'tool-group'; tools: RuntimeToolEvent[]; index: string };
     type LoadMoreItem = { type: 'load-more'; remaining: number };
-    type Item = ChunkItem | ({ type: 'feedback' } & InlineFeedback) | { type: 'thinking' } | LoadMoreItem;
+    type Item = ChunkItem | ToolItem | ToolGroupItem | ({ type: 'feedback' } & InlineFeedback) | { type: 'thinking' } | LoadMoreItem;
     const items: Item[] = [];
     let fbIdx = 0;
     for (let i = 0; i < liveStream.length; i++) {
@@ -9402,12 +9307,75 @@ export default function WorkbenchPage({
         });
       });
     }
-    if (isRunning) filteredItems.push({ type: 'thinking' });
+    let mergedTools: RuntimeToolEvent[] = [];
+    for (const tool of liveToolEvents) mergedTools = mergeRuntimeToolEvents(mergedTools, tool);
 
-    const hasMore = filteredItems.length > liveStreamVisibleCount;
-    const visibleItems = hasMore ? filteredItems.slice(filteredItems.length - liveStreamVisibleCount) : filteredItems;
+    const getTimelineTimestamp = (item: Item): number | null => {
+      const rawTimestamp = item.type === 'tool'
+        ? item.tool.createdAt || item.tool.updatedAt
+        : item.type === 'feedback'
+          ? item.timestamp
+          : item.type === 'chunk'
+            ? parseChunk(item.content).timestamp
+            : null;
+      const timestamp = Date.parse(String(rawTimestamp || ''));
+      return Number.isNaN(timestamp) ? null : timestamp;
+    };
+
+    // Tool payloads are structured, but they remain ordinary chronological
+    // entries in the live transcript. The final lifecycle update only changes
+    // the card state; createdAt keeps the card at the original call position.
+    const timelineItems: Item[] = [...filteredItems];
+    for (const [toolIndex, tool] of mergedTools.entries()) {
+      const toolItem: ToolItem = { type: 'tool', tool, index: `${tool.id}:${toolIndex}` };
+      const toolTimestamp = getTimelineTimestamp(toolItem);
+      const insertionIndex = toolTimestamp === null
+        ? -1
+        : timelineItems.findIndex((item) => {
+            const itemTimestamp = getTimelineTimestamp(item);
+            if (itemTimestamp === null) return false;
+            // Preserve call order for tools emitted in the same millisecond,
+            // while putting each tool before the next text or feedback event.
+            return item.type === 'tool'
+              ? itemTimestamp > toolTimestamp
+              : itemTimestamp >= toolTimestamp;
+          });
+      timelineItems.splice(insertionIndex < 0 ? timelineItems.length : insertionIndex, 0, toolItem);
+    }
+
+    const groupedTimelineItems: Item[] = [];
+    for (let index = 0; index < timelineItems.length; index += 1) {
+      const item = timelineItems[index];
+      if (item.type !== 'tool') {
+        groupedTimelineItems.push(item);
+        continue;
+      }
+
+      const tools = [item.tool];
+      let cursor = index + 1;
+      while (cursor < timelineItems.length && timelineItems[cursor].type === 'tool') {
+        tools.push((timelineItems[cursor] as ToolItem).tool);
+        cursor += 1;
+      }
+      if (tools.length > 1) {
+        groupedTimelineItems.push({
+          type: 'tool-group',
+          tools,
+          index: `tool-group:${item.index}:${tools[tools.length - 1].id}`,
+        });
+      } else {
+        groupedTimelineItems.push(item);
+      }
+      index = cursor - 1;
+    }
+
+    timelineItems.splice(0, timelineItems.length, ...groupedTimelineItems);
+    if (isRunning) timelineItems.push({ type: 'thinking' });
+
+    const hasMore = timelineItems.length > liveStreamVisibleCount;
+    const visibleItems = hasMore ? timelineItems.slice(timelineItems.length - liveStreamVisibleCount) : timelineItems;
     const displayItems: Item[] = hasMore
-      ? [{ type: 'load-more', remaining: filteredItems.length - liveStreamVisibleCount }, ...visibleItems]
+      ? [{ type: 'load-more', remaining: timelineItems.length - liveStreamVisibleCount }, ...visibleItems]
       : visibleItems;
 
     const renderLiveStreamItem = (item: Item, i: number) => {
@@ -9424,6 +9392,36 @@ export default function WorkbenchPage({
         );
       }
       if (item.type === 'thinking') return renderLiveThinkingIndicator();
+      if (item.type === 'tool') {
+        const timestamp = formatLiveOutputTimestamp(item.tool.createdAt || item.tool.updatedAt);
+        return (
+          <div className="border-b border-border/50 px-4 pb-3 last:border-0">
+            {timestamp ? (
+              <div className="mb-2 flex items-center gap-2 font-mono text-[10px] text-muted-foreground" aria-label="工具调用时间">
+                <span className="h-px min-w-4 flex-1 bg-border/70" />
+                <span className="shrink-0">{timestamp}</span>
+                <span className="h-px min-w-4 flex-1 bg-border/70" />
+              </div>
+            ) : null}
+            <RuntimeToolEventCard tool={item.tool} isStreaming={isRunning} />
+          </div>
+        );
+      }
+      if (item.type === 'tool-group') {
+        const timestamp = formatLiveOutputTimestamp(item.tools[0]?.createdAt || item.tools[0]?.updatedAt);
+        return (
+          <div className="border-b border-border/50 px-4 pb-3 last:border-0">
+            {timestamp ? (
+              <div className="mb-2 flex items-center gap-2 font-mono text-[10px] text-muted-foreground" aria-label="工具调用时间">
+                <span className="h-px min-w-4 flex-1 bg-border/70" />
+                <span className="shrink-0">{timestamp}</span>
+                <span className="h-px min-w-4 flex-1 bg-border/70" />
+              </div>
+            ) : null}
+            <RuntimeToolEventGroup events={item.tools} isStreaming={isRunning} />
+          </div>
+        );
+      }
       if (item.type === 'feedback') {
         const statusMeta: Record<LiveFeedbackStatus, { label: string; className: string }> = {
           sending: { label: '发送中', className: 'bg-muted text-muted-foreground' },
@@ -9470,6 +9468,7 @@ export default function WorkbenchPage({
         );
       }
       const parsed = parseChunk(item.content);
+      const liveOutputTimestamp = formatLiveOutputTimestamp(parsed.timestamp);
       if (parsed.isHumanFeedback) {
         return (
           <div className="flex justify-end px-4 pb-3">
@@ -9493,11 +9492,11 @@ export default function WorkbenchPage({
         <div className="border-b border-border/50 px-4 pb-3 last:border-0">
           {(parsed.timestamp || item.pageCount) ? (
             <div className="mb-2 flex flex-wrap items-center gap-2 font-mono text-[10px] text-muted-foreground">
-              {parsed.timestamp ? (
+              {liveOutputTimestamp ? (
                 <div className="flex min-w-0 flex-1 items-center gap-2" aria-label="新发言时间">
                   <span className="h-px min-w-4 flex-1 bg-border/70" />
                   <span className="shrink-0">
-                    {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    {liveOutputTimestamp}
                   </span>
                   <span className="h-px min-w-4 flex-1 bg-border/70" />
                 </div>
@@ -9531,7 +9530,7 @@ export default function WorkbenchPage({
             const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
             liveStreamUserScrolledUp.current = !atBottom;
             setLiveStreamScrollLocked(!atBottom);
-            if (el.scrollTop === 0 && filteredItems.length > liveStreamVisibleCount) {
+            if (el.scrollTop === 0 && timelineItems.length > liveStreamVisibleCount) {
               setLiveStreamVisibleCount(prev => prev + LIVE_STREAM_PAGE_SIZE);
             }
           }}
@@ -9539,9 +9538,13 @@ export default function WorkbenchPage({
             ? `feedback:${item.id || item.timestamp}:${item.streamIndex}:${index}`
             : item.type === 'load-more'
               ? `load-more:${item.remaining}`
-            : item.type === 'thinking'
-              ? `thinking:${index}`
-            : `chunk:${item.index}`}
+                : item.type === 'thinking'
+                  ? `thinking:${index}`
+                  : item.type === 'tool-group'
+                    ? `tool-group:${item.index}:${item.tools.some((tool) => tool.status === 'running') ? 'pending' : 'done'}`
+                  : item.type === 'tool'
+                    ? `tool:${item.tool.id}:${item.tool.status}`
+                    : `chunk:${item.index}`}
           renderItem={renderLiveStreamItem}
         />
       </div>
@@ -9869,17 +9872,20 @@ export default function WorkbenchPage({
     });
     if (!ok) return;
     try {
-      setViewingHistoryRun(false);
-      dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
-      dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
-      dispatch({ type: 'SET_STEP_RESULTS', payload: {} });
-      dispatch({ type: 'SET_RUN_ID', payload: rid });
-      addLog('system', 'info', `正在从步骤 "${stepName}" 重新运行...`);
-      await workflowApi.rerunFromStep(rid, stepName);
+      await applyAcceptedWorkbenchRecovery(
+        () => workflowApi.rerunFromStep(rid, stepName),
+        () => {
+          setViewingHistoryRun(false);
+          dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
+          dispatch({ type: 'SET_STEP_RESULTS', payload: {} });
+          dispatch({ type: 'SET_STEP_ID_MAP', payload: {} });
+          dispatch({ type: 'SET_RUN_ID', payload: rid });
+          addLog('system', 'info', `正在从步骤 "${stepName}" 重新运行...`);
+        },
+      );
       dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
       fetchCurrentStatus();
     } catch (error: any) {
-      dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
       addLog('system', 'error', `重新运行失败: ${error.message}`);
     }
   };
@@ -10077,216 +10083,9 @@ export default function WorkbenchPage({
     return baseName;
   };
 
-  const handleSelectNode = (type: 'phase' | 'step', phaseIndex: number, stepIndex?: number) => {
-    setIsNewNode(false);
-    dispatch({ type: 'SET_EDITING_NODE', payload: { type, phaseIndex, stepIndex } });
-    dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: true });
-  };
-
-  const handleSaveNode = async (data: any) => {
-    if (!editingNode || !editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    if (editingNode.type === 'phase') {
-      newConfig.workflow.phases[editingNode.phaseIndex] = {
-        ...newConfig.workflow.phases[editingNode.phaseIndex], ...data,
-      };
-    } else if (editingNode.stepIndex !== undefined) {
-      const existingStep = newConfig.workflow.phases[editingNode.phaseIndex].steps[editingNode.stepIndex] || {};
-      const nextStep = {
-        ...existingStep, ...data,
-      };
-      if (Object.prototype.hasOwnProperty.call(data, 'specTaskBinding') && !data.specTaskBinding) {
-        delete nextStep.specTaskBinding;
-      }
-      if (Object.prototype.hasOwnProperty.call(data, 'preCommands') && (!Array.isArray(data.preCommands) || data.preCommands.length === 0)) {
-        delete nextStep.preCommands;
-      }
-      newConfig.workflow.phases[editingNode.phaseIndex].steps[editingNode.stepIndex] = nextStep;
-    }
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-    dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: false });
-    dispatch({ type: 'SET_EDITING_NODE', payload: null });
-  };
-
-  const handleDeleteNode = async () => {
-    if (!editingNode || !editingConfig) return;
-    const ok = await confirm({
-      title: '确认删除',
-      description: '确定要删除吗？',
-      confirmLabel: '删除',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    if (editingNode.type === 'phase') {
-      newConfig.workflow.phases.splice(editingNode.phaseIndex, 1);
-    } else if (editingNode.stepIndex !== undefined) {
-      newConfig.workflow.phases[editingNode.phaseIndex].steps.splice(editingNode.stepIndex, 1);
-    }
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-    dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: false });
-    dispatch({ type: 'SET_EDITING_NODE', payload: null });
-  };
-
-  const handleAddPhase = (afterIndex: number) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const newPhase = {
-      name: `新阶段 ${newConfig.workflow.phases.length + 1}`,
-      steps: [],
-      iteration: { enabled: false },
-    };
-    newConfig.workflow.phases.splice(afterIndex + 1, 0, newPhase);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-    setIsNewNode(true);
-    dispatch({ type: 'SET_EDITING_NODE', payload: { type: 'phase' as const, phaseIndex: afterIndex + 1 } });
-    dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: true });
-  };
-
-  const handleAddStep = (phaseIndex: number) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const phase = newConfig.workflow.phases[phaseIndex];
-    const newStep = {
-      name: `新步骤 ${phase.steps.length + 1}`,
-      agent: agentConfigs.length > 0 ? agentConfigs[0].name : '',
-      task: '',
-      role: 'defender',
-    };
-    phase.steps.push(newStep);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-    setIsNewNode(true);
-    dispatch({ type: 'SET_EDITING_NODE', payload: { type: 'step' as const, phaseIndex, stepIndex: phase.steps.length - 1 } });
-    dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: true });
-  };
-
-  const handleDeletePhase = async (phaseIndex: number) => {
-    if (!editingConfig) return;
-    const ok = await confirm({
-      title: '确认删除阶段',
-      description: `确定要删除阶段 "${editingConfig.workflow.phases[phaseIndex].name}" 吗？`,
-      confirmLabel: '删除',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    newConfig.workflow.phases.splice(phaseIndex, 1);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
-  const handleDeleteStep = async (phaseIndex: number, stepIndex: number) => {
-    if (!editingConfig) return;
-    const step = editingConfig.workflow.phases[phaseIndex].steps[stepIndex];
-    const ok = await confirm({
-      title: '确认删除步骤',
-      description: `确定要删除步骤 "${step.name}" 吗？`,
-      confirmLabel: '删除',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    newConfig.workflow.phases[phaseIndex].steps.splice(stepIndex, 1);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
-  const handleAddStepAt = (phaseIndex: number, afterStepIndex: number) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const phase = newConfig.workflow.phases[phaseIndex];
-    const newStep = {
-      name: `新步骤 ${phase.steps.length + 1}`,
-      agent: agentConfigs.length > 0 ? agentConfigs[0].name : '',
-      task: '',
-      role: 'defender',
-    };
-    phase.steps.splice(afterStepIndex + 1, 0, newStep);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-    setIsNewNode(true);
-    dispatch({ type: 'SET_EDITING_NODE', payload: { type: 'step' as const, phaseIndex, stepIndex: afterStepIndex + 1 } });
-    dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: true });
-  };
-
-  const handleMoveStep = (phaseIndex: number, fromIndex: number, toIndex: number) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const steps = newConfig.workflow.phases[phaseIndex].steps;
-    if (toIndex < 0 || toIndex >= steps.length) return;
-    const [moved] = steps.splice(fromIndex, 1);
-    steps.splice(toIndex, 0, moved);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
-  const handleToggleParallel = (phaseIndex: number, stepIndices: number[]) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const steps = newConfig.workflow.phases[phaseIndex].steps;
-    // Reuse existing group ID if any target step is already in a group
-    let groupId = stepIndices.map((si: number) => steps[si]?.parallelGroup).find((pg: string | undefined) => pg != null);
-    if (!groupId) groupId = `parallel-${Date.now()}`;
-    stepIndices.forEach((si: number) => {
-      if (steps[si]) steps[si].parallelGroup = groupId;
-    });
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
-  const handleUngroup = (phaseIndex: number, stepIndex: number) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const steps = newConfig.workflow.phases[phaseIndex].steps;
-    const groupId = steps[stepIndex]?.parallelGroup;
-    if (!groupId) return;
-    steps.forEach((s: any) => { if (s.parallelGroup === groupId) delete s.parallelGroup; });
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
-  const handleCrossPhaseMove = (fromPhase: number, fromIndex: number, toPhase: number, toIndex: number) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const sourceSteps = newConfig.workflow.phases[fromPhase].steps;
-    const targetSteps = newConfig.workflow.phases[toPhase].steps;
-    const [moved] = sourceSteps.splice(fromIndex, 1);
-    delete moved.parallelGroup;
-    targetSteps.splice(Math.min(toIndex, targetSteps.length), 0, moved);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
-  const handleMoveGroup = (fromPhase: number, groupStartIndex: number, toPhase: number, toIndex: number) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const sourceSteps = newConfig.workflow.phases[fromPhase].steps;
-    const groupId = sourceSteps[groupStartIndex]?.parallelGroup;
-    if (!groupId) return;
-    const groupSteps: any[] = [];
-    let i = groupStartIndex;
-    while (i < sourceSteps.length && sourceSteps[i].parallelGroup === groupId) {
-      groupSteps.push(sourceSteps[i]);
-      i++;
-    }
-    sourceSteps.splice(groupStartIndex, groupSteps.length);
-    const targetSteps = fromPhase === toPhase ? sourceSteps : newConfig.workflow.phases[toPhase].steps;
-    let insertAt = Math.min(toIndex, targetSteps.length);
-    if (fromPhase === toPhase && toIndex > groupStartIndex) {
-      insertAt = Math.max(0, toIndex - groupSteps.length);
-    }
-    targetSteps.splice(insertAt, 0, ...groupSteps);
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
-  const handleJoinGroup = (phaseIndex: number, stepIndex: number, groupId: string) => {
-    if (!editingConfig) return;
-    const newConfig = JSON.parse(JSON.stringify(editingConfig));
-    const step = newConfig.workflow.phases[phaseIndex].steps[stepIndex];
-    if (step) step.parallelGroup = groupId;
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-  };
-
   const stripSpecBindingsFromWorkflowConfig = useCallback((config: any) => {
     const next = JSON.parse(JSON.stringify(config));
-    const nodes = Array.isArray(next?.workflow?.states)
-      ? next.workflow.states
-      : Array.isArray(next?.workflow?.phases)
-        ? next.workflow.phases
-        : [];
+    const nodes = Array.isArray(next?.workflow?.states) ? next.workflow.states : [];
     for (const node of nodes) {
       for (const step of Array.isArray(node?.steps) ? node.steps : []) {
         if (step && typeof step === 'object') {
@@ -10373,13 +10172,6 @@ export default function WorkbenchPage({
     } catch (error: any) {
       toast('error', '删除 Agent 失败: ' + error.message);
     }
-  };
-
-  const getEditingNodeData = () => {
-    if (!editingNode || !editingConfig) return null;
-    if (editingNode.type === 'phase') return editingConfig.workflow.phases[editingNode.phaseIndex];
-    if (editingNode.stepIndex !== undefined) return editingConfig.workflow.phases[editingNode.phaseIndex].steps[editingNode.stepIndex];
-    return null;
   };
 
   const renderRuntimeInsightPanels = () => {
@@ -12002,9 +11794,7 @@ export default function WorkbenchPage({
     { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
     { key: 'changes' as const, label: '变更', icon: 'difference' },
     { key: 'documents' as const, label: '工作总结', icon: 'description' },
-    { key: 'agora' as const, label: '对话', icon: 'forum' },
     { key: 'live' as const, label: '实时输出', icon: 'cell_tower' },
-    { key: 'handoffs' as const, label: '记忆交接', icon: 'arrow_split' },
     ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
   ];
 
@@ -12161,7 +11951,7 @@ export default function WorkbenchPage({
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {pendingHumanQuestion ? (
-              <Button type="button" size="sm" className="h-9 bg-orange-600 px-3 text-xs font-bold text-white hover:bg-orange-700" onClick={() => openRunDetailSection('agora')}>
+              <Button type="button" size="sm" className="h-9 bg-orange-600 px-3 text-xs font-bold text-white hover:bg-orange-700" onClick={() => openRunDetailSection('live')}>
                 <span className="material-symbols-outlined mr-1 text-sm">fact_check</span>
                 查看并审批
               </Button>
@@ -12204,8 +11994,7 @@ export default function WorkbenchPage({
   const renderRunStateMapPanel = () => (
     <div className="h-full min-h-0 overflow-hidden bg-background">
       {workflowConfig ? (
-        workflowConfig.workflow.mode === 'state-machine' ? (
-          <div className="relative h-full p-4">
+        <div className="relative h-full p-4">
             {subworkflowDrilldownLoading ? (
               <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/60 backdrop-blur-[1px]">
                 <div className="flex items-center gap-2 rounded-full border bg-background px-4 py-2 text-sm text-muted-foreground shadow-sm">
@@ -12216,6 +12005,29 @@ export default function WorkbenchPage({
             ) : null}
             {subworkflowDrilldownStack.length > 0 ? (
               renderSubworkflowDrilldown()
+            ) : isLightweightWorkflowConfig(workflowConfig) ? (
+              <LightweightWorkflowExecutionView
+                workflow={workflowConfig.workflow}
+                runId={runId || selectedRun?.id || null}
+                status={workflowStatus}
+                currentState={currentPhase || null}
+                currentStep={currentStep || null}
+                activeSteps={activeSteps}
+                completedSteps={completedSteps}
+                failedSteps={failedSteps}
+                humanQuestionPanel={pendingHumanQuestion?.status === 'unanswered' ? (
+                  <HumanQuestionCard
+                    question={pendingHumanQuestion}
+                    submitting={submittingHumanQuestion}
+                    collapsible={false}
+                    onSubmit={handleSubmitHumanQuestion}
+                  />
+                ) : null}
+                onOpenTaskDocuments={() => openRunDetailSection('documents')}
+                onOpenRuntimeOutput={() => openRunDetailSection('live')}
+                onOpenWorkspace={() => openRunDetailSection('workspace')}
+                workspaceAvailable={Boolean(currentRunWorkspacePath)}
+              />
             ) : (
               <StateMachineExecutionView
                 states={workflowConfig.workflow.states || []}
@@ -12225,6 +12037,7 @@ export default function WorkbenchPage({
                 activeSteps={activeSteps}
                 activeConcurrencyGroups={activeConcurrencyGroups}
                 completedSteps={completedSteps}
+                failedSteps={failedSteps}
                 stateHistory={smStateHistory}
                 issueTracker={smIssueTracker}
                 transitionCount={smTransitionCount}
@@ -12256,21 +12069,11 @@ export default function WorkbenchPage({
                 supervisorAgent={runtimeSupervisorAgent}
                 onStateClick={selectStateDetails}
                 onStepClick={handleRunDiagramStepClick}
+                onRerunFromStep={handleRerunFromStep}
                 onForceTransition={handleForceTransition}
               />
             )}
           </div>
-        ) : (
-          <FlowDiagram workflow={workflowConfig.workflow} currentPhase={currentPhase} currentStep={currentStep}
-            agents={agents} completedSteps={completedSteps} failedSteps={failedSteps} iterationStates={iterationStates} onSelectStep={selectStep}
-            pendingCheckpointPhase={pendingCheckpointPhase || undefined}
-            onSelectCheckpoint={(cp) => {
-              const phase = workflowConfig.workflow.phases?.find((p: any) => p.checkpoint?.name === cp.name);
-              dispatch({ type: 'SET_CHECKPOINT_MESSAGE', payload: cp.message });
-              dispatch({ type: 'SET_CHECKPOINT_IS_ITERATIVE', payload: !!phase?.iteration?.enabled });
-              dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: true });
-            }} />
-        )
       ) : (<WorkbenchExecutionLoadingSkeleton />)}
     </div>
   );
@@ -12315,52 +12118,6 @@ export default function WorkbenchPage({
       </div>
     );
   };
-
-  const renderRunAgoraPanel = () => (
-    <div className="h-full min-h-0 overflow-hidden bg-background">
-      <WorkflowSupervisorAgoraPanel
-        sessionId={workbenchConversationSessionId || workflowFrontendSessionId}
-        title={`Supervisor 协作 · ${workflowBaseTitle}`}
-        configFile={configFile}
-        runId={runId || selectedRun?.id || null}
-        supervisorAgent={runtimeSupervisorAgent}
-        supervisorSessionId={runtimeSupervisorSessionId}
-        workingDirectory={currentRunWorkspacePath || projectRoot || ''}
-        workflowStatus={workflowStatus}
-        initialGuests={workflowAgoraInitialGuests}
-        agentSessionIds={workflowAgoraAgentSessionIds}
-        pendingHumanQuestion={pendingHumanQuestion}
-        submittingHumanQuestion={submittingHumanQuestion}
-        onSubmitHumanQuestion={handleSubmitHumanQuestion}
-        specRevisionVote={specRevisionVote}
-        specRevisionVoteHistory={specRevisionVoteHistory}
-        formationPanel={(
-          <div className="h-full min-h-0 bg-muted/20 p-4">
-            <div className="h-full min-h-[420px] overflow-hidden rounded-2xl border bg-background">
-              <AgentFormationDiagram
-                states={workflowFormationStates}
-                agents={supervisorFormationAgents}
-                supervisorAgent={runtimeSupervisorAgent}
-                currentStep={currentStep}
-                activeSteps={activeSteps}
-                status={workflowStatus as any}
-                className="h-full"
-              />
-            </div>
-          </div>
-        )}
-        summaryPanel={workflowStatus === 'completed' && finalReview ? (
-          <div className="h-full overflow-y-auto bg-muted/20 p-4">
-            {renderFinalReviewCard()}
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-            工作流完成后会在这里展示战后总结。
-          </div>
-        )}
-      />
-    </div>
-  );
 
   const renderRunLiveOutputPanel = () => (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/10">
@@ -12600,7 +12357,15 @@ export default function WorkbenchPage({
             </p>
           </div>
           <div className={styles.workbenchPreviewCanvas}>
-            {workflowConfig?.workflow?.mode === 'state-machine' ? (
+            {workflowConfig && isLightweightWorkflowConfig(workflowConfig) ? (
+              <LightweightWorkflowExecutionView
+                workflow={workflowConfig.workflow}
+                status="idle"
+                currentState={null}
+                currentStep={null}
+                workspaceAvailable={Boolean(previewWorkspacePath)}
+              />
+            ) : workflowConfig?.workflow?.mode === 'state-machine' ? (
               <StateMachineExecutionView
                 key={`preview-state-machine-${configFile}-${savedWorkflowRevision}`}
                 states={workflowConfig.workflow.states || []}
@@ -12643,22 +12408,10 @@ export default function WorkbenchPage({
                 onStepClick={() => {}}
                 onForceTransition={() => {}}
               />
-            ) : workflowConfig?.workflow ? (
-              <FlowDiagram
-                key={`preview-flow-${configFile}-${savedWorkflowRevision}`}
-                workflow={workflowConfig.workflow}
-                currentPhase=""
-                currentStep=""
-                agents={agents}
-                completedSteps={[]}
-                failedSteps={[]}
-                iterationStates={{}}
-                onSelectStep={() => {}}
-                pendingCheckpointPhase={undefined}
-                onSelectCheckpoint={() => {}}
-              />
             ) : (
-              <WorkbenchExecutionLoadingSkeleton />
+              <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                此工作台仅支持状态机工作流预览。
+              </div>
             )}
           </div>
         </div>
@@ -13061,12 +12814,8 @@ export default function WorkbenchPage({
                     renderRunStateMapPanel()
                   ) : runDetailSection === 'agents' ? (
                     renderAgentFormationPanel('run')
-                  ) : runDetailSection === 'agora' ? (
-                    renderRunAgoraPanel()
                   ) : runDetailSection === 'live' ? (
                     renderRunLiveOutputPanel()
-                  ) : runDetailSection === 'handoffs' ? (
-                    <WorkflowMemoryHandoffPanel runId={runId || selectedRun?.id || null} />
                   ) : runDetailSection === 'documents' ? (
                     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
                       <DocumentsPanel
@@ -13276,8 +13025,7 @@ export default function WorkbenchPage({
                     )
                   );
                   // For steps with iteration suffix (e.g. "设计修复方案-迭代2"), also check the base name
-                  // in completedSteps/failedSteps, since FlowDiagram marks non-last rounds as completed
-                  // even if completedSteps only contains the base name or a different iteration key.
+                  // in completedSteps/failedSteps even if only a base name is recorded.
                   const stepBaseName = selectedStep?.name.match(/^(.+)-迭代\d+$/)
                     ? selectedStep.name.replace(/-迭代\d+$/, '')
                     : selectedStep?.name;
@@ -13430,38 +13178,20 @@ export default function WorkbenchPage({
                   </div>
 
                   <div className="min-h-0 flex-1">
-                    {editingConfig.workflow.mode === 'state-machine' ? (
-                      <StateMachineDesignPanel
-                        states={editingConfig.workflow.states || []}
-                        onStatesChange={(states: any) => {
-                          const newConfig = JSON.parse(JSON.stringify(editingConfig));
-                          newConfig.workflow.states = states;
-                          dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-                        }}
-                        availableAgents={agentConfigs}
-                        availableSkills={availableSkills}
-                        specTasks={designOptimizationSpecTaskOptions}
-                        onOptimizeState={handleOptimizeStateMachineState}
-                        onOptimizeStep={handleOptimizeStateMachineStep}
-                        onAgentSkillsChange={handleAgentSkillsChange}
-                      />
-                    ) : (
-                      <DesignPanel workflow={editingConfig.workflow}
-                        availableAgents={agentConfigs}
-                        onSelectNode={handleSelectNode}
-                        onAddPhase={handleAddPhase}
-                        onAddStep={handleAddStep}
-                        onAddStepAt={handleAddStepAt}
-                        onDeletePhase={handleDeletePhase}
-                        onDeleteStep={handleDeleteStep}
-                        onMoveStep={handleMoveStep}
-                        onToggleParallel={handleToggleParallel}
-                        onUngroup={handleUngroup}
-                        onCrossPhaseMove={handleCrossPhaseMove}
-                        onMoveGroup={handleMoveGroup}
-                        onJoinGroup={handleJoinGroup}
-                        onOptimizeStep={handleOptimizePhaseStep} />
-                    )}
+                    <StateMachineDesignPanel
+                      states={editingConfig.workflow.states || []}
+                      onStatesChange={(states: any) => {
+                        const newConfig = JSON.parse(JSON.stringify(editingConfig));
+                        newConfig.workflow.states = states;
+                        dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
+                      }}
+                      availableAgents={agentConfigs}
+                      availableSkills={availableSkills}
+                      specTasks={designOptimizationSpecTaskOptions}
+                      onOptimizeState={handleOptimizeStateMachineState}
+                      onOptimizeStep={handleOptimizeStateMachineStep}
+                      onAgentSkillsChange={handleAgentSkillsChange}
+                    />
                   </div>
                 </div>
               )}
@@ -13853,7 +13583,7 @@ export default function WorkbenchPage({
                   <div className="text-xs font-medium text-muted-foreground">当前对象</div>
                   <div className="mt-2 text-lg font-semibold">{editingConfig.workflow.name || configFile}</div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {editingConfig.workflow.mode === 'state-machine' ? '状态机工作流' : '阶段式工作流'} · {totalSteps} 步
+                    {isLightweightWorkflowConfig(editingConfig) ? '轻量工作流' : '状态机工作流'} · {totalSteps} 步
                   </div>
                 </div>
                 <div className={styles.workbenchInspectorCard}>
@@ -13861,7 +13591,7 @@ export default function WorkbenchPage({
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div className="rounded-lg border bg-background px-2 py-2">
                       <div className="text-muted-foreground">模式</div>
-                      <div className="mt-1 font-semibold">{editingConfig.workflow.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
+                      <div className="mt-1 font-semibold">{isLightweightWorkflowConfig(editingConfig) ? '轻量状态机' : '状态机'}</div>
                     </div>
                     <div className="rounded-lg border bg-background px-2 py-2">
                       <div className="text-muted-foreground">步骤</div>
@@ -13924,57 +13654,6 @@ export default function WorkbenchPage({
           dispatch({ type: 'SET_EDITING_CONFIG', payload: nextConfig });
         }}
       />
-      {editingNode && (<EditNodeModal isOpen={showEditNodeModal} type={editingNode.type} data={getEditingNodeData()} roles={agentConfigs}
-        availableSkills={availableSkills}
-        availableMcpServers={availableMcpServers.map((server: any) => ({ name: server.name, command: server.command }))}
-        availableKnowledgeBases={availableKnowledgeBases}
-        specTasks={designOptimizationSpecTaskOptions}
-        isNew={isNewNode}
-        existingPhases={editingConfig?.workflow?.phases || []}
-        existingSteps={editingConfig?.workflow?.phases?.flatMap((p: any) => p.steps) || []}
-        onClose={() => { dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: false }); dispatch({ type: 'SET_EDITING_NODE', payload: null }); setIsNewNode(false); }}
-        onSave={handleSaveNode}
-        onAgentSkillsChange={handleAgentSkillsChange}
-        onAgentMcpServersChange={handleAgentMcpServersChange}
-        onAgentRagKnowledgeBasesChange={handleAgentRagKnowledgeBasesChange}
-        onDelete={handleDeleteNode} />)}
-      <Dialog open={showCheckpoint} onOpenChange={(open) => dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: open })}>
-        <DialogContent className="w-[min(600px,92vw)] max-w-none gap-0 overflow-hidden p-0">
-          <div className="border-b p-5">
-            <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
-              <span className="material-symbols-outlined text-lg">person</span>
-              人工检查点
-            </DialogTitle>
-          </div>
-          <div className="p-5"><p className="text-sm mb-4 leading-relaxed">{checkpointMessage}</p>
-            <div className="bg-muted p-4 rounded-md border-l-[3px] border-l-yellow-500 mb-4">
-              <p className="text-sm text-muted-foreground mb-2">当前阶段: <strong className="text-foreground">{formatStateName(currentPhase || '')}</strong></p>
-              <p className="text-sm text-muted-foreground">请审查工作成果，决定是否继续执行</p>
-            </div>
-            {checkpointIsIterative && (
-              <div className="mb-4">
-                <Label htmlFor="iteration-feedback" className="text-sm font-medium mb-2 block">迭代意见（继续迭代时必填）</Label>
-                <Textarea
-                  id="iteration-feedback"
-                  value={iterationFeedback}
-                  onChange={(e) => setIterationFeedback(e.target.value)}
-                  placeholder="请输入本轮迭代的评审意见，这些意见将作为下一轮迭代的检查项..."
-                  rows={4}
-                  className="w-full"
-                />
-                <p className="text-xs text-muted-foreground mt-1">提示：评审意见将作为AI的检查项，指导下一轮迭代的改进方向</p>
-              </div>
-            )}
-          </div>
-          <div className="p-5 border-t flex gap-3 justify-end">
-            <Button variant="outline" onClick={approveCheckpoint}><span className="material-symbols-outlined text-sm mr-1">check</span>通过</Button>
-            {checkpointIsIterative && (
-              <Button variant="outline" onClick={iterateCheckpoint}><span className="material-symbols-outlined text-sm mr-1">refresh</span>继续迭代</Button>
-            )}
-            <Button variant="destructive" onClick={rejectCheckpoint}><span className="material-symbols-outlined text-sm mr-1">close</span>拒绝并停止</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
       {false && showLiveStream && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={stopLiveStream}>
           <div className={`bg-card rounded-lg border flex min-h-0 flex-col ${liveStreamFullscreen ? 'w-full h-full rounded-none' : 'h-[80vh] w-[80%] max-w-[800px]'}`} onClick={(e) => e.stopPropagation()}>
@@ -15161,15 +14840,12 @@ export default function WorkbenchPage({
           }
         }}
         resumeCreationSessionId={resumeCreationDraftId}
-        initialMode="ai-guided"
+        initialMode="lightweight"
         initialWorkflowName={workflowConfig?.workflow?.name || ''}
         initialReferenceWorkflow={configFile}
         initialDescription={requirements || workflowConfig?.workflow?.description || ''}
         initialWorkingDirectory={resolvedProjectRoot || ''}
         initialWorkspaceMode={workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place'}
-        hideAiGuided={false}
-        inheritEngine={globalEngine || engine}
-        inheritModel={globalDefaultModel}
       />
       <AIAgentCreatorModal
         open={showRuntimeAgentCreator}

@@ -202,8 +202,8 @@ export async function buildChatRequestContext(options: {
     }
     if (isResume) {
       const modeReminder = creationAssistantEnabled
-        ? '当前会话已启用创建助手模式。创建 workflow 或 Agent 时，必须使用 aceharness-workflow-creator，并在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON；需要打开创建弹窗时设置 `shouldOpenModal:true`。'
-        : '当前会话是普通工程对话模式。不要使用 aceharness-workflow-creator，不要输出 `intent=create-workflow` 或 `intent=create-agent` 的 `home_sidebar`，也不要触发 workflow / Agent 创建弹窗。';
+        ? '当前会话已启用创建助手模式。创建 Agent 时，在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON；需要打开创建弹窗时设置 `shouldOpenModal:true`。设计普通 state-machine 工作流时，使用一等工作流设计 UI。'
+        : '当前会话是普通工程对话模式。不要触发 Agent 创建弹窗；普通 state-machine 工作流仍可按工程需求进行设计。';
       systemPrompt = dashboardSkills.length > 0
         ? [
           modeReminder,

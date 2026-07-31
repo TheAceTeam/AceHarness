@@ -8,6 +8,7 @@ import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/su
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 import type { WorkflowTaskInput } from '@/lib/workflow/task-input';
+import { mergeRuntimeToolEvents, type RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 const streamPersistedLengths = new Map<string, number>();
@@ -79,6 +80,7 @@ async function appendStreamChunkFrame(runId: string, stepName: string, safeName:
   await appendFile(resolve(dir, `${safeName}.stream.md`), frame, 'utf-8');
   const chunkFile = resolve(dir, `${safeName}.chunks.jsonl`);
   const chunk = {
+    kind: 'text',
     ts: new Date().toISOString(),
     offset: previousLength,
     text: frame,
@@ -91,6 +93,29 @@ async function appendStreamChunkFrame(runId: string, stepName: string, safeName:
     bytes: Buffer.byteLength(frame, 'utf-8'),
   }).catch(() => {});
   streamPersistedLengths.set(key, previousLength + frame.length);
+}
+
+async function appendStreamToolEventFrame(
+  runId: string,
+  stepName: string,
+  safeName: string,
+  tool: RuntimeToolEvent,
+): Promise<void> {
+  const dir = streamDir(runId);
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  const chunkFile = resolve(dir, `${safeName}.chunks.jsonl`);
+  await appendFile(chunkFile, `${JSON.stringify({
+    kind: 'tool',
+    ts: tool.updatedAt || new Date().toISOString(),
+    tool,
+  })}\n`, 'utf-8');
+  await getWorkflowEventStore().append(runId, 'stream.tool', {
+    stepName,
+    streamRef: `streams/${safeName}.chunks.jsonl`,
+    toolId: tool.id,
+    toolName: tool.toolName,
+    status: tool.status,
+  }).catch(() => {});
 }
 
 function isRetryableReplaceError(error: unknown): boolean {
@@ -194,7 +219,14 @@ export interface PersistedStepLog {
   id: string; // UUID for this step execution
   stepName: string;
   agent: string;
-  status: 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed';
+  /**
+   * An earlier attempt retained for audit after an explicit rerun. It is not
+   * part of the current materialized step outcome.
+   */
+  superseded?: boolean;
+  supersededAt?: string;
+  supersededByStep?: string;
   output: string;
   outputRef?: string;
   outputBytes?: number;
@@ -287,6 +319,16 @@ export interface PersistedQualityCheck {
   summary: string;
   createdAt: string;
   commands: PersistedQualityCommandResult[];
+}
+
+export interface PersistedLightweightRunMetadata {
+  profile: 'lightweight';
+  tasklistDirectory: string;
+  workspaceRoot: string;
+  resolvedTasklistDirectory: string;
+  stateName: string;
+  stepName: string;
+  effectiveStepSkills: string[];
 }
 
 export interface DeltaMergeState {
@@ -491,7 +533,8 @@ export interface PersistedRunState {
   taskInput?: WorkflowTaskInput;
 
   // State machine specific fields
-  mode?: 'state-machine' | 'phase-based';
+  mode?: 'state-machine';
+  lightweight?: PersistedLightweightRunMetadata;
   currentState?: string | null;
   transitionCount?: number;
   maxTransitions?: number;
@@ -878,6 +921,9 @@ async function writeRunStateNow(state: PersistedRunState): Promise<void> {
           stepName: log?.stepName,
           agent: log?.agent,
           status: log?.status,
+          superseded: log?.superseded === true || undefined,
+          supersededAt: log?.supersededAt,
+          supersededByStep: log?.supersededByStep,
           outputRef: log?.outputRef,
           outputBytes: log?.outputBytes,
           error: log?.error,
@@ -998,13 +1044,18 @@ export async function listOutputFiles(runId: string): Promise<{ stepName: string
 }
 
 export async function findRunningRuns(): Promise<PersistedRunState[]> {
+  const activeRuns = await findActiveRuns();
+  return activeRuns.filter((state) => state.status === 'running');
+}
+
+export async function findActiveRuns(): Promise<PersistedRunState[]> {
   if (!existsSync(RUNS_DIR)) return [];
   const entries = await readdir(RUNS_DIR, { withFileTypes: true });
   const results: PersistedRunState[] = [];
   for (const entry of entries) {
     if (entry.isDirectory()) {
       const state = await loadRunState(entry.name);
-      if (state && state.status === 'running') {
+      if (state && (state.status === 'running' || state.status === 'preparing')) {
         results.push(state);
       }
     }
@@ -1080,6 +1131,16 @@ async function appendStreamContentNow(
   }
 }
 
+async function appendStreamToolEventNow(
+  runId: string,
+  stepName: string,
+  tool: RuntimeToolEvent,
+): Promise<void> {
+  if (!tool?.id) return;
+  const safeName = safeStepFileName(stepName);
+  await appendStreamToolEventFrame(runId, stepName, safeName, tool);
+}
+
 export async function saveStreamContent(
   runId: string,
   stepName: string,
@@ -1120,6 +1181,27 @@ export async function appendStreamContent(
   }
 }
 
+/** Persist a structured tool lifecycle update alongside, but not inside, prose. */
+export async function appendStreamToolEvent(
+  runId: string,
+  stepName: string,
+  tool: RuntimeToolEvent,
+): Promise<void> {
+  const key = streamQueueKey(runId, stepName);
+  const previous = streamWriteQueues.get(key) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => appendStreamToolEventNow(runId, stepName, tool));
+  streamWriteQueues.set(key, next);
+  try {
+    await next;
+  } finally {
+    if (streamWriteQueues.get(key) === next) {
+      streamWriteQueues.delete(key);
+    }
+  }
+}
+
 /** Append a human feedback marker to the stream file for the current step */
 export async function appendFeedbackToStream(
   runId: string,
@@ -1136,7 +1218,9 @@ export async function appendFeedbackToStream(
       const safeName = safeStepFileName(stepName);
       const filepath = resolve(dir, `${safeName}.stream.md`);
       const timestamp = new Date().toISOString();
-      const feedbackChunk = `${STREAM_CHUNK_SEPARATOR}<!-- human-feedback: ${timestamp} -->\n${message}`;
+      // Frame feedback as a complete stream segment so the following agent reply
+      // cannot be rendered inside the system feedback bubble.
+      const feedbackChunk = `${STREAM_CHUNK_SEPARATOR}<!-- human-feedback: ${timestamp} -->\n${message}\n<!-- /human-feedback -->${STREAM_CHUNK_SEPARATOR}`;
       try {
         await appendFile(filepath, feedbackChunk, 'utf-8');
       } catch {
@@ -1172,5 +1256,37 @@ export async function loadStreamContent(
     return await readFile(filepath, 'utf-8');
   } catch {
     return null;
+  }
+}
+
+/** Load the latest state for each structured tool event in a step stream. */
+export async function loadStreamToolEvents(
+  runId: string,
+  stepName: string,
+): Promise<RuntimeToolEvent[]> {
+  const safeName = safeStepFileName(stepName);
+  const filepath = resolve(runDir(runId), 'streams', `${safeName}.chunks.jsonl`);
+  try {
+    const content = await readFile(filepath, 'utf-8');
+    let tools: RuntimeToolEvent[] = [];
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as { kind?: unknown; tool?: unknown; ts?: unknown };
+        if (parsed.kind !== 'tool' || !parsed.tool || typeof parsed.tool !== 'object') continue;
+        const tool = parsed.tool as RuntimeToolEvent;
+        if (!tool.id || !tool.toolName || !tool.title || !tool.status) continue;
+        tools = mergeRuntimeToolEvents(tools, {
+          ...tool,
+          createdAt: tool.createdAt || (typeof parsed.ts === 'string' ? parsed.ts : undefined),
+          updatedAt: typeof parsed.ts === 'string' ? parsed.ts : tool.updatedAt,
+        });
+      } catch {
+        // A concurrent append can leave one partial line while it is read.
+      }
+    }
+    return tools;
+  } catch {
+    return [];
   }
 }

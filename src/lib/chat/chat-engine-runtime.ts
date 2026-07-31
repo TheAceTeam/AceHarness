@@ -4,13 +4,12 @@ import { getEngineConfigPath } from '@/lib/core/app-paths';
 import { getRuntimeSessionsApiService } from '@/server/runtime/runtime-sessions-api-service';
 import { resolveRuntimeModelRoute } from '@/lib/runtime-agent/models/model-routes-api';
 import {
-  formatAceToolCall,
-  formatAceToolResult,
   getAceToolTitle,
   inferCommandToolName,
   resolveAceToolName,
 } from '@/lib/chat/ace-process-formatters';
 import { writeAcpxDebugTrace } from '@/lib/runtime-agent/acpx-debug-trace';
+import type { RuntimeToolChange, RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 import type {
   CostUsage,
   RuntimeEvent,
@@ -89,11 +88,17 @@ export interface ChatRuntimeResult {
   metadata?: ChatRuntimeResultMetadata;
 }
 
-export interface ChatRuntimeStreamEvent {
-  type: 'text' | 'tool' | 'thought' | 'error' | 'log' | 'session';
-  content: string;
-  metadata?: any;
-}
+export type ChatRuntimeStreamEvent =
+  | {
+      type: 'text' | 'thought' | 'error' | 'log' | 'session';
+      content: string;
+      metadata?: any;
+    }
+  | {
+      type: 'tool';
+      tool: RuntimeToolEvent;
+      metadata?: any;
+    };
 
 export type RuntimeToolState = {
   toolName: string;
@@ -345,6 +350,7 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
   private runtimeSessionId?: string;
   private cancelled = false;
   private activeTurnId?: string;
+  private activeRequestId?: string;
 
   constructor(
     private readonly engineType: string,
@@ -377,6 +383,7 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
     }
     this.runtimeSessionId = session.runtimeSessionId;
     const requestId = `${options.step || 'chat'}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    this.activeRequestId = requestId;
     const emitFormattedChunk = (event: ChatRuntimeStreamEvent) => {
       writeAcpxDebugTrace({
         stage: 'chat.formatted_chunk',
@@ -426,8 +433,33 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
       });
       this.activeTurnId = turnResult.turn.turnId;
       completedTurnId = turnResult.turn.turnId;
+      if (this.cancelled) {
+        await service.cancelTurn({
+          runtimeSessionId: session.runtimeSessionId,
+          turnId: turnResult.turn.turnId,
+          requestId: `${requestId}:cancel-late-turn`,
+          reason: 'chat runtime cancel',
+        }).catch(() => service.cancelSession({
+          runtimeSessionId: session.runtimeSessionId,
+          requestId: `${requestId}:cancel-late-session`,
+          reason: 'chat runtime cancel',
+        }));
+        success = false;
+        error = 'cancelled';
+        stopReason = 'cancelled';
+      }
       for await (const event of turnResult.events ?? []) {
         if (this.cancelled) {
+          await service.cancelTurn({
+            runtimeSessionId: session.runtimeSessionId,
+            turnId: event.turnId,
+            requestId: `${requestId}:cancel-late-turn`,
+            reason: 'chat runtime cancel',
+          }).catch(() => service.cancelSession({
+            runtimeSessionId: session.runtimeSessionId,
+            requestId: `${requestId}:cancel-late-session`,
+            reason: 'chat runtime cancel',
+          }));
           success = false;
           error = 'cancelled';
           stopReason = 'cancelled';
@@ -451,10 +483,13 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
           const text = extractText(normalized.payload);
           if (text) emitFormattedChunk({ type: 'thought', content: text, metadata: normalized.payload });
         } else if (normalized.type.startsWith('tool.')) {
-          const formatted = formatRuntimeToolEvent(normalized.type, normalized.payload, normalized.toolCallId, seenToolCalls, pendingTools);
-          if (formatted) {
-            output += formatted;
-            emitFormattedChunk({ type: 'text', content: formatted, metadata: normalized.payload });
+          const tool = projectRuntimeToolEvent(normalized.type, normalized.payload, normalized.toolCallId, seenToolCalls, pendingTools);
+          if (tool) {
+            emitFormattedChunk({
+              type: 'tool',
+              tool: { ...tool, createdAt: tool.createdAt || normalized.createdAt, updatedAt: normalized.createdAt },
+              metadata: normalized.payload,
+            });
           }
         } else if (normalized.type === 'turn.failed') {
           success = false;
@@ -478,6 +513,7 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
     } finally {
       if (timeout) clearTimeout(timeout);
       this.activeTurnId = undefined;
+      this.activeRequestId = undefined;
     }
 
     const result = {
@@ -510,14 +546,23 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
 
   cancel(): void {
     this.cancelled = true;
-    if (this.runtimeSessionId && this.activeTurnId) {
-      void getRuntimeSessionsApiService().cancelTurn({
-        runtimeSessionId: this.runtimeSessionId,
+    const runtimeSessionId = this.runtimeSessionId;
+    if (!runtimeSessionId) return;
+    const requestId = `${this.activeRequestId || `cancel:${Date.now()}`}:cancel`;
+    const service = getRuntimeSessionsApiService();
+    const cancellation = this.activeTurnId
+      ? service.cancelTurn({
+        runtimeSessionId,
         turnId: this.activeTurnId,
-        requestId: `cancel:${Date.now()}`,
+        requestId,
         reason: 'chat runtime cancel',
-      }).catch(() => {});
-    }
+      })
+      : service.cancelSession({
+        runtimeSessionId,
+        requestId,
+        reason: 'chat runtime cancel',
+      });
+    void cancellation.catch(() => {});
   }
 
   async isAvailable(): Promise<boolean> {
@@ -578,6 +623,7 @@ function buildRuntimeTurnInput(options: ChatRuntimeEngineOptions): string {
 function createRuntimeProfileSnapshot(agentId: string, options: ChatRuntimeEngineOptions, modelRouteId: string): RuntimeProfileSnapshot {
   return {
     agentId,
+    ownerUserId: options.userId,
     modelRouteId,
     cwd: options.workingDirectory,
     systemPromptHash: 'sha256:chat-runtime',
@@ -672,23 +718,36 @@ function summarizeToolPayload(payload: unknown): string {
   return [name, status].filter(Boolean).join(' ');
 }
 
-export function formatRuntimeToolEvent(
+/**
+ * Projects ACP tool protocol events without serializing them into assistant
+ * prose. Tool output has a separate lifecycle from model message deltas.
+ */
+export function projectRuntimeToolEvent(
   type: RuntimeEvent['type'],
   payload: unknown,
   eventToolCallId: string | undefined,
   seenToolCalls: Set<string>,
   pendingTools: Map<string, RuntimeToolState>,
-): string {
-  if (!isRecord(payload)) return '';
+): RuntimeToolEvent | null {
+  if (!isRecord(payload)) return null;
   const status = String(payload.status ?? payload.state ?? '').toLowerCase();
   const toolId = String(payload.toolCallId ?? payload.id ?? eventToolCallId ?? '').trim();
   const pendingKey = toolId || '';
-  const pending = pendingKey ? pendingTools.get(pendingKey) : undefined;
+  let pending = pendingKey ? pendingTools.get(pendingKey) : undefined;
   const rawInput = resolveToolRawInput(payload) || pending?.rawInput;
   const rawOutput = resolveToolRawOutput(payload);
-  const toolName = pending?.toolName || resolveRuntimeToolName(payload, rawInput);
+  const resolvedToolName = resolveRuntimeToolName(payload, rawInput);
+  const hasDisplayableInput = rawInput ? hasDisplayableToolInput(resolvedToolName, rawInput) : false;
+  if (toolId && rawInput && hasDisplayableInput) {
+    pending = {
+      toolName: preferRuntimeToolName(pending?.toolName, resolvedToolName),
+      rawInput,
+      toolId,
+    };
+    pendingTools.set(toolId, pending);
+  }
+  const toolName = pending?.toolName || resolvedToolName;
   const title = getAceToolTitle(toolName);
-  const hasDisplayableInput = rawInput ? hasDisplayableToolInput(toolName, rawInput) : false;
   const shouldEmitCall = type === 'tool.started'
     || type === 'tool.updated'
     || (!['completed', 'failed', 'done', 'success'].includes(status) && hasDisplayableInput);
@@ -696,34 +755,125 @@ export function formatRuntimeToolEvent(
 
   if (shouldEmitCall && rawInput && hasDisplayableInput && !seenToolCalls.has(callKey)) {
     seenToolCalls.add(callKey);
-    if (toolId) {
-      pendingTools.set(toolId, { toolName, rawInput, toolId });
-    }
-    return formatAceToolCall({
+    return {
+      id: callKey,
       toolName,
-      rawInput,
       title,
-      toolId: toolId || undefined,
-    });
+      status: 'running',
+      input: projectRuntimeToolInput(rawInput),
+    };
   }
 
-  if (
+  const isTerminal = (
     type === 'tool.output'
     || type === 'tool.completed'
     || type === 'tool.failed'
     || ['completed', 'failed', 'done', 'success', 'error'].includes(status)
-  ) {
-    if (rawOutput == null || rawOutput === '') return '';
+  );
+  const hasExplicitToolIdentity = Boolean(
+    asString(payload.toolName ?? payload.tool_name ?? payload.name ?? payload.tool ?? payload.kind ?? payload.title),
+  );
+
+  if (isTerminal && (toolId || rawInput || rawOutput !== undefined || hasExplicitToolIdentity)) {
+    const terminalOutput = rawOutput == null || rawOutput === ''
+      ? createRuntimeToolTerminalOutput(type, payload, rawInput, status)
+      : rawOutput;
     if (toolId) pendingTools.delete(toolId);
-    return formatAceToolResult({
+    return {
+      id: callKey,
       toolName,
-      rawOutput: enrichRuntimeToolOutput(rawOutput, rawInput),
       title,
-      toolId: toolId || undefined,
-    }).trimEnd();
+      status: type === 'tool.failed' || ['failed', 'error'].includes(status) ? 'failed' : 'completed',
+      input: rawInput ? projectRuntimeToolInput(rawInput) : undefined,
+      result: projectRuntimeToolResult(
+        toolName,
+        enrichRuntimeToolOutput(terminalOutput, rawInput),
+        rawInput,
+      ),
+    };
   }
 
-  return '';
+  return null;
+}
+
+function projectRuntimeToolInput(rawInput: Record<string, unknown>): RuntimeToolEvent['input'] {
+  const changes = projectRuntimeToolChanges(rawInput.changes);
+  return {
+    ...(stringValue(rawInput.command) ? { command: stringValue(rawInput.command) } : {}),
+    ...(stringValue(rawInput.filePath ?? rawInput.file_path) ? { filePath: stringValue(rawInput.filePath ?? rawInput.file_path) } : {}),
+    ...(stringValue(rawInput.path) ? { path: stringValue(rawInput.path) } : {}),
+    ...(stringValue(rawInput.pattern) ? { pattern: stringValue(rawInput.pattern) } : {}),
+    ...(stringValue(rawInput.include) ? { include: stringValue(rawInput.include) } : {}),
+    ...(stringValue(rawInput.url) ? { url: stringValue(rawInput.url) } : {}),
+    ...(stringValue(rawInput.query) ? { query: stringValue(rawInput.query) } : {}),
+    ...(stringValue(rawInput.name ?? rawInput.skill ?? rawInput.id) ? { name: stringValue(rawInput.name ?? rawInput.skill ?? rawInput.id) } : {}),
+    ...(changes.length > 0 ? { changes } : {}),
+  };
+}
+
+function projectRuntimeToolResult(
+  toolName: string,
+  rawOutput: unknown,
+  rawInput?: Record<string, unknown>,
+): RuntimeToolEvent['result'] {
+  const output = isRecord(rawOutput) ? rawOutput : { output: rawOutput };
+  const changes = projectRuntimeToolChanges(output.changes ?? rawInput?.changes);
+  const filePath = stringValue(output.filePath ?? output.file_path ?? rawInput?.filePath ?? rawInput?.file_path ?? rawInput?.path);
+  const exitCode = numberValue(output.exitCode ?? output.exit_code);
+  const error = stringValue(output.error ?? output.errorText ?? output.errorMessage);
+  const isFileContentTool = ['read', 'write', 'edit', 'multiedit', 'patch'].includes(toolName);
+  const directOutput = output.output ?? output.result ?? output.content;
+  const stdout = stringValue(output.stdout)
+    || (!isFileContentTool ? stringValue(directOutput) : undefined);
+  const stderr = stringValue(output.stderr);
+
+  return {
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(filePath ? { filePath } : {}),
+    ...(changes.length > 0 ? { changes } : {}),
+    ...(stdout ? { stdout } : {}),
+    ...(stderr ? { stderr } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+function projectRuntimeToolChanges(value: unknown): RuntimeToolChange[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((rawChange) => {
+    if (!isRecord(rawChange)) return [];
+    const filePath = stringValue(rawChange.filePath ?? rawChange.file_path ?? rawChange.path);
+    const kind = stringValue(rawChange.kind ?? rawChange.type ?? rawChange.status);
+    const changedLines = numberValue(rawChange.changedLines ?? rawChange.changed_lines);
+    const addedLines = numberValue(rawChange.addedLines ?? rawChange.added_lines);
+    const removedLines = numberValue(rawChange.removedLines ?? rawChange.removed_lines);
+    if (!filePath && !kind && changedLines === undefined && addedLines === undefined && removedLines === undefined) return [];
+    return [{
+      ...(filePath ? { filePath } : {}),
+      ...(kind ? { kind } : {}),
+      ...(changedLines !== undefined ? { changedLines } : {}),
+      ...(addedLines !== undefined ? { addedLines } : {}),
+      ...(removedLines !== undefined ? { removedLines } : {}),
+    }];
+  });
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function preferRuntimeToolName(current: string | undefined, next: string): string {
+  if (!current) return next;
+  if (isGenericRuntimeToolName(current) && !isGenericRuntimeToolName(next)) return next;
+  return current;
+}
+
+function isGenericRuntimeToolName(name: string | undefined): boolean {
+  const normalized = String(name || '').trim().toLowerCase();
+  return !normalized || normalized === 'tool' || normalized === 'tool call' || normalized === 'unknown';
 }
 
 function hasDisplayableToolInput(toolName: string, rawInput: Record<string, unknown>): boolean {
@@ -748,7 +898,40 @@ function enrichRuntimeToolOutput(rawOutput: unknown, rawInput?: Record<string, u
     const filePath = rawInput.filePath ?? rawInput.file_path ?? rawInput.path;
     if (typeof filePath === 'string') enriched.filePath = filePath;
   }
+  if (!Array.isArray(enriched.changes) && Array.isArray(rawInput.changes)) {
+    enriched.changes = rawInput.changes;
+  }
   return enriched;
+}
+
+function createRuntimeToolTerminalOutput(
+  type: RuntimeEvent['type'],
+  payload: Record<string, any>,
+  rawInput: Record<string, unknown> | undefined,
+  status: string,
+): Record<string, unknown> {
+  const failed = type === 'tool.failed' || ['failed', 'error'].includes(status);
+  const filePath = rawInput?.filePath ?? rawInput?.file_path ?? rawInput?.path;
+  const changes = Array.isArray(rawInput?.changes) ? rawInput.changes : undefined;
+  const exitCode = payload.exitCode ?? payload.exit_code;
+  if (failed) {
+    const error = isRecord(payload.error)
+      ? asString(payload.error.message)
+      : asString(payload.errorText ?? payload.errorMessage ?? payload.error);
+    return {
+      error: error || '工具调用失败，ACP 未返回详细结果。',
+      ...(typeof filePath === 'string' ? { filePath } : {}),
+      ...(changes ? { changes } : {}),
+      ...(typeof exitCode === 'number' ? { exitCode } : {}),
+    };
+  }
+  return {
+    completed: true,
+    resultUnavailable: true,
+    ...(typeof filePath === 'string' ? { filePath } : {}),
+    ...(changes ? { changes } : {}),
+    ...(typeof exitCode === 'number' ? { exitCode } : {}),
+  };
 }
 
 function resolveToolRawInput(payload: Record<string, any>): Record<string, unknown> | undefined {

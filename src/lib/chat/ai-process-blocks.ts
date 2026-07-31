@@ -23,6 +23,9 @@ export type AceFileChange = {
   oldString?: string;
   newString?: string;
   kind?: string;
+  changedLines?: number;
+  addedLines?: number;
+  removedLines?: number;
 };
 
 export type AceReasoningPayload = AceProcessBase<'reasoning'> & {
@@ -43,6 +46,7 @@ export type AceToolCallPayload = AceProcessBase<'tool-call'> & {
   url?: string;
   query?: string;
   todos?: AceTodoItem[];
+  changes?: AceFileChange[];
   input?: unknown;
 };
 
@@ -160,6 +164,9 @@ function asFileChanges(value: unknown): AceFileChange[] | undefined {
       oldString: asString(raw.oldString),
       newString: asString(raw.newString),
       kind: asString(raw.kind),
+      changedLines: asNumber(raw.changedLines),
+      addedLines: asNumber(raw.addedLines),
+      removedLines: asNumber(raw.removedLines),
     };
   });
 }
@@ -195,6 +202,7 @@ function normalizePayload(rawInput: unknown): AceProcessPayload | null {
         url: asString(raw.url),
         query: asString(raw.query),
         todos: asTodoItems(raw.todos),
+        changes: asFileChanges(raw.changes),
         input: raw.input,
       };
     case 'tool-result':

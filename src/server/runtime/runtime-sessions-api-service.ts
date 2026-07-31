@@ -233,14 +233,7 @@ class SqliteRuntimeSessionsApiService implements RuntimeSessionsApiService {
   }
 
   async cancelSession(input: { runtimeSessionId: string; requestId: string; reason?: string }): Promise<void> {
-    const active = this.store.getActiveTurn(input.runtimeSessionId);
-    if (!active) return;
-    await this.orchestrator.cancelTurn({
-      runtimeSessionId: input.runtimeSessionId,
-      turnId: active.id,
-      requestId: input.requestId,
-      reason: input.reason,
-    });
+    await this.orchestrator.cancelSession(input);
   }
 }
 
@@ -336,6 +329,9 @@ function backgroundRuntimeEvents(source: AsyncIterable<RuntimeEvent>): AsyncIter
   const waiters: Array<() => void> = [];
   let done = false;
   let error: unknown;
+  let stopped = false;
+  let stopPromise: Promise<void> | undefined;
+  const sourceIterator = source[Symbol.asyncIterator]();
 
   const notify = () => {
     for (const waiter of waiters.splice(0)) waiter();
@@ -345,14 +341,32 @@ function backgroundRuntimeEvents(source: AsyncIterable<RuntimeEvent>): AsyncIter
     waiters.push(resolve);
   });
 
+  const stopSource = async (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopped = true;
+    stopPromise = (async () => {
+      try {
+        await sourceIterator.return?.();
+      } catch {
+        // The consumer is already gone; the source cleanup is best-effort.
+      } finally {
+        done = true;
+        notify();
+      }
+    })();
+    return stopPromise;
+  };
+
   void (async () => {
     try {
-      for await (const event of source) {
-        events.push(event);
+      while (!stopped) {
+        const next = await sourceIterator.next();
+        if (next.done) break;
+        events.push(next.value);
         notify();
       }
     } catch (caught) {
-      error = caught;
+      if (!stopped) error = caught;
     } finally {
       done = true;
       notify();
@@ -362,15 +376,19 @@ function backgroundRuntimeEvents(source: AsyncIterable<RuntimeEvent>): AsyncIter
   return {
     async *[Symbol.asyncIterator]() {
       let index = 0;
-      while (true) {
-        while (index < events.length) {
-          yield events[index++]!;
+      try {
+        while (true) {
+          while (index < events.length) {
+            yield events[index++]!;
+          }
+          if (done) {
+            if (error) throw error;
+            return;
+          }
+          await waitForEvent();
         }
-        if (done) {
-          if (error) throw error;
-          return;
-        }
-        await waitForEvent();
+      } finally {
+        if (!done) await stopSource();
       }
     },
   };

@@ -128,18 +128,32 @@ export async function GET(request: Request) {
         'state-change', 'step-start', 'step-complete', 'transition',
         'force-transition', 'transition-forced', 'human-approval-required',
         'human-question-required', 'human-question-answered', 'human-question-updated',
-        'agent-flow', 'supervisor-review', 'state-executing',
+        'agent-flow', 'supervisor-review', 'runtime-transcript', 'state-executing',
         'parallel-group-start', 'parallel-group-complete', 'circuit-breaker',
       ];
 
-      // Map SM events to frontend-compatible types
+      // Preserve state-machine event names. The transition alias remains for the
+      // existing transition history surface, but state/step events stay explicit.
       const smTypeMap: Record<string, string> = {
-        'state-change': 'phase',
-        'step-start': 'step',
-        'step-complete': 'result',
         transition: 'sm-transition',
       };
+      const stateMachineEventTypes = new Set(['state-change', 'step-start', 'step-complete']);
       const workflowStatusesFallback: Record<string, any> = {};
+
+      const buildStateMachineEventData = (input: any, configFile?: string, statusSnapshot?: any) => {
+        const stateName = [input?.stateName, input?.state, input?.currentState]
+          .find((value) => typeof value === 'string' && value.trim());
+        const stepName = [input?.stepName, input?.step, input?.currentStep]
+          .find((value) => typeof value === 'string' && value.trim());
+
+        return {
+          ...input,
+          ...(stateName ? { state: stateName, stateName } : {}),
+          ...(stepName ? { step: stepName, stepName } : {}),
+          configFile,
+          statusSnapshot,
+        };
+      };
 
       for (const evt of eventTypes) {
         handlers[evt] = (data: any) => {
@@ -152,46 +166,16 @@ export async function GET(request: Request) {
             workflowStatusesFallback[configFile] = statusSnapshot;
           }
 
-          if (evt === 'state-change') {
-            sendEvent({
-              type: 'phase',
-              data: {
-                phase: compactRest.state,
-                message: compactRest.message,
-                configFile,
-                statusSnapshot,
-              },
-            });
-          } else if (evt === 'step-start') {
-            sendEvent({
-              type: 'step',
-              data: {
-                ...compactRest,
-                step: `${compactRest.state}-${compactRest.step}`,
-                configFile,
-                statusSnapshot,
-              },
-            });
-          } else if (evt === 'step-complete') {
-            sendEvent({
-              type: 'result',
-              data: {
-                ...compactRest,
-                step: `${compactRest.state}-${compactRest.step}`,
-                configFile,
-                statusSnapshot,
-              },
-            });
-          } else {
-            sendEvent({
-              type: mappedType || evt,
-              data: {
-                ...compactRest,
-                configFile,
-                statusSnapshot,
-              },
-            });
-          }
+          sendEvent({
+            type: mappedType || evt,
+            data: stateMachineEventTypes.has(evt)
+              ? buildStateMachineEventData(compactRest, configFile, statusSnapshot)
+              : {
+                  ...compactRest,
+                  configFile,
+                  statusSnapshot,
+                },
+          });
         };
         workflowRegistry.on(evt, handlers[evt]);
       }

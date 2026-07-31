@@ -59,22 +59,24 @@ export async function GET(
     const files = await listOutputFiles(runId);
     const state = await loadRunState(runId);
 
-    // Build a step→phase lookup and enrich with metadata
-    const stepPhaseMap: Record<string, string> = {};
+    // Build a step→state lookup and enrich with metadata
+    const stepStateMap: Record<string, string> = {};
     const stepRoleMap: Record<string, string> = {};
     if (state) {
-      // Parse workflow config to get phase/step mapping
+      // Parse workflow config to get state/step mapping
       try {
         const configPath = await resolveWorkflowConfigPath(state.configFile);
         if (configPath) {
           const configContent = await readFile(configPath, 'utf-8');
           const { parse } = await import('yaml');
           const config = parse(configContent);
-          if (config?.workflow?.phases) {
-            for (const phase of config.workflow.phases) {
-              for (const step of phase.steps || []) {
-                stepPhaseMap[step.name] = phase.name;
+          if (Array.isArray(config?.workflow?.states)) {
+            for (const state of config.workflow.states) {
+              for (const step of Array.isArray(state.steps) ? state.steps : []) {
+                stepStateMap[step.name] = state.name;
+                stepStateMap[`${state.name}-${step.name}`] = state.name;
                 stepRoleMap[step.name] = step.role || 'defender';
+                stepRoleMap[`${state.name}-${step.name}`] = step.role || 'defender';
               }
             }
           }
@@ -87,14 +89,16 @@ export async function GET(
         const safeSL = l.stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
         return safeSL === f.stepName || l.stepName === f.stepName;
       });
-      // Find iteration info for the phase this step belongs to
+      // Find iteration info for the state this step belongs to
       const originalStepName = stepLog?.stepName || f.stepName;
-      const phaseName = stepPhaseMap[originalStepName] || '';
-      const iterState = phaseName && state?.iterationStates?.[phaseName];
+      const stateName = stepStateMap[originalStepName] || '';
+      const iterState = stateName && state?.iterationStates?.[stateName];
       return {
         ...f,
         agent: stepLog?.agent || '',
-        phaseName,
+        stateName,
+        // Keep the existing output-display field while deriving it from state-machine data.
+        phaseName: stateName,
         role: stepRoleMap[originalStepName] || '',
         iteration: iterState ? iterState.currentIteration : null,
         maxIterations: iterState ? iterState.maxIterations : null,

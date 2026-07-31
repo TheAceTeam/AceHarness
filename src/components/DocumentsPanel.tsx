@@ -2,7 +2,14 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/core/api';
+import {
+  runsApi,
+  workspaceApi,
+  type NotebookScope,
+  type RunDocumentReference,
+  type RunDocumentSource,
+  type TreeNode,
+} from '@/lib/core/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,6 +47,11 @@ import {
 
 export interface DocFile {
   filename: string;
+  relativePath?: string;
+  documentKey?: string;
+  documentSource: RunDocumentSource;
+  documentSourceLabel?: string;
+  documentDirectory?: string;
   stepName: string;
   baseName: string;
   logicalName?: string;
@@ -196,17 +208,31 @@ export function extractDocumentHighlights(content: string): DocumentHighlight[] 
     : [];
 }
 
-function getWorkspacePathFilename(path: string): string {
+function normalizeWorkspacePath(path: string): string {
   let decoded = String(path || '');
   try { decoded = decodeURIComponent(decoded); } catch {}
-  const normalized = decoded.replace(/\\/g, '/').split(/[?#]/, 1)[0].replace(/\/+$/, '');
+  return decoded.replace(/\\/g, '/').split(/[?#]/, 1)[0].replace(/\/+$/, '');
+}
+
+function getWorkspacePathFilename(path: string): string {
+  const normalized = normalizeWorkspacePath(path);
   return normalized.slice(normalized.lastIndexOf('/') + 1);
 }
 
 export function findRunDocumentByWorkspacePath(files: DocFile[], path: string): DocFile | null {
+  const normalizedPath = normalizeWorkspacePath(path);
+  const rootedMatches = files.filter((file) => {
+    if (!file.documentDirectory) return false;
+    const root = normalizeWorkspacePath(file.documentDirectory);
+    const relativePath = file.relativePath || file.filename;
+    return normalizedPath === `${root}/${relativePath}`;
+  });
+  if (rootedMatches.length === 1) return rootedMatches[0];
+
   const filename = getWorkspacePathFilename(path);
   if (!filename) return null;
-  return files.find((file) => file.filename === filename || file.baseName === filename) || null;
+  const filenameMatches = files.filter((file) => file.filename === filename || file.baseName === filename);
+  return filenameMatches.length === 1 ? filenameMatches[0] : null;
 }
 
 const HIGHLIGHT_PRESENTATION: Record<DocumentHighlightKind, { label: string; icon: string; className: string }> = {
@@ -308,31 +334,62 @@ function getFallbackFileGroupLabel(filename: string): string {
   return normalizeDocumentFolderLabel(raw) || '其他';
 }
 
-export function getDocumentFolderGroup(file: Pick<DocFile, 'filename' | 'phaseName'>): { key: string; label: string } {
-  const label = normalizeDocumentFolderLabel(file.phaseName) || getFallbackFileGroupLabel(file.filename);
+function getDocumentSourceLabel(file: Pick<DocFile, 'documentSource' | 'documentSourceLabel'>): string {
+  return file.documentSourceLabel || (file.documentSource === 'tasklist' ? '任务文档' : '运行输出');
+}
+
+function getSourceRunLabel(file: Pick<DocFile, 'sourceLabel'>): string {
+  return file.sourceLabel && file.sourceLabel !== '父工作流' ? file.sourceLabel : '';
+}
+
+export function getDocumentFolderGroup(
+  file: Pick<DocFile, 'filename' | 'phaseName' | 'documentSource' | 'documentSourceLabel' | 'sourceRunId' | 'sourceLabel'>,
+): { key: string; label: string; phaseKey: string; phaseLabel: string; sourcePrefix: string } {
+  const phaseLabel = normalizeDocumentFolderLabel(file.phaseName) || getFallbackFileGroupLabel(file.filename);
+  const phaseKey = normalizeDocumentFolderKey(phaseLabel);
+  const sourcePrefix = [getDocumentSourceLabel(file), getSourceRunLabel(file)].filter(Boolean).join(' / ');
   return {
-    key: normalizeDocumentFolderKey(label),
-    label,
+    key: JSON.stringify([file.documentSource, file.sourceRunId || 'root', phaseKey]),
+    label: `${sourcePrefix} / ${phaseLabel}`,
+    phaseKey,
+    phaseLabel,
+    sourcePrefix,
   };
 }
 
 function getTreeLinkName(file: DocFile): string {
   const base = file.groupLabel || file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
-  return file.sourceLabel && file.sourceLabel !== '父工作流' ? `${file.sourceLabel} / ${base}` : base;
+  return [getDocumentSourceLabel(file), getSourceRunLabel(file), base].filter(Boolean).join(' / ');
 }
 
-function getDocKey(file: Pick<DocFile, 'filename' | 'sourceRunId'>): string {
-  return `${file.sourceRunId || 'root'}::${file.filename}`;
+function getDocKey(file: Pick<DocFile, 'filename' | 'relativePath' | 'documentKey' | 'documentSource' | 'sourceRunId'>): string {
+  return file.documentKey || JSON.stringify([
+    file.sourceRunId || 'root',
+    file.documentSource,
+    file.relativePath || file.filename,
+  ]);
 }
 
 function isRootRunFile(file: DocFile, runId: string | null): boolean {
-  return !file.sourceRunId || file.sourceRunId === runId;
+  return Boolean(runId && file.sourceRunId === runId);
+}
+
+function toDocumentReference(file: Pick<DocFile, 'documentSource' | 'sourceRunId' | 'relativePath' | 'filename'>): RunDocumentReference {
+  return {
+    source: file.documentSource,
+    sourceRunId: file.sourceRunId,
+    file: file.relativePath || file.filename,
+  };
 }
 
 function getTreeGroupKey(file: DocFile): string {
   if (file.groupKey) return file.groupKey;
   const logical = file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
-  return logical.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+  return JSON.stringify([
+    file.sourceRunId || 'root',
+    file.documentSource,
+    logical.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_'),
+  ]);
 }
 
 function sortDocFiles(files: DocFile[], sortField: SortField, sortOrder: SortOrder): DocFile[] {
@@ -351,6 +408,11 @@ function documentMetadataRowToDocFile(row: DocumentMetadataRow): DocFile {
   const filename = row.filename || row.name;
   return {
     filename,
+    relativePath: row.relativePath || filename,
+    documentKey: row.documentKey,
+    documentSource: row.documentSource,
+    documentSourceLabel: row.documentSourceLabel,
+    documentDirectory: row.documentDirectory,
     stepName: row.stepName || '',
     baseName: row.baseName || filename,
     logicalName: row.logicalName,
@@ -437,6 +499,7 @@ export default function DocumentsPanel({
   const [docPage, setDocPage] = useState(1);
   const [docPagination, setDocPagination] = useState<{ total: number; totalPages?: number; page?: number; pageSize?: number; offset?: number; limit?: number; nextOffset?: number | null } | null>(null);
   const [documentDirectory, setDocumentDirectory] = useState<string | null>(null);
+  const [documentRoots, setDocumentRoots] = useState<Partial<Record<RunDocumentSource, string>>>({});
   const [manualLoading, setManualLoading] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
   const [loadedGroups, setLoadedGroups] = useState<Set<string>>(new Set());
@@ -461,7 +524,7 @@ export default function DocumentsPanel({
   const [renameValue, setRenameValue] = useState('');
 
   // Delete confirm
-  const [deleteTarget, setDeleteTarget] = useState<string[] | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DocFile[] | null>(null);
   const [savingNotebookFile, setSavingNotebookFile] = useState<string | null>(null);
   const [saveNotebookDialogOpen, setSaveNotebookDialogOpen] = useState(false);
   const [saveNotebookTarget, setSaveNotebookTarget] = useState<DocFile | null>(null);
@@ -502,17 +565,29 @@ export default function DocumentsPanel({
   useSyncDocumentsMetadataToDb(runId || undefined, documentsQuery.data?.files || []);
   const dbDocumentRows = useDocumentMetadataRows(runId || undefined);
   const dbFiles = useMemo(() => dbDocumentRows.map(documentMetadataRowToDocFile), [dbDocumentRows]);
-  const previewContentQuery = useDocumentContentQuery(runId, previewFile?.filename, previewFile?.sourceRunId);
+  const previewContentQuery = useDocumentContentQuery(
+    runId,
+    previewFile ? toDocumentReference(previewFile) : null,
+  );
   const renameDocumentMutation = useRenameDocumentMutation(runId);
   const deleteDocumentsMutation = useDeleteDocumentsMutation(runId);
   const loading = manualLoading || documentsQuery.isLoading;
   const loadingPreview = previewContentQuery.isLoading;
 
-  const selectedRootFilenames = useMemo(() => {
+  const selectedRootFiles = useMemo(() => {
     return files
       .filter((file) => isRootRunFile(file, runId) && selected.has(getDocKey(file)))
-      .map((file) => file.filename);
+      .map((file) => file);
   }, [files, runId, selected]);
+
+  const getDocumentDirectory = useCallback((file?: DocFile | null) => {
+    if (file?.documentDirectory) return file.documentDirectory;
+    if (file) return documentRoots[file.documentSource] || null;
+    return documentDirectory;
+  }, [documentDirectory, documentRoots]);
+
+  const previewDocumentDirectory = getDocumentDirectory(previewFile);
+  const activeDocumentDirectory = previewDocumentDirectory || documentDirectory;
 
   // Load persisted sidebar state
   useEffect(() => {
@@ -585,6 +660,7 @@ export default function DocumentsPanel({
     if (!data) return;
     setDocPagination(data.pagination || null);
     setDocumentDirectory(data.documentDirectory || null);
+    setDocumentRoots(data.documentRoots || {});
     setLoadedGroups(new Set());
   }, [documentsQuery.data]);
 
@@ -598,6 +674,7 @@ export default function DocumentsPanel({
     setFiles([]);
     setDocPagination(null);
     setDocumentDirectory(null);
+    setDocumentRoots({});
     setLoadedGroups(new Set());
   }, [documentsQuery.isError]);
 
@@ -617,10 +694,11 @@ export default function DocumentsPanel({
     const map = new Map<string, DocFolderGroup>();
     tabFiles.forEach(f => {
       const group = getDocumentFolderGroup(f);
-      const definition = phaseDefinitionMap.get(group.key);
+      const definition = phaseDefinitionMap.get(group.phaseKey);
+      const displayLabel = `${group.sourcePrefix} / ${formatDocumentPhaseLabel(group.phaseLabel, definition?.label)}`;
       const existing = map.get(group.key) || {
         key: group.key,
-        label: formatDocumentPhaseLabel(group.label, definition?.label),
+        label: displayLabel,
         rawLabel: group.label,
         order: definition?.order ?? Number.MAX_SAFE_INTEGER,
         files: [],
@@ -715,7 +793,6 @@ export default function DocumentsPanel({
     () => extractDocumentHighlights(previewContent),
     [previewContent],
   );
-
   const openLinkedRunDocument = useCallback(async (absolutePath: string) => {
     const currentMatch = findRunDocumentByWorkspacePath(
       previewFile ? [previewFile, ...files] : files,
@@ -933,22 +1010,30 @@ export default function DocumentsPanel({
     else setSelected(new Set(editableFiles.map(f => getDocKey(f))));
   };
 
-  const handleRename = async (file: string) => {
+  const handleRename = async (file: DocFile) => {
     if (!runId || !renameValue.trim()) return;
     try {
-      await renameDocumentMutation.mutateAsync({ file, newName: renameValue.trim() });
+      await renameDocumentMutation.mutateAsync({ ...toDocumentReference(file), newName: renameValue.trim() });
       setRenamingFile(null);
       await loadFiles();
     } catch { /* toast? */ }
   };
 
-  const handleDelete = async (filenames: string[]) => {
+  const handleDelete = async (targetFiles: DocFile[]) => {
     if (!runId) return;
     try {
-      await deleteDocumentsMutation.mutateAsync(filenames);
+      const references = targetFiles.map(toDocumentReference);
+      await deleteDocumentsMutation.mutateAsync(references);
       setDeleteTarget(null);
-      setSelected(prev => { const n = new Set(prev); filenames.forEach(f => n.delete(f)); return n; });
-      if (previewFile && filenames.includes(previewFile.filename) && isRootRunFile(previewFile, runId)) { setPreviewFile(null); setPreviewContent(''); }
+      setSelected(prev => {
+        const next = new Set(prev);
+        targetFiles.forEach((file) => next.delete(getDocKey(file)));
+        return next;
+      });
+      if (previewFile && targetFiles.some((file) => getDocKey(file) === getDocKey(previewFile))) {
+        setPreviewFile(null);
+        setPreviewContent('');
+      }
       await loadFiles();
     } catch { /* toast? */ }
   };
@@ -956,7 +1041,7 @@ export default function DocumentsPanel({
   const downloadFile = (file: DocFile) => {
     const blob = new Blob([previewContent || ''], { type: 'text/markdown;charset=utf-8' });
     if (!previewContent || !previewFile || getDocKey(previewFile) !== getDocKey(file)) {
-      runsApi.getDocumentContent(runId!, file.filename, { sourceRunId: file.sourceRunId }).then(({ content }) => {
+      runsApi.getDocumentContent(runId!, toDocumentReference(file)).then(({ content }) => {
         const b = new Blob([content], { type: 'text/markdown;charset=utf-8' });
         triggerDownload(b, file.filename);
       });
@@ -1025,11 +1110,12 @@ export default function DocumentsPanel({
 
   const saveDocToNotebook = useCallback(async (file: DocFile, scope: NotebookScope = 'personal', directory = '') => {
     if (!runId) return;
-    setSavingNotebookFile(file.filename);
+    const fileKey = getDocKey(file);
+    setSavingNotebookFile(fileKey);
     try {
       const content = (previewFile && getDocKey(previewFile) === getDocKey(file) && previewContent)
         ? previewContent
-        : (await runsApi.getDocumentContent(runId, file.filename, { sourceRunId: file.sourceRunId })).content;
+        : (await runsApi.getDocumentContent(runId, toDocumentReference(file))).content;
       const base = sanitizeNotebookName(file.baseName.replace(/\.md$/i, '') || 'workflow-doc');
       const ts = new Date();
       const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}-${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}${String(ts.getSeconds()).padStart(2, '0')}`;
@@ -1042,7 +1128,7 @@ export default function DocumentsPanel({
     } catch (error: any) {
       toast('error', error?.message || '保存到 Notebook 失败');
     } finally {
-      setSavingNotebookFile((prev) => (prev === file.filename ? null : prev));
+      setSavingNotebookFile((prev) => (prev === fileKey ? null : prev));
     }
   }, [previewContent, previewFile, runId, toast]);
 
@@ -1166,21 +1252,21 @@ export default function DocumentsPanel({
           </Button>
         </div>
       )}
-      {documentDirectory && onOpenWorkspaceDirectory && (
+      {activeDocumentDirectory && onOpenWorkspaceDirectory && (
         <Button
           variant="outline"
           size="sm"
           className="h-7 text-xs"
-          onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+          onClick={() => onOpenWorkspaceDirectory(activeDocumentDirectory)}
           title="使用工作区查看文档目录"
         >
           <span className="material-symbols-outlined text-sm mr-1">folder_open</span>
           工作区查看目录
         </Button>
       )}
-      {selectedRootFilenames.length > 0 && (
-        <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => setDeleteTarget(selectedRootFilenames)}>
-          <span className="material-symbols-outlined text-sm mr-1">delete</span>删除 ({selectedRootFilenames.length})
+      {selectedRootFiles.length > 0 && (
+        <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => setDeleteTarget(selectedRootFiles)}>
+          <span className="material-symbols-outlined text-sm mr-1">delete</span>删除 ({selectedRootFiles.length})
         </Button>
       )}
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadFiles} disabled={loading}>
@@ -1211,7 +1297,7 @@ export default function DocumentsPanel({
 
     return (
       <div
-        key={file.filename}
+        key={docKey}
         className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30 ${isActive ? 'bg-accent' : ''}`}
         style={rowStyle}
         onClick={() => !isRenaming && selectFile(file)}
@@ -1225,7 +1311,7 @@ export default function DocumentsPanel({
             className="h-6 text-xs flex-1 min-w-0"
             value={renameValue}
             onChange={e => setRenameValue(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleRename(file.filename); if (e.key === 'Escape') setRenamingFile(null); }}
+            onKeyDown={e => { if (e.key === 'Enter') handleRename(file); if (e.key === 'Escape') setRenamingFile(null); }}
             onBlur={() => setRenamingFile(null)}
             onClick={e => e.stopPropagation()}
           />
@@ -1243,6 +1329,9 @@ export default function DocumentsPanel({
             子流程
           </Badge>
         )}
+        <Badge variant="outline" className="text-[9px] h-4 px-1 shrink-0 text-muted-foreground">
+          {getDocumentSourceLabel(file)}
+        </Badge>
         {recommendedFile && getDocKey(recommendedFile) === docKey ? (
           <Badge className="h-4 shrink-0 px-1 text-[9px]">推荐</Badge>
         ) : null}
@@ -1266,12 +1355,12 @@ export default function DocumentsPanel({
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={e => { e.stopPropagation(); openSaveNotebookDialog(file); }}
-              disabled={savingNotebookFile === file.filename}
+              disabled={savingNotebookFile === getDocKey(file)}
             >
               <span className="material-symbols-outlined text-sm mr-2">save</span>保存到 Notebook…
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={!editable} className="text-destructive" onClick={e => { e.stopPropagation(); if (!editable) return; setDeleteTarget([file.filename]); }}>
+            <DropdownMenuItem disabled={!editable} className="text-destructive" onClick={e => { e.stopPropagation(); if (!editable) return; setDeleteTarget([file]); }}>
               <span className="material-symbols-outlined text-sm mr-2">delete</span>删除
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -1418,12 +1507,15 @@ export default function DocumentsPanel({
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/20 shrink-0">
             <span className={`material-symbols-outlined text-sm ${getDocumentIconClass(previewFile)}`}>{getDocumentIcon(previewFile)}</span>
             <span className="text-xs font-medium truncate flex-1" title={previewFile.filename}>{getDisplayFileName(previewFile)}</span>
-            {documentDirectory && onOpenWorkspaceDirectory && (
+            <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] text-muted-foreground">
+              {getDocumentSourceLabel(previewFile)}
+            </Badge>
+            {previewDocumentDirectory && onOpenWorkspaceDirectory && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-6 px-2 text-[11px]"
-                onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+                onClick={() => onOpenWorkspaceDirectory(previewDocumentDirectory)}
                 title="使用工作区查看文档目录"
               >
                 <span className="material-symbols-outlined text-sm mr-1">folder_open</span>
@@ -1440,7 +1532,7 @@ export default function DocumentsPanel({
                   size="sm"
                   className="h-6 w-6 p-0"
                   title="保存到Notebook"
-                  disabled={savingNotebookFile === previewFile.filename}
+                  disabled={savingNotebookFile === getDocKey(previewFile)}
                 >
                   <span className="material-symbols-outlined text-sm">note_add</span>
                 </Button>
@@ -1471,7 +1563,9 @@ export default function DocumentsPanel({
                     <span className="h-px flex-1 bg-border" />
                   </div>
                 ) : null}
-                <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+                <div className={styles.markdownBody}>
+                  <Markdown>{previewContent}</Markdown>
+                </div>
               </div>
             )}
           </div>
@@ -1497,14 +1591,16 @@ export default function DocumentsPanel({
           <>
             <DetailDrawerHeader>
               <DetailDrawerTitle>{getDisplayFileName(previewFile)}</DetailDrawerTitle>
-              <DetailDrawerDescription>{previewFile.phaseName || previewFile.stepName || '运行文档'}</DetailDrawerDescription>
+              <DetailDrawerDescription>
+                {[getDocumentSourceLabel(previewFile), previewFile.phaseName || previewFile.stepName || '运行文档'].filter(Boolean).join(' / ')}
+              </DetailDrawerDescription>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {documentDirectory && onOpenWorkspaceDirectory ? (
+                {previewDocumentDirectory && onOpenWorkspaceDirectory ? (
                   <Button
                     variant="outline"
                     size="sm"
                     className="h-7 px-2 text-xs"
-                    onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+                    onClick={() => onOpenWorkspaceDirectory(previewDocumentDirectory)}
                   >
                     <span className="material-symbols-outlined mr-1 text-sm">folder_open</span>
                     目录
@@ -1520,7 +1616,7 @@ export default function DocumentsPanel({
                       variant="outline"
                       size="sm"
                       className="h-7 px-2 text-xs"
-                      disabled={savingNotebookFile === previewFile.filename}
+                      disabled={savingNotebookFile === getDocKey(previewFile)}
                     >
                       <span className="material-symbols-outlined mr-1 text-sm">note_add</span>
                       保存到 Notebook
@@ -1550,7 +1646,9 @@ export default function DocumentsPanel({
                       <span className="h-px flex-1 bg-border" />
                     </div>
                   ) : null}
-                  <div className={styles.markdownBody}><Markdown>{previewContent}</Markdown></div>
+                  <div className={styles.markdownBody}>
+                    <Markdown>{previewContent}</Markdown>
+                  </div>
                 </div>
               )}
             </DetailDrawerBody>
@@ -1629,7 +1727,7 @@ export default function DocumentsPanel({
         onDirectoryChange={setSaveNotebookDirectory}
         directories={saveNotebookDirs}
         loadingDirectories={saveNotebookDirsLoading}
-        saving={Boolean(saveNotebookTarget && savingNotebookFile === saveNotebookTarget.filename)}
+        saving={Boolean(saveNotebookTarget && savingNotebookFile === getDocKey(saveNotebookTarget))}
         previewText={saveNotebookTarget
           ? `将保存：${saveNotebookDirectory ? `${saveNotebookDirectory}/` : ''}${sanitizeNotebookName(saveNotebookTarget.baseName.replace(/\.md$/i, '') || 'workflow-doc')}-YYYYMMDD-HHMMSS.cj.md`
           : '请选择文档'}
@@ -1644,7 +1742,7 @@ export default function DocumentsPanel({
       <ConfirmDialog
         open={!!deleteTarget}
         title="确认删除"
-        description={deleteTarget?.length === 1 ? `确定要删除 "${deleteTarget[0]}" 吗？` : `确定要删除选中的 ${deleteTarget?.length || 0} 个文件吗？`}
+        description={deleteTarget?.length === 1 ? `确定要删除 "${deleteTarget[0].filename}" 吗？` : `确定要删除选中的 ${deleteTarget?.length || 0} 个文件吗？`}
         confirmLabel="删除"
         variant="destructive"
         onConfirm={() => deleteTarget && handleDelete(deleteTarget)}

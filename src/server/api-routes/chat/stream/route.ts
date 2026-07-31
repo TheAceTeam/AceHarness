@@ -394,7 +394,7 @@ export async function POST(request: Request) {
       }
 
       const onEngineStream = (evt: any) => {
-        if ((evt?.type === 'text' || evt?.type === 'tool') && evt.content) {
+        if (evt?.type === 'text' && evt.content) {
           appendEngineStreamContent(chatId, evt.content);
           const stateAfterAppend = getEngineStream(chatId);
           writeChatStreamDebugTrace({
@@ -439,6 +439,8 @@ export async function POST(request: Request) {
             saveLiveSessionSnapshot(nextLiveSession);
           }
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
+        } else if (evt?.type === 'tool' && evt.tool) {
+          engineStreamEvents.emit(chatId, { type: 'tool', tool: evt.tool });
         } else if (evt?.type === 'session' && evt.content) {
           setEngineStreamSessionId(chatId, evt.content);
           if (proc) proc.sessionId = evt.content;
@@ -886,6 +888,8 @@ export async function GET(request: Request) {
         if (!evt) return;
         if (evt.type === 'delta') {
           send('delta', { content: evt.content });
+        } else if (evt.type === 'tool' && evt.tool) {
+          send('tool', { tool: evt.tool });
         } else if (evt.type === 'session') {
           send('session', { runtimeSessionId: evt.runtimeSessionId || evt.sessionId, sessionId: evt.runtimeSessionId || evt.sessionId });
         } else if (evt.type === 'thinking') {

@@ -739,6 +739,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const globalEngineRef = useRef(effectiveGlobalEngine);
   const sendMessageRef = useRef<((text: string, options?: { displayText?: string; targetSessionId?: string }) => Promise<void>) | null>(null);
   const pendingSessionsRef = useRef<Record<string, ChatSession>>({});
+  const pendingCreationPromisesRef = useRef<Record<string, Promise<void> | undefined>>({});
   const sessionCacheRef = useRef<Record<string, ChatSession>>({});
   activeSessionRef.current = activeSession;
   skillSettingsRef.current = skillSettings;
@@ -765,9 +766,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return apiListSessions().then(list => {
       if (isCancelled()) return;
       const mergedList = [...list];
-      const addLocalSession = (session: ChatSession | null | undefined) => {
-        if (!session || mergedList.some((item) => item.id === session.id)) return;
-        mergedList.unshift({
+      const mergeLocalSession = (session: ChatSession | null | undefined) => {
+        if (!session) return;
+        const localSummary: SessionSummary = {
           id: session.id,
           title: session.title,
           model: session.model,
@@ -780,10 +781,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           workflowBinding: session.workflowBinding,
           agentBinding: session.agentBinding,
           sessionWorkbenchState: session.sessionWorkbenchState,
-        });
+        };
+        const existingIndex = mergedList.findIndex((item) => item.id === session.id);
+        if (existingIndex < 0) {
+          mergedList.unshift(localSummary);
+          return;
+        }
+
+        const existing = mergedList[existingIndex];
+        const localIsAhead = session.messages.length > existing.messageCount
+          || session.updatedAt >= existing.updatedAt;
+        if (localIsAhead || localSummary.lastMessage && !existing.lastMessage) {
+          mergedList[existingIndex] = { ...existing, ...localSummary };
+        }
       };
-      addLocalSession(activeSessionRef.current);
-      Object.values(sessionCacheRef.current).forEach(addLocalSession);
+      mergeLocalSession(activeSessionRef.current);
+      Object.values(sessionCacheRef.current).forEach(mergeLocalSession);
       setSessions(mergedList);
 
       const storedActiveSessionId = readStoredActiveSessionId();
@@ -987,6 +1000,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     Object.values(saveTimersRef.current).forEach((timer) => clearTimeout(timer));
     saveTimersRef.current = {};
     pendingSessionsRef.current = {};
+    pendingCreationPromisesRef.current = {};
   }, []);
 
   // Load full session when activeSessionId changes
@@ -1417,18 +1431,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   ]);
 
   // Debounced persist to server
+  const flushPendingSessionSave = useCallback((sessionId: string) => {
+    const pending = pendingSessionsRef.current[sessionId];
+    if (!pending) return;
+    delete pendingSessionsRef.current[sessionId];
+    const timer = saveTimersRef.current[sessionId];
+    if (timer) {
+      clearTimeout(timer);
+      delete saveTimersRef.current[sessionId];
+    }
+    apiSaveSession(pending).catch(console.error);
+  }, []);
+
   const scheduleSave = useCallback((session: ChatSession) => {
     pendingSessionsRef.current[session.id] = session;
     const existingTimer = saveTimersRef.current[session.id];
     if (existingTimer) clearTimeout(existingTimer);
     saveTimersRef.current[session.id] = setTimeout(() => {
-      const pending = pendingSessionsRef.current[session.id];
-      delete pendingSessionsRef.current[session.id];
       delete saveTimersRef.current[session.id];
-      if (!pending) return;
-      apiSaveSession(pending).catch(console.error);
+      if (pendingCreationPromisesRef.current[session.id]) return;
+      flushPendingSessionSave(session.id);
     }, 300);
-  }, []);
+  }, [flushPendingSessionSave]);
 
   // Flush pending save on page unload to prevent data loss
   useEffect(() => {
@@ -1872,9 +1896,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     sessionCacheRef.current[id] = session;
     setActiveSession(session);
     setActiveSessionId(id);
-    apiCreateSession(session).catch(console.error);
+    const creationPromise = apiCreateSession(session);
+    pendingCreationPromisesRef.current[id] = creationPromise;
+    void creationPromise
+      .catch(console.error)
+      .finally(() => {
+        delete pendingCreationPromisesRef.current[id];
+        flushPendingSessionSave(id);
+      });
     return id;
-  }, [creationAssistantDefaultEnabled, model, engine, runStatusById]);
+  }, [creationAssistantDefaultEnabled, flushPendingSessionSave, model, engine, runStatusById]);
 
   const deleteSession = useCallback((id: string) => {
     const sessionToDelete = sessions.find((session) => session.id === id)

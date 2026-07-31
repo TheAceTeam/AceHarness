@@ -45,19 +45,13 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { Pin } from 'lucide-react';
 import {
-  buildWorkflowConversationDirectory,
   getCreationSessionStatusLabel,
-  isWorkflowDirectorySession,
-  getWorkbenchSessionKind,
   type ChatSessionSummaryLike,
 } from '@/lib/agent/conversations';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { getAgoraTopicExtensionActions } from '@/lib/agora/extensions';
 import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
-import {
-  isWorkflowSidebarHint,
-  type CollaborationChatroomParticipant,
-} from '@/lib/core/home-sidebar-state';
+import type { CollaborationChatroomParticipant } from '@/lib/core/home-sidebar-state';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { isRunningWorkflowConversation } from '@/lib/workflow/run-status';
@@ -110,7 +104,6 @@ const SESSION_TAG_FILTER_OPTIONS: ReadonlyArray<{ value: SessionTagFilter; label
 const DEFAULT_SESSION_TAG_FILTERS: SessionTagFilter[] = [];
 
 export type SessionDirectoryView = 'conversation';
-type WorkflowBucketKey = 'creating' | 'ready' | 'active';
 export const SESSION_DIRECTORY_ORDER_STORAGE_KEY = 'chat-session-directory-order';
 export const SESSION_TAG_FILTER_STORAGE_KEY = 'chat-session-tag-filter';
 export const DEFAULT_SESSION_DIRECTORY_ORDER: SessionDirectoryView[] = ['conversation'];
@@ -251,187 +244,17 @@ function compareSidebarSessions(a: SidebarSession, b: SidebarSession): number {
   return b.updatedAt - a.updatedAt;
 }
 
-function isLegacyPlanningCreationSession(session: SidebarSession): boolean {
-  return Boolean(
-    session.creationSession?.creationSessionId
-    && session.title.trim().startsWith('创建计划：')
-  );
-}
-
-function collapseDuplicateCreationPlanningSessions(sessions: SidebarSession[]): SidebarSession[] {
-  const primaryCreationSessionIds = new Set(
-    sessions
-      .filter((session) => session.creationSession?.creationSessionId && !isLegacyPlanningCreationSession(session))
-      .map((session) => session.creationSession!.creationSessionId)
-  );
-  if (primaryCreationSessionIds.size === 0) return sessions;
-  return sessions.filter((session) => {
-    const creationSessionId = session.creationSession?.creationSessionId;
-    if (!creationSessionId) return true;
-    return !isLegacyPlanningCreationSession(session) || !primaryCreationSessionIds.has(creationSessionId);
-  });
-}
-
 function isActiveRunStatus(status?: string): boolean {
   return status === 'preparing' || status === 'running' || status === 'pending';
-}
-
-function getWorkflowSessionConfigFile(session: SidebarSession, relatedBinding = session.workflowBinding): string {
-  return (
-    relatedBinding?.configFile
-    || session.creationSession?.filename
-    || session.sessionWorkbenchState?.homeSidebar?.workflowDraft?.name
-    || session.title
-    || '未命名工作流'
-  );
 }
 
 function getWorkflowSessionName(session: SidebarSession, relatedBinding = session.workflowBinding): string {
   return (
     session.creationSession?.workflowName
     || relatedBinding?.configFile
-    || session.sessionWorkbenchState?.homeSidebar?.workflowDraft?.name
     || session.title
-    || getWorkflowSessionConfigFile(session, relatedBinding)
+    || '未命名工作流'
   );
-}
-
-function createWorkflowAgentGroup(input: {
-  key: string;
-  label: string;
-  role: WorkflowAgentSessionGroup['role'];
-  sessionId?: string | null;
-}): WorkflowAgentSessionGroup {
-  return {
-    key: input.key,
-    label: input.label,
-    role: input.role,
-    sessionId: input.sessionId || null,
-    sessions: [],
-    pendingCount: 0,
-    connected: Boolean(input.sessionId),
-  };
-}
-
-function buildWorkflowAgentGroups(
-  sessions: SidebarSession[],
-  pendingQuestionsBySessionId: Map<string, HumanQuestion[]>,
-  workflowBindingByRelatedSessionId: Map<string, NonNullable<SidebarSession['workflowBinding']>>
-): WorkflowAgentSessionGroup[] {
-  const groups = new Map<string, WorkflowAgentSessionGroup>();
-  const assignedSessionIds = new Set<string>();
-  const addGroup = (group: WorkflowAgentSessionGroup) => {
-    if (!groups.has(group.key)) {
-      groups.set(group.key, group);
-      return group;
-    }
-    const existing = groups.get(group.key)!;
-    existing.sessionId = existing.sessionId || group.sessionId;
-    existing.connected = existing.connected || group.connected;
-    return existing;
-  };
-  const addSessionToGroup = (group: WorkflowAgentSessionGroup, session: SidebarSession) => {
-    if (group.sessions.some((item) => item.id === session.id)) return;
-    group.sessions.push(session);
-    group.pendingCount += pendingQuestionsBySessionId.get(session.id)?.length || 0;
-    assignedSessionIds.add(session.id);
-  };
-
-  for (const session of sessions) {
-    const binding = session.workflowBinding || workflowBindingByRelatedSessionId.get(session.id);
-    if (!binding) continue;
-    for (const entry of buildWorkflowConversationDirectory(binding)) {
-      const group = addGroup(createWorkflowAgentGroup({
-        key: `${entry.role}:${entry.label}`,
-        label: entry.label,
-        role: entry.role,
-        sessionId: entry.sessionId,
-      }));
-      const isEntrySession = entry.sessionId && entry.sessionId === session.id;
-      const isRuntimeSupervisor = entry.role === 'Supervisor' && session.id === binding.supervisorSessionId;
-      const isAgentBinding = session.agentBinding?.agentName === entry.label;
-      if (isEntrySession || isRuntimeSupervisor || isAgentBinding) {
-        addSessionToGroup(group, session);
-      }
-    }
-  }
-
-  for (const session of sessions) {
-    if (assignedSessionIds.has(session.id)) continue;
-    if (session.creationSession) {
-      addSessionToGroup(
-        addGroup(createWorkflowAgentGroup({
-          key: 'creation:workflow-design',
-          label: '工作流设计',
-          role: '创建',
-          sessionId: session.id,
-        })),
-        session
-      );
-      continue;
-    }
-    const relatedBinding = session.workflowBinding || workflowBindingByRelatedSessionId.get(session.id);
-    if (relatedBinding) {
-      addSessionToGroup(
-        addGroup(createWorkflowAgentGroup({
-          key: 'runtime:workflow-run',
-          label: '运行会话',
-          role: '运行',
-          sessionId: session.id,
-        })),
-        session
-      );
-    }
-  }
-
-  const roleOrder: Record<WorkflowAgentSessionGroup['role'], number> = {
-    Supervisor: 0,
-    创建: 1,
-    运行: 2,
-    Agent: 3,
-  };
-
-  return Array.from(groups.values())
-    .filter((group) => group.sessions.length > 0 || Boolean(group.sessionId))
-    .map((group) => ({
-      ...group,
-      sessions: group.sessions.sort((a, b) => {
-        const aPending = pendingQuestionsBySessionId.get(a.id)?.length || 0;
-        const bPending = pendingQuestionsBySessionId.get(b.id)?.length || 0;
-        if (aPending !== bPending) return bPending - aPending;
-        return compareSidebarSessions(a, b);
-      }),
-    }))
-    .sort((a, b) => {
-      if (a.pendingCount !== b.pendingCount) return b.pendingCount - a.pendingCount;
-      if (roleOrder[a.role] !== roleOrder[b.role]) return roleOrder[a.role] - roleOrder[b.role];
-      if (a.connected !== b.connected) return a.connected ? -1 : 1;
-      return a.label.localeCompare(b.label, 'zh-CN');
-    });
-}
-
-function getWorkflowSessionBucket(input: {
-  session: SidebarSession;
-  pendingQuestionCount: number;
-  runStatusById: Record<string, string>;
-  relatedBinding?: SidebarSession['workflowBinding'];
-}): WorkflowBucketKey {
-  const { session, pendingQuestionCount, runStatusById, relatedBinding = session.workflowBinding } = input;
-  const runId = relatedBinding?.runId;
-  const runStatus = runId ? runStatusById[runId] : '';
-  if (runId) {
-    return isActiveRunStatus(runStatus) || pendingQuestionCount > 0 ? 'active' : 'ready';
-  }
-
-  const creationStatus = session.creationSession?.status;
-  if (creationStatus === 'draft' || creationStatus === 'confirmed') return 'creating';
-  if (
-    session.sessionWorkbenchState?.homeSidebar?.intent === 'create-workflow'
-    || Boolean(session.sessionWorkbenchState?.homeSidebar?.workflowDraft)
-  ) {
-    return 'creating';
-  }
-  return 'ready';
 }
 
 function getSelectionState(sessionIds: string[], selectedSessionIds: Set<string>): CheckedState {
@@ -607,7 +430,7 @@ function getDeleteConfirmationDescription(input: {
     runStatusById,
   } = input;
   const workflowCounts = new Map<string, number>();
-  let workflowDraftingCount = 0;
+  let creationSessionCount = 0;
   let workflowCompletedCount = 0;
   let agentChatCount = 0;
   let runningCount = 0;
@@ -619,7 +442,7 @@ function getDeleteConfirmationDescription(input: {
       const workflowName = getWorkflowSessionName(session);
       workflowCounts.set(workflowName, (workflowCounts.get(workflowName) || 0) + 1);
     }
-    if (session.conversationMode === 'workflow-drafting' || session.creationSession) workflowDraftingCount += 1;
+    if (session.creationSession) creationSessionCount += 1;
     if (session.conversationMode === 'workflow-completed') workflowCompletedCount += 1;
     if (session.conversationMode === 'agent-chat' || session.sessionWorkbenchState?.collaborationRoom) agentChatCount += 1;
     const runId = session.workflowBinding?.runId;
@@ -636,7 +459,7 @@ function getDeleteConfirmationDescription(input: {
   const riskLines = [
     `将删除选中的 ${sessions.length} 个对话，删除后无法恢复。`,
     workflowSummary ? `涉及 ${workflowSummary}${moreCount}。` : '',
-    workflowDraftingCount > 0 ? `其中 ${workflowDraftingCount} 个正在创建工作流，删除会丢弃当前对话内草案入口。` : '',
+    creationSessionCount > 0 ? `其中 ${creationSessionCount} 个关联了配置创建会话，删除会移除首页对话入口。` : '',
     workflowCompletedCount > 0 ? `其中 ${workflowCompletedCount} 个是已完成工作流对话；只删除首页对话记录，不会删除 run history、配置和产物。` : '',
     workflowCounts.size > 0 && workflowCompletedCount === 0 ? '只删除首页对话记录，不会删除工作流配置、运行历史和产物。' : '',
     runningCount > 0 ? `其中 ${runningCount} 个属于运行中工作流。` : '',
@@ -650,8 +473,8 @@ function getDeleteConfirmationDescription(input: {
 
 function getSingleDeleteConfirmationDescription(session: ChatSessionSummaryLike): string {
   const lines = [`删除「${session.title}」后无法恢复。`];
-  if (session.conversationMode === 'workflow-drafting' || session.creationSession) {
-    lines.push('该对话正在创建工作流，删除会丢弃当前对话内草案入口。');
+  if (session.creationSession) {
+    lines.push('该对话关联了配置创建会话，删除会移除首页对话入口。');
   } else if (session.workflowBinding || session.conversationMode === 'workflow-completed') {
     lines.push('只删除首页对话记录，不会删除 run history、工作流配置和产物。');
   } else if (session.conversationMode === 'agent-chat' || session.sessionWorkbenchState?.collaborationRoom) {
@@ -833,7 +656,7 @@ function ChatSidebarComponent({
   }, [activeSession, sessions]);
 
   const groupedSessions = useMemo(() => {
-    const unified = collapseDuplicateCreationPlanningSessions([...sessionsWithActiveState]).sort(compareSidebarSessions);
+    const unified = [...sessionsWithActiveState].sort(compareSidebarSessions);
     return {
       conversation: unified,
     };
@@ -3572,7 +3395,7 @@ function SessionItem({
     <div
       className={`home-chat-session-row group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-lg' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
         active
-          ? 'border-l-[3px] border-[#8B5CF6] bg-[#EEE7FF]/70 px-3 dark:bg-violet-500/12'
+          ? 'border-l-[3px] border-[#8B5CF6] bg-[#EEE7FF]/70 px-3 dark:bg-violet-950/45'
           : isWeChatBound
             ? 'border-l-[3px] border-[#1AAD19] bg-[#1AAD19]/[0.08] px-3 hover:bg-[#1AAD19]/[0.12]'
             : 'px-3 hover:bg-muted/55'

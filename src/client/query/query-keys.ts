@@ -1,8 +1,10 @@
+import type { RunDocumentReference } from '@/lib/core/api';
+
 const contentKeys = {
   workspaceFile: (workspacePath: string, filePath: string) =>
     ['content', 'workspace', workspacePath, filePath] as const,
-  runDocument: (runId: string, filename: string, sourceRunId?: string) =>
-    ['content', 'runDocument', runId, filename, sourceRunId ?? null] as const,
+  runDocument: (runId: string, reference?: RunDocumentReference | null) =>
+    ['content', 'runDocument', runId, reference?.source ?? null, reference?.sourceRunId ?? null, reference?.file ?? null] as const,
 };
 
 type RuntimeKeyParams = {
