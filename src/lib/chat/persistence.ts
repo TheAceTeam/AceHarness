@@ -222,6 +222,17 @@ function rowToSession(row: any): PersistedChatSession | null {
   return parsed ? normalizeSessionWorkbenchConversationMode(parsed) : null;
 }
 
+function summarizeSessionWorkbenchState(state?: SessionWorkbenchState): SessionWorkbenchState | undefined {
+  if (!state?.collaborationRoom) return state;
+  return {
+    ...state,
+    collaborationRoom: {
+      ...state.collaborationRoom,
+      messages: [],
+    },
+  };
+}
+
 function rowToSummary(row: any): ChatSessionSummary | null {
   if (!row) return null;
   return {
@@ -237,7 +248,9 @@ function rowToSummary(row: any): ChatSessionSummary | null {
     creationSession: parseJson<WorkflowCreationBinding>(row.creation_session_json),
     workflowBinding: parseJson<WorkflowRunBinding>(row.workflow_binding_json),
     agentBinding: parseJson<AgentChatBinding>(row.agent_binding_json),
-    sessionWorkbenchState: parseJson<SessionWorkbenchState>(row.session_workbench_state_json),
+    sessionWorkbenchState: summarizeSessionWorkbenchState(
+      parseJson<SessionWorkbenchState>(row.session_workbench_state_json),
+    ),
     createdBy: row.created_by || undefined,
     visibility: row.visibility || undefined,
   };
@@ -258,7 +271,7 @@ function sessionToSummary(session: PersistedChatSession): ChatSessionSummary {
     creationSession: normalized.creationSession,
     workflowBinding: normalized.workflowBinding,
     agentBinding: normalized.agentBinding,
-    sessionWorkbenchState: normalized.sessionWorkbenchState || undefined,
+    sessionWorkbenchState: summarizeSessionWorkbenchState(normalized.sessionWorkbenchState),
     createdBy: normalized.createdBy,
     visibility: normalized.visibility,
   };

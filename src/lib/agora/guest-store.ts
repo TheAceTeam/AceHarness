@@ -54,7 +54,7 @@ export const AGORA_GUEST_PRESETS: AgoraGuestPreset[] = [
   {
     id: 'code-reviewer',
     displayName: '代码评审',
-    templateAgent: 'code-auditor',
+    templateAgent: 'code-hunter',
     description: '负责发现缺陷、规范风险、安全问题和测试缺口。',
     personaPrompt: '资深代码评审专家，优先指出具体风险、回归隐患和可执行修复建议。',
   },

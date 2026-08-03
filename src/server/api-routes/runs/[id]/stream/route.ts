@@ -85,9 +85,24 @@ export async function GET(
         for (const tool of tools) sendTool(tool);
       };
 
-      const flushPersistedSnapshot = async () => {
+      const flushPersistedUpdates = async () => {
         await flushPersistedStream();
         await flushPersistedTools();
+      };
+
+      // The first replay is a complete persisted transcript, not an append.
+      // A client may have stale IndexedDB data, so it must be able to replace
+      // that cache before it receives any incremental deltas.
+      const sendInitialSnapshot = async () => {
+        const [content, tools] = await Promise.all([
+          loadStreamContent(id, step),
+          loadStreamToolEvents(id, step),
+        ]);
+        const snapshotContent = content || '';
+        lastFileSentLen = snapshotContent.length;
+        send('snapshot', { content: snapshotContent });
+        for (const tool of tools) sendTool(tool);
+        return snapshotContent;
       };
 
       const handleLiveEvent = (evt: any) => {
@@ -110,7 +125,7 @@ export async function GET(
       // Poll the persisted transcript for reconnects and for engine paths that
       // do not have a process-local stream. Tool updates are replayed separately.
       filePoll = setInterval(() => {
-        void flushPersistedSnapshot();
+        void flushPersistedUpdates();
       }, 800);
 
       onStream = (evt: any) => {
@@ -128,9 +143,25 @@ export async function GET(
       heartbeat = setInterval(() => send('heartbeat', { timestamp: new Date().toISOString() }), 15000);
 
       void (async () => {
-        await flushPersistedSnapshot();
+        const snapshotContent = await sendInitialSnapshot();
         initialSnapshotLoaded = true;
-        for (const evt of pendingLiveEvents.splice(0)) handleLiveEvent(evt);
+        const pending = pendingLiveEvents.splice(0);
+        // appendStreamContent is asynchronous, so a queued process event may
+        // already be represented in the snapshot. `total` is the process's
+        // cumulative stream at that event; if the snapshot ends with it, all
+        // preceding text events are already included.
+        const lastSnapshotIncludedEvent = pending.reduce((last, evt, index) => (
+          typeof evt?.delta === 'string'
+          && typeof evt?.total === 'string'
+          && evt.total
+          && snapshotContent.endsWith(evt.total)
+            ? index
+            : last
+        ), -1);
+        pending.forEach((evt, index) => {
+          if (index <= lastSnapshotIncludedEvent && typeof evt?.delta === 'string') return;
+          handleLiveEvent(evt);
+        });
       })();
 
       // Done when: no running proc AND run state no longer running, OR a finished proc exists for this run
@@ -148,7 +179,7 @@ export async function GET(
           }
           if (hasRunningProc || runStillActive) return;
 
-          await flushPersistedSnapshot();
+          await flushPersistedUpdates();
 
           const finished = procs.find(
             (p: any) =>

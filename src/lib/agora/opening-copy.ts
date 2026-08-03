@@ -22,7 +22,7 @@ type OpeningToneParticipant = Pick<CollaborationChatroomParticipant, 'name'>
 const OPENING_TONE_PROFILES: OpeningToneProfile[] = [
   {
     role: 'code-reviewer',
-    keywords: ['code-reviewer', 'code-auditor', 'review', 'auditor', '代码评审', '评审', '审查'],
+    keywords: ['code-reviewer', 'code-hunter', 'review', 'auditor', '代码评审', '评审', '审查'],
     examples: ['我先看风险和回归点。', '我先过一遍这次改动。'],
     fallback: '我先看风险和回归点。',
   },

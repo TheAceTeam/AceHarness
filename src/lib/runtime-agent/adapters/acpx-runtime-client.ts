@@ -196,7 +196,8 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
         throw error;
       }
       const seenToolCalls = new Map<string, AcpRuntimeEvent>();
-      const completedToolCalls = new Set<string>();
+      const terminalToolCalls = new Map<string, ToolTerminalStatus>();
+      const recoveredToolResultCalls = new Set<string>();
       let turn: AcpRuntimeTurn;
       try {
         turn = runtime.startTurn({
@@ -213,13 +214,20 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       activeTurns.set(input.turnId, { handle, runtime, turn });
       let resultSettled = false;
       try {
-        for await (const event of turn.events) {
+        for await (const nativeEvent of turn.events) {
+          // ACPX classifies provider-private orchestration calls such as
+          // Codex spawnAgent/wait as `other`. The same session record retains
+          // the original ToolUse metadata, so recover it before projection.
+          const event = await enrichOpaqueToolEventFromPersistedCall(handle, nativeEvent)
+            .catch(() => nativeEvent);
           const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : undefined;
-          if (event.type === 'tool_call' && toolCallId) {
-            seenToolCalls.set(toolCallId, event);
-            if (hasToolOutput(event)) completedToolCalls.add(toolCallId);
-          } else if (toolCallId && hasToolOutput(event)) {
-            completedToolCalls.add(toolCallId);
+          if (toolCallId && isTrackableToolLifecycleEvent(event)) {
+            const previous = seenToolCalls.get(toolCallId);
+            seenToolCalls.set(toolCallId, mergeToolCallEvent(previous, event));
+          }
+          const nativeTerminalStatus = resolveNativeToolTerminalStatus(event);
+          if (toolCallId && nativeTerminalStatus) {
+            terminalToolCalls.set(toolCallId, nativeTerminalStatus);
           }
           yield event;
         }
@@ -241,31 +249,43 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
           cleanupTimeoutMs,
           'ACP runtime status timed out',
         ).catch(() => undefined);
-        const usage = diffUsage(afterUsage, beforeUsage);
-        const cost = diffCost(afterUsage?.cost, beforeUsage?.cost);
-        if (result.status === 'completed') {
-          const recoveredToolEvents = await readPersistedToolResultEvents(handle, seenToolCalls, completedToolCalls);
-          for (const event of recoveredToolEvents) {
-            if (typeof event.toolCallId === 'string') completedToolCalls.add(event.toolCallId);
-          }
-          const toolCompletionEvents = [
-            ...recoveredToolEvents,
-            ...createMissingToolCompletionEvents(seenToolCalls, completedToolCalls),
-          ];
-          for (const event of toolCompletionEvents) {
-            writeAcpxDebugTrace({
-              stage: 'acpx.raw_event',
-              context: {
-                runtimeSessionId: binding.runtimeSessionId,
-                turnId: input.turnId,
-                requestId: input.requestId,
-                traceId: input.traceId,
-                runtime: binding.runtime,
-              },
-              payload: event,
-            });
-            yield event;
-          }
+        const persistedUsage: Awaited<ReturnType<typeof readPersistedTerminalUsage>> =
+          await readPersistedTerminalUsage(handle, beforeUsage).catch(() => ({}));
+        const usage = diffUsage(afterUsage, beforeUsage) ?? persistedUsage.usage;
+        const cost = diffCost(afterUsage?.cost, beforeUsage?.cost) ?? persistedUsage.cost;
+        const fallbackToolStatus = resolveTurnTerminalToolStatus(result);
+        const recoveredToolEvents = await readPersistedToolResultEvents(
+          handle,
+          seenToolCalls,
+          terminalToolCalls,
+          recoveredToolResultCalls,
+        );
+        for (const event of recoveredToolEvents) {
+          if (typeof event.toolCallId === 'string') recoveredToolResultCalls.add(event.toolCallId);
+        }
+        const toolCompletionEvents = [
+          ...recoveredToolEvents,
+          ...createMissingToolCompletionEvents(
+            seenToolCalls,
+            terminalToolCalls,
+            recoveredToolResultCalls,
+            fallbackToolStatus,
+            result.status,
+          ),
+        ];
+        for (const event of toolCompletionEvents) {
+          writeAcpxDebugTrace({
+            stage: 'acpx.raw_event',
+            context: {
+              runtimeSessionId: binding.runtimeSessionId,
+              turnId: input.turnId,
+              requestId: input.requestId,
+              traceId: input.traceId,
+              runtime: binding.runtime,
+            },
+            payload: event,
+          });
+          yield event;
         }
         if (result.status === 'completed') {
           yield { type: 'done', stopReason: result.stopReason, usage, cost };
@@ -278,6 +298,8 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
             code: result.error.code,
             detailCode: result.error.detailCode,
             retryable: result.error.retryable,
+            usage,
+            cost,
           };
         }
       } finally {
@@ -312,9 +334,10 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       const handle = requireAcpHandle(binding);
       const runtime = await getRuntimeForHandle(handle);
       const active = activeTurns.get(input.turnId);
+      const cancellingActiveTurn = Boolean(active && sameAcpSession(active.handle, handle));
       let failure: unknown;
       try {
-        if (active && sameAcpSession(active.handle, handle)) {
+        if (cancellingActiveTurn && active) {
           await withTimeout(active.turn.cancel({ reason: input.reason }), cleanupTimeoutMs, 'ACP turn cancellation timed out');
         } else {
           await withTimeout(runtime.cancel({
@@ -326,17 +349,19 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
         failure = error;
       }
 
-      try {
-        await closeRuntimeForHandle(
-          runtime,
-          handle,
-          failure ? 'aceharness-runtime-cancel-failed' : 'aceharness-runtime-cancel',
-          cleanupTimeoutMs,
-        );
-      } catch (error) {
-        // Preserve the native cancellation error when both operations fail; otherwise surface
-        // close timeout/failure so a successful cancel cannot hide a leaked runtime transport.
-        failure ??= error;
+      if (!cancellingActiveTurn) {
+        try {
+          await closeRuntimeForHandle(
+            runtime,
+            handle,
+            failure ? 'aceharness-runtime-cancel-failed' : 'aceharness-runtime-cancel',
+            cleanupTimeoutMs,
+          );
+        } catch (error) {
+          // Preserve the native cancellation error when both operations fail; otherwise surface
+          // close timeout/failure so a successful cancel cannot hide a leaked runtime transport.
+          failure ??= error;
+        }
       }
 
       if (failure) throw failure;
@@ -394,44 +419,275 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
   }
 }
 
-function hasToolOutput(event: Record<string, any>): boolean {
-  return event.rawOutput !== undefined
-    || event.output !== undefined
-    || event.aggregated_output !== undefined
-    || event.stdout !== undefined
-    || event.stderr !== undefined
-    || event.exitCode !== undefined
-    || event.exit_code !== undefined;
+type ToolTerminalStatus = 'completed' | 'failed';
+
+function resolveNativeToolTerminalStatus(event: AcpRuntimeEvent): ToolTerminalStatus | undefined {
+  const eventType = String(event.type || '').trim().toLowerCase();
+  if (eventType === 'tool_completed') return 'completed';
+  if (eventType === 'tool_failed') return 'failed';
+
+  const status = String(event.status ?? '').trim().toLowerCase();
+  if (['completed', 'done', 'success'].includes(status)) return 'completed';
+  if (['failed', 'error', 'cancelled', 'canceled'].includes(status)) return 'failed';
+  return undefined;
+}
+
+function resolveTurnTerminalToolStatus(result: { status: string }): ToolTerminalStatus {
+  return result.status === 'completed' ? 'completed' : 'failed';
+}
+
+function isTrackableToolLifecycleEvent(event: AcpRuntimeEvent): boolean {
+  return [
+    'tool_call',
+    'tool_call_update',
+    'tool_started',
+    'tool_updated',
+    'tool_output',
+    'tool_completed',
+    'tool_failed',
+  ].includes(String(event.type || '').toLowerCase());
+}
+
+type PersistedToolCallMetadata = {
+  id: string;
+  name: string;
+  rawInput?: Record<string, unknown>;
+};
+
+async function enrichOpaqueToolEventFromPersistedCall(
+  handle: AcpRuntimeHandle,
+  event: AcpRuntimeEvent,
+): Promise<AcpRuntimeEvent> {
+  if (!isTrackableToolLifecycleEvent(event)) return event;
+  const source = isRecord(event) ? event : {};
+  if (!isOpaqueToolEvent(source)) return event;
+
+  const toolCallIds = extractToolCallIds(source);
+  if (toolCallIds.length === 0) return event;
+  const metadata = await readPersistedToolCallMetadata(handle, toolCallIds);
+  if (!metadata) return event;
+  const canonicalName = normalizeProviderToolName(metadata.name);
+  return {
+    ...source,
+    toolCallId: metadata.id,
+    name: canonicalName,
+    toolName: canonicalName,
+    tool_name: canonicalName,
+    rawInput: metadata.rawInput ?? source.rawInput,
+  } as AcpRuntimeEvent;
+}
+
+function extractToolCallIds(event: Record<string, unknown>): string[] {
+  const candidates: string[] = [];
+  const add = (value: unknown) => {
+    const id = nonEmptyString(value);
+    if (id && !candidates.includes(id)) candidates.push(id);
+  };
+  const read = (value: unknown) => {
+    if (!isRecord(value)) return;
+    add(value.toolCallId ?? value.tool_call_id);
+    add(value.id);
+  };
+
+  read(event);
+  read(event.payload);
+  read(event.data);
+  read(event.toolCall);
+  read(event.tool_call);
+  return candidates;
+}
+
+function isOpaqueToolEvent(event: Record<string, unknown>): boolean {
+  const identity = [event.name, event.toolName, event.tool_name, event.tool, event.kind, event.title]
+    .map(nonEmptyString)
+    .filter((value): value is string => Boolean(value));
+  return identity.length === 0 || identity.some((value) => /^(other|unknown|tool|tool call)$/i.test(value));
+}
+
+async function readPersistedToolCallMetadata(
+  handle: AcpRuntimeHandle,
+  toolCallIds: string[],
+): Promise<PersistedToolCallMetadata | undefined> {
+  const recordId = handle.acpxRecordId || handle.sessionKey;
+  if (!recordId) return undefined;
+  const filePath = getWorkspaceDataFile('acpx-runtime', 'sessions', `${encodeURIComponent(recordId)}.json`);
+  const record = await readJsonRecord(filePath);
+  if (!record) return undefined;
+  const calls = new Map<string, PersistedToolCallMetadata>();
+  collectPersistedToolCalls(calls, record);
+  for (const toolCallId of toolCallIds) {
+    const metadata = calls.get(toolCallId);
+    if (metadata) return metadata;
+  }
+  return undefined;
+}
+
+function collectPersistedToolCalls(
+  target: Map<string, PersistedToolCallMetadata>,
+  source: unknown,
+): void {
+  if (!isRecord(source)) return;
+  collectPersistedToolUseContent(target, source.content);
+  collectPersistedToolUseContent(target, source.tool_uses ?? source.toolUses ?? source.tool_calls ?? source.toolCalls);
+
+  const agent = isRecord(source.Agent) ? source.Agent : isRecord(source.agent) ? source.agent : undefined;
+  if (agent) {
+    collectPersistedToolUseContent(target, agent.content);
+    collectPersistedToolUseContent(target, agent.tool_uses ?? agent.toolUses ?? agent.tool_calls ?? agent.toolCalls);
+  }
+  const messages = Array.isArray(source.messages) ? source.messages : [];
+  for (const message of messages) collectPersistedToolCalls(target, message);
+}
+
+function collectPersistedToolUseContent(
+  target: Map<string, PersistedToolCallMetadata>,
+  content: unknown,
+): void {
+  const entries = Array.isArray(content)
+    ? content
+    : isRecord(content)
+      ? Object.values(content)
+      : [];
+  for (const entry of entries) {
+    const source = isRecord(entry) ? entry : {};
+    const toolUse = isRecord(source.ToolUse)
+      ? source.ToolUse
+      : isRecord(source.toolUse)
+        ? source.toolUse
+        : source;
+    const id = nonEmptyString(toolUse.id ?? toolUse.toolCallId ?? toolUse.tool_call_id);
+    const name = nonEmptyString(toolUse.name ?? toolUse.toolName ?? toolUse.tool_name);
+    if (!id || !name) continue;
+    target.set(id, {
+      id,
+      name,
+      rawInput: parsePersistedToolInput(toolUse.input ?? toolUse.raw_input ?? toolUse.rawInput),
+    });
+  }
+}
+
+function normalizeProviderToolName(name: string): string {
+  const normalized = name.trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (normalized === 'spawnagent') return 'subagent-dispatch';
+  if (normalized === 'wait' || normalized === 'waitforagents') return 'subagent-wait';
+  return name;
+}
+
+function parsePersistedToolInput(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function mergeToolCallEvent(previous: AcpRuntimeEvent | undefined, incoming: AcpRuntimeEvent): AcpRuntimeEvent {
+  if (!previous) return incoming;
+  const previousRecord = isRecord(previous) ? previous : {};
+  const incomingRecord = isRecord(incoming) ? incoming : {};
+  return {
+    ...previous,
+    ...incoming,
+    toolCallId: incomingRecord.toolCallId ?? previousRecord.toolCallId,
+    ...pickToolIdentity(previousRecord, incomingRecord),
+    title: incomingRecord.title ?? previousRecord.title,
+    kind: incomingRecord.kind ?? previousRecord.kind,
+    rawInput: incomingRecord.rawInput ?? previousRecord.rawInput,
+    rawOutput: incomingRecord.rawOutput ?? previousRecord.rawOutput,
+    output: incomingRecord.output ?? previousRecord.output,
+    aggregated_output: incomingRecord.aggregated_output ?? previousRecord.aggregated_output,
+    stdout: incomingRecord.stdout ?? previousRecord.stdout,
+    stderr: incomingRecord.stderr ?? previousRecord.stderr,
+    exitCode: incomingRecord.exitCode ?? previousRecord.exitCode,
+    exit_code: incomingRecord.exit_code ?? previousRecord.exit_code,
+  } as AcpRuntimeEvent;
+}
+
+function pickToolIdentity(
+  previous: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    name: incoming.name ?? previous.name,
+    toolName: incoming.toolName ?? previous.toolName,
+    tool_name: incoming.tool_name ?? previous.tool_name,
+  };
+}
+
+function pickToolIdentityFromEvent(event: AcpRuntimeEvent): Record<string, unknown> {
+  return pickToolIdentity(isRecord(event) ? event : {}, {});
 }
 
 function createMissingToolCompletionEvents(
   seenToolCalls: Map<string, AcpRuntimeEvent>,
-  completedToolCalls: Set<string>,
+  terminalToolCalls: Map<string, ToolTerminalStatus>,
+  recoveredToolResultCalls: Set<string>,
+  fallbackStatus: ToolTerminalStatus,
+  turnStatus: 'completed' | 'cancelled' | 'failed',
 ): AcpRuntimeEvent[] {
   const events: AcpRuntimeEvent[] = [];
   for (const [toolCallId, callEvent] of seenToolCalls) {
-    if (completedToolCalls.has(toolCallId)) continue;
+    if (terminalToolCalls.has(toolCallId) || recoveredToolResultCalls.has(toolCallId)) continue;
+    const exitCode = finiteNumber(callEvent.exitCode) ?? finiteNumber(callEvent.exit_code);
     events.push({
       type: 'tool_call_update',
       toolCallId,
-      status: 'completed',
+      ...pickToolIdentityFromEvent(callEvent),
+      status: fallbackStatus,
       title: callEvent.title,
       kind: callEvent.kind,
       rawInput: callEvent.rawInput,
-      rawOutput: {
-        output: '工具调用已完成，ACP 未返回详细结果。',
-        resultUnavailable: true,
-      },
+      rawOutput: createUnavailableToolResult(callEvent, fallbackStatus, turnStatus, exitCode),
       text: callEvent.title || 'tool call completed',
     });
   }
   return events;
 }
 
+function createUnavailableToolResult(
+  callEvent: AcpRuntimeEvent,
+  status: ToolTerminalStatus,
+  turnStatus: 'completed' | 'cancelled' | 'failed',
+  exitCode?: number,
+): Record<string, unknown> {
+  if (status === 'completed') {
+    return {
+      completed: true,
+      resultUnavailable: true,
+      ...(exitCode !== undefined ? { exitCode } : {}),
+    };
+  }
+  return {
+    error: resolveToolLifecycleError(callEvent)
+      || (turnStatus === 'cancelled'
+        ? '工具调用在运行取消前未返回终态。'
+        : '运行失败前工具调用未返回终态。'),
+    resultUnavailable: true,
+    ...(turnStatus === 'cancelled' ? { cancelled: true } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+  };
+}
+
+function resolveToolLifecycleError(event: AcpRuntimeEvent): string | undefined {
+  if (typeof event.error === 'string' && event.error.trim()) return event.error;
+  if (isRecord(event.error) && typeof event.error.message === 'string' && event.error.message.trim()) {
+    return event.error.message;
+  }
+  return undefined;
+}
+
 async function readPersistedToolResultEvents(
   handle: AcpRuntimeHandle,
   seenToolCalls: Map<string, AcpRuntimeEvent>,
-  completedToolCalls: Set<string>,
+  terminalToolCalls: Map<string, ToolTerminalStatus>,
+  recoveredToolResultCalls: Set<string>,
 ): Promise<AcpRuntimeEvent[]> {
   const recordId = handle.acpxRecordId || handle.sessionKey;
   if (!recordId || seenToolCalls.size === 0) return [];
@@ -448,21 +704,32 @@ async function readPersistedToolResultEvents(
 
   const events: AcpRuntimeEvent[] = [];
   for (const [toolCallId, callEvent] of seenToolCalls) {
-    if (completedToolCalls.has(toolCallId)) continue;
+    if (recoveredToolResultCalls.has(toolCallId)) continue;
     const result = resultById.get(toolCallId);
     if (!result) continue;
     const rawOutput = normalizePersistedToolOutput(result);
-    if (rawOutput === undefined) continue;
+    const persistedFailure = isPersistedToolFailure(result);
+    if (rawOutput === undefined && !persistedFailure) continue;
+    const status: ToolTerminalStatus = persistedFailure || terminalToolCalls.get(toolCallId) === 'failed'
+      ? 'failed'
+      : 'completed';
+    const exitCode = isRecord(rawOutput)
+      ? finiteNumber(rawOutput.exitCode) ?? finiteNumber(rawOutput.exit_code)
+      : undefined;
     events.push({
       type: 'tool_call_update',
       toolCallId,
-      status: result.is_error ? 'failed' : 'completed',
+      ...pickToolIdentityFromEvent(callEvent),
+      status,
       title: callEvent.title,
       kind: callEvent.kind,
       rawInput: callEvent.rawInput,
-      rawOutput,
+      rawOutput: rawOutput ?? {
+        error: resolveToolLifecycleError(callEvent) || '工具调用失败，ACP 未返回详细结果。',
+        resultUnavailable: true,
+      },
       output: isRecord(rawOutput) ? rawOutput.output : rawOutput,
-      exit_code: isRecord(rawOutput) ? rawOutput.exitCode ?? rawOutput.exit_code : undefined,
+      exit_code: exitCode,
       text: callEvent.title || 'tool call completed',
     });
   }
@@ -492,16 +759,63 @@ async function readJsonRecord(filePath: string): Promise<Record<string, any> | u
 }
 
 function normalizePersistedToolOutput(result: Record<string, any>): unknown {
-  if (result.output !== undefined) return normalizePersistedToolOutputValue(result.output);
-  const text = typeof result.content?.Text === 'string' ? result.content.Text : '';
-  if (text) {
+  if (result.output !== undefined) {
+    const output = normalizePersistedToolOutputValue(result.output);
+    return normalizePersistedToolResultData(addPersistedExitCode(output, result));
+  }
+  const text = typeof result.content?.Text === 'string' ? result.content.Text : undefined;
+  if (text !== undefined) {
+    if (!text.trim()) return addPersistedExitCode(undefined, result);
     try {
-      return normalizePersistedToolOutputValue(JSON.parse(text));
+      return normalizePersistedToolResultData(addPersistedExitCode(normalizePersistedToolOutputValue(JSON.parse(text)), result));
     } catch {
-      return { output: text };
+      return normalizePersistedToolResultData(addPersistedExitCode({ output: text }, result));
     }
   }
-  return undefined;
+  const rawOutput = pickDefinedRecord({
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
+    output: result.formatted_output,
+    exitCode: finiteNumber(result.exit_code) ?? finiteNumber(result.exitCode),
+  });
+  return normalizePersistedToolResultData(rawOutput);
+}
+
+function addPersistedExitCode(value: unknown, result: Record<string, any>): unknown {
+  const exitCode = finiteNumber(result.exit_code) ?? finiteNumber(result.exitCode);
+  if (value === undefined || value === null) {
+    return exitCode === undefined ? undefined : { exitCode };
+  }
+  if (exitCode === undefined) return value;
+  if (isRecord(value)) {
+    return {
+      ...value,
+      exitCode: finiteNumber(value.exitCode) ?? finiteNumber(value.exit_code) ?? exitCode,
+    };
+  }
+  return { output: value, exitCode };
+}
+
+function normalizePersistedToolResultData(value: unknown): unknown {
+  return hasPersistedToolResultData(value) ? value : undefined;
+}
+
+function hasPersistedToolResultData(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number' || typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.some(hasPersistedToolResultData);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, child]) => {
+    if (['exitCode', 'exit_code'].includes(key)) return finiteNumber(child) !== undefined;
+    return hasPersistedToolResultData(child);
+  });
+}
+
+function isPersistedToolFailure(result: Record<string, any>): boolean {
+  if (result.is_error === true || result.isError === true) return true;
+  if (typeof result.error === 'string' && result.error.trim()) return true;
+  return isRecord(result.error) && typeof result.error.message === 'string' && result.error.message.trim().length > 0;
 }
 
 function normalizePersistedToolOutputValue(value: unknown): unknown {
@@ -513,7 +827,16 @@ function normalizePersistedToolOutputValue(value: unknown): unknown {
       exitCode: finiteNumber(value.exit_code) ?? finiteNumber(value.exitCode),
     };
   }
-  return value;
+  const exitCode = finiteNumber(value.exit_code) ?? finiteNumber(value.exitCode);
+  return exitCode === undefined ? value : { ...value, exitCode };
+}
+
+function pickDefinedRecord(source: Record<string, unknown>): Record<string, unknown> {
+  const target: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined) target[key] = value;
+  }
+  return target;
 }
 
 async function createRuntime(
@@ -818,6 +1141,151 @@ async function readCumulativeUsage(runtime: AcpRuntime, handle: AcpRuntimeHandle
       currency: typeof cost.currency === 'string' ? cost.currency : undefined,
     } : undefined,
   };
+}
+
+async function readPersistedTerminalUsage(
+  handle: AcpRuntimeHandle,
+  before: AcpxCumulativeUsageSnapshot | undefined,
+): Promise<{
+  usage?: Record<string, number>;
+  cost?: AcpxCumulativeUsageSnapshot['cost'];
+}> {
+  const recordId = handle.acpxRecordId || handle.sessionKey;
+  if (!recordId) return {};
+  const filePath = getWorkspaceDataFile('acpx-runtime', 'sessions', `${encodeURIComponent(recordId)}.json`);
+  const record = await readJsonRecord(filePath);
+  if (!record) return {};
+
+  const requestUsage = selectPersistedUsageSnapshot(record.request_token_usage ?? record.requestTokenUsage);
+  const requestCost = selectPersistedCostSnapshot(record.request_cost ?? record.requestCost) ?? requestUsage?.cost;
+  if (requestUsage) {
+    return {
+      usage: usageRecordFromSnapshot(requestUsage),
+      cost: requestCost,
+    };
+  }
+
+  const cumulativeCost = normalizePersistedCostSnapshot(record.cumulative_cost ?? record.cumulativeCost);
+  const cumulativeUsage = normalizePersistedUsageSnapshot(record.cumulative_token_usage ?? record.cumulativeTokenUsage);
+  const cumulativeSnapshot = cumulativeUsage
+    ? { ...cumulativeUsage, cost: cumulativeUsage.cost ?? cumulativeCost }
+    : cumulativeCost
+      ? { cost: cumulativeCost }
+      : undefined;
+  return {
+    usage: diffUsage(cumulativeSnapshot, before),
+    cost: diffCost(cumulativeSnapshot?.cost, before?.cost),
+  };
+}
+
+function selectPersistedUsageSnapshot(value: unknown): AcpxCumulativeUsageSnapshot | undefined {
+  const direct = normalizePersistedUsageSnapshot(value);
+  if (direct) return direct;
+  if (!isRecord(value)) return undefined;
+  return selectNewestPersistedEntry(value, normalizePersistedUsageSnapshot);
+}
+
+function selectPersistedCostSnapshot(value: unknown): AcpxCumulativeUsageSnapshot['cost'] | undefined {
+  const direct = normalizePersistedCostSnapshot(value);
+  if (direct) return direct;
+  if (!isRecord(value)) return undefined;
+  return selectNewestPersistedEntry(value, normalizePersistedCostSnapshot);
+}
+
+function selectNewestPersistedEntry<T>(
+  value: Record<string, unknown>,
+  normalize: (entry: unknown) => T | undefined,
+): T | undefined {
+  let selected: { index: number; timestamp?: number; value: T } | undefined;
+  Object.entries(value).forEach(([key, entry], index) => {
+    const normalized = normalize(entry);
+    if (!normalized) return;
+    const timestamp = persistedEntryTimestamp(entry) ?? persistedKeyTimestamp(key);
+    if (
+      !selected
+      || (timestamp !== undefined && (selected.timestamp === undefined || timestamp >= selected.timestamp))
+      || (timestamp === undefined && selected.timestamp === undefined && index >= selected.index)
+    ) {
+      selected = { index, timestamp, value: normalized };
+    }
+  });
+  return selected?.value;
+}
+
+function normalizePersistedUsageSnapshot(value: unknown): AcpxCumulativeUsageSnapshot | undefined {
+  if (!isRecord(value)) return undefined;
+  const cost = normalizePersistedCostSnapshot(value.cost);
+  const usage = {
+    inputTokens: finiteNumber(value.inputTokens ?? value.input_tokens),
+    outputTokens: finiteNumber(value.outputTokens ?? value.output_tokens),
+    cachedReadTokens: finiteNumber(value.cachedReadTokens ?? value.cacheReadInputTokens ?? value.cache_read_input_tokens),
+    cachedWriteTokens: finiteNumber(value.cachedWriteTokens ?? value.cacheCreationInputTokens ?? value.cache_creation_input_tokens),
+    thoughtTokens: finiteNumber(value.thoughtTokens ?? value.thought_tokens),
+    totalTokens: finiteNumber(value.totalTokens ?? value.total_tokens),
+    cost,
+  };
+  const hasUsage = [
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cachedReadTokens,
+    usage.cachedWriteTokens,
+    usage.thoughtTokens,
+    usage.totalTokens,
+    usage.cost?.amount,
+  ].some((item) => item !== undefined);
+  return hasUsage ? usage : undefined;
+}
+
+function normalizePersistedCostSnapshot(value: unknown): AcpxCumulativeUsageSnapshot['cost'] | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return { amount: value };
+  if (!isRecord(value)) return undefined;
+  const amount = finiteNumber(value.amount ?? value.costUsd ?? value.cost_usd);
+  if (amount === undefined) return undefined;
+  return {
+    amount,
+    currency: typeof value.currency === 'string' ? value.currency : undefined,
+  };
+}
+
+function persistedEntryTimestamp(value: unknown): number | undefined {
+  if (!isRecord(value)) return undefined;
+  return timestampValue(
+    value.updatedAt,
+    value.updated_at,
+    value.createdAt,
+    value.created_at,
+    value.timestamp,
+  );
+}
+
+function persistedKeyTimestamp(key: string): number | undefined {
+  return timestampValue(key);
+}
+
+function timestampValue(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const parsedNumber = Number(value);
+    if (Number.isFinite(parsedNumber)) return parsedNumber;
+    const parsedDate = Date.parse(value);
+    if (Number.isFinite(parsedDate)) return parsedDate;
+  }
+  return undefined;
+}
+
+function usageRecordFromSnapshot(snapshot: AcpxCumulativeUsageSnapshot): Record<string, number> | undefined {
+  const usage = {
+    input_tokens: snapshot.inputTokens,
+    output_tokens: snapshot.outputTokens,
+    cache_read_input_tokens: snapshot.cachedReadTokens,
+    cache_creation_input_tokens: snapshot.cachedWriteTokens,
+    thought_tokens: snapshot.thoughtTokens,
+    total_tokens: snapshot.totalTokens,
+  };
+  const entries = Object.entries(usage).filter(([, value]) => value !== undefined);
+  if (entries.length === 0 || entries.every(([, value]) => value === 0)) return undefined;
+  return Object.fromEntries(entries) as Record<string, number>;
 }
 
 function diffUsage(

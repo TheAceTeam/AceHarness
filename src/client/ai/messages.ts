@@ -374,8 +374,7 @@ function readWorkflowEventContent(
     || stringValue(payload.output)
     || stringValue(payload.message)
     || stringValue(payload.summary)
-    || stringValue(payload.status)
-    || type;
+    || '';
 }
 
 function readChunkStatus(record: Record<string, unknown>): AgentMessageRow['status'] {

@@ -54,26 +54,6 @@ export default defineConfig({
     ws: {
       timeout: Number.isFinite(devTimeoutMs) ? devTimeoutMs : 180000,
     },
-    warmup: {
-      ssrFiles: [
-        './src/start.ts',
-        './src/router.tsx',
-        './src/routes/__root.tsx',
-      ],
-      clientFiles: [
-        './src/routes/__root.tsx',
-      ],
-    },
-  },
-  optimizeDeps: {
-    entries: [
-      './src/start.ts',
-      './src/router.tsx',
-      './src/routes/**/*.ts',
-      './src/routes/**/*.tsx',
-      './src/client/pages/**/*.tsx',
-      './src/components/**/*.tsx',
-    ],
   },
   ssr: {
     external: [

@@ -15,10 +15,91 @@ export interface WorkflowRunTiming {
   isWaiting: boolean;
 }
 
+export interface WorkflowRunTimingSource {
+  id?: string | null;
+  runId?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  updatedAt?: string | null;
+  summary?: {
+    endTime?: string | null;
+  } | null;
+}
+
+export interface WorkflowOverviewTimingInput {
+  actionRunId?: string | null;
+  actionIsRunning: boolean;
+  runtimeRunId?: string | null;
+  runtimeStartTime?: string | null;
+  runtimeEndTime?: string | null;
+  status?: WorkflowRunTimingSource | null;
+  historyRuns?: WorkflowRunTimingSource[] | null;
+  runDetail?: WorkflowRunTimingSource | null;
+  selectedRun?: WorkflowRunTimingSource | null;
+}
+
+export interface WorkflowOverviewTiming {
+  startTime: string | null;
+  endTime: string | null;
+}
+
 function timestampMs(value?: string | null): number | null {
   if (!value) return null;
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nonEmptyTimestamp(...values: Array<string | null | undefined>): string | null {
+  return values.find((value): value is string => typeof value === 'string' && value.trim().length > 0) || null;
+}
+
+function timingSourceMatchesRun(source: WorkflowRunTimingSource | null | undefined, runId: string | null | undefined): boolean {
+  if (!source) return false;
+  if (!runId) return true;
+  return [source.id, source.runId].some((value) => String(value || '') === runId);
+}
+
+/**
+ * Select overview timestamps from run-scoped live and historical records.
+ * A recorded end time stays authoritative even while a stale running status is
+ * still being reconciled by the client.
+ */
+export function resolveWorkflowOverviewTiming({
+  actionRunId,
+  actionIsRunning,
+  runtimeRunId,
+  runtimeStartTime,
+  runtimeEndTime,
+  status,
+  historyRuns,
+  runDetail,
+  selectedRun,
+}: WorkflowOverviewTimingInput): WorkflowOverviewTiming {
+  const matchingStatus = timingSourceMatchesRun(status, actionRunId) ? status : null;
+  const matchingHistoryRun = (historyRuns || []).find((run) => timingSourceMatchesRun(run, actionRunId)) || null;
+  const matchingRuntime = !actionRunId || String(runtimeRunId || '') === actionRunId;
+  const matchingDetail = timingSourceMatchesRun(runDetail, actionRunId) ? runDetail : null;
+  const matchingSelectedRun = timingSourceMatchesRun(selectedRun, actionRunId) ? selectedRun : null;
+
+  const startTime = nonEmptyTimestamp(
+    matchingStatus?.startTime,
+    matchingHistoryRun?.startTime,
+    matchingRuntime ? runtimeStartTime : null,
+    matchingDetail?.startTime,
+    matchingSelectedRun?.startTime,
+  );
+  const endTime = nonEmptyTimestamp(
+    matchingStatus?.endTime,
+    matchingHistoryRun?.endTime,
+    matchingRuntime ? runtimeEndTime : null,
+    matchingDetail?.endTime,
+    matchingDetail?.summary?.endTime,
+    matchingSelectedRun?.endTime,
+    !actionIsRunning ? matchingDetail?.updatedAt : null,
+    !actionIsRunning ? matchingSelectedRun?.updatedAt : null,
+  );
+
+  return { startTime, endTime };
 }
 
 /**

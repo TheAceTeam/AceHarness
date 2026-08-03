@@ -32,6 +32,7 @@ import {
 } from '@/lib/chat/request-options';
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
+import { formatAceToolCall, formatAceToolResult } from '@/lib/chat/ace-process-formatters';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
 import { isCreationAssistantSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
@@ -41,6 +42,7 @@ import {
   prepareHomepageChatMemoryV2,
 } from '@/lib/memory-v2-cutover/homepage-chat';
 import { AiMemoryV2EngineAdapter } from '@/lib/agent/ai-memory-engine-adapter';
+import { chatModelRouteError, resolveActiveChatModelRoute } from '@/lib/chat/model-route-validation';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 1200;
@@ -54,6 +56,33 @@ function numberOrUndefined(value: unknown): number | undefined {
 
 function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function serializeRuntimeToolEvent(tool: any): string {
+  if (!tool || typeof tool !== 'object') return '';
+
+  const toolName = stringOrUndefined(tool.toolName) || 'tool';
+  const title = stringOrUndefined(tool.title);
+  const toolId = stringOrUndefined(tool.id);
+  if (tool.status === 'running') {
+    return formatAceToolCall({
+      toolName,
+      title,
+      toolId,
+      rawInput: tool.input && typeof tool.input === 'object' ? tool.input : undefined,
+    });
+  }
+
+  if (tool.status === 'completed' || tool.status === 'failed') {
+    const rawOutput = tool.result && typeof tool.result === 'object'
+      ? tool.result
+      : tool.status === 'failed'
+        ? { error: '工具调用失败，ACP 未返回详细结果。' }
+        : { completed: true, resultUnavailable: true };
+    return formatAceToolResult({ toolName, title, toolId, rawOutput });
+  }
+
+  return '';
 }
 
 function normalizeUsage(metadata?: ChatRuntimeResultMetadata): Partial<ChatRuntimeTokenUsage> | undefined {
@@ -271,6 +300,11 @@ export async function POST(request: Request) {
       ? workingDirectory.trim()
       : getWorkspaceRoot();
 
+    const configuredEngine = await resolveRequestedChatRuntimeEngineType(perChatEngine);
+    if (useModel && !resolveActiveChatModelRoute(configuredEngine, useModel)) {
+      return jsonError(chatModelRouteError(configuredEngine, useModel), 422);
+    }
+
     const isResume = !!sessionId;
     const {
       systemPrompt,
@@ -295,7 +329,6 @@ export async function POST(request: Request) {
     if (isResume) {
       validRuntimeSessionId = sessionId;
     }
-    const configuredEngine = await resolveRequestedChatRuntimeEngineType(perChatEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, configuredEngine);
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
     if (!validRuntimeSessionId && streamRecoveryKey) {
@@ -440,7 +473,33 @@ export async function POST(request: Request) {
           }
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
         } else if (evt?.type === 'tool' && evt.tool) {
-          engineStreamEvents.emit(chatId, { type: 'tool', tool: evt.tool });
+          const toolContent = serializeRuntimeToolEvent(evt.tool);
+          if (!toolContent) return;
+
+          appendEngineStreamContent(chatId, toolContent);
+          processManager.appendStreamContent(chatId, toolContent);
+          if (baseLiveSession && liveAssistantMessageId) {
+            const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
+              if (!session) return session;
+              const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
+              if (!currentAssistant) return session;
+              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), toolContent);
+              const visibleText = normalizeAssistantDisplay(nextRawContent, true).visibleText || parseActions(nextRawContent).text;
+              return {
+                ...session,
+                updatedAt: Date.now(),
+                messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
+                  ...message,
+                  content: visibleText,
+                  rawContent: nextRawContent,
+                  engine: configuredEngine || message.engine,
+                  model: useModel || message.model,
+                })),
+              };
+            });
+            saveLiveSessionSnapshot(nextLiveSession);
+          }
+          engineStreamEvents.emit(chatId, { type: 'delta', content: toolContent });
         } else if (evt?.type === 'session' && evt.content) {
           setEngineStreamSessionId(chatId, evt.content);
           if (proc) proc.sessionId = evt.content;
@@ -555,7 +614,9 @@ export async function POST(request: Request) {
         setEngineStreamSessionId(chatId, resolvedRuntimeSessionId || undefined);
         if (proc) proc.sessionId = resolvedRuntimeSessionId || undefined;
         const state = getEngineStream(chatId);
-        const output = result.output || state?.streamContent || '';
+        const streamedContent = String(state?.streamContent || '');
+        const output = buildFinalRawContent(streamedContent, '', String(result.output || ''))
+          || String(result.output || streamedContent || '');
 
         // Update processManager state
         if (proc) {
@@ -888,8 +949,6 @@ export async function GET(request: Request) {
         if (!evt) return;
         if (evt.type === 'delta') {
           send('delta', { content: evt.content });
-        } else if (evt.type === 'tool' && evt.tool) {
-          send('tool', { tool: evt.tool });
         } else if (evt.type === 'session') {
           send('session', { runtimeSessionId: evt.runtimeSessionId || evt.sessionId, sessionId: evt.runtimeSessionId || evt.sessionId });
         } else if (evt.type === 'thinking') {

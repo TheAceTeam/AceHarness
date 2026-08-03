@@ -139,9 +139,12 @@ class SqliteRuntimeSessionsApiService implements RuntimeSessionsApiService {
       return { turn: turnRecordToRef(existing), created: false };
     }
 
-    const events = backgroundRuntimeEvents(this.orchestrator.runTurn(input));
-    const turn = await waitForRuntimeTurn(() => this.store.getTurnByRequestId(input.runtimeSessionId, input.requestId));
-    return { turn: turnRecordToRef(turn), created: true, events };
+    const background = backgroundRuntimeEvents(this.orchestrator.runTurn(input));
+    const turn = await waitForRuntimeTurn(
+      () => this.store.getTurnByRequestId(input.runtimeSessionId, input.requestId),
+      background.failure,
+    );
+    return { turn: turnRecordToRef(turn), created: true, events: background.events };
   }
 
   async readEvents(input: RuntimeSessionEventsInput): Promise<RuntimeSessionEventsPage> {
@@ -324,11 +327,21 @@ function parseTracePayload(input: unknown): unknown {
   }
 }
 
-function backgroundRuntimeEvents(source: AsyncIterable<RuntimeEvent>): AsyncIterable<RuntimeEvent> {
+interface BackgroundRuntimeEvents {
+  events: AsyncIterable<RuntimeEvent>;
+  failure: Promise<never>;
+}
+
+function backgroundRuntimeEvents(source: AsyncIterable<RuntimeEvent>): BackgroundRuntimeEvents {
   const events: RuntimeEvent[] = [];
   const waiters: Array<() => void> = [];
   let done = false;
   let error: unknown;
+  let rejectFailure!: (reason?: unknown) => void;
+  const failure = new Promise<never>((_, reject) => {
+    rejectFailure = reject;
+  });
+  failure.catch(() => {});
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
   const sourceIterator = source[Symbol.asyncIterator]();
@@ -366,7 +379,10 @@ function backgroundRuntimeEvents(source: AsyncIterable<RuntimeEvent>): AsyncIter
         notify();
       }
     } catch (caught) {
-      if (!stopped) error = caught;
+      if (!stopped) {
+        error = caught;
+        rejectFailure(caught);
+      }
     } finally {
       done = true;
       notify();
@@ -374,31 +390,40 @@ function backgroundRuntimeEvents(source: AsyncIterable<RuntimeEvent>): AsyncIter
   })();
 
   return {
-    async *[Symbol.asyncIterator]() {
-      let index = 0;
-      try {
-        while (true) {
-          while (index < events.length) {
-            yield events[index++]!;
+    failure,
+    events: {
+      async *[Symbol.asyncIterator]() {
+        let index = 0;
+        try {
+          while (true) {
+            while (index < events.length) {
+              yield events[index++]!;
+            }
+            if (done) {
+              if (error) throw error;
+              return;
+            }
+            await waitForEvent();
           }
-          if (done) {
-            if (error) throw error;
-            return;
-          }
-          await waitForEvent();
+        } finally {
+          if (!done) await stopSource();
         }
-      } finally {
-        if (!done) await stopSource();
-      }
+      },
     },
   };
 }
 
-async function waitForRuntimeTurn(read: () => RuntimeTurnRecord | null): Promise<RuntimeTurnRecord> {
+async function waitForRuntimeTurn(
+  read: () => RuntimeTurnRecord | null,
+  failure: Promise<never>,
+): Promise<RuntimeTurnRecord> {
   const deadline = Date.now() + 2000;
   let turn = read();
   while (!turn && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await Promise.race([
+      new Promise<void>((resolve) => setTimeout(resolve, 5)),
+      failure,
+    ]);
     turn = read();
   }
   if (!turn) {

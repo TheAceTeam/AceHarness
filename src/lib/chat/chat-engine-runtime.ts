@@ -4,9 +4,11 @@ import { getEngineConfigPath } from '@/lib/core/app-paths';
 import { getRuntimeSessionsApiService } from '@/server/runtime/runtime-sessions-api-service';
 import { resolveRuntimeModelRoute } from '@/lib/runtime-agent/models/model-routes-api';
 import {
+  extractTextFromUnknown,
   getAceToolTitle,
   inferCommandToolName,
   resolveAceToolName,
+  stringifyStructured,
 } from '@/lib/chat/ace-process-formatters';
 import { writeAcpxDebugTrace } from '@/lib/runtime-agent/acpx-debug-trace';
 import type { RuntimeToolChange, RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
@@ -452,7 +454,7 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
         if (this.cancelled) {
           await service.cancelTurn({
             runtimeSessionId: session.runtimeSessionId,
-            turnId: event.turnId,
+            turnId: event.turnId || turnResult.turn.turnId,
             requestId: `${requestId}:cancel-late-turn`,
             reason: 'chat runtime cancel',
           }).catch(() => service.cancelSession({
@@ -752,18 +754,6 @@ export function projectRuntimeToolEvent(
     || type === 'tool.updated'
     || (!['completed', 'failed', 'done', 'success'].includes(status) && hasDisplayableInput);
   const callKey = toolId || stableToolCallKey(toolName, rawInput);
-
-  if (shouldEmitCall && rawInput && hasDisplayableInput && !seenToolCalls.has(callKey)) {
-    seenToolCalls.add(callKey);
-    return {
-      id: callKey,
-      toolName,
-      title,
-      status: 'running',
-      input: projectRuntimeToolInput(rawInput),
-    };
-  }
-
   const isTerminal = (
     type === 'tool.output'
     || type === 'tool.completed'
@@ -774,6 +764,8 @@ export function projectRuntimeToolEvent(
     asString(payload.toolName ?? payload.tool_name ?? payload.name ?? payload.tool ?? payload.kind ?? payload.title),
   );
 
+  // A reconnect or ACPX recovery can yield only the terminal update. Prefer
+  // its result over manufacturing a running card that can never be closed.
   if (isTerminal && (toolId || rawInput || rawOutput !== undefined || hasExplicitToolIdentity)) {
     const terminalOutput = rawOutput == null || rawOutput === ''
       ? createRuntimeToolTerminalOutput(type, payload, rawInput, status)
@@ -784,7 +776,7 @@ export function projectRuntimeToolEvent(
       toolName,
       title,
       status: type === 'tool.failed' || ['failed', 'error'].includes(status) ? 'failed' : 'completed',
-      input: rawInput ? projectRuntimeToolInput(rawInput) : undefined,
+      input: rawInput ? projectRuntimeToolInput(rawInput, toolName) : undefined,
       result: projectRuntimeToolResult(
         toolName,
         enrichRuntimeToolOutput(terminalOutput, rawInput),
@@ -793,11 +785,26 @@ export function projectRuntimeToolEvent(
     };
   }
 
+  if (shouldEmitCall && rawInput && hasDisplayableInput && !seenToolCalls.has(callKey)) {
+    seenToolCalls.add(callKey);
+    return {
+      id: callKey,
+      toolName,
+      title,
+      status: 'running',
+      input: projectRuntimeToolInput(rawInput, toolName),
+    };
+  }
+
   return null;
 }
 
-function projectRuntimeToolInput(rawInput: Record<string, unknown>): RuntimeToolEvent['input'] {
+function projectRuntimeToolInput(
+  rawInput: Record<string, unknown>,
+  toolName: string,
+): RuntimeToolEvent['input'] {
   const changes = projectRuntimeToolChanges(rawInput.changes);
+  const subagentInput = projectSubagentToolInput(rawInput, toolName);
   return {
     ...(stringValue(rawInput.command) ? { command: stringValue(rawInput.command) } : {}),
     ...(stringValue(rawInput.filePath ?? rawInput.file_path) ? { filePath: stringValue(rawInput.filePath ?? rawInput.file_path) } : {}),
@@ -807,8 +814,60 @@ function projectRuntimeToolInput(rawInput: Record<string, unknown>): RuntimeTool
     ...(stringValue(rawInput.url) ? { url: stringValue(rawInput.url) } : {}),
     ...(stringValue(rawInput.query) ? { query: stringValue(rawInput.query) } : {}),
     ...(stringValue(rawInput.name ?? rawInput.skill ?? rawInput.id) ? { name: stringValue(rawInput.name ?? rawInput.skill ?? rawInput.id) } : {}),
+    ...subagentInput,
     ...(changes.length > 0 ? { changes } : {}),
   };
+}
+
+function projectSubagentToolInput(
+  rawInput: Record<string, unknown>,
+  toolName: string,
+): NonNullable<RuntimeToolEvent['input']> {
+  if (toolName !== 'subagent-dispatch' && toolName !== 'subagent-wait') return {};
+
+  const childAgentCount = countSubagents(rawInput);
+  const model = stringValue(rawInput.model);
+  const reasoningEffort = stringValue(rawInput.reasoningEffort ?? rawInput.reasoning_effort);
+  if (toolName === 'subagent-wait') {
+    return {
+      description: childAgentCount
+        ? `等待 ${childAgentCount} 个子 Agent 返回`
+        : '等待子 Agent 返回',
+      ...(childAgentCount ? { childAgentCount } : {}),
+    };
+  }
+
+  const description = summarizeSubagentPrompt(rawInput.prompt);
+  return {
+    ...(description ? { description } : {}),
+    ...(stringValue(rawInput.agent ?? rawInput.agentName ?? rawInput.subagent_type ?? rawInput.subagentType)
+      ? { agent: stringValue(rawInput.agent ?? rawInput.agentName ?? rawInput.subagent_type ?? rawInput.subagentType) }
+      : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(childAgentCount ? { childAgentCount } : {}),
+  };
+}
+
+function countSubagents(rawInput: Record<string, unknown>): number | undefined {
+  const receiverIds = rawInput.receiverThreadIds ?? rawInput.receiver_thread_ids;
+  if (Array.isArray(receiverIds) && receiverIds.length > 0) return receiverIds.length;
+  const agentStates = rawInput.agentsStates ?? rawInput.agents_states;
+  if (isRecord(agentStates)) {
+    const count = Object.keys(agentStates).length;
+    if (count > 0) return count;
+  }
+  return undefined;
+}
+
+function summarizeSubagentPrompt(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const line = value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find((item) => item && !item.startsWith('[skill:') && !item.startsWith('<'));
+  if (!line) return undefined;
+  return line.length > 180 ? `${line.slice(0, 177)}...` : line;
 }
 
 function projectRuntimeToolResult(
@@ -820,12 +879,18 @@ function projectRuntimeToolResult(
   const changes = projectRuntimeToolChanges(output.changes ?? rawInput?.changes);
   const filePath = stringValue(output.filePath ?? output.file_path ?? rawInput?.filePath ?? rawInput?.file_path ?? rawInput?.path);
   const exitCode = numberValue(output.exitCode ?? output.exit_code);
-  const error = stringValue(output.error ?? output.errorText ?? output.errorMessage);
+  const error = runtimeToolResultText(output.error ?? output.errorText ?? output.errorMessage);
   const isFileContentTool = ['read', 'write', 'edit', 'multiedit', 'patch'].includes(toolName);
-  const directOutput = output.output ?? output.result ?? output.content;
-  const stdout = stringValue(output.stdout)
-    || (!isFileContentTool ? stringValue(directOutput) : undefined);
-  const stderr = stringValue(output.stderr);
+  // ACPX persists command and search output as formatted_output. It is the
+  // canonical stdout payload after runtime.js strips top-level output fields.
+  const directOutput = output.output
+    ?? output.result
+    ?? output.formatted_output
+    ?? output.formattedOutput
+    ?? output.content;
+  const stdout = runtimeToolResultText(output.stdout)
+    || (!isFileContentTool ? runtimeToolResultText(directOutput) : undefined);
+  const stderr = runtimeToolResultText(output.stderr);
 
   return {
     ...(exitCode !== undefined ? { exitCode } : {}),
@@ -835,6 +900,23 @@ function projectRuntimeToolResult(
     ...(stderr ? { stderr } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+const MAX_RUNTIME_TOOL_RESULT_CHARS = 60_000;
+
+/**
+ * ACP adapters do not agree on a result shape. Keep command/search output in
+ * the structured tool channel even when an engine returns a JSON object or a
+ * content block instead of stdout.
+ */
+function runtimeToolResultText(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const text = typeof value === 'string'
+    ? value
+    : extractTextFromUnknown(value) || stringifyStructured(value);
+  if (!text.trim()) return undefined;
+  if (text.length <= MAX_RUNTIME_TOOL_RESULT_CHARS) return text;
+  return `${text.slice(0, MAX_RUNTIME_TOOL_RESULT_CHARS)}\n\n[输出已截断，原始长度 ${text.length} 字符]`;
 }
 
 function projectRuntimeToolChanges(value: unknown): RuntimeToolChange[] {
@@ -959,10 +1041,25 @@ function resolveToolRawOutput(payload: Record<string, any>): unknown {
   }
   if (payload.output !== undefined) return payload.output;
   if (payload.result !== undefined) return payload.result;
-  if (payload.stderr !== undefined || payload.stdout !== undefined || payload.exitCode !== undefined || payload.exit_code !== undefined) {
+  if (payload.formatted_output !== undefined) {
+    return { formatted_output: payload.formatted_output, exitCode: payload.exitCode ?? payload.exit_code };
+  }
+  if (payload.formattedOutput !== undefined) {
+    return { formattedOutput: payload.formattedOutput, exitCode: payload.exitCode ?? payload.exit_code };
+  }
+  if (
+    payload.stderr !== undefined
+    || payload.stdout !== undefined
+    || payload.error !== undefined
+    || payload.errorText !== undefined
+    || payload.errorMessage !== undefined
+    || payload.exitCode !== undefined
+    || payload.exit_code !== undefined
+  ) {
     return {
       stdout: payload.stdout,
       stderr: payload.stderr,
+      error: payload.error ?? payload.errorText ?? payload.errorMessage,
       exitCode: payload.exitCode ?? payload.exit_code,
       command: payload.command,
     };
@@ -975,6 +1072,8 @@ function resolveRuntimeToolName(payload: Record<string, any>, rawInput?: Record<
   const explicit = asString(payload.toolName ?? payload.tool_name ?? payload.name ?? payload.tool ?? payload.kind);
   if (explicit) {
     const normalized = explicit.toLowerCase();
+    if (['spawnagent', 'spawn_agent', 'spawn-agent'].includes(normalized)) return 'subagent-dispatch';
+    if (['wait', 'waitforagents', 'wait_for_agents', 'wait-for-agents'].includes(normalized)) return 'subagent-wait';
     if (normalized === 'shell' || normalized === 'terminal' || normalized === 'command_execution') {
       const command = typeof rawInput?.command === 'string' ? rawInput.command : '';
       return inferCommandToolName(command);

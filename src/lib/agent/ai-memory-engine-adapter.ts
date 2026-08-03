@@ -130,7 +130,7 @@ export class AiMemoryV2EngineAdapter implements ChatRuntimeEngine {
       // A control block can span chunks and a native-capable model can still
       // violate its contract. The cleaned final output is the only model text
       // delivered for an active V2 turn.
-      if (this.suppressMemoryV2TextStream && ['text', 'tool', 'thought'].includes(streamEvent.type)) return;
+      if (this.suppressMemoryV2TextStream && ['text', 'thought'].includes(streamEvent.type)) return;
       listener(streamEvent);
     };
     this.streamListeners.set(listener, wrapped);

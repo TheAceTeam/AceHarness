@@ -20,6 +20,7 @@ import {
   prepareHomepageChatMemoryV2,
 } from '@/lib/memory-v2-cutover/homepage-chat';
 import { AiMemoryV2EngineAdapter } from '@/lib/agent/ai-memory-engine-adapter';
+import { chatModelRouteError, resolveActiveChatModelRoute } from '@/lib/chat/model-route-validation';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
 export const maxDuration = 1200;
@@ -79,6 +80,10 @@ export async function POST(request: Request) {
       : (typeof requestedSessionId === 'string' ? requestedSessionId.trim() : '');
 
     const useModel = model || '';
+    const engineType = await resolveRequestedChatRuntimeEngineType(requestedEngine);
+    if (useModel && !resolveActiveChatModelRoute(engineType, useModel)) {
+      return jsonError(chatModelRouteError(engineType, useModel), 422);
+    }
     const { systemPrompt, resolvedWorkingDirectory, runtimeSkillNames, enabledMcpServers, runtimeDatabaseEnv } = await buildChatRequestContext({
       mode,
       sessionId,
@@ -98,7 +103,6 @@ export async function POST(request: Request) {
       message,
     });
 
-    const engineType = await resolveRequestedChatRuntimeEngineType(requestedEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, engineType);
     const engine = await createChatRuntimeEngine(engineType);
 

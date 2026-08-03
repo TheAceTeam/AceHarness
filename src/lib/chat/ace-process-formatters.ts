@@ -34,6 +34,8 @@ const KNOWN_TOOLS = new Set([
   'ls',
   'skill',
   'context-compression',
+  'subagent-dispatch',
+  'subagent-wait',
   'multiedit',
   'patch',
 ]);
@@ -79,6 +81,8 @@ export function getAceToolTitle(toolName: string): string {
     websearch: '🔎 搜索网页',
     skill: '技能文档',
     'context-compression': '上下文压缩',
+    'subagent-dispatch': '启动子 Agent',
+    'subagent-wait': '等待子 Agent',
   };
   return titleMap[toolName] || `🔧 ${toolName}`;
 }

@@ -30,6 +30,13 @@ export type RuntimeToolEvent = {
     url?: string;
     query?: string;
     name?: string;
+    /** Compact task summary for a provider-native child-agent dispatch. */
+    description?: string;
+    /** Display name for a provider-native child agent, when available. */
+    agent?: string;
+    model?: string;
+    reasoningEffort?: string;
+    childAgentCount?: number;
     changes?: RuntimeToolChange[];
   };
   result?: {

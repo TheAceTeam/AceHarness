@@ -5,7 +5,7 @@ import {
   type PersistedChatSession,
 } from '@/lib/chat/persistence';
 import { createInitialChatroomState, ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
-import type { CollaborationRoomState } from '@/lib/core/home-sidebar-state';
+import type { CollaborationRoomMessage, CollaborationRoomState } from '@/lib/core/home-sidebar-state';
 import type { PersistedLightweightRunMetadata } from '@/lib/run/state-persistence';
 import { isActiveWorkflowRunStatus } from '@/lib/workflow/run-status';
 
@@ -246,6 +246,19 @@ export async function appendWorkflowSupervisorReviewToAgora(input: {
       useDefaultModel: true,
       createdAt: now,
     }));
+  const summaryMessage: CollaborationRoomMessage = {
+    id: messageId,
+    speakerType: 'supervisor',
+    speakerName,
+    content,
+    rawContent: content,
+    createdAt: now,
+    status: 'done',
+    chatroom: {
+      kind: 'summary',
+      mode: chatroom.settings.responseMode,
+    },
+  };
   const nextRoom: CollaborationRoomState = {
     ...room,
     roomId: workflowReviewRoomId(runId),
@@ -256,19 +269,7 @@ export async function appendWorkflowSupervisorReviewToAgora(input: {
       : room.agentSessions,
     messages: [
       ...room.messages,
-      {
-        id: messageId,
-        speakerType: 'supervisor',
-        speakerName,
-        content,
-        rawContent: content,
-        createdAt: now,
-        status: 'done',
-        chatroom: {
-          kind: 'summary',
-          mode: chatroom.settings.responseMode,
-        },
-      },
+      summaryMessage,
     ].slice(-80),
     chatroom: {
       ...chatroom,

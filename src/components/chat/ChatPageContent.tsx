@@ -179,6 +179,15 @@ export function isChatAiBusy(input: {
     || input.messages?.some((message) => message.workflowThinking)
   );
 }
+
+export function resolveWorkflowCreatorSessionId(input: {
+  targetSessionId?: string | null;
+  activeSessionId?: string | null;
+  activeSessionIdFallback?: string | null;
+}): string | null {
+  return input.targetSessionId || input.activeSessionId || input.activeSessionIdFallback || null;
+}
+
 function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
   switch (team) {
     case 'blue':
@@ -1387,7 +1396,14 @@ export function ChatPageContent({
   }, []);
 
   const openWorkflowCreator = useCallback((requirements?: string, targetSessionId?: string | null) => {
-    const sessionId = targetSessionId || activeSessionId || activeSession?.id || createAndActivateSession({ title: 'AI 引导创建工作流' });
+    // Opening the creator is only navigation. The planning flow creates a chat
+    // session after the user submits requirements, so a cancelled entry leaves
+    // no empty conversation in the sidebar.
+    const sessionId = resolveWorkflowCreatorSessionId({
+      targetSessionId,
+      activeSessionId,
+      activeSessionIdFallback: activeSession?.id,
+    });
     setWorkflowCreatorSessionId(sessionId || null);
     setWorkflowCreatorRequirements(requirements?.trim() || DEFAULT_AI_WORKFLOW_REQUIREMENTS);
     setWorkflowCreatorOpen(true);
@@ -1395,7 +1411,7 @@ export function ChatPageContent({
     setInput('');
     editorRef.current?.clear();
     if (loading) stopStreaming();
-  }, [activeSession?.id, activeSessionId, createAndActivateSession, loading, stopStreaming, unlockAutoScroll]);
+  }, [activeSession?.id, activeSessionId, loading, stopStreaming, unlockAutoScroll]);
 
   const closeWorkflowCreator = useCallback(() => {
     setWorkflowCreatorOpen(false);
@@ -2415,9 +2431,11 @@ export function ChatPageContent({
 
     starterHandledRef.current = true;
     const sidebarTab = searchParams.get('sidebarTab');
-    const sessionTitle = searchParams.get('sessionTitle');
     const existingSessionId = searchParams.get('sessionId');
-    const targetSessionId = existingSessionId || createSession({ title: sessionTitle?.trim() || '新对话' });
+    const targetSessionId = existingSessionId || resolveWorkflowCreatorSessionId({
+      activeSessionId,
+      activeSessionIdFallback: activeSession?.id,
+    });
     if (existingSessionId) {
       const targetSession = sessions.find((session) => session.id === existingSessionId);
       if (targetSession) {
@@ -2444,7 +2462,7 @@ export function ChatPageContent({
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, handleQuickAction, openWorkflowCreator, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
+  }, [activeSession?.id, activeSessionId, handleQuickAction, openWorkflowCreator, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
 
   const messages = dbBackedActiveSession?.messages || [];
   const isCurrentSessionLoading = Boolean(activeSessionId && sessionLoadingId === activeSessionId);
@@ -4185,8 +4203,8 @@ export function ChatPageContent({
         onClose={closeWorkflowCreator}
         onSuccess={handleWorkflowCreatorSuccess}
         homepageCompact
-        initialMode="lightweight"
-        initialWorkflowName="轻量工作流"
+        initialMode="state-machine"
+        initialWorkflowName="AI 引导工作流"
         initialRequirements={workflowCreatorRequirements}
         initialDescription={DEFAULT_AI_WORKFLOW_DESCRIPTION}
         initialWorkingDirectory={effectiveWorkingDirectory}

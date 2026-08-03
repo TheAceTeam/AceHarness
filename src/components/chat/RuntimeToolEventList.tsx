@@ -5,7 +5,10 @@ import { Task, TaskContent, TaskItem, TaskTrigger } from '@/components/ai-elemen
 import { Tool, ToolContent, ToolHeader } from '@/components/ai-elements/tool';
 import { mergeRuntimeToolEvents, type RuntimeToolChange, type RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 import { ChevronDownIcon, WrenchIcon } from 'lucide-react';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+const RUNTIME_TOOL_AUTO_COLLAPSE_MS = 10_000;
+const RUNTIME_TOOL_GROUP_STABILITY_MS = 3_000;
 
 function toToolUiState(tool: RuntimeToolEvent): 'input-available' | 'output-available' | 'output-error' {
   if (tool.status === 'failed') return 'output-error';
@@ -37,6 +40,10 @@ function ToolStdio({ label, value, tone = 'normal' }: { label: string; value?: s
   );
 }
 
+function isFileContentTool(toolName: string): boolean {
+  return ['read', 'write', 'edit', 'multiedit', 'patch'].includes(toolName.toLowerCase());
+}
+
 /** Renders one structured tool event inside a chronological transcript. */
 export function RuntimeToolEventCard({
   tool,
@@ -53,6 +60,24 @@ export function RuntimeToolEventCard({
     .filter((value): value is string => Boolean(value));
   const changes = result?.changes?.length ? result.changes : input?.changes || [];
   const isRunning = tool.status === 'running';
+  const showStdout = !isFileContentTool(tool.toolName);
+  const subagentDetails = [
+    input?.description ? ['任务', input.description] : null,
+    input?.agent ? ['Agent', input.agent] : null,
+    input?.childAgentCount ? ['子 Agent', `${input.childAgentCount} 个`] : null,
+    input?.model ? ['模型', input.model] : null,
+    input?.reasoningEffort ? ['推理等级', input.reasoningEffort] : null,
+  ].filter((detail): detail is [string, string] => Boolean(detail));
+  const [open, setOpen] = useState(isRunning);
+
+  useEffect(() => {
+    if (!isRunning) {
+      setOpen(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setOpen(false), RUNTIME_TOOL_AUTO_COLLAPSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [isRunning, tool.id, tool.updatedAt]);
 
   return (
     <Tool
@@ -60,13 +85,15 @@ export function RuntimeToolEventCard({
       data-tool-id={tool.id}
       data-tool-name={tool.toolName}
       data-tool-status={tool.status}
-      defaultOpen={isRunning || tool.status === 'failed'}
+      open={open}
+      onOpenChange={setOpen}
     >
       <ToolHeader
         type="dynamic-tool"
         toolName={tool.toolName || 'tool'}
         title={tool.title || tool.toolName || '工具调用'}
         state={toToolUiState(tool)}
+        hideDefaultIcon
         className="bg-muted/30"
       />
       <ToolContent className="space-y-3">
@@ -85,12 +112,22 @@ export function RuntimeToolEventCard({
               .map((value) => <div key={value}>{value}</div>)}
           </div>
         ) : null}
+        {subagentDetails.length > 0 ? (
+          <dl className="grid gap-1 text-[12px] sm:grid-cols-[auto_minmax(0,1fr)]">
+            {subagentDetails.map(([label, value]) => (
+              <div key={label} className="contents">
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="min-w-0 break-words text-foreground">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
         {changes.length > 0 ? (
           <div className="space-y-1 text-[12px] text-muted-foreground">
             {changes.map((change, index) => <div key={`${change.filePath || change.kind || 'change'}:${index}`}>{formatChange(change)}</div>)}
           </div>
         ) : null}
-        <ToolStdio label="标准输出" value={result?.stdout} />
+        <ToolStdio label="标准输出" value={showStdout ? result?.stdout : undefined} />
         <ToolStdio label="标准错误" value={result?.stderr} tone="error" />
         {result?.error ? <ToolStdio label="错误" value={result.error} tone="error" /> : null}
         {result?.exitCode !== undefined ? <div className="font-mono text-[11px] text-muted-foreground">exit {result.exitCode}</div> : null}
@@ -115,10 +152,54 @@ export function RuntimeToolEventGroup({
   const pendingCount = events.filter((event) => event.status === 'running').length;
   const groupTitle = pendingCount > 0 && isStreaming ? '工具调用中' : '工具调用已完成';
   const groupSummary = `${events.length} 个步骤${pendingCount > 0 && isStreaming ? ` · 进行中 ${pendingCount}` : ''}`;
+  const runningToolKey = events
+    .filter((event) => event.status === 'running')
+    .map((event) => `${event.id}:${event.updatedAt || event.createdAt || ''}`)
+    .join('|');
+  const [open, setOpen] = useState(pendingCount > 0);
+  const previousPendingCountRef = useRef(pendingCount);
+  const stabilityTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (stabilityTimerRef.current !== null) {
+      window.clearTimeout(stabilityTimerRef.current);
+      stabilityTimerRef.current = null;
+    }
+
+    if (!isStreaming) {
+      setOpen(false);
+      return;
+    }
+
+    const wasIdle = previousPendingCountRef.current === 0;
+    previousPendingCountRef.current = pendingCount;
+    if (pendingCount === 0) {
+      stabilityTimerRef.current = window.setTimeout(() => {
+        stabilityTimerRef.current = null;
+        setOpen(false);
+      }, RUNTIME_TOOL_GROUP_STABILITY_MS);
+      return () => {
+        if (stabilityTimerRef.current !== null) {
+          window.clearTimeout(stabilityTimerRef.current);
+          stabilityTimerRef.current = null;
+        }
+      };
+    }
+    if (wasIdle) setOpen(true);
+    const timer = window.setTimeout(() => setOpen(false), RUNTIME_TOOL_AUTO_COLLAPSE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      if (stabilityTimerRef.current !== null) {
+        window.clearTimeout(stabilityTimerRef.current);
+        stabilityTimerRef.current = null;
+      }
+    };
+  }, [isStreaming, pendingCount, runningToolKey]);
 
   return (
     <Task
-      defaultOpen={pendingCount > 0}
+      open={open}
+      onOpenChange={setOpen}
       className={`rounded-md border-border/70 bg-background/60 px-3 py-3 shadow-sm ${className}`}
       data-testid="runtime-tool-group"
     >

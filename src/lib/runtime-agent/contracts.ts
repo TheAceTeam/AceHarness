@@ -283,6 +283,12 @@ export interface OpenRuntimeSessionInput {
   modelRouteId?: string;
   cwd: string;
   kind: RuntimeSessionKind;
+  /**
+   * Persist the logical session now and create its native adapter binding when
+   * the first turn is claimed. This avoids starting then immediately
+   * reconnecting a backend session that has not produced a turn yet.
+   */
+  deferAdapterSessionInitialization?: boolean;
   runtimeProfileId?: string;
   mcpServers?: unknown[];
   ownerUserId?: string;

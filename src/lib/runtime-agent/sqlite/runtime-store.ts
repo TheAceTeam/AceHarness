@@ -1000,6 +1000,15 @@ export class RuntimeSqliteStore {
     return row ? rowToTurn(row) : null;
   }
 
+  hasOtherTurns(sessionId: string, excludedTurnId: string): boolean {
+    return Boolean(this.db.prepare(`
+      SELECT 1
+      FROM runtime_turns
+      WHERE session_id = ? AND id <> ?
+      LIMIT 1
+    `).get(sessionId, excludedTurnId));
+  }
+
   getActiveTurn(sessionId: string): RuntimeTurnRecord | null {
     const row = this.db.prepare(`
       SELECT *

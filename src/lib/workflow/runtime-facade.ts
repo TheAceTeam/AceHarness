@@ -167,6 +167,10 @@ export async function prewarmWorkflowRuntimeSession(input: {
     modelRouteId,
     cwd: input.workingDirectory,
     kind: 'workflow-agent',
+    // Prewarming reserves the workflow session identity and model route. The
+    // backend ACPX session is created by its first real turn so it cannot be
+    // mistaken for a resumable rollout before any work has happened.
+    deferAdapterSessionInitialization: true,
     ownerUserId: input.userId,
     title: [input.agent, input.step || 'prewarm'].filter(Boolean).join(' / '),
   });
@@ -232,6 +236,7 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
     let usage: WorkflowRuntimeTokenUsage | undefined;
     let costUsd: number | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let cancelRequested = false;
     const projectionState: WorkflowRuntimeProjectionState = {
       hasMessageText: false,
       toolObservedAfterMessage: false,
@@ -239,11 +244,12 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
       pendingTools: new Map<string, RuntimeToolState>(),
     };
 
-    if (options.timeoutMs && options.timeoutMs > 0) {
+    const timeoutMs = options.timeoutMs;
+    if (timeoutMs && timeoutMs > 0) {
       timeout = setTimeout(() => {
-        this.cancellationError = `步骤执行超时：已超过配置上限 ${formatRuntimeTimeout(options.timeoutMs)}。`;
+        this.cancellationError = `步骤执行超时：已超过配置上限 ${formatRuntimeTimeout(timeoutMs)}。`;
         this.cancel();
-      }, options.timeoutMs);
+      }, timeoutMs);
     }
 
     try {
@@ -262,14 +268,23 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
           frontendSessionId: options.frontendSessionId,
         },
         })) {
-          this.activeTurnId = event.turnId;
-          if (this.cancelled) {
-            await orchestrator.cancelTurn({
+          if (event.turnId) this.activeTurnId = event.turnId;
+          if (this.cancelled && !cancelRequested) {
+            cancelRequested = true;
+            const activeTurnId = event.turnId || this.activeTurnId;
+            const cancel = activeTurnId
+              ? orchestrator.cancelTurn({
+                  runtimeSessionId,
+                  turnId: activeTurnId,
+                  requestId: `${requestId}:cancel-late-turn`,
+                  reason: 'workflow runtime cancellation',
+                })
+              : orchestrator.cancelSession({
               runtimeSessionId,
-              turnId: event.turnId,
-              requestId: `${requestId}:cancel-late-turn`,
+              requestId: `${requestId}:cancel-late-session`,
               reason: 'workflow runtime cancellation',
-            }).catch(() => orchestrator.cancelSession({
+              });
+            await cancel.catch(() => orchestrator.cancelSession({
               runtimeSessionId,
               requestId: `${requestId}:cancel-late-session`,
               reason: 'workflow runtime cancellation',
@@ -277,7 +292,6 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
             success = false;
             error = this.cancellationError || '运行时执行已取消';
             stopReason = 'cancelled';
-          break;
         }
         const projection = projectWorkflowRuntimeEvent(event, projectionState);
         if (projection) this.emit('stream', projection);
@@ -365,23 +379,27 @@ class OrchestratedWorkflowRuntime extends EventEmitter implements WorkflowRuntim
     options: WorkflowRuntimeOptions,
     modelRouteId: string,
   ): Promise<string> {
-    if (!options.forceNewSession && options.sessionId) {
+    const requestedSessionId = !options.forceNewSession
+      ? String(options.sessionId || '').trim()
+      : '';
+    if (requestedSessionId) {
       try {
-        await orchestrator.getSessionStatus({ runtimeSessionId: options.sessionId });
-        this.runtimeSessionId = options.sessionId;
-        return options.sessionId;
+        await orchestrator.getSessionStatus({ runtimeSessionId: requestedSessionId });
+        this.runtimeSessionId = requestedSessionId;
+        return requestedSessionId;
       } catch {
         this.runtimeSessionId = undefined;
       }
-    }
-    if (!options.forceNewSession && this.runtimeSessionId) {
-      return this.runtimeSessionId;
     }
     const session = await orchestrator.openSession({
       agentId: this.agentId,
       modelRouteId,
       cwd: options.workingDirectory,
       kind: 'workflow-agent',
+      // The first ACPX turn needs a fresh backend session. Creating a native
+      // binding here would immediately reconnect that unstarted session and
+      // make Codex attempt a resume before it has a rollout to restore.
+      deferAdapterSessionInitialization: true,
       ownerUserId: options.userId,
       title: [options.agent, options.step].filter(Boolean).join(' / ') || undefined,
     });
@@ -498,9 +516,12 @@ export function projectWorkflowRuntimeEvent(
   if (event.type === 'message.delta' || event.type === 'message.completed') {
     const content = extractText(event.payload);
     if (!content) return null;
-    const prefix = state.toolObservedAfterMessage
-      ? `${ACE_CHUNK_BOUNDARY}<!-- timestamp: ${event.createdAt} -->\n`
-      : '';
+    const isFirstMessage = !state.hasMessageText;
+    const prefix = isFirstMessage
+      ? `<!-- timestamp: ${event.createdAt} -->\n`
+      : state.toolObservedAfterMessage
+        ? `${ACE_CHUNK_BOUNDARY}<!-- timestamp: ${event.createdAt} -->\n`
+        : '';
     state.hasMessageText = true;
     state.toolObservedAfterMessage = false;
     return { type: 'text', content: prefix + content, metadata: event.payload };
