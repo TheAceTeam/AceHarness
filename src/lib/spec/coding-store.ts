@@ -14,7 +14,6 @@ import {
 } from '@/lib/core/schemas';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { readMasterSpec, getSpecRootDir, hasPersistedSpec } from '@/lib/spec/persistence';
-import { deriveLightweightTasklistDirectory } from '@/lib/workflow/lightweight';
 
 const CREATION_SESSIONS_DIR = getWorkspaceDataFile('workflow-creation-sessions');
 const creationSessionWriteQueues = new Map<string, Promise<void>>();
@@ -1084,7 +1083,6 @@ export function buildCreationSession(input: {
     agent?: string;
     task?: string;
     skills?: string[];
-    tasklistDirectory?: string;
   };
   clarification?: CreationSession['clarification'];
   stageSessions?: CreationSession['stageSessions'];
@@ -1145,7 +1143,6 @@ export function buildCreationSession(input: {
     ? {
         ...input.lightweight,
         skills: input.lightweight.skills || [],
-        tasklistDirectory: deriveLightweightTasklistDirectory(input.filename),
       }
     : undefined;
 
@@ -1379,7 +1376,6 @@ export async function updateCreationSession(id: string, patch: Partial<CreationS
         }
       : existing.specCoding;
     const nextMode = patch.mode || existing.mode;
-    const nextFilename = patch.filename || existing.filename;
     const incomingLightweight = patch.lightweight
       ? { ...existing.lightweight, ...patch.lightweight }
       : existing.lightweight;
@@ -1387,7 +1383,6 @@ export async function updateCreationSession(id: string, patch: Partial<CreationS
       ? {
           ...incomingLightweight,
           skills: incomingLightweight.skills || [],
-          tasklistDirectory: deriveLightweightTasklistDirectory(nextFilename),
         }
       : undefined;
 

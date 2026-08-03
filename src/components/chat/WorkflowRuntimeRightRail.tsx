@@ -342,11 +342,15 @@ function WorkflowLiveOutputPanel({
       selectedSource.runId,
       selectedSource.stepKey,
       (content) => {
-        const nextRaw = raw && content.startsWith(raw) ? content : raw + content;
-        applyContent(nextRaw);
+        applyContent(raw + content);
         setLoading(false);
       },
       () => setLoading(false),
+      undefined,
+      (content) => {
+        applyContent(content);
+        setLoading(false);
+      },
     );
     void refresh();
     timer = window.setInterval(refresh, isRunningStatus(status?.status) ? 2000 : 6000);

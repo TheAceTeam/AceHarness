@@ -40,6 +40,7 @@ import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/cor
 import { useWorkflowConfigQuery } from '@/client/query/configs';
 import { useSaveConfigMutation } from '@/client/query/workflow-mutations';
 import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
+import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
@@ -1034,6 +1035,10 @@ export default function StateMachineDesignPanel({
   lightweightMetadata,
 }: StateMachineDesignPanelProps) {
   const isLightweight = Boolean(lightweightMetadata) || hasLightweightWorkflowTopology(states);
+  const workflowStepAgents = useMemo(
+    () => availableAgents.filter(isWorkflowStepSelectableAgent),
+    [availableAgents],
+  );
   const [selectedStateName, setSelectedStateName] = useState<string | null>(
     states.length > 0 ? states[0].name : null
   );
@@ -1364,7 +1369,6 @@ export default function StateMachineDesignPanel({
         states={states}
         onStatesChange={onStatesChange}
         availableAgents={availableAgents}
-        availableSkills={availableSkills}
         metadata={lightweightMetadata}
       />
     );
@@ -1376,7 +1380,6 @@ export default function StateMachineDesignPanel({
       ? {
           workflowName: workflow.name,
           workspace: subworkflowDrilldown.config?.context?.projectRoot,
-          tasklistDirectory: workflow.lightweight?.tasklistDirectory,
         }
       : undefined;
     return (
@@ -1817,7 +1820,7 @@ export default function StateMachineDesignPanel({
           type="step"
           data={editingStep.isNew ? {
             name: '',
-            agent: availableAgents[0]?.name ?? '',
+            agent: workflowStepAgents[0]?.name ?? '',
             task: '',
             role: 'defender',
             constraints: '',
@@ -1827,7 +1830,7 @@ export default function StateMachineDesignPanel({
             channelIds: [],
             specTaskBinding: undefined,
           } : editingStepData}
-          roles={availableAgents}
+          roles={workflowStepAgents}
           availableSkills={availableSkills}
           specTasks={specTasks}
           initialSection={editingStep.focusSpec ? 'spec' : undefined}

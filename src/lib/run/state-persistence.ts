@@ -323,7 +323,8 @@ export interface PersistedQualityCheck {
 
 export interface PersistedLightweightRunMetadata {
   profile: 'lightweight';
-  tasklistDirectory: string;
+  /** Fixed directory name inside the run-owned runtime root. */
+  tasklistDirectory: 'tasklist';
   workspaceRoot: string;
   resolvedTasklistDirectory: string;
   stateName: string;

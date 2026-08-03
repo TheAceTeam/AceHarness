@@ -8,6 +8,7 @@ import {
   getWorkspaceConfigPath,
   getWorkspaceConfigsDir,
 } from '@/lib/core/app-paths';
+import { RETIRED_CATALOG_AGENT_NAMES } from '@/lib/agent/catalog';
 
 const DELETED_MARKER = '.deleted.json';
 
@@ -62,6 +63,21 @@ async function copyMissingRecursive(src: string, dst: string, deletedSet: Set<st
   await cp(src, dst, { force: false });
 }
 
+async function removeRetiredBuiltinAgents(configsDir: string): Promise<void> {
+  const agentsDir = resolve(configsDir, 'agents');
+  for (const name of RETIRED_CATALOG_AGENT_NAMES) {
+    for (const extension of ['.yaml', '.yml']) {
+      const filePath = resolve(agentsDir, `${name}${extension}`);
+      if (!existsSync(filePath)) continue;
+      try {
+        await unlink(filePath);
+      } catch {
+        // A legacy file must never prevent the current catalog from seeding.
+      }
+    }
+  }
+}
+
 export async function ensureRuntimeConfigsSeeded(): Promise<void> {
   if (seedPromise) return seedPromise;
 
@@ -84,6 +100,10 @@ export async function ensureRuntimeConfigsSeeded(): Promise<void> {
         try { await unlink(fullPath); } catch { /* ignore */ }
       }
     }
+
+    // Retired bundled identities are removed from the runtime catalog. Existing
+    // workflow YAML must use an active Agent ID before it can be executed.
+    await removeRetiredBuiltinAgents(runtimeConfigsDir);
 
     await copyMissingRecursive(installConfigsDir, runtimeConfigsDir, deletedSet, runtimeConfigsDir);
   })().finally(() => {

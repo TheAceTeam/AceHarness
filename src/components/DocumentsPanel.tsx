@@ -44,6 +44,7 @@ import {
   useSyncDocumentsMetadataToDb,
   type DocumentMetadataRow,
 } from '@/client/db/collections';
+import { DocumentSourceTabs } from '@/components/documents/DocumentSourceTabs';
 
 export interface DocFile {
   filename: string;
@@ -98,14 +99,19 @@ interface DocumentsPanelProps {
   runId: string | null;
   openLatestTimestampedRequest?: number;
   focusRequest?: { requestId: number; stepName: string; filename?: string } | null;
+  documentSource?: RunDocumentSource | 'all';
+  lockedDocumentSource?: RunDocumentSource;
+  onDocumentSourceChange?: (source: RunDocumentSource | 'all') => void;
   onOpenWorkspaceDirectory?: (path: string) => void;
   previewPresentation?: 'inline' | 'drawer';
+  lightweightTasklistLayout?: boolean;
   phaseDefinitions?: Array<{ name: string; label?: string; order: number }>;
 }
 
 type SortField = 'name' | 'time' | 'size';
 type SortOrder = 'asc' | 'desc';
 type DocFilter = 'all' | 'conclusion' | 'detail';
+type DocumentSourceFilter = RunDocumentSource | 'all';
 
 export type DocumentHighlightKind = 'conclusion' | 'risk' | 'action' | 'evidence' | 'summary';
 
@@ -212,6 +218,15 @@ function normalizeWorkspacePath(path: string): string {
   let decoded = String(path || '');
   try { decoded = decodeURIComponent(decoded); } catch {}
   return decoded.replace(/\\/g, '/').split(/[?#]/, 1)[0].replace(/\/+$/, '');
+}
+
+export function getDocumentsPanelLayout(input: {
+  lightweightTasklistLayout?: boolean;
+  previewPresentation?: 'inline' | 'drawer';
+}): 'two-column' | 'three-column' {
+  return input.lightweightTasklistLayout && input.previewPresentation === 'inline'
+    ? 'two-column'
+    : 'three-column';
 }
 
 function getWorkspacePathFilename(path: string): string {
@@ -489,8 +504,12 @@ export default function DocumentsPanel({
   runId,
   openLatestTimestampedRequest = 0,
   focusRequest,
+  documentSource,
+  lockedDocumentSource,
+  onDocumentSourceChange,
   onOpenWorkspaceDirectory,
   previewPresentation = 'inline',
+  lightweightTasklistLayout = false,
   phaseDefinitions = [],
 }: DocumentsPanelProps) {
   const { toast } = useToast();
@@ -510,6 +529,8 @@ export default function DocumentsPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeGroup, setActiveGroup] = useState<string | null>(null); // null = all
   const [docFilter, setDocFilter] = useState<DocFilter>('all');
+  const [internalDocumentSource, setInternalDocumentSource] = useState<DocumentSourceFilter>(documentSource || 'all');
+  const activeDocumentSource = lockedDocumentSource || documentSource || internalDocumentSource;
 
   // Selection
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -547,6 +568,7 @@ export default function DocumentsPanel({
 
   const [folderTreeVisible, setFolderTreeVisible] = useState(true);
   const [fileListVisible, setFileListVisible] = useState(true);
+  const effectiveFileListVisible = lightweightTasklistLayout || fileListVisible;
   const [folderTreeWidth, setFolderTreeWidth] = useState(FOLDER_TREE_DEFAULT);
   const [fileListWidth, setFileListWidth] = useState(FILE_LIST_DEFAULT);
   const resizingPanel = useRef<'folderTree' | 'fileList' | null>(null);
@@ -558,9 +580,10 @@ export default function DocumentsPanel({
     pageSize: 50,
     sortDirection: 'asc' as const,
     scope: 'root' as const,
+    source: activeDocumentSource === 'all' ? undefined : activeDocumentSource,
     summaryOnly: docFilter === 'all',
     documentKind: docFilter === 'all' ? undefined : docFilter,
-  }), [docFilter, docPage]);
+  }), [activeDocumentSource, docFilter, docPage]);
   const documentsQuery = useRunDocumentsQuery(runId, documentsQueryParams);
   useSyncDocumentsMetadataToDb(runId || undefined, documentsQuery.data?.files || []);
   const dbDocumentRows = useDocumentMetadataRows(runId || undefined);
@@ -653,7 +676,14 @@ export default function DocumentsPanel({
     await documentsQuery.refetch();
   }, [documentsQuery, runId]);
 
-  useEffect(() => { setDocPage(1); }, [docFilter, runId]);
+  useEffect(() => {
+    setDocPage(1);
+    setActiveGroup(null);
+    setExpandedGroups(new Set());
+    setSelected(new Set());
+    setPreviewFile(null);
+    setPreviewContent('');
+  }, [activeDocumentSource, docFilter, runId]);
 
   useEffect(() => {
     const data = documentsQuery.data;
@@ -680,10 +710,13 @@ export default function DocumentsPanel({
 
   // Filter files by doc type
   const tabFiles = useMemo(() => {
-    if (docFilter === 'conclusion') return files.filter(f => !hasTimestamp(f.filename));
-    if (docFilter === 'detail') return files.filter(f => hasTimestamp(f.filename));
-    return files;
-  }, [files, docFilter]);
+    const sourceFiles = activeDocumentSource === 'all'
+      ? files
+      : files.filter((file) => file.documentSource === activeDocumentSource);
+    if (docFilter === 'conclusion') return sourceFiles.filter(f => !hasTimestamp(f.filename));
+    if (docFilter === 'detail') return sourceFiles.filter(f => hasTimestamp(f.filename));
+    return sourceFiles;
+  }, [activeDocumentSource, files, docFilter]);
 
   // Build left folder groups from workflow metadata first, with filename fallback.
   const phaseDefinitionMap = useMemo(() => new Map(
@@ -864,6 +897,7 @@ export default function DocumentsPanel({
       const params = {
         scope: 'children',
         groupKey,
+        source: activeDocumentSource === 'all' ? undefined : activeDocumentSource,
         documentKind: 'detail',
         pageSize: 500,
         sortDirection: sortOrder,
@@ -890,7 +924,7 @@ export default function DocumentsPanel({
         return next;
       });
     }
-  }, [loadedGroups, loadingGroups, queryClient, runId, sortOrder, toast]);
+  }, [activeDocumentSource, loadedGroups, loadingGroups, queryClient, runId, sortOrder, toast]);
 
   const toggleExpandedGroup = useCallback((groupKey: string) => {
     setExpandedGroups((prev) => {
@@ -921,7 +955,14 @@ export default function DocumentsPanel({
     if (!runId) return;
     setManualLoading(true);
     try {
-      const rootParams = { page: 1, pageSize: 1, sortDirection: 'desc' as const, documentKind: 'detail' as const, scope: 'root' as const };
+      const rootParams = {
+        page: 1,
+        pageSize: 1,
+        sortDirection: 'desc' as const,
+        documentKind: 'detail' as const,
+        scope: 'root' as const,
+        source: activeDocumentSource === 'all' ? undefined : activeDocumentSource,
+      };
       const rootData = await queryClient.fetchQuery({
         queryKey: queryKeys.documentLatestDetail(runId, rootParams),
         queryFn: () => runsApi.listDocuments(runId, rootParams),
@@ -934,7 +975,14 @@ export default function DocumentsPanel({
         .sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime())[0];
 
       if (!latestFile) {
-        const childParams = { scope: 'children' as const, page: 1, pageSize: 1, documentKind: 'detail' as const, sortDirection: 'desc' as const };
+        const childParams = {
+          scope: 'children' as const,
+          page: 1,
+          pageSize: 1,
+          documentKind: 'detail' as const,
+          sortDirection: 'desc' as const,
+          source: activeDocumentSource === 'all' ? undefined : activeDocumentSource,
+        };
         const childData = await queryClient.fetchQuery({
           queryKey: queryKeys.documentLatestDetail(runId, childParams),
           queryFn: () => runsApi.listDocuments(runId, childParams),
@@ -962,7 +1010,7 @@ export default function DocumentsPanel({
     } finally {
       setManualLoading(false);
     }
-  }, [queryClient, runId, selectFile, toast]);
+  }, [activeDocumentSource, queryClient, runId, selectFile, toast]);
 
   useEffect(() => {
     if (!openLatestTimestampedRequest || openLatestTimestampedRequest === lastOpenLatestRequestRef.current) {
@@ -1145,8 +1193,12 @@ export default function DocumentsPanel({
   const folderTree = () => (
     <div className="flex h-full w-full flex-col overflow-hidden border-r border-border bg-muted/20">
       <div className="px-3 py-2 border-b border-border/50">
-        <div className="text-xs font-semibold text-muted-foreground">按执行阶段</div>
-        <div className="mt-0.5 text-[10px] text-muted-foreground/80">从上到下为工作流执行顺序</div>
+        <div className="text-xs font-semibold text-muted-foreground">
+          {activeDocumentSource === 'tasklist' ? '任务清单文档' : '按执行阶段'}
+        </div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground/80">
+          {activeDocumentSource === 'tasklist' ? '按任务清单目录归类' : '从上到下为工作流执行顺序'}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         <div
@@ -1183,9 +1235,40 @@ export default function DocumentsPanel({
     </div>
   );
 
+  const documentSourceOptions = useMemo(() => {
+    const hasTasklist = Boolean(documentRoots.tasklist)
+      || activeDocumentSource === 'tasklist'
+      || files.some((file) => file.documentSource === 'tasklist');
+    return [
+      { value: 'all' as const, label: '全部', count: files.length },
+      {
+        value: 'runtime-output' as const,
+        label: '步骤文档',
+        count: files.filter((file) => file.documentSource === 'runtime-output').length,
+      },
+      ...(hasTasklist ? [{
+        value: 'tasklist' as const,
+        label: '任务清单',
+        count: files.filter((file) => file.documentSource === 'tasklist').length,
+      }] : []),
+    ];
+  }, [activeDocumentSource, documentRoots.tasklist, files]);
+
+  const selectDocumentSource = useCallback((nextSource: DocumentSourceFilter) => {
+    if (lockedDocumentSource || nextSource === activeDocumentSource) return;
+    if (documentSource === undefined) setInternalDocumentSource(nextSource);
+    onDocumentSourceChange?.(nextSource);
+  }, [activeDocumentSource, documentSource, lockedDocumentSource, onDocumentSourceChange]);
+
   // --- Toolbar ---
   const toolbar = () => (
     <div className="flex flex-wrap items-center gap-2 p-3">
+      <DocumentSourceTabs
+        activeSource={activeDocumentSource}
+        lockedSource={lockedDocumentSource}
+        options={documentSourceOptions}
+        onSourceChange={selectDocumentSource}
+      />
       {(
         <Input
           placeholder="搜索文件..."
@@ -1272,14 +1355,18 @@ export default function DocumentsPanel({
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadFiles} disabled={loading}>
         <span className="material-symbols-outlined text-sm">refresh</span>
       </Button>
-      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFolderTreeVisible}
-        title={folderTreeVisible ? '隐藏文件夹' : '显示文件夹'}>
-        <span className="material-symbols-outlined text-sm">side_navigation</span>
-      </Button>
-      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFileListVisible}
-        title={fileListVisible ? '隐藏文件列表' : '显示文件列表'}>
-        <span className="material-symbols-outlined text-sm">view_sidebar</span>
-      </Button>
+      {!lightweightTasklistLayout ? (
+        <>
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFolderTreeVisible}
+            title={folderTreeVisible ? '隐藏文件夹' : '显示文件夹'}>
+            <span className="material-symbols-outlined text-sm">side_navigation</span>
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={toggleFileListVisible}
+            title={fileListVisible ? '隐藏文件列表' : '显示文件列表'}>
+            <span className="material-symbols-outlined text-sm">view_sidebar</span>
+          </Button>
+        </>
+      ) : null}
     </div>
   );
 
@@ -1660,7 +1747,11 @@ export default function DocumentsPanel({
 
   return (
     <>
-      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div
+        className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+        data-testid="documents-panel-layout"
+        data-layout={getDocumentsPanelLayout({ lightweightTasklistLayout, previewPresentation })}
+      >
         <div className="shrink-0 border-b border-border">{toolbar()}</div>
         {recommendedFile && priorityGroup ? (
           <button
@@ -1675,13 +1766,17 @@ export default function DocumentsPanel({
             <span className="min-w-0 flex-1">
               <span className="block text-[11px] font-semibold text-primary">建议优先查看</span>
               <span className="block truncate text-xs font-medium">{getDisplayFileName(recommendedFile)}</span>
-              <span className="block truncate text-[10px] text-muted-foreground">最终阶段：{priorityGroup.label} · 点击直接打开结论</span>
+              <span className="block truncate text-[10px] text-muted-foreground">
+                {activeDocumentSource === 'tasklist'
+                  ? `任务清单：${priorityGroup.label} · 点击直接打开文档`
+                  : `最终阶段：${priorityGroup.label} · 点击直接打开结论`}
+              </span>
             </span>
             <span className="material-symbols-outlined text-base text-muted-foreground">arrow_forward</span>
           </button>
         ) : null}
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          {folderTreeVisible ? (
+          {folderTreeVisible && !lightweightTasklistLayout ? (
             <>
               <div style={{ width: folderTreeWidth }} className="shrink-0 overflow-hidden">{folderTree()}</div>
               <div
@@ -1690,7 +1785,7 @@ export default function DocumentsPanel({
               />
             </>
           ) : null}
-          {fileListVisible ? (
+          {effectiveFileListVisible ? (
             <>
               <div
                 style={previewPresentation === 'inline' ? { width: fileListWidth } : undefined}

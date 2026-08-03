@@ -21,6 +21,7 @@ import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { useAgentsQuery } from '@/client/query/agents';
 import { useConfigOptionsQuery } from '@/client/query/configs';
 import { useSkillsQuery } from '@/client/query/skills';
+import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 
 const stepSchema = z.object({
   type: z.enum(['agent', 'subworkflow']).optional(),
@@ -80,6 +81,7 @@ interface RoleOption {
   name: string;
   team: string;
   roleType?: 'normal' | 'supervisor';
+  catalogVisibility?: 'default' | 'optional' | 'system';
   avatar?: any;
   category?: string;
   tags?: string[];
@@ -267,7 +269,8 @@ export default function EditNodeModal({
   const skillsQuery = useSkillsQuery({ enabled: isOpen });
   const workflowOptionsQuery = useConfigOptionsQuery({ mode: 'state-machine', sortKey: 'name', sortDirection: 'asc' });
   const queryRoles = (agentsQuery.data?.agents || []) as RoleOption[];
-  const effectiveRoles = roles.length > 0 ? roles : queryRoles;
+  const effectiveRoles = (roles.length > 0 ? roles : queryRoles)
+    .filter(isWorkflowStepSelectableAgent);
   const querySkills = (skillsQuery.data?.skills || []) as SkillOption[];
   const effectiveSkills = availableSkills.length > 0 ? availableSkills : querySkills;
   const initialAgent = effectiveRoles.find((role) => role.name === data?.agent);

@@ -130,13 +130,15 @@ export function resolveRunDocumentRoots(runId: string, state: PersistedRunState)
     if (resolve(lightweight.workspaceRoot) !== expectedWorkspaceRoot) {
       throw new Error('Persisted lightweight workspace does not match the run working directory');
     }
-    const persistedResolvedDirectory = resolve(lightweight.resolvedTasklistDirectory);
     const recalculated = resolveLightweightTasklistDirectory({
+      runId,
       workspaceRoot: expectedWorkspaceRoot,
-      tasklistDirectory: lightweight.tasklistDirectory,
     });
-    if (persistedResolvedDirectory !== recalculated.resolvedTasklistDirectory) {
-      throw new Error('Persisted lightweight tasklist directory is inconsistent');
+    if (
+      lightweight.tasklistDirectory !== recalculated.tasklistDirectory
+      || resolve(lightweight.resolvedTasklistDirectory) !== resolve(recalculated.resolvedTasklistDirectory)
+    ) {
+      throw new Error('Persisted lightweight tasklist metadata points to a legacy or inconsistent workspace path');
     }
     roots.push({
       source: 'tasklist',

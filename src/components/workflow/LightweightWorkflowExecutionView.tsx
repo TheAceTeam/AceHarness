@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { FileText, FolderOpen, ListChecks, Terminal } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/core/utils';
 
@@ -32,21 +31,24 @@ interface LightweightWorkflowExecutionViewProps {
 
 function getStatusPresentation(status: string, completed: boolean, failed: boolean) {
   if (failed || status === 'failed' || status === 'crashed') {
-    return { label: '失败', progress: 100, variant: 'destructive' as const };
+    return { label: '失败', variant: 'destructive' as const };
   }
   if (completed || status === 'completed') {
-    return { label: '已完成', progress: 100, variant: 'default' as const };
+    return { label: '已完成', variant: 'default' as const };
   }
   if (status === 'waiting') {
-    return { label: '等待人工处理', progress: 50, variant: 'secondary' as const };
+    return { label: '等待人工处理', variant: 'secondary' as const };
   }
-  if (status === 'running' || status === 'preparing') {
-    return { label: '执行中', progress: 50, variant: 'secondary' as const };
+  if (status === 'preparing') {
+    return { label: '准备中', variant: 'secondary' as const };
+  }
+  if (status === 'running') {
+    return { label: '执行中', variant: 'secondary' as const };
   }
   if (status === 'stopped') {
-    return { label: '已停止', progress: 0, variant: 'outline' as const };
+    return { label: '已停止', variant: 'outline' as const };
   }
-  return { label: '未开始', progress: 0, variant: 'outline' as const };
+  return { label: '未开始', variant: 'outline' as const };
 }
 
 function stepNameMatches(value: string, stepName: string, stateName: string) {
@@ -83,7 +85,6 @@ export default function LightweightWorkflowExecutionView({
   const completed = completedSteps.some((value) => stepNameMatches(String(value || ''), stepName, stateName));
   const failed = failedSteps.some((value) => stepNameMatches(String(value || ''), stepName, stateName));
   const presentation = getStatusPresentation(normalizedStatus, completed, failed);
-  const tasklistDirectory = String(workflow?.lightweight?.tasklistDirectory || '').trim();
   const hasEmbeddedSurfaces = Boolean(taskDocuments || runtimeOutput || workspace);
   const [activeSurface, setActiveSurface] = useState<LightweightSurface>('overview');
   const availableSurfaces = useMemo<LightweightSurface[]>(() => [
@@ -114,12 +115,13 @@ export default function LightweightWorkflowExecutionView({
     }
   };
 
-  const runtimeStep = String(currentStep || activeSteps[0] || '').trim();
-  const statusDescription = runtimeStep
-    ? `当前步骤：${runtimeStep}`
-    : presentation.label === '已完成'
-      ? '单个步骤已完成。'
-      : `固定步骤：${stateName} / ${stepName}`;
+  const statusDescription = presentation.label === '已完成'
+    ? '任务清单执行已完成。'
+    : presentation.label === '失败'
+      ? '任务清单执行需要处理失败原因。'
+      : presentation.label === '准备中'
+        ? '正在准备运行环境。'
+      : '执行 Agent 正在根据任务清单推进完整目标。';
 
   const overview = (
     <div className="space-y-4 overflow-auto p-4">
@@ -128,33 +130,18 @@ export default function LightweightWorkflowExecutionView({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <ListChecks className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-              <h3 className="truncate text-sm font-semibold">{stepName}</h3>
+              <h3 className="truncate text-sm font-semibold">任务清单执行</h3>
             </div>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">{statusDescription}</p>
           </div>
           <Badge variant={presentation.variant} className="shrink-0 text-[10px]">{presentation.label}</Badge>
         </div>
-        <div className="mt-4 flex items-center justify-between gap-3 text-xs">
-          <span className="text-muted-foreground">固定单步进度</span>
-          <span className="font-medium">{presentation.progress === 100 ? '1 / 1' : '0 / 1'}</span>
-        </div>
-        <Progress value={presentation.progress} className="mt-2 h-1.5" />
-        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-          <div className="min-w-0 rounded-md bg-muted/40 px-3 py-2">
-            <div className="text-[10px] text-muted-foreground">状态</div>
-            <div className="mt-1 truncate font-medium">{stateName}</div>
-          </div>
+        <div className="mt-4 grid gap-2 text-xs">
           <div className="min-w-0 rounded-md bg-muted/40 px-3 py-2">
             <div className="text-[10px] text-muted-foreground">执行 Agent</div>
             <div className="mt-1 truncate font-medium">{step?.agent || '未指定'}</div>
           </div>
         </div>
-        {tasklistDirectory ? (
-          <div className="mt-3 min-w-0 rounded-md border border-dashed px-3 py-2 text-xs">
-            <div className="text-[10px] text-muted-foreground">任务文档目录</div>
-            <code className="mt-1 block break-all font-mono text-[11px] text-foreground">{tasklistDirectory}</code>
-          </div>
-        ) : null}
         {runId ? <div className="mt-2 break-all text-[10px] text-muted-foreground">运行 ID：{runId}</div> : null}
       </section>
 
@@ -168,8 +155,8 @@ export default function LightweightWorkflowExecutionView({
         >
           <FileText className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0">
-            <span className="block text-xs font-medium">任务文档</span>
-            <span className="block truncate text-[10px] text-muted-foreground">{tasklistDirectory || '当前运行文档'}</span>
+            <span className="block text-xs font-medium">任务清单</span>
+            <span className="block truncate text-[10px] text-muted-foreground">查看任务、进度和验收文档</span>
           </span>
         </Button>
         <Button
@@ -182,7 +169,7 @@ export default function LightweightWorkflowExecutionView({
           <Terminal className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0">
             <span className="block text-xs font-medium">运行输出</span>
-            <span className="block truncate text-[10px] text-muted-foreground">当前单步输出</span>
+            <span className="block truncate text-[10px] text-muted-foreground">实时执行输出</span>
           </span>
         </Button>
         <Button
@@ -213,8 +200,8 @@ export default function LightweightWorkflowExecutionView({
       <Tabs value={activeSurface} onValueChange={(value) => setActiveSurface(value as LightweightSurface)} className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="shrink-0 border-b bg-muted/20 px-3 pt-3">
           <TabsList className="grid h-8 w-full" style={{ gridTemplateColumns: `repeat(${availableSurfaces.length}, minmax(0, 1fr))` }} aria-label="轻量工作流运行面板">
-            <TabsTrigger value="overview" className="text-xs">执行</TabsTrigger>
-            {taskDocuments ? <TabsTrigger value="documents" className="text-xs">任务文档</TabsTrigger> : null}
+            <TabsTrigger value="overview" className="text-xs">概览</TabsTrigger>
+            {taskDocuments ? <TabsTrigger value="documents" className="text-xs">任务清单</TabsTrigger> : null}
             {runtimeOutput ? <TabsTrigger value="output" className="text-xs">运行输出</TabsTrigger> : null}
             {workspace ? <TabsTrigger value="workspace" className="text-xs">工作区</TabsTrigger> : null}
           </TabsList>

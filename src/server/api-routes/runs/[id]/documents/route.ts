@@ -23,10 +23,15 @@ export async function GET(
 
   const searchParams = requestUrl(request).searchParams;
   const requestedFile = searchParams.get('file');
+  const sourceParam = searchParams.get('source');
+  const requestedSource = sourceParam ? readDocumentSource(sourceParam) : undefined;
+  if (sourceParam && !requestedSource) {
+    return jsonOk({ error: '非法的文档来源' }, { status: 400 });
+  }
 
   try {
     if (requestedFile) {
-      const source = readDocumentSource(searchParams.get('source'));
+      const source = requestedSource;
       if (!source) return jsonOk({ error: '非法的文档来源' }, { status: 400 });
       const result = await readRunDocumentContent(runId, {
         source,
@@ -42,6 +47,7 @@ export async function GET(
       includeChildren: searchParams.get('includeChildren') === '1',
       scope: readScope(searchParams),
       childRunId: searchParams.get('childRunId') || undefined,
+      source: requestedSource || undefined,
       groupKey: searchParams.get('groupKey') || undefined,
       documentKind: readDocumentKind(searchParams),
       summaryOnly: searchParams.get('summaryOnly') === '1',
@@ -146,8 +152,8 @@ export async function DELETE(
   }
 }
 
-function readDocumentSource(value: unknown): RunDocumentSource | null {
-  return value === 'tasklist' || value === 'runtime-output' ? value : null;
+function readDocumentSource(value: unknown): RunDocumentSource | undefined {
+  return value === 'tasklist' || value === 'runtime-output' ? value : undefined;
 }
 
 function readScope(searchParams: URLSearchParams): 'root' | 'children' | 'child' | undefined {

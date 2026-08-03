@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { runsApi, type RunDocumentReference } from '@/lib/core/api';
+import { runsApi, type RunDocumentReference, type RunDocumentSource } from '@/lib/core/api';
 import { queryKeys } from './query-keys';
 import {
   getDocumentMetadataSnapshot,
@@ -12,6 +12,7 @@ export type RunDocumentsParams = {
   includeChildren?: boolean;
   scope?: 'root' | 'children' | 'child';
   childRunId?: string;
+  source?: RunDocumentSource;
   groupKey?: string;
   documentKind?: 'conclusion' | 'detail';
   summaryOnly?: boolean;

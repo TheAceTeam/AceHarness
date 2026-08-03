@@ -66,6 +66,7 @@ export type ListRunDocumentsOptions = {
   includeChildren?: boolean;
   scope?: 'root' | 'children' | 'child';
   childRunId?: string;
+  source?: RunDocumentSource;
   groupKey?: string;
   documentKind?: 'conclusion' | 'detail';
   summaryOnly?: boolean;
@@ -407,6 +408,7 @@ function buildDocumentFile(input: {
 function filterAndSortDocuments(files: RunDocumentFile[], options: ListRunDocumentsOptions): RunDocumentFile[] {
   const direction = options.sortDirection === 'desc' ? -1 : 1;
   return files
+    .filter((file) => !options.source || file.documentSource === options.source)
     .filter((file) => !options.groupKey || file.groupKey === options.groupKey)
     .filter((file) => !options.documentKind || file.documentKind === options.documentKind)
     .sort((left, right) => {

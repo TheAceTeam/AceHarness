@@ -1733,6 +1733,7 @@ export const runsApi = {
     includeChildren?: boolean;
     scope?: 'root' | 'children' | 'child';
     childRunId?: string;
+    source?: RunDocumentSource;
     groupKey?: string;
     documentKind?: 'conclusion' | 'detail';
     summaryOnly?: boolean;
@@ -1746,6 +1747,7 @@ export const runsApi = {
     if (options?.includeChildren) search.set('includeChildren', '1');
     if (options?.scope) search.set('scope', options.scope);
     if (options?.childRunId) search.set('childRunId', options.childRunId);
+    if (options?.source) search.set('source', options.source);
     if (options?.groupKey) search.set('groupKey', options.groupKey);
     if (options?.documentKind) search.set('documentKind', options.documentKind);
     if (options?.summaryOnly) search.set('summaryOnly', '1');
@@ -2410,9 +2412,14 @@ export const streamApi = {
     onDelta: (content: string) => void,
     onDone?: (status: string) => void,
     onTool?: (tool: RuntimeToolEvent) => void,
+    onSnapshot?: (content: string) => void,
   ): EventSource {
     const url = `${API_BASE}/runs/${encodeURIComponent(runId)}/stream?step=${encodeURIComponent(stepName)}&live=1`;
     const es = createSafeEventSource(url);
+    es.addEventListener('snapshot', (e: MessageEvent) => {
+      const data = parseSseJsonEventData(e.data);
+      onSnapshot?.(typeof data.content === 'string' ? data.content : '');
+    });
     es.addEventListener('delta', (e: MessageEvent) => {
       const data = parseSseJsonEventData(e.data);
       if (data.content) onDelta(String(data.content));

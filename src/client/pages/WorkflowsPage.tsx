@@ -99,7 +99,8 @@ interface ShareableUser {
 
 type WorkflowSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
-type WorkflowModeFilter = 'all' | WorkflowCreationMode;
+type PersistedWorkflowMode = Exclude<WorkflowCreationMode, 'ai-guided'>;
+type WorkflowModeFilter = 'all' | PersistedWorkflowMode;
 type WorkflowsPageTab = 'workflows' | 'templates' | 'drafts';
 type DraftViewMode = 'gallery' | 'table';
 type DraftSortDirection = 'desc' | 'asc';
@@ -170,7 +171,7 @@ type CreationDraftSession = {
   };
 };
 
-function getWorkflowKind(workflow: Pick<WorkflowConfig, 'kind' | 'mode' | 'profile'> | CreationDraftSession): WorkflowCreationMode {
+function getWorkflowKind(workflow: Pick<WorkflowConfig, 'kind' | 'mode' | 'profile'> | CreationDraftSession): PersistedWorkflowMode {
   return workflow.kind === 'lightweight'
     || workflow.profile === 'lightweight'
     || workflow.mode === 'lightweight'
@@ -521,8 +522,8 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
   const openAiWorkflowCreator = useCallback(() => {
     openNewWorkflowModal({
       aiGuidedEntry: true,
-      initialMode: 'lightweight',
-      initialWorkflowName: '轻量工作流',
+      initialMode: 'ai-guided',
+      initialWorkflowName: 'AI 引导工作流',
       initialRequirements: DEFAULT_AI_WORKFLOW_REQUIREMENTS,
       initialDescription: DEFAULT_AI_WORKFLOW_DESCRIPTION,
       initialWorkspaceMode: 'in-place',
@@ -1139,7 +1140,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
         size="sm"
         variant="secondary"
         onClick={openAiWorkflowCreator}
-        title="AI 引导创建轻量工作流"
+        title="AI 引导创建工作流"
       >
         <Sparkles className="mr-2 h-4 w-4" />
         AI 引导创建工作流

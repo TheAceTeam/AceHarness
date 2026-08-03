@@ -3,39 +3,34 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { MultiCombobox, SingleCombobox } from '@/components/ui/combobox';
+import { SingleCombobox } from '@/components/ui/combobox';
 import type { StateMachineState, WorkflowStep } from '@/lib/core/schemas';
 import { configApi } from '@/lib/core/api';
 import {
   LIGHTWEIGHT_TASKLIST_SKILL,
   LIGHTWEIGHT_WORKFLOW_DESCRIPTION,
 } from '@/lib/workflow/lightweight';
+import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 
 type AgentOption = {
   name: string;
   description?: string;
   team?: string;
   roleType?: string;
-};
-
-type SkillOption = {
-  name: string;
-  description: string;
+  catalogVisibility?: 'default' | 'optional' | 'system';
 };
 
 export type LightweightWorkflowDesignMetadata = {
   workflowName?: string;
   workspace?: string;
-  tasklistDirectory?: string;
 };
 
-interface LightweightWorkflowDesignPanelProps {
+type LightweightWorkflowDesignPanelProps = {
   states: StateMachineState[];
   onStatesChange: (states: StateMachineState[]) => void;
   availableAgents: AgentOption[];
-  availableSkills?: SkillOption[];
   metadata?: LightweightWorkflowDesignMetadata;
-}
+};
 
 export function hasLightweightWorkflowTopology(states: StateMachineState[]): boolean {
   const state = states[0];
@@ -57,16 +52,12 @@ function buildFixedState(state: StateMachineState | undefined, changes: Partial<
     concurrency: _concurrency,
     workflow: _workflow,
     subworkflow: _subworkflow,
+    specTaskBinding: _specTaskBinding,
     inputs: _inputs,
     result: _result,
     runtime: _runtime,
     ...agentStep
   } = currentStep as any;
-  const skills = Array.isArray(changes.skills) ? changes.skills : agentStep.skills;
-  const normalizedSkills = [...new Set([
-    LIGHTWEIGHT_TASKLIST_SKILL,
-    ...(Array.isArray(skills) ? skills : []).filter((skill): skill is string => typeof skill === 'string' && skill.trim().length > 0),
-  ])];
   return {
     ...state,
     name: state?.name || '执行',
@@ -80,7 +71,7 @@ function buildFixedState(state: StateMachineState | undefined, changes: Partial<
       name: changes.name || agentStep.name || '执行任务',
       agent: changes.agent || agentStep.agent || '',
       task: changes.task || agentStep.task || '',
-      skills: normalizedSkills,
+      skills: [LIGHTWEIGHT_TASKLIST_SKILL],
     }],
     transitions: [],
   } as StateMachineState;
@@ -90,29 +81,20 @@ export default function LightweightWorkflowDesignPanel({
   states,
   onStatesChange,
   availableAgents,
-  availableSkills = [],
   metadata,
 }: LightweightWorkflowDesignPanelProps) {
   const [resolvedMetadata, setResolvedMetadata] = useState<LightweightWorkflowDesignMetadata | null>(null);
   const state = states[0];
   const step = state?.steps?.[0];
-  const optionalSkills = (step?.skills || []).filter((skill) => skill !== LIGHTWEIGHT_TASKLIST_SKILL);
-  const agentOptions = useMemo(() => availableAgents.map((agent) => ({
+  const workflowStepAgents = useMemo(
+    () => availableAgents.filter(isWorkflowStepSelectableAgent),
+    [availableAgents],
+  );
+  const agentOptions = useMemo(() => workflowStepAgents.map((agent) => ({
     value: agent.name,
     label: agent.name,
     description: [agent.description, agent.team, agent.roleType].filter(Boolean).join(' · '),
-  })), [availableAgents]);
-  const skillOptions = useMemo(() => {
-    const byName = new Map<string, SkillOption>();
-    for (const skill of availableSkills) byName.set(skill.name, skill);
-    for (const skill of optionalSkills) {
-      if (!byName.has(skill)) byName.set(skill, { name: skill, description: '当前步骤已选择的 Skill' });
-    }
-    return [...byName.values()]
-      .filter((skill) => skill.name !== LIGHTWEIGHT_TASKLIST_SKILL)
-      .map((skill) => ({ value: skill.name, label: skill.name, description: skill.description }));
-  }, [availableSkills, optionalSkills]);
-
+  })), [workflowStepAgents]);
   const updateStep = (changes: Partial<WorkflowStep>) => {
     onStatesChange([buildFixedState(state, changes)]);
   };
@@ -135,7 +117,6 @@ export default function LightweightWorkflowDesignPanel({
       setResolvedMetadata({
         workflowName: config?.workflow?.name,
         workspace: config?.context?.projectRoot,
-        tasklistDirectory: config?.workflow?.lightweight?.tasklistDirectory,
       });
     }).catch(() => {
       // The editor remains usable when its parent does not expose a config route.
@@ -156,7 +137,7 @@ export default function LightweightWorkflowDesignPanel({
           </div>
         </div>
 
-        <dl className="grid gap-x-6 gap-y-3 rounded-lg border bg-muted/20 p-4 text-sm sm:grid-cols-3">
+        <dl className="grid gap-x-6 gap-y-3 rounded-lg border bg-muted/20 p-4 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-xs text-muted-foreground">名称</dt>
             <dd className="mt-1 break-words font-medium">{displayMetadata?.workflowName || '当前工作流'}</dd>
@@ -165,16 +146,12 @@ export default function LightweightWorkflowDesignPanel({
             <dt className="text-xs text-muted-foreground">工作区</dt>
             <dd className="mt-1 break-all font-medium">{displayMetadata?.workspace || '由工作流配置定义'}</dd>
           </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">任务清单目录（只读）</dt>
-            <dd className="mt-1 break-all font-medium">{displayMetadata?.tasklistDirectory || '由工作流配置定义'}</dd>
-          </div>
         </dl>
 
         <section className="space-y-4 rounded-lg border p-4">
           <div>
             <div>
-              <h3 className="text-sm font-semibold">步骤设置</h3>
+              <h3 className="text-sm font-semibold">执行设置</h3>
             </div>
           </div>
 
@@ -190,7 +167,7 @@ export default function LightweightWorkflowDesignPanel({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="lightweight-step-task">执行任务</Label>
+            <Label htmlFor="lightweight-step-task">完整目标</Label>
             <Textarea
               id="lightweight-step-task"
               value={step?.task || ''}
@@ -200,16 +177,6 @@ export default function LightweightWorkflowDesignPanel({
             />
           </div>
 
-          <div className="space-y-3">
-            <Label>步骤 Skills</Label>
-            <MultiCombobox
-              value={optionalSkills}
-              onValueChange={(skills) => updateStep({ skills: [LIGHTWEIGHT_TASKLIST_SKILL, ...skills] })}
-              options={skillOptions}
-              placeholder="选择可选步骤 Skills"
-            />
-            <p className="text-xs leading-5 text-muted-foreground">Skills 保存到 `step.skills`，不会修改 Agent 的全局 Skills。</p>
-          </div>
         </section>
       </div>
     </div>

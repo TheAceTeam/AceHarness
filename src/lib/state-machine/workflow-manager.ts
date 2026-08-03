@@ -87,6 +87,9 @@ import {
   resolveWorkflowSupervisorAgent,
 } from '@/lib/core/default-supervisor';
 import {
+  isRetiredCatalogAgent,
+} from '@/lib/agent/catalog';
+import {
   appendSpecCodingRevision,
   appendSupervisorSpecCodingRevision,
   cloneSpecCodingForRun,
@@ -165,13 +168,12 @@ import {
 } from '@/lib/workflow/task-input';
 import {
   LIGHTWEIGHT_TASKLIST_SKILL,
+  LIGHTWEIGHT_WORKFLOW_TIMEOUT_MINUTES,
   ensureLightweightWorkflowStepSkill,
   getEffectiveWorkflowStepSkills,
   isLightweightWorkflowConfig,
 } from '@/lib/workflow/lightweight';
 import {
-  releaseLightweightTasklistDirectory,
-  reserveLightweightTasklistDirectory,
   resolveLightweightTasklistDirectory,
 } from '@/lib/workflow/lightweight-runtime';
 
@@ -229,6 +231,15 @@ interface LiveFeedbackOptions {
   automatic?: boolean;
 }
 
+type AgentStepExecutionResult = {
+  output: string;
+  lastRoundOutput: string;
+  costUsd: number;
+  durationMs: number;
+  sessionId?: string;
+  tokenUsage: TokenUsage;
+};
+
 type WorkflowActionActor = {
   id?: string;
   name?: string;
@@ -277,6 +288,20 @@ function addTokenUsage(agent: AgentState, usage: TokenUsage): void {
   agent.tokenUsage.outputTokens += usage.outputTokens;
   agent.tokenUsage.cacheCreationInputTokens = (agent.tokenUsage.cacheCreationInputTokens || 0) + (usage.cacheCreationInputTokens || 0);
   agent.tokenUsage.cacheReadInputTokens = (agent.tokenUsage.cacheReadInputTokens || 0) + (usage.cacheReadInputTokens || 0);
+}
+
+class WorkflowStepTerminalUsageError extends Error {
+  readonly terminalUsage: AgentStepExecutionResult;
+
+  constructor(message: string, terminalUsage: AgentStepExecutionResult) {
+    super(message);
+    this.name = 'WorkflowStepTerminalUsageError';
+    this.terminalUsage = terminalUsage;
+  }
+}
+
+function getTerminalUsageFromError(error: unknown): AgentStepExecutionResult | undefined {
+  return error instanceof WorkflowStepTerminalUsageError ? error.terminalUsage : undefined;
 }
 
 function replaceAgentStateSessionId(agent: AgentState | undefined | null, nextSessionId?: string | null): void {
@@ -585,6 +610,10 @@ function isHttpAuthStatusFailure(message: string): boolean {
     || /\b(?:401|403)\b[^\r\n]{0,80}(?:unauthorized|forbidden|invalid token|invalid api key|authentication failed|无效的令牌|令牌无效|认证失败|鉴权失败)/i.test(message);
 }
 
+function isModelCapacityFailure(message: string): boolean {
+  return /\b(?:selected\s+)?model\s+is\s+at\s+capacity\b/i.test(String(message || ''));
+}
+
 export function isEngineLevelFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
@@ -601,6 +630,7 @@ export function isEngineLevelFailure(message: string): boolean {
     || /reached (its |the )?context window limit/i.test(normalized)
     || /maximum context length/i.test(normalized)
     || /prompt is too long/i.test(normalized)
+    || isModelCapacityFailure(normalized)
     || /SDK API retry limit/i.test(normalized)
     || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
     || /engine (?:not initialized|unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
@@ -617,6 +647,7 @@ function isTransientEngineFailure(message: string): boolean {
   if (/context window limit|maximum context length|prompt is too long/i.test(normalized)) return false;
 
   return /acp\s+connection\s+closed/i.test(normalized)
+    || isModelCapacityFailure(normalized)
     || /SDK API retry limit/i.test(normalized)
     || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
     || /(?:HTTP\s*)?(?:429|500|502|503|504)\b/i.test(normalized)
@@ -783,6 +814,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     timestamp: string;
   }[] = [];
   private stepLogs: PersistedStepLog[] = [];
+  private allocatedStepLogIds = new Set<string>();
   private qualityChecks: PersistedQualityCheck[] = [];
   /** Current engine instance (Kiro CLI, etc.) */
   private currentRuntime: WorkflowRuntime | null = null;
@@ -808,6 +840,48 @@ export class StateMachineWorkflowManager extends EventEmitter {
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
     return getWorkflowRuntimeSkillsSubdir(this.engineType);
+  }
+
+  private isSupervisorEnabled(workflowConfig?: StateMachineWorkflowConfig | null): boolean {
+    return Boolean(
+      workflowConfig
+      && !isLightweightWorkflowConfig(workflowConfig)
+      && workflowConfig.workflow.supervisor?.enabled !== false
+    );
+  }
+
+  private resolveRuntimeSupervisorAgent(workflowConfig: StateMachineWorkflowConfig): string {
+    return this.isSupervisorEnabled(workflowConfig)
+      ? resolveWorkflowSupervisorAgent(workflowConfig)
+      : '';
+  }
+
+  private getLightweightExecutionAgentName(): string | undefined {
+    const config = this.currentWorkflowConfig;
+    if (!config || !isLightweightWorkflowConfig(config)) return undefined;
+    const state = config.workflow.states.find((item) => item.name === this.currentState)
+      || config.workflow.states[0];
+    return state?.steps?.find((step) => step.type !== 'subworkflow' && step.agent)?.agent;
+  }
+
+  private getRuntimeTranscriptSpeakerName(input?: string): string | undefined {
+    const explicit = input?.trim();
+    if (explicit) return explicit;
+    if (this.currentSupervisorAgent) return this.currentSupervisorAgent;
+    if (this.currentWorkflowConfig && !this.isSupervisorEnabled(this.currentWorkflowConfig)) {
+      return this.getLightweightExecutionAgentName();
+    }
+    return this.getLightweightExecutionAgentName() || DEFAULT_SUPERVISOR_NAME;
+  }
+
+  private clearLightweightSpecState(): void {
+    this.currentRunSpecCoding = null;
+    this.currentSpecRootDir = null;
+    this.bindingValidation = undefined;
+    this.stepTaskBindingsSnapshot = [];
+    this.stepTaskBindingsByStepKey.clear();
+    this.specRevisionVote = null;
+    this.specRevisionVoteHistory = [];
   }
 
   private resolveProjectRootPath(projectRoot?: string | null): string {
@@ -1141,7 +1215,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         try {
           const content = await readFile(resolve(agentsDir, file), 'utf-8');
           const config = parse(content) as RoleConfig;
-          if (config?.name) {
+          if (config?.name && !isRetiredCatalogAgent(config)) {
             this.agentConfigs.push(config);
           }
         } catch (e) {
@@ -1354,23 +1428,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.copiedSkills = null;
   }
 
-  private async reserveLightweightTasklistDirectory(metadata: PersistedLightweightRunMetadata): Promise<void> {
-    if (!this.currentRunId) return;
-    await reserveLightweightTasklistDirectory({
-      runId: this.currentRunId,
-      resolvedTasklistDirectory: metadata.resolvedTasklistDirectory,
-    });
-    try {
-      await mkdir(metadata.resolvedTasklistDirectory, { recursive: true });
-    } catch (error) {
-      releaseLightweightTasklistDirectory({
-        runId: this.currentRunId,
-        resolvedTasklistDirectory: metadata.resolvedTasklistDirectory,
-      });
-      throw error;
-    }
-  }
-
   private async prepareLightweightRunMetadata(config: StateMachineWorkflowConfig): Promise<void> {
     if (!isLightweightWorkflowConfig(config)) {
       this.lightweightRunMetadata = null;
@@ -1384,10 +1441,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       throw new Error('Lightweight workflow cannot resolve its tasklist workspace');
     }
 
-    const resolved = resolveLightweightTasklistDirectory({
-      workspaceRoot,
-      tasklistDirectory: config.workflow.lightweight?.tasklistDirectory,
-    });
+    if (!this.currentRunId) throw new Error('Lightweight workflow run identifier is unavailable');
+    const resolved = resolveLightweightTasklistDirectory({ runId: this.currentRunId, workspaceRoot });
     const roleConfig = this.agentConfigs.find((role) => role.name === step.agent)
       || config.roles?.find((role) => role.name === step.agent);
     const metadata: PersistedLightweightRunMetadata = {
@@ -1397,7 +1452,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       stepName: step.name,
       effectiveStepSkills: getEffectiveWorkflowStepSkills({ config, step, roleConfig }),
     };
-    await this.reserveLightweightTasklistDirectory(metadata);
+    await mkdir(metadata.resolvedTasklistDirectory, { recursive: true });
     this.lightweightRunMetadata = metadata;
   }
 
@@ -1407,33 +1462,33 @@ export class StateMachineWorkflowManager extends EventEmitter {
       return;
     }
 
+    if (
+      typeof runState.lightweight.workspaceRoot !== 'string'
+      || typeof runState.lightweight.tasklistDirectory !== 'string'
+      || typeof runState.lightweight.resolvedTasklistDirectory !== 'string'
+    ) {
+      throw new Error('Persisted lightweight tasklist metadata is incomplete');
+    }
+
     const expectedWorkspaceRoot = runState.workingDirectory
       ? resolve(runState.workingDirectory)
       : resolve(runState.lightweight.workspaceRoot);
     if (resolve(runState.lightweight.workspaceRoot) !== expectedWorkspaceRoot) {
       throw new Error('Persisted lightweight workspace does not match the run working directory');
     }
-    const resolved = resolveLightweightTasklistDirectory({
-      workspaceRoot: expectedWorkspaceRoot,
-      tasklistDirectory: runState.lightweight.tasklistDirectory,
-    });
-    if (resolved.resolvedTasklistDirectory !== runState.lightweight.resolvedTasklistDirectory) {
-      throw new Error('Persisted lightweight tasklist directory no longer resolves to its recorded workspace path');
+    const resolved = resolveLightweightTasklistDirectory({ runId: runState.runId, workspaceRoot: expectedWorkspaceRoot });
+    if (
+      runState.lightweight.tasklistDirectory !== resolved.tasklistDirectory
+      || resolve(runState.lightweight.resolvedTasklistDirectory) !== resolve(resolved.resolvedTasklistDirectory)
+    ) {
+      throw new Error('Persisted lightweight tasklist metadata points to a legacy or inconsistent workspace path');
     }
 
     this.lightweightRunMetadata = {
       ...runState.lightweight,
       ...resolved,
     };
-    await this.reserveLightweightTasklistDirectory(this.lightweightRunMetadata);
-  }
-
-  private releaseLightweightTasklistDirectory(): void {
-    if (!this.currentRunId || !this.lightweightRunMetadata) return;
-    releaseLightweightTasklistDirectory({
-      runId: this.currentRunId,
-      resolvedTasklistDirectory: this.lightweightRunMetadata.resolvedTasklistDirectory,
-    });
+    await mkdir(this.lightweightRunMetadata.resolvedTasklistDirectory, { recursive: true });
   }
 
   /**
@@ -1587,7 +1642,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   getStatus() {
-    const supervisorAgent = this.agents.find((agent) => agent.name === this.currentSupervisorAgent);
+    const supervisorAgent = this.currentSupervisorAgent
+      ? this.agents.find((agent) => agent.name === this.currentSupervisorAgent)
+      : undefined;
     const preparingPhase = this.status === 'preparing' ? '准备阶段' : null;
     const runSpecCoding = this.currentRunSpecCoding
       ? normalizeSpecCodingDocument(this.currentRunSpecCoding)
@@ -1634,7 +1691,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       createdByName: this._createdByName,
       workingDirectory: this.getWorkingDirectory(),
       workspaceGit: this.workflowGit || undefined,
-      supervisorAgent: this.currentSupervisorAgent,
+      supervisorAgent: this.currentSupervisorAgent || undefined,
       supervisorSessionId: supervisorAgent?.sessionId || null,
       workflowFrontendSessionId: this._frontendSessionId || null,
       attachedAgentSessions: Object.fromEntries(
@@ -1707,7 +1764,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     affectedArtifacts?: string[];
     impact?: string[];
   }): Promise<SpecCodingDocument | null> {
-    if (!this.currentRunId || !this.currentRunSpecCoding) return null;
+    if (!this.currentRunId || !this.currentRunSpecCoding || !this.isSupervisorEnabled(this.currentWorkflowConfig)) return null;
 
     this.currentRunSpecCoding = appendSpecCodingRevision(this.currentRunSpecCoding, {
       summary: input.summary,
@@ -1837,7 +1894,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentState = null;
       this.currentStep = null;
       this.agents = [];
-      this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
+      this.currentSupervisorAgent = '';
       this.latestSupervisorReview = null;
       this.specRevisionVote = null;
       this.specRevisionVoteHistory = [];
@@ -1921,7 +1978,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
       this.workflowName = workflowConfig.workflow.name || '';
       this.currentRequirements = requirements || workflowConfig.context?.requirements || '';
-      this.currentSupervisorAgent = resolveWorkflowSupervisorAgent(workflowConfig);
+      this.currentSupervisorAgent = this.resolveRuntimeSupervisorAgent(workflowConfig);
       if (this.embeddedProjectRoot) {
         const nextContext = {
           ...(workflowConfig.context || {}),
@@ -2057,7 +2114,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const creationSession = this._creationSessionId
         ? await loadCreationSession(this._creationSessionId).catch(() => null)
         : null;
-      if (creationSession?.specCoding) {
+      if (!isLightweightWorkflowConfig(workflowConfig) && creationSession?.specCoding) {
         this.currentRunSpecCoding = cloneSpecCodingForRun(creationSession.specCoding, {
           runId,
           filename: configFile,
@@ -2204,21 +2261,30 @@ export class StateMachineWorkflowManager extends EventEmitter {
           }
         }
         this.waitStartedAt = null;
-        this.latestSupervisorReview = existingState.latestSupervisorReview || this.latestSupervisorReview;
+        this.latestSupervisorReview = isLightweightWorkflowConfig(workflowConfig)
+          ? null
+          : (existingState.latestSupervisorReview || this.latestSupervisorReview);
+        this.supervisorFlow = isLightweightWorkflowConfig(workflowConfig)
+          ? []
+          : (existingState.supervisorFlow || this.supervisorFlow);
         this.humanQuestions = existingState.humanQuestions || [];
         this.pendingHumanQuestionId = existingState.pendingHumanQuestionId || existingState.pendingCheckpoint?.humanQuestionId || null;
         this.humanAnswersContext = existingState.humanAnswersContext || [];
-        this.specRevisionVote = existingState.specRevisionVote || null;
-        this.specRevisionVoteHistory = existingState.specRevisionVoteHistory || [];
-        this.currentRunSpecCoding = existingState.runSpecCoding
-          ? normalizeSpecCodingDocument(existingState.runSpecCoding)
-          : this.currentRunSpecCoding;
-        this.currentSpecRootDir = existingState.specRootDir || this.currentSpecRootDir;
-        this.bindingValidation = existingState.bindingValidation || this.bindingValidation;
-        this.stepTaskBindingsSnapshot = existingState.stepTaskBindingsSnapshot || this.stepTaskBindingsSnapshot;
-        this.stepTaskBindingsByStepKey = new Map(
-          this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
-        );
+        if (isLightweightWorkflowConfig(workflowConfig)) {
+          this.clearLightweightSpecState();
+        } else {
+          this.specRevisionVote = existingState.specRevisionVote || null;
+          this.specRevisionVoteHistory = existingState.specRevisionVoteHistory || [];
+          this.currentRunSpecCoding = existingState.runSpecCoding
+            ? normalizeSpecCodingDocument(existingState.runSpecCoding)
+            : this.currentRunSpecCoding;
+          this.currentSpecRootDir = existingState.specRootDir || this.currentSpecRootDir;
+          this.bindingValidation = existingState.bindingValidation || this.bindingValidation;
+          this.stepTaskBindingsSnapshot = existingState.stepTaskBindingsSnapshot || this.stepTaskBindingsSnapshot;
+          this.stepTaskBindingsByStepKey = new Map(
+            this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+          );
+        }
       }
 
       // === Switch to running ===
@@ -2439,7 +2505,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }): Promise<void> {
     const runId = this.currentRunId;
     if (!runId) return;
-    const speakerName = input.speakerName || this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    const speakerName = this.getRuntimeTranscriptSpeakerName(input.speakerName);
     const event = await appendWorkflowRuntimeTranscript({
       runId,
       type: input.type,
@@ -2500,7 +2566,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       message: input.message,
       supervisorAdvice: input.supervisorAdvice,
       createdAt: input.createdAt || new Date().toISOString(),
-      supervisorAgent: input.supervisorAgent || this.currentSupervisorAgent,
+      supervisorAgent: input.supervisorAgent || this.currentSupervisorAgent || undefined,
       supervisorSessionId: input.supervisorSessionId ?? supervisorAgent?.sessionId ?? null,
       workflowFrontendSessionId: input.workflowFrontendSessionId ?? this._frontendSessionId ?? null,
       currentState: input.currentState ?? this.currentState,
@@ -2517,12 +2583,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
     if (question.requiresWorkflowPause) {
       this.pendingHumanQuestionId = question.id;
     }
-    this.latestSupervisorReview = {
-      type: 'human-question',
-      stateName: this.currentState || '全局',
-      content: `${question.title}\n${question.message}`,
-      timestamp: question.createdAt,
-    };
+    if (this.isSupervisorEnabled(this.currentWorkflowConfig)) {
+      this.latestSupervisorReview = {
+        type: 'human-question',
+        stateName: this.currentState || '全局',
+        content: `${question.title}\n${question.message}`,
+        timestamp: question.createdAt,
+      };
+    }
     await this.persistState();
     const isParallelManualJoin = question.source?.type === 'parallel-manual-join';
     const isHumanHelp = question.source?.type === 'human-help';
@@ -2767,7 +2835,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     config: StateMachineWorkflowConfig;
   }): Promise<SupervisorHumanHelpDecision> {
     const { request, output, step, state, config } = input;
-    if (config.workflow?.humanHelp?.supervisorReviewEnabled === false || config.workflow?.supervisor?.enabled === false) {
+    if (config.workflow?.humanHelp?.supervisorReviewEnabled === false || !this.isSupervisorEnabled(config)) {
       return {
         needsHuman: true,
         title: request.title,
@@ -3087,11 +3155,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       body: status === 'completed'
         ? `完成步骤：${this.agents.reduce((sum, agent) => sum + agent.completedTasks, 0)}`
         : this.statusReason || '',
-      speakerName: this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME,
+      speakerName: this.getRuntimeTranscriptSpeakerName(),
       dedupeKey: `workflow-run-${status}-${this.currentRunId}`,
     });
 
-    this.releaseLightweightTasklistDirectory();
     this.status = 'idle';
     } finally {
       this.releaseMemoryV2AfterRun();
@@ -3232,6 +3299,25 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const index = this.stepLogs.findIndex((item) => item.id === log.id);
     if (index >= 0) this.stepLogs[index] = log;
     else this.stepLogs.push(log);
+  }
+
+  private createUniqueStepLogId(): string {
+    const baseId = randomUUID();
+    const isAllocated = (id: string) => this.allocatedStepLogIds.has(id)
+      || this.stepLogs.some((log) => log.id === id);
+    if (!isAllocated(baseId)) {
+      this.allocatedStepLogIds.add(baseId);
+      return baseId;
+    }
+
+    let suffix = 1;
+    let candidate = `${baseId}-${suffix}`;
+    while (isAllocated(candidate)) {
+      suffix += 1;
+      candidate = `${baseId}-${suffix}`;
+    }
+    this.allocatedStepLogIds.add(candidate);
+    return candidate;
   }
 
   private getSegmentStepKeys(stateName: string, segment: StepSegment): string[] {
@@ -3413,7 +3499,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         } : {}),
         workingDirectory: this.getWorkingDirectory() || undefined,
         workspaceGit: this.workflowGit || undefined,
-        supervisorAgent: this.currentSupervisorAgent,
+        ...(this.currentSupervisorAgent ? { supervisorAgent: this.currentSupervisorAgent } : {}),
         supervisorSessionId,
         attachedAgentSessions,
         workflowFrontendSessionId: this._frontendSessionId || null,
@@ -3442,7 +3528,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           configFile: this.currentConfigFile,
           runId: this.currentRunId,
           status: statusToPersist,
-          supervisorAgent: this.currentSupervisorAgent,
+          supervisorAgent: this.currentSupervisorAgent || undefined,
           supervisorSessionId,
           attachedAgentSessions,
           lightweight: this.lightweightRunMetadata,
@@ -3760,7 +3846,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private async runSpecRevisionVote(input: SpecRevisionVoteTriggerInput, config: StateMachineWorkflowConfig): Promise<void> {
-    if (!this.currentRunId || !this.currentRunSpecCoding || config.workflow.supervisor?.enabled === false || this.shouldStop) {
+    if (!this.currentRunId || !this.currentRunSpecCoding || !this.isSupervisorEnabled(config) || this.shouldStop) {
       return;
     }
 
@@ -4145,7 +4231,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const configContent = await readFile(configPath, 'utf-8');
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
     const supervisorConfig = workflowConfig.workflow.supervisor;
-    if (supervisorConfig?.enabled === false) return;
+    if (!this.isSupervisorEnabled(workflowConfig)) return;
 
     const scoringEnabled = supervisorConfig?.scoringEnabled !== false;
     if (!scoringEnabled) return;
@@ -4447,6 +4533,17 @@ try {
         let result = await executeRuntime(prompt, options.resumeSessionId, options.appendSystemPrompt);
         let visibleOutput = result.output || fullStreamContent || '';
 
+        // ACPX can surface a provider capacity rejection as turn.completed.
+        // Preserve the provider text, but expose it as a failed runtime turn
+        // so transient retry runs before any completion or conclusion repair.
+        if (result.success && isModelCapacityFailure(visibleOutput)) {
+          result = {
+            ...result,
+            success: false,
+            error: result.error || visibleOutput,
+          };
+        }
+
         if (memoryV2Execution) {
           visibleOutput = '';
           for (let round = 0; round < WORKFLOW_MEMORY_V2_MAX_FALLBACK_ROUNDS; round += 1) {
@@ -4530,7 +4627,7 @@ try {
         addRuntimeAgent(getStepRuntimeAgentName(step), step.agent);
       }
     }
-    if (workflowConfig.workflow.supervisor?.enabled !== false) {
+    if (this.isSupervisorEnabled(workflowConfig)) {
       addRuntimeAgent(this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME, this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME);
     }
 
@@ -4614,7 +4711,7 @@ try {
         addTarget(getStepRuntimeAgentName(step), step.agent, `${state.name} / ${step.name}`);
       }
     }
-    if (workflowConfig.workflow.supervisor?.enabled !== false) {
+    if (this.isSupervisorEnabled(workflowConfig)) {
       const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
       addTarget(supervisorName, supervisorName, 'supervisor');
     }
@@ -4697,6 +4794,10 @@ try {
   }
 
   private ensureSupervisorAgentExists(workflowConfig: StateMachineWorkflowConfig): void {
+    if (!this.isSupervisorEnabled(workflowConfig)) {
+      this.currentSupervisorAgent = '';
+      return;
+    }
     const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
     const existsInConfigs = this.agentConfigs.some((config) => config.name === supervisorName);
     const existsInWorkflow = workflowConfig.roles?.some((config) => config.name === supervisorName);
@@ -4748,7 +4849,7 @@ try {
     config: StateMachineWorkflowConfig,
     nextState?: string
   ): Promise<string | null> {
-    if (config.workflow.supervisor?.enabled === false) return null;
+    if (!this.isSupervisorEnabled(config)) return null;
     if (type === 'state-review' && config.workflow.supervisor?.stageReviewEnabled === false) return null;
     if (type === 'checkpoint-advice' && config.workflow.supervisor?.checkpointAdviceEnabled === false) return null;
 
@@ -4844,7 +4945,7 @@ try {
       stateName: state.name,
       reviewType: type,
       content: response,
-      supervisorAgent: this.currentSupervisorAgent,
+      supervisorAgent: this.currentSupervisorAgent || undefined,
       supervisorSessionId,
       timestamp,
       dedupeKey: `workflow-supervisor-review-${this.currentRunId}-${state.name}-${type}-${timestamp}`,
@@ -5706,7 +5807,8 @@ try {
     let executedSegmentInThisPass = false;
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
-      const useSegmentVerdict = i === segments.length - 1;
+      const useSegmentVerdict = !isLightweightWorkflowConfig(config)
+        && i === segments.length - 1;
       if (this.shouldStop) break;
       // Allow forced transition to interrupt mid-state
       if (this.pendingForceTransition) break;
@@ -6423,7 +6525,7 @@ try {
       // but cannot inject a parent manifest into a separately authorized child run.
       memoryV2.prepareStep(memoryStep);
     }
-    const stepId = randomUUID();
+    const stepId = this.createUniqueStepLogId();
     const stepKey = this.getWorkflowStepKey(state.name, step);
     const activeExisting = this.findActiveSubworkflowForStep(step, state, childConfigFile);
     await this.assertSubworkflowRunLimits(step, state, childConfigFile, activeExisting);
@@ -7006,7 +7108,7 @@ try {
       throw new Error(`找不到 agent: ${runtimeAgentName}`);
     }
 
-    const stepId = randomUUID();
+    const stepId = this.createUniqueStepLogId();
     const stepStartedAt = new Date().toISOString();
     const stepKey = this.getWorkflowStepKey(state.name, step);
     const memoryV2 = this.memoryV2;
@@ -7066,6 +7168,7 @@ try {
       speakerName: runtimeAgentName,
     });
 
+    let observedStepResult: AgentStepExecutionResult | undefined;
     try {
       let memoryContextPrompt: string | undefined;
       let memoryV2Execution: WorkflowMemoryV2AiExecution | undefined;
@@ -7099,19 +7202,50 @@ try {
       // Build context (now async)
       const context = await this.buildStepContext(step, state, config, requirements, extraContext, memoryContextPrompt, stepRunId);
 
-      // Execute step (reuse existing process manager logic)
+      // Execute step (reuse existing process manager logic). The live timestamp
+      // is attached when the runtime emits its first message, not at dispatch.
       let stepResult = await this.runAgentStep(step, context, config, stepId, memoryV2Execution, stepRunId);
+      observedStepResult = stepResult;
       let output = stepResult.output;
       if (isEngineLevelFailure(output)) {
         throw new Error(output.trim() || '引擎返回致命错误输出');
       }
-      if (this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
+      const requiresLightweightStepConclusion = isLightweightWorkflowConfig(config);
+      const requiresFinalVerdict = !requiresLightweightStepConclusion
+        && this.shouldRequireFinalVerdict(step, state);
+      const missingFinalVerdict = requiresFinalVerdict && !this.hasRequiredVerdictJson(output);
+      const missingStepConclusion = requiresLightweightStepConclusion && !this.hasStepConclusion(output);
+      if (missingFinalVerdict || missingStepConclusion) {
+        const repairSessionId = stepResult.sessionId || agent.sessionId || undefined;
+        const missingParts = [
+          missingFinalVerdict ? '严格最终裁决 JSON' : '',
+          missingStepConclusion ? '<step-conclusion>' : '',
+        ].filter(Boolean).join(' 和 ');
         this.emit('log', {
           level: 'warning',
-          message: `步骤 "${state.name}/${step.name}" 缺少严格最终裁决 JSON，正在请求 Agent 补交。`,
+          message: `步骤 "${state.name}/${step.name}" 缺少 ${missingParts}，正在请求 Agent 确认结束状态并补交。`,
         });
-        const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
-        const repairResult = await this.runAgentStep(step, repairContext, config, stepId, memoryV2Execution, stepRunId);
+        const repairContext = requiresLightweightStepConclusion
+          ? this.buildMissingLightweightStepConclusionPrompt(
+            repairSessionId ? '' : context,
+            output,
+            state,
+            step,
+            {
+              missingFinalVerdict,
+              reuseExistingSession: Boolean(repairSessionId),
+            },
+          )
+          : this.buildMissingFinalVerdictPrompt(context, output, state, step);
+        const repairResult = await this.runAgentStep(
+          step,
+          repairContext,
+          config,
+          stepId,
+          memoryV2Execution,
+          stepRunId,
+          { resumeSessionId: repairSessionId },
+        );
         output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
         stepResult = {
           ...stepResult,
@@ -7122,8 +7256,12 @@ try {
           sessionId: repairResult.sessionId || stepResult.sessionId,
           tokenUsage: this.mergeTokenUsage(stepResult.tokenUsage, repairResult.tokenUsage),
         };
-        if (!this.hasRequiredVerdictJson(output)) {
+        observedStepResult = stepResult;
+        if (missingFinalVerdict && !this.hasRequiredVerdictJson(output)) {
           throw new Error(`步骤 "${state.name}/${step.name}" 补交后仍缺少严格最终裁决 JSON`);
+        }
+        if (missingStepConclusion && !this.hasStepConclusion(output)) {
+          throw new Error(`步骤 "${state.name}/${step.name}" 确认结束状态后仍缺少 <step-conclusion>`);
         }
       }
       if (memoryV2 && memoryStep && !parseWorkflowMemoryV2Handoff(output).ok) {
@@ -7144,6 +7282,7 @@ try {
           sessionId: handoffRepair.sessionId || stepResult.sessionId,
           tokenUsage: this.mergeTokenUsage(stepResult.tokenUsage, handoffRepair.tokenUsage),
         };
+        observedStepResult = stepResult;
       }
       this.assertStepOutputIsNotSupervisorReview(step, state, runtimeAgentName, output);
       const conclusion = compactStepConclusion(output.replace(/<memory-handoff>[\s\S]*?<\/memory-handoff>/gi, ''));
@@ -7270,6 +7409,15 @@ try {
 
       // Record failed step log
       const errorMsg = error.message || String(error);
+      const terminalUsage = getTerminalUsageFromError(error) || observedStepResult;
+      const failedTokenUsage = terminalUsage?.tokenUsage || toPersistedTokenUsage(ZERO_ENGINE_USAGE);
+      const failedCostUsd = terminalUsage?.costUsd || 0;
+      const failedDurationMs = terminalUsage?.durationMs || 0;
+      if (terminalUsage) {
+        addTokenUsage(agent, failedTokenUsage);
+        agent.costUsd += failedCostUsd;
+        replaceAgentStateSessionId(agent, terminalUsage.sessionId);
+      }
       this.recordMemoryV2Terminal(memoryStep, this.shouldStop ? 'cancelled' : 'failed');
       if (memoryStep && error instanceof WorkflowMemoryV2HandoffBlockedError) {
         this.statusReason = errorMsg;
@@ -7306,11 +7454,11 @@ try {
         status: 'failed',
         output: '',
         error: errorMsg,
-        costUsd: 0,
-        durationMs: 0,
+        costUsd: failedCostUsd,
+        durationMs: failedDurationMs,
         timestamp: new Date().toISOString(),
-        tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
-        sessionId: null,
+        tokenUsage: failedTokenUsage,
+        sessionId: terminalUsage?.sessionId || null,
         engineName: this.engineType,
         gitStepDiffId: `git-step-${stepId}`,
         gitBeforeSnapshotId: beforeSnapshotId,
@@ -7427,6 +7575,71 @@ try {
     return Boolean(this.extractVerdictJson(output));
   }
 
+  private hasStepConclusion(output: string): boolean {
+    return extractTaggedBlocks(output, 'step-conclusion').length > 0;
+  }
+
+  private buildMissingLightweightStepConclusionPrompt(
+    originalContext: string,
+    previousOutput: string,
+    state: StateMachineState,
+    step: WorkflowStep,
+    options: {
+      missingFinalVerdict: boolean;
+      reuseExistingSession: boolean;
+    },
+  ): string {
+    const previous = compactRuntimeOutputPreview(previousOutput || '', 8000).output;
+    const parts = [
+      originalContext,
+      '# 系统补充要求：确认步骤结束状态',
+      `系统已收到步骤 "${state.name}/${step.name}" 的 end turn 成功信号。当前回复需要补充步骤结论归档。`,
+      '请根据当前任务的实际进度确认步骤是否已经结束，并在本次回复完成相应收尾：',
+      '1. 当前步骤已经结束时，请在回复末尾补发完整的 <step-conclusion>。',
+      '2. 当前步骤仍在推进时，请继续完成任务清单中的剩余工作；达到结束条件后，在回复末尾输出完整的 <step-conclusion>。',
+      '任务清单中的全部任务达到各自验收条件后，步骤状态进入结束。',
+    ].filter(Boolean);
+
+    if (options.missingFinalVerdict) {
+      parts.push(
+        '当前回复还需要在 <step-conclusion> 前提供最终裁决 JSON：',
+        '```json',
+        '{',
+        '  "verdict": "pass | conditional_pass | fail",',
+        '  "remaining_issues": 0,',
+        '  "summary": "一句话总结"',
+        '}',
+        '```',
+      );
+    } else {
+      parts.push('当前最终裁决 JSON 已记录，请在步骤结论中如实总结当前结果与剩余风险。');
+    }
+
+    parts.push(
+      '步骤结论请使用以下结构：',
+      '<step-conclusion>',
+      '## 结果 / 裁决',
+      '- 当前步骤完成情况与真实结论。',
+      '## 任务清单完成情况',
+      '- 已完成任务、验证证据，以及仍在推进的事项。',
+      '## 涉及对象',
+      '- 修改、读取或交付的关键文件、命令、制品或配置。',
+      '## 验证状态',
+      '- 已执行的验证及结果。',
+      '## 剩余风险',
+      '- 当前仍需关注的风险或阻塞；无风险时明确写“无”。',
+      '</step-conclusion>',
+    );
+
+    if (options.reuseExistingSession) {
+      parts.push('当前会话保留了上一轮执行记录，请基于该记录完成本次收尾。');
+    } else {
+      parts.push('# 你上一轮输出', previous || '[上一轮没有可用输出]');
+    }
+
+    return parts.join('\n');
+  }
+
   private buildMissingFinalVerdictPrompt(
     originalContext: string,
     previousOutput: string,
@@ -7528,6 +7741,92 @@ try {
     ].join('\n');
   }
 
+  private async buildLightweightTasklistContext(
+    step: WorkflowStep,
+    state: StateMachineState,
+    config: StateMachineWorkflowConfig,
+    requirements?: string,
+    extraContext?: string,
+    memoryContext?: string,
+  ): Promise<string> {
+    const goalParts = Array.from(new Set([
+      requirements,
+      this.currentRequirements,
+      config.context?.requirements,
+      step.task,
+    ]
+      .map((value) => typeof value === 'string' ? value.trim() : '')
+      .filter(Boolean)));
+    const taskInputPrompt = formatWorkflowTaskInputForPrompt(
+      this.taskInput,
+      resolveWorkflowTaskInputFields((config.context as any)?.taskInput),
+    ).trim();
+    const resolvedTasklistDirectory = this.lightweightRunMetadata?.resolvedTasklistDirectory || '';
+    const skillsRoot = await getRuntimeSkillsDirPath();
+    const parts = [
+      '# 完整目标',
+      goalParts.join('\n\n'),
+      '',
+      '# 任务清单协作',
+      `请使用 ${LIGHTWEIGHT_TASKLIST_SKILL}。`,
+      `请先阅读 \`${join(skillsRoot, LIGHTWEIGHT_TASKLIST_SKILL, 'SKILL.md')}\`，然后按其中约束建立任务文档集。`,
+      resolvedTasklistDirectory
+        ? `任务文档根目录（本次运行专属目录）：\`${resolvedTasklistDirectory}\``
+        : '',
+      '请将完整目标拆分为约十条边界清晰、依赖明确、可独立验证的任务。',
+      '请为每项任务记录目标、依赖、范围、验收条件和验证证据。',
+      '请由当前 Agent 完成任务清单中的全部实施、验证与记录。',
+      '请在当前执行中按依赖关系持续推进全部任务，并在每项完成后更新任务清单与验证记录。',
+      '请将任务文档、验证日志和交付总结写入上述任务文档根目录。',
+      '请在全部任务达到验收条件后汇总交付物、验证结果和剩余风险。',
+    ].filter(Boolean);
+
+    if (taskInputPrompt) {
+      parts.push('', '# 补充输入', taskInputPrompt);
+    }
+    if (this.globalContext) {
+      parts.push('', '# 全局上下文', this.globalContext);
+    }
+    if (this.humanAnswersContext.length > 0) {
+      const answers = this.humanAnswersContext.slice(-5).map((item) => [
+        `- 问题: ${item.title}`,
+        `  - 人类回答: ${item.answer}`,
+        item.instruction ? `  - 附加指令: ${item.instruction}` : '',
+      ].filter(Boolean).join('\n')).join('\n');
+      parts.push('', '# 本轮运行中的人类答复', answers);
+    }
+    if (memoryContext) {
+      parts.push('', memoryContext);
+    }
+    if (extraContext) {
+      parts.push('', '# 补充信息', extraContext);
+    }
+    if (config.context?.projectRoot) {
+      parts.push('', '# 工作目录', config.context.projectRoot);
+    }
+
+    parts.push(
+      '',
+      '# 步骤结束协议',
+      '完成任务清单中的全部实施、验证与记录后，请在回复末尾输出完整的 <step-conclusion>。',
+      '步骤结论应覆盖任务清单完成情况、交付物、验证证据和剩余风险，供运行记录与后续恢复直接使用。',
+      '<step-conclusion>',
+      '## 结果 / 裁决',
+      '- 当前步骤完成情况与真实结论。',
+      '## 任务清单完成情况',
+      '- 每项任务的完成与验证摘要。',
+      '## 涉及对象',
+      '- 关键文件、制品、命令或配置。',
+      '## 验证状态',
+      '- 已执行的验证与结果。',
+      '## 剩余风险',
+      '- 当前风险、阻塞或“无”。',
+      '</step-conclusion>',
+    );
+
+    return parts.join('\n');
+  }
+
   private async buildStepContext(
     step: WorkflowStep,
     state: StateMachineState,
@@ -7542,6 +7841,10 @@ try {
      */
     callerRunId?: string | null,
   ): Promise<string> {
+    if (isLightweightWorkflowConfig(config)) {
+      return this.buildLightweightTasklistContext(step, state, config, requirements, extraContext, memoryContext);
+    }
+
     const stepRunId = callerRunId !== undefined ? callerRunId : this.currentRunId;
     const parts: string[] = [];
     const runtimeAgentName = getStepRuntimeAgentName(step);
@@ -7556,14 +7859,6 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
-    if (this.lightweightRunMetadata && isLightweightWorkflowConfig(config)) {
-      parts.push([
-        '\n# Lightweight task documents',
-        `Use this run-owned tasklist directory for task documents: ${this.lightweightRunMetadata.resolvedTasklistDirectory}`,
-        `Configured workspace-relative directory: ${this.lightweightRunMetadata.tasklistDirectory}`,
-        'Do not create a run-id subdirectory and do not use .ace-outputs for task documents.',
-      ].join('\n'));
-    }
     const roadmapKey = `${state.name}:${requiresFinalVerdict ? 'with-verdict' : 'without-verdict'}:${config.workflow.states.map((item) => {
       const stepSig = (item.steps || []).map((stateStep) => stateStep.name).join('|');
       const transitionSig = (item.transitions || [])
@@ -8018,7 +8313,8 @@ try {
     memoryV2Execution?: WorkflowMemoryV2AiExecution,
     /** Pinned by the caller so every write from one step lands in the same run — see below. */
     callerRunId?: string | null,
-  ): Promise<{ output: string; lastRoundOutput: string; costUsd: number; durationMs: number; sessionId?: string; tokenUsage: TokenUsage }> {
+    options: { resumeSessionId?: string } = {},
+  ): Promise<AgentStepExecutionResult> {
     // Find agent config for system prompt and model
     const roleConfig = this.agentConfigs.find(r => r.name === step.agent)
       || config.roles?.find(r => r.name === step.agent);
@@ -8036,19 +8332,30 @@ try {
     const workingDirectory = config.context?.projectRoot
       ? this.resolveProjectRootPath(config.context.projectRoot)
       : this.resolveProjectRootPath();
-    const timeoutMs = (config.context?.timeoutMinutes || 60) * 60 * 1000;
+    const configuredTimeoutMinutes = Number(config.context?.timeoutMinutes);
+    const timeoutMinutes = Number.isFinite(configuredTimeoutMinutes) && configuredTimeoutMinutes > 0
+      ? configuredTimeoutMinutes
+      : isLightweightWorkflowConfig(config)
+        ? LIGHTWEIGHT_WORKFLOW_TIMEOUT_MINUTES
+        : 60;
+    const timeoutMs = timeoutMinutes * 60 * 1000;
 
     let currentProcessId = stepId || randomUUID();
-    const compactedExecution = await this.autoCompactAgentContextIfNeeded({
-      agentName: runtimeAgentName,
-      stepName: this.currentState ? `${this.currentState} / ${step.name}` : step.name,
-      workflowConfig: config,
-      prompt: context,
-      systemPrompt,
-      model,
-      workingDirectory,
-      timeoutMs,
-    });
+    const requestedResumeSessionId = typeof options.resumeSessionId === 'string'
+      ? options.resumeSessionId.trim() || undefined
+      : undefined;
+    const compactedExecution = requestedResumeSessionId
+      ? { prompt: context, sessionId: requestedResumeSessionId }
+      : await this.autoCompactAgentContextIfNeeded({
+        agentName: runtimeAgentName,
+        stepName: this.currentState ? `${this.currentState} / ${step.name}` : step.name,
+        workflowConfig: config,
+        prompt: context,
+        systemPrompt,
+        model,
+        workingDirectory,
+        timeoutMs,
+      });
     let currentPrompt = compactedExecution.prompt;
     // Reuse session from same agent if available (saves tokens, preserves memory)
     let currentSessionId: string | undefined = compactedExecution.sessionId;
@@ -8063,6 +8370,27 @@ try {
     let transientEngineRetryAttempts = 0;
     let humanHelpStreamInterrupted = false;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
+    const snapshotTerminalUsage = (output = accumulatedOutput || accumulatedStreamPreview): AgentStepExecutionResult => ({
+      output,
+      lastRoundOutput,
+      costUsd: accumulatedCost,
+      durationMs: accumulatedDuration,
+      sessionId: currentSessionId,
+      tokenUsage: { ...accumulatedTokenUsage },
+    });
+    const terminalUsageError = (message: string, output?: string): WorkflowStepTerminalUsageError => (
+      new WorkflowStepTerminalUsageError(message, snapshotTerminalUsage(output))
+    );
+    const accumulateRuntimeResult = (result: WorkflowRuntimeJsonResult): void => {
+      accumulatedCost += result.cost_usd || 0;
+      accumulatedDuration += result.duration_ms || 0;
+      const resultTokenUsage = toPersistedTokenUsage(result.usage || ZERO_ENGINE_USAGE);
+      accumulatedTokenUsage.inputTokens += resultTokenUsage.inputTokens;
+      accumulatedTokenUsage.outputTokens += resultTokenUsage.outputTokens;
+      accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
+      accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
+      currentSessionId = result.runtimeSessionId || undefined;
+    };
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
     const streamStepName = this.currentState ? `${this.currentState}-${step.name}` : step.name;
@@ -8096,13 +8424,15 @@ try {
       accumulatedStreamPreview = appendRuntimeOutputPreview(accumulatedStreamPreview, text).output;
     };
 
-    const flushProcessStream = (content?: string | null) => {
+    // The engine stream handler persists every text delta immediately. This
+    // observer only maintains in-memory step state; persisting here as well
+    // duplicated each delta through the process-manager event loop.
+    const observeProcessStream = (content?: string | null) => {
       if (!stepRunId || !content || content.length < currentProcessStreamLength) return;
       const delta = content.slice(currentProcessStreamLength);
       if (!delta) return;
       currentProcessStreamLength = content.length;
       appendStreamPreview(delta);
-      appendStreamContent(stepRunId, streamStepName, delta).catch(() => {});
     };
 
     const appendFeedbackMarker = (feedbackPrompt: string) => {
@@ -8115,19 +8445,19 @@ try {
     let lastStreamAt = Date.now();
     let watchdogTriggeredForProcess = '';
     let trailingFlushTimer: ReturnType<typeof setTimeout> | null = null;
-    const flushLatestProcessStream = () => {
+    const observeLatestProcessStream = () => {
       if (!stepRunId) return;
       const proc = processManager.getProcess(currentProcessId);
       const content = proc?.streamContent || '';
       if (!content) return;
-      flushProcessStream(content);
+      observeProcessStream(content);
       lastFlush = Date.now();
     };
     const scheduleTrailingFlush = (delayMs: number) => {
       if (trailingFlushTimer) return;
       trailingFlushTimer = setTimeout(() => {
         trailingFlushTimer = null;
-        flushLatestProcessStream();
+        observeLatestProcessStream();
       }, Math.max(50, delayMs));
     };
     const streamFlushHandler = (data: { id: string; step: string; total?: string; delta?: string }) => {
@@ -8143,7 +8473,7 @@ try {
       if (stepRunId && now - lastFlush > 2000) {
         lastFlush = now;
         if (content) {
-          flushProcessStream(content);
+          observeProcessStream(content);
         }
       } else if (stepRunId && content) {
         scheduleTrailingFlush(2000 - (now - lastFlush));
@@ -8211,7 +8541,7 @@ try {
         if (humanHelpStreamInterrupted) {
           const proc = processManager.getProcess(currentProcessId);
           if (proc?.streamContent) {
-            flushProcessStream(proc.streamContent);
+            observeProcessStream(proc.streamContent);
           }
           result = {
             result: proc?.streamContent || accumulatedStreamPreview || '',
@@ -8230,7 +8560,7 @@ try {
           console.log(`[SM-ForceTransition] 进程被强制跳转终止，目标: ${this.pendingForceTransition}`);
           const proc = processManager.getProcess(currentProcessId);
           if (proc?.streamContent) {
-            flushProcessStream(proc.streamContent);
+            observeProcessStream(proc.streamContent);
           }
           if (stepRunId) {
             appendStreamContent(stepRunId, streamStepName, '\n\n<!-- chunk-boundary -->\n\n').catch(() => {});
@@ -8250,7 +8580,7 @@ try {
           this.feedbackInterrupt = false;
           const proc = processManager.getProcess(currentProcessId);
           if (proc?.streamContent) {
-            flushProcessStream(proc.streamContent);
+            observeProcessStream(proc.streamContent);
           }
           const sessionId = proc?.sessionId;
 
@@ -8294,11 +8624,12 @@ try {
       // Accumulate stream content
       const proc = processManager.getProcess(currentProcessId);
       if (proc?.streamContent) {
-        flushProcessStream(proc.streamContent);
+        observeProcessStream(proc.streamContent);
       }
+      accumulateRuntimeResult(result);
 
       if (this.shouldStop) {
-        throw new Error('工作流已停止');
+        throw terminalUsageError('工作流已停止', result.result || accumulatedStreamPreview);
       }
 
       if (humanHelpStreamInterrupted && !this.shouldStop) {
@@ -8384,7 +8715,7 @@ try {
       }
 
       if (result.stop_reason === 'cancelled' && !humanHelpStreamInterrupted) {
-        throw new Error(result.result || '运行时执行已取消');
+        throw terminalUsageError(result.result || '运行时执行已取消', result.result || accumulatedStreamPreview);
       }
 
       if (result.is_error) {
@@ -8405,12 +8736,13 @@ try {
           continue;
         }
         if (!isRecoverableStepExecutionError(errorMsg)) {
-          throw new Error(errorMsg);
+          throw terminalUsageError(errorMsg, result.result || accumulatedStreamPreview);
         }
 
         if (autoRecoveryAttempts >= STEP_AUTO_RECOVERY_MAX_ATTEMPTS) {
-          throw new Error(
-            `引擎连续失败，已停止工作流：步骤 "${streamStepName}" 自动恢复 ${STEP_AUTO_RECOVERY_MAX_ATTEMPTS} 次后仍失败。最后错误：${errorMsg}`
+          throw terminalUsageError(
+            `引擎连续失败，已停止工作流：步骤 "${streamStepName}" 自动恢复 ${STEP_AUTO_RECOVERY_MAX_ATTEMPTS} 次后仍失败。最后错误：${errorMsg}`,
+            result.result || accumulatedStreamPreview,
           );
         }
 
@@ -8460,16 +8792,6 @@ try {
         accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + roundOutput;
         lastRoundOutput = roundOutput;
       }
-      accumulatedCost += result.cost_usd || 0;
-      accumulatedDuration += result.duration_ms || 0;
-      const resultTokenUsage = toPersistedTokenUsage(result.usage || ZERO_ENGINE_USAGE);
-      accumulatedTokenUsage.inputTokens += resultTokenUsage.inputTokens;
-      accumulatedTokenUsage.outputTokens += resultTokenUsage.outputTokens;
-      accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
-      accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
-
-      // Always capture the latest runtimeSessionId for reuse; clear if recovery could not produce one.
-      currentSessionId = result.runtimeSessionId || undefined;
 
       if (humanHelpRequests.length > 0 && !this.shouldStop) {
         humanHelpStreamInterrupted = false;
@@ -8545,13 +8867,13 @@ try {
         clearTimeout(trailingFlushTimer);
         trailingFlushTimer = null;
       }
-      flushLatestProcessStream();
+      observeLatestProcessStream();
       clearInterval(idleWatchdog);
       processManager.off('stream', streamFlushHandler);
     }
 
     if (!hasMeaningfulAiOutput(accumulatedOutput) && !streamHasMeaningfulOutput) {
-      throw new Error(`AI 服务中断：步骤 "${streamStepName}" 未产生任何输出`);
+      throw terminalUsageError(`AI 服务中断：步骤 "${streamStepName}" 未产生任何输出`);
     }
 
     return {
@@ -8959,11 +9281,15 @@ try {
 
     // Load config and continue execution
     const configContent = await this.readWorkflowConfigContent(runState.configFile);
-    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    let workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
     this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
     this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
     if (runState.workingDirectory) {
       workflowConfig.context.projectRoot = runState.workingDirectory;
+    }
+    workflowConfig = ensureLightweightWorkflowStepSkill(workflowConfig);
+    if (isLightweightWorkflowConfig(workflowConfig)) {
+      this.clearLightweightSpecState();
     }
     this.currentWorkflowConfig = workflowConfig;
     const resumeStepKey = this.getResumeStepKeyForRun(runState, workflowConfig);
@@ -8985,7 +9311,7 @@ try {
       await this.persistState();
     }
     this.workflowMcpServers = [];
-    this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
+    this.currentSupervisorAgent = this.resolveRuntimeSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents
     await this.loadAgentConfigs();
@@ -9170,13 +9496,15 @@ try {
     this._frontendSessionId = restoredFrontendSessionId || undefined;
     this.currentRequirements = runState.requirements || '';
     this.currentState = targetState || runState.currentState || null;
-    this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
-    this.latestSupervisorReview = runState.latestSupervisorReview || null;
+    const isLightweightRun = runState.lightweight?.profile === 'lightweight';
+    this.currentSupervisorAgent = isLightweightRun ? '' : DEFAULT_SUPERVISOR_NAME;
+    this.latestSupervisorReview = isLightweightRun ? null : (runState.latestSupervisorReview || null);
+    this.supervisorFlow = isLightweightRun ? [] : (runState.supervisorFlow || []);
     this.humanQuestions = runState.humanQuestions || [];
     this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
     this.humanAnswersContext = runState.humanAnswersContext || [];
-    this.specRevisionVote = runState.specRevisionVote || null;
-    this.specRevisionVoteHistory = runState.specRevisionVoteHistory || [];
+    this.specRevisionVote = isLightweightRun ? null : (runState.specRevisionVote || null);
+    this.specRevisionVoteHistory = isLightweightRun ? [] : (runState.specRevisionVoteHistory || []);
     this.specRevisionVoteTail = Promise.resolve();
     this.stateHistory = runState.stateHistory || [];
     this.issueTracker = (runState.issueTracker || []) as Issue[];
@@ -9206,12 +9534,12 @@ try {
     this.currentProjectRoot = runState.workingDirectory || null;
     await this.restoreLightweightRunMetadata(runState);
     this.workflowGit = runState.workspaceGit || null;
-    this.currentRunSpecCoding = runState.runSpecCoding
+    this.currentRunSpecCoding = !isLightweightRun && runState.runSpecCoding
       ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
-    this.currentSpecRootDir = runState.specRootDir || null;
-    this.bindingValidation = runState.bindingValidation;
-    this.stepTaskBindingsSnapshot = runState.stepTaskBindingsSnapshot || [];
+    this.currentSpecRootDir = isLightweightRun ? null : (runState.specRootDir || null);
+    this.bindingValidation = isLightweightRun ? undefined : runState.bindingValidation;
+    this.stepTaskBindingsSnapshot = isLightweightRun ? [] : (runState.stepTaskBindingsSnapshot || []);
     this.stepTaskBindingsByStepKey = new Map(
       this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
     );
@@ -9640,7 +9968,7 @@ try {
     this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
     this.workflowMcpServers = [];
     await this.resolveWorkflowMcpServers(workflowConfig);
-    this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
+    this.currentSupervisorAgent = this.resolveRuntimeSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents
     await this.loadAgentConfigs();
@@ -9757,7 +10085,7 @@ try {
 
     this.currentWorkflowConfig = workflowConfig;
     this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
-    this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
+    this.currentSupervisorAgent = this.resolveRuntimeSupervisorAgent(workflowConfig);
     this.stateHistory.push({
       from: runState.currentState || runState.currentPhase || runState.status || 'completed',
       to: targetState,

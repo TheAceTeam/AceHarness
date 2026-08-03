@@ -239,6 +239,16 @@ async function resolveWorkflowStatusPayload(configFile?: string | null, requeste
         };
         return withCreationSession(restoredStatus, configFile);
       }
+
+      // A scoped History request must never fall back to another run's in-memory
+      // manager merely because its persisted record is unavailable. That would
+      // let an explicit runId view render unrelated live status and events.
+      return withCreationSession({
+        status: 'idle',
+        statusReason: '未找到指定运行记录',
+        runId: requestedRunId,
+        currentConfigFile: configFile,
+      }, configFile);
     }
 
     const manager = await workflowRegistry.getManager(configFile);
@@ -279,6 +289,16 @@ async function resolveWorkflowLiveStatusPayload(configFile?: string | null, requ
             : runState.pendingCheckpoint?.humanQuestion || null,
         }, configFile);
       }
+
+      // A scoped History request must never fall back to another run's in-memory
+      // manager merely because its persisted record is unavailable. That would
+      // let an explicit runId view render unrelated live status and events.
+      return compactWorkflowStatusForLive({
+        status: 'idle',
+        statusReason: '未找到指定运行记录',
+        runId: requestedRunId,
+        currentConfigFile: configFile,
+      }, configFile);
     }
 
     const manager = await workflowRegistry.getManager(configFile);
@@ -465,7 +485,7 @@ export async function GET(request: Request) {
       return jsonOk(await resolveWorkflowLiveStatusPayload(configFile, requestedRunId));
     }
 
-    return jsonOk(await resolveWorkflowLiveStatusPayload(configFile, requestedRunId));
+    return jsonOk(await resolveWorkflowStatusPayload(configFile, requestedRunId));
   } catch (error: any) {
     return jsonOk(
       { error: '获取状态失败', message: error.message },

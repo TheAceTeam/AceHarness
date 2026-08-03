@@ -20,12 +20,7 @@ import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { createWorkflowConfigSnapshot } from '@/lib/workflow/subworkflow-config';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { getEffectiveWorkflowStepSkills, isLightweightWorkflowConfig } from '@/lib/workflow/lightweight';
-import {
-  LightweightTasklistDirectoryConflictError,
-  releaseLightweightTasklistDirectory,
-  reserveLightweightTasklistDirectory,
-  resolveLightweightTasklistDirectory,
-} from '@/lib/workflow/lightweight-runtime';
+import { resolveLightweightTasklistDirectory } from '@/lib/workflow/lightweight-runtime';
 import { bindWorkflowRunToConversation, ensureWorkflowRuntimeConversation } from '@/lib/workflow/runtime-session';
 import {
   appendWorkflowRuntimeTranscript,
@@ -75,6 +70,7 @@ async function appendAndFanoutWorkflowRuntimeTranscript(
 function prepareLightweightRunMetadata(
   config: any,
   userPersonalDir?: string,
+  runId?: string,
 ): PersistedLightweightRunMetadata | undefined {
   if (!isLightweightWorkflowConfig(config)) return undefined;
 
@@ -83,13 +79,13 @@ function prepareLightweightRunMetadata(
   const projectRoot = typeof config.context?.projectRoot === 'string'
     ? config.context.projectRoot.trim()
     : '';
-  if (!state || !step || !projectRoot) {
+  if (!state || !step || !projectRoot || !runId) {
     throw new Error('Lightweight workflow cannot resolve its tasklist workspace');
   }
 
   const resolved = resolveLightweightTasklistDirectory({
+    runId,
     workspaceRoot: resolve(userPersonalDir || getWorkspaceRoot(), projectRoot),
-    tasklistDirectory: config.workflow.lightweight?.tasklistDirectory,
   });
   const roleConfig = config.roles?.find((role: any) => role.name === step.agent);
   return {
@@ -154,7 +150,7 @@ async function startRehearsalRun(input: {
   const creationSession = input.creationSessionId
     ? await loadCreationSession(input.creationSessionId).catch(() => null)
     : null;
-  const runSpecCoding = creationSession?.specCoding
+  const runSpecCoding = !isLightweightWorkflowConfig(config) && creationSession?.specCoding
     ? cloneSpecCodingForRun(creationSession.specCoding, { runId, filename: input.configFile })
     : null;
   const bindingValidation = runSpecCoding
@@ -203,8 +199,10 @@ async function startRehearsalRun(input: {
     lightweight: input.lightweight,
     requirements: config?.context?.requirements || '',
     workingDirectory: input.lightweight?.workspaceRoot || input.initialContexts?.workingDirectory || config?.context?.projectRoot || undefined,
-    supervisorAgent: config?.workflow?.supervisor?.agent || 'default-supervisor',
-    supervisorSessionId: null,
+    ...(input.lightweight ? {} : {
+      supervisorAgent: config?.workflow?.supervisor?.agent || 'default-supervisor',
+      supervisorSessionId: null,
+    }),
     attachedAgentSessions: {},
     workflowFrontendSessionId: input.frontendSessionId || null,
     globalContext: input.initialContexts?.globalContext || '',
@@ -213,12 +211,14 @@ async function startRehearsalRun(input: {
     qualityChecks: input.preflightChecks,
     stepTaskBindingsSnapshot: bindingValidation?.bindings,
     bindingValidation: bindingValidation as any,
-    latestSupervisorReview: {
-      type: 'state-review',
-      stateName: '演练模式',
-      content: summary,
-      timestamp: now,
-    },
+    ...(input.lightweight ? {} : {
+      latestSupervisorReview: {
+        type: 'state-review' as const,
+        stateName: '演练模式',
+        content: summary,
+        timestamp: now,
+      },
+    }),
     runSpecCoding: runSpecCoding ? {
       ...runSpecCoding,
       status: 'completed',
@@ -254,7 +254,7 @@ async function startRehearsalRun(input: {
     runId,
     type: 'run-created',
     title: '工作流运行已创建',
-    speakerName: state.supervisorAgent || 'default-supervisor',
+    speakerName: state.supervisorAgent,
     dedupeKey: `workflow-rehearsal-created-${runId}`,
     createdAt: now,
   }, input.configFile);
@@ -264,27 +264,29 @@ async function startRehearsalRun(input: {
     title: '演练开始',
     body: [
       `配置文件：${input.configFile}`,
-      `协调嘉宾：${state.supervisorAgent || 'default-supervisor'}`,
+      input.lightweight ? '' : `协调嘉宾：${state.supervisorAgent}`,
       getWorkflowTaskInputTitle(input.initialContexts?.taskInput)
         ? `本次任务：${getWorkflowTaskInputTitle(input.initialContexts?.taskInput)}`
         : '',
     ].filter(Boolean).join('\n'),
-    speakerName: state.supervisorAgent || 'default-supervisor',
+    speakerName: state.supervisorAgent,
     dedupeKey: `workflow-rehearsal-starting-${runId}`,
     createdAt: now,
   }, input.configFile);
-  await appendAndFanoutWorkflowRuntimeTranscript({
-    runId,
-    type: 'state-review',
-    title: '演练总结',
-    body: [
-      summary,
-      recommendedNextSteps.length ? `建议：${recommendedNextSteps.join('；')}` : '',
-    ].filter(Boolean).join('\n'),
-    speakerName: state.supervisorAgent || 'default-supervisor',
-    dedupeKey: `workflow-rehearsal-completed-${runId}`,
-    createdAt: (Date.parse(now) || Date.now()) + 1,
-  }, input.configFile);
+  if (!input.lightweight) {
+    await appendAndFanoutWorkflowRuntimeTranscript({
+      runId,
+      type: 'state-review',
+      title: '演练总结',
+      body: [
+        summary,
+        recommendedNextSteps.length ? `建议：${recommendedNextSteps.join('；')}` : '',
+      ].filter(Boolean).join('\n'),
+      speakerName: state.supervisorAgent,
+      dedupeKey: `workflow-rehearsal-completed-${runId}`,
+      createdAt: (Date.parse(now) || Date.now()) + 1,
+    }, input.configFile);
+  }
 
   if (input.frontendSessionId) {
     await updateChatSessionCreationBinding(input.frontendSessionId, {
@@ -334,7 +336,7 @@ export async function POST(request: Request) {
       ? await loadCreationSession(creationSessionId).catch(() => null)
       : await loadLatestCreationSessionByFilename(configFile).catch(() => null);
     let bindingValidation: any = undefined;
-    if (boundCreationSession?.specCoding) {
+    if (!isLightweightWorkflowConfig(config) && boundCreationSession?.specCoding) {
       const bindingCompilation = compileStepTaskBindings(config, boundCreationSession.specCoding);
       config = bindingCompilation.config;
       bindingValidation = bindingCompilation.validation;
@@ -367,21 +369,13 @@ export async function POST(request: Request) {
           },
         }
       : config;
-    const supervisorAgent = executionConfig?.workflow?.supervisor?.agent || 'default-supervisor';
     const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    const lightweight = prepareLightweightRunMetadata(executionConfig, user.personalDir);
+    const lightweight = prepareLightweightRunMetadata(executionConfig, user.personalDir, runId);
+    const supervisorAgent = lightweight
+      ? undefined
+      : (executionConfig?.workflow?.supervisor?.agent || 'default-supervisor');
 
     if (rehearsal) {
-      let lightweightDirectoryReserved = false;
-      try {
-        if (lightweight) {
-          await reserveLightweightTasklistDirectory({
-            runId,
-            resolvedTasklistDirectory: lightweight.resolvedTasklistDirectory,
-          });
-          lightweightDirectoryReserved = true;
-        }
-
         const workflowConversation = await ensureWorkflowRuntimeConversation({
           frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
           configFile,
@@ -412,25 +406,6 @@ export async function POST(request: Request) {
             recommendedNextSteps: result.recommendedNextSteps,
           },
         });
-      } catch (error) {
-        if (error instanceof LightweightTasklistDirectoryConflictError) {
-          return jsonOk(
-            {
-              error: '轻量工作流任务文档目录已被活动运行占用',
-              runId: error.conflictingRunId,
-            },
-            { status: 409 },
-          );
-        }
-        throw error;
-      } finally {
-        if (lightweightDirectoryReserved && lightweight) {
-          releaseLightweightTasklistDirectory({
-            runId,
-            resolvedTasklistDirectory: lightweight.resolvedTasklistDirectory,
-          });
-        }
-      }
     }
 
     try {
@@ -465,18 +440,7 @@ export async function POST(request: Request) {
       );
     }
     workflowStartLocks.add(configFile);
-    let lightweightDirectoryReserved = false;
-    let managerStartHandedOff = false;
-
     try {
-      if (lightweight) {
-        await reserveLightweightTasklistDirectory({
-          runId,
-          resolvedTasklistDirectory: lightweight.resolvedTasklistDirectory,
-        });
-        lightweightDirectoryReserved = true;
-      }
-
       const workflowConversation = await ensureWorkflowRuntimeConversation({
         frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
         configFile,
@@ -492,15 +456,8 @@ export async function POST(request: Request) {
       manager._frontendSessionId = workflowConversation.sessionId;
       manager._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
       const startPromise = manager.start(configFile, undefined, preflightChecks, initialContexts, runId);
-      managerStartHandedOff = true;
       void Promise.resolve(startPromise)
         .catch((err: any) => {
-          if (lightweight) {
-            releaseLightweightTasklistDirectory({
-              runId,
-              resolvedTasklistDirectory: lightweight.resolvedTasklistDirectory,
-            });
-          }
           logWorkflowStartFailure(configFile, err);
           // The manager owns its own status transitions. Mutating it here can
           // corrupt an already-running workflow when a duplicate start is rejected.
@@ -518,7 +475,7 @@ export async function POST(request: Request) {
         title: '工作流开始启动',
         body: [
           `配置文件：${configFile}`,
-          `协调嘉宾：${supervisorAgent}`,
+          lightweight ? '' : `协调嘉宾：${supervisorAgent}`,
           getWorkflowTaskInputTitle(initialContexts.taskInput)
             ? `本次任务：${getWorkflowTaskInputTitle(initialContexts.taskInput)}`
             : '',
@@ -534,24 +491,7 @@ export async function POST(request: Request) {
         frontendSessionId: workflowConversation.sessionId,
         sessionWorkbenchState: workflowConversation.sessionWorkbenchState,
       });
-    } catch (error) {
-      if (error instanceof LightweightTasklistDirectoryConflictError) {
-        return jsonOk(
-          {
-            error: '轻量工作流任务文档目录已被活动运行占用',
-            runId: error.conflictingRunId,
-          },
-          { status: 409 },
-        );
-      }
-      throw error;
     } finally {
-      if (lightweightDirectoryReserved && !managerStartHandedOff && lightweight) {
-        releaseLightweightTasklistDirectory({
-          runId,
-          resolvedTasklistDirectory: lightweight.resolvedTasklistDirectory,
-        });
-      }
       workflowStartLocks.delete(configFile);
     }
   } catch (error: any) {

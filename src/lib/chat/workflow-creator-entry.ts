@@ -3,9 +3,9 @@ export const AI_WORKFLOW_CREATOR_COMPAT_ACTION = '__HOME_ACTION__:ai-workflow-cr
 export const CODESPEC_WORKFLOW_CREATOR_ACTION = '__HOME_ACTION__:create_workflow_from_codespec';
 export const AI_WORKFLOW_CREATOR_STARTER_ACTION = 'create_workflow';
 export const AI_WORKFLOW_CREATOR_COMPAT_STARTER_ACTION = 'ai-workflow-creator';
-export const DEFAULT_AI_WORKFLOW_REQUIREMENTS = '我想围绕【目标】创建一个轻量工作流，工作目录是【路径】，请先帮我梳理任务目标、执行 Agent 和验收条件。';
-export const CODESPEC_WORKFLOW_CREATOR_REQUIREMENTS = '请结合当前工作目录中的 Codespec 文档，整理目标、执行 Agent、任务清单和验收条件，创建一个轻量任务清单工作流。';
-export const DEFAULT_AI_WORKFLOW_DESCRIPTION = '通过任务清单动态拆分、调度与验收的协作执行。';
+export const DEFAULT_AI_WORKFLOW_REQUIREMENTS = '我想围绕【目标】创建一个工作流，工作目录是【路径】。请先梳理任务目标、执行角色、执行步骤、流转和验收条件，并选择合适的轻量或状态机编排。';
+export const CODESPEC_WORKFLOW_CREATOR_REQUIREMENTS = '请结合当前工作目录中的 Codespec 文档，整理目标、执行角色、执行步骤、流转和验收条件，生成合适的工作流草案。';
+export const DEFAULT_AI_WORKFLOW_DESCRIPTION = '由 AI 根据需求整理执行结构、角色和验收条件的工作流。';
 
 const WORKFLOW_TERM = /(?:工作流|workflow)/iu;
 const CREATE_TERM = /(?:创建|新建|生成|搭建|设计|编排|制作|做|create|build|design|set\s*up)/iu;
