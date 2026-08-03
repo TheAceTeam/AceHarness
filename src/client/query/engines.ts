@@ -295,11 +295,12 @@ export function useSaveModelsMutation() {
   });
 }
 
-export function useEngineConfigQuery() {
+export function useEngineConfigQuery(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.engines(),
     queryFn: fetchRuntimeEngineConfig,
     staleTime: 30_000,
+    enabled: options.enabled,
   });
 }
 

@@ -13,6 +13,13 @@ import { workflowRegistry } from '@/lib/workflow/registry';
 import { getUserById, loadUsers } from '@/lib/core/user-store';
 import { validateSubworkflowDependenciesForConfig } from '@/lib/workflow/subworkflow-config';
 import { findWorkflowReferences, updateWorkflowReferences } from '@/lib/workflow/references';
+import { isRetiredCatalogAgent } from '@/lib/agent/catalog';
+import { ensureDefaultSupervisorConfig } from '@/lib/core/default-supervisor';
+import {
+  ensureLightweightWorkflowStepSkill,
+  isLightweightWorkflowConfig,
+  normalizeLightweightWorkflowConfig,
+} from '@/lib/workflow/lightweight';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -55,10 +62,13 @@ export async function GET(
 
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     const content = await readFile(filepath, 'utf-8');
-    const config = parse(content);
+    const config = normalizeLightweightWorkflowConfig(parse(content));
     const validation = validateWorkflowDraft(config);
     const meta = await getConfigMeta(filename, 'workflow');
-    const responseConfig = meta?.specCodingEnabled === false || meta?.specCodingSkipped === true
+    const specCodingDisabled = isLightweightWorkflowConfig(config)
+      || meta?.specCodingEnabled === false
+      || meta?.specCodingSkipped === true;
+    const responseConfig = specCodingDisabled
       ? {
           ...config,
           context: {
@@ -79,7 +89,7 @@ export async function GET(
         try {
           const agentContent = await readFile(resolve(agentsDir, file), 'utf-8');
           const agent = parse(agentContent);
-          if (agent?.name) agents.push(agent);
+          if (agent?.name && !isRetiredCatalogAgent(agent)) agents.push(agent);
         } catch { /* skip */ }
       }
     } catch { /* agents dir may not exist */ }
@@ -87,7 +97,7 @@ export async function GET(
     return jsonOk({
       config: responseConfig,
       raw: content,
-      agents,
+      agents: ensureDefaultSupervisorConfig(agents),
       meta: {
         createdBy: meta?.createdBy,
         visibility: meta?.visibility || 'private',
@@ -137,7 +147,7 @@ export async function POST(
     }
 
     const body = await readJsonBody<Record<string, any>>(request, {});
-    const { config } = body;
+    const config = normalizeLightweightWorkflowConfig(body?.config);
     const renameFrom = typeof body?.renameFrom === 'string'
       ? body.renameFrom
       : typeof body?.previousFilename === 'string'
@@ -160,7 +170,7 @@ export async function POST(
       );
     }
 
-    let normalizedConfig = validationResult.normalized;
+    let normalizedConfig = ensureLightweightWorkflowStepSkill(validationResult.normalized);
     const dependencyIssues = await validateSubworkflowDependenciesForConfig(normalizedConfig);
     if (dependencyIssues.length > 0) {
       return jsonOk(
@@ -176,7 +186,8 @@ export async function POST(
     const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
     const session = creationSessionId ? await loadCreationSession(creationSessionId).catch(() => null) : null;
     const meta = await getConfigMeta(filename, 'workflow');
-    const specCodingDisabled = normalizedConfig?.context?.specCodingEnabled === false
+    const specCodingDisabled = isLightweightWorkflowConfig(normalizedConfig)
+      || normalizedConfig?.context?.specCodingEnabled === false
       || normalizedConfig?.context?.skipSpecCoding === true
       || meta?.specCodingEnabled === false
       || meta?.specCodingSkipped === true;

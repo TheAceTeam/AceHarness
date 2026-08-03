@@ -54,12 +54,9 @@ function addModel(target: DiscoveredModel[], seen: Set<string>, modelId: unknown
 
 function looksLikeModelConfigOption(option: Record<string, unknown>): boolean {
   const id = stringValue(option.id).toLowerCase();
-  if (id === 'model' || id === 'models' || id.endsWith('.model')) return true;
-  const label = [option.name, option.title, option.label, option.description]
-    .map((value) => stringValue(value).toLowerCase())
-    .filter(Boolean)
-    .join(' ');
-  return /\bmodels?\b/.test(label);
+  const type = stringValue(option.type).toLowerCase();
+  const category = stringValue(option.category).toLowerCase();
+  return type === 'select' && (id === 'model' || category === 'model');
 }
 
 function extractModelsFromStatus(status: unknown): DiscoveredModel[] {

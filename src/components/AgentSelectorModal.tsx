@@ -5,11 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
+import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 
 interface AgentConfig {
   name: string;
   team: 'blue' | 'red' | 'judge' | 'black-gold';
   roleType?: 'normal' | 'supervisor';
+  catalogVisibility?: 'default' | 'optional' | 'system';
   avatar?: any;
   category?: string;
   tags?: string[];
@@ -27,7 +29,7 @@ interface AgentSelectorModalProps {
   onClose: () => void;
 }
 
-const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
+const CATEGORIES = ['通用协作', '研究', '分析', '产品', '体验设计', '内容', '架构', '编码', '测试', '性能', '问题诊断', '审查', '文档', '其他'];
 
 export default function AgentSelectorModal({ agents, onSelect, onClose }: AgentSelectorModalProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -36,10 +38,11 @@ export default function AgentSelectorModal({ agents, onSelect, onClose }: AgentS
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   // Get all unique tags
-  const allTags = Array.from(new Set(agents.flatMap(a => a.tags || [])));
+  const selectableAgents = agents.filter(isWorkflowStepSelectableAgent);
+  const allTags = Array.from(new Set(selectableAgents.flatMap(a => a.tags || [])));
 
   // Filter agents
-  const filteredAgents = agents.filter(agent => {
+  const filteredAgents = selectableAgents.filter(agent => {
     if (searchQuery && !agent.name.toLowerCase().includes(searchQuery.toLowerCase())) {
       return false;
     }

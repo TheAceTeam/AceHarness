@@ -5,6 +5,7 @@ import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/
 import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { assertSubworkflowDependenciesForConfig, resolveWorkflowConfigDependencyGraph } from '@/lib/workflow/subworkflow-config';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
+import { normalizeLightweightWorkflowConfig } from '@/lib/workflow/lightweight';
 
 export async function POST(request: Request) {
   try {
@@ -24,6 +25,7 @@ export async function POST(request: Request) {
       return jsonError('缺少 workflow 配置对象或 filename', 400);
     }
 
+    config = normalizeLightweightWorkflowConfig(config);
     const validation = validateWorkflowDraft(config);
     if (validation.ok && config?.workflow?.mode === 'state-machine') {
       try {

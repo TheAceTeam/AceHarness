@@ -17,6 +17,10 @@ export interface AgentConfig {
   avatar?: any;
   category?: string;
   tags?: string[];
+  expertPacks?: string[];
+  catalogVisibility?: 'default' | 'optional' | 'system';
+  baseCapability?: string;
+  taskModes?: string[];
   engineModels: Record<string, string>;
   activeEngine: string;
   temperature?: number;

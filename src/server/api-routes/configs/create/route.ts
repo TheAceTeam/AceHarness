@@ -13,8 +13,8 @@ import { buildCreationSession, loadCreationSession, saveCreationSession, updateC
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { validateSubworkflowDependenciesForConfig } from '@/lib/workflow/subworkflow-config';
 import {
-  deriveLightweightTasklistDirectory,
   LIGHTWEIGHT_TASKLIST_SKILL,
+  LIGHTWEIGHT_WORKFLOW_TIMEOUT_MINUTES,
   LIGHTWEIGHT_WORKFLOW_DESCRIPTION,
   LIGHTWEIGHT_WORKFLOW_PROFILE,
 } from '@/lib/workflow/lightweight';
@@ -80,7 +80,7 @@ function createStateMachineConfig(
           position: { x: 100, y: 200 },
           steps: [
             { name: '方案设计', agent: 'architect', role: 'defender', task: '根据需求设计技术方案，输出设计文档' },
-            { name: '方案挑战', agent: 'design-breaker', role: 'attacker', task: '审查设计方案，寻找潜在缺陷和风险点' },
+            { name: '方案挑战', agent: 'solution-breaker', role: 'attacker', task: '审查设计方案，寻找潜在缺陷和风险点' },
             { name: '设计评审', agent: 'design-judge', role: 'judge', task: '综合红队方案和蓝队意见，给出评审结论和 verdict' },
           ],
           transitions: createVerdictTransitions({
@@ -142,7 +142,7 @@ function createStateMachineConfig(
           position: { x: 1000, y: 200 },
           steps: [
             { name: '生成报告', agent: 'developer', role: 'defender', task: '汇总各阶段成果，生成最终报告' },
-            { name: '报告审查', agent: 'code-auditor', role: 'attacker', task: '审查最终报告的完整性和准确性' },
+            { name: '报告审查', agent: 'code-hunter', role: 'attacker', task: '审查最终报告的完整性和准确性' },
             { name: '最终确认', agent: 'code-judge', role: 'judge', task: '确认报告质量，给出最终结论' },
           ],
           transitions: [],
@@ -157,16 +157,6 @@ function createStateMachineConfig(
   };
 }
 
-function normalizeStepSkills(value: unknown): string[] {
-  const skills = Array.isArray(value) ? value : [];
-  return [...new Set([
-    LIGHTWEIGHT_TASKLIST_SKILL,
-    ...skills
-      .map((skill) => typeof skill === 'string' ? skill.trim() : '')
-      .filter(Boolean),
-  ])];
-}
-
 function createLightweightConfig(input: {
   filename: string;
   workflowName: string;
@@ -175,24 +165,14 @@ function createLightweightConfig(input: {
   description?: string;
   agent: string;
   task: string;
-  skills?: unknown;
 }) {
-  let tasklistDirectory: string;
-  try {
-    tasklistDirectory = deriveLightweightTasklistDirectory(input.filename);
-  } catch (error) {
-    throw new CreationInputError(error instanceof Error ? error.message : String(error));
-  }
-
   return {
     workflow: {
       name: input.workflowName,
       description: input.description || '',
       mode: 'state-machine' as const,
       profile: LIGHTWEIGHT_WORKFLOW_PROFILE,
-      lightweight: { tasklistDirectory },
-      maxTransitions: 1,
-      ...createDefaultWorkflowGovernance(),
+      lightweight: {},
       states: [
         {
           name: '执行',
@@ -206,7 +186,7 @@ function createLightweightConfig(input: {
               type: 'agent' as const,
               agent: input.agent.trim(),
               task: input.task.trim(),
-              skills: normalizeStepSkills(input.skills),
+              skills: [LIGHTWEIGHT_TASKLIST_SKILL],
             },
           ],
           transitions: [],
@@ -217,6 +197,7 @@ function createLightweightConfig(input: {
       projectRoot: input.workingDirectory,
       workspaceMode: input.workspaceMode,
       requirements: input.task,
+      timeoutMinutes: LIGHTWEIGHT_WORKFLOW_TIMEOUT_MINUTES,
     },
   };
 }
@@ -231,6 +212,38 @@ function normalizeConfigFilename(filename: string): string {
 
 function structuredCloneSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeLightweightStep(step: any): any {
+  const normalized = {
+    ...step,
+    skills: [LIGHTWEIGHT_TASKLIST_SKILL],
+  };
+  delete normalized.specTaskBinding;
+  return normalized;
+}
+
+function normalizeLightweightConfigDraft(configDraft: any): any {
+  const cloned = structuredCloneSafe(configDraft || {});
+  cloned.workflow = cloned.workflow || {};
+  cloned.context = cloned.context || {};
+  cloned.workflow.mode = 'state-machine';
+  cloned.workflow.profile = LIGHTWEIGHT_WORKFLOW_PROFILE;
+  if (cloned.context.timeoutMinutes === undefined) {
+    cloned.context.timeoutMinutes = LIGHTWEIGHT_WORKFLOW_TIMEOUT_MINUTES;
+  }
+  delete cloned.workflow.supervisor;
+  delete cloned.workflow.maxTransitions;
+  if (Array.isArray(cloned.workflow.states)) {
+    cloned.workflow.states = cloned.workflow.states.map((state: any) => ({
+      ...state,
+      steps: Array.isArray(state?.steps)
+        ? state.steps.map(normalizeLightweightStep)
+        : state?.steps,
+    }));
+  }
+  cloned.workflow.lightweight = {};
+  return cloned;
 }
 
 function getWorkflowMode(config: any): CreationMode | null {
@@ -323,8 +336,13 @@ export async function POST(request: Request) {
       persistMode,
       specRoot,
     } = form.data;
-    const workflowMode = readCreationMode(form.data.mode);
-    const normalizedPersistMode = skipSpecCoding ? 'none' : (persistMode === 'repository' ? 'repository' : 'none');
+    const requestedWorkflowMode = readCreationMode(form.data.mode);
+    const draftWorkflowMode = configDraft?.workflow?.profile === LIGHTWEIGHT_WORKFLOW_PROFILE
+      ? 'lightweight'
+      : getWorkflowMode(configDraft);
+    const workflowMode = draftWorkflowMode || requestedWorkflowMode;
+    const specCodingEnabled = workflowMode !== 'lightweight' && !skipSpecCoding;
+    const normalizedPersistMode = specCodingEnabled && persistMode === 'repository' ? 'repository' : 'none';
     const normalizedSpecRoot = normalizedPersistMode === 'repository' ? (specRoot?.trim() || '.spec') : undefined;
     if (normalizedPersistMode === 'repository') {
       assertPersistedSpecRootReady(workingDirectory, normalizedSpecRoot);
@@ -340,26 +358,26 @@ export async function POST(request: Request) {
       // The target does not exist yet.
     }
 
-    const lightweightInput = workflowMode === 'lightweight'
+    const lightweightInput = workflowMode === 'lightweight' && !configDraft
       ? {
           agent: readRequiredString(body.lightweight?.agent, '执行 Agent'),
           task: readRequiredString(body.lightweight?.task, '执行任务'),
-          skills: body.lightweight?.skills,
         }
       : null;
 
     let defaultConfig: any;
     if (workflowMode === 'lightweight') {
-      defaultConfig = createLightweightConfig({
-        filename,
-        workflowName,
-        workingDirectory,
-        workspaceMode,
-        description,
-        agent: lightweightInput!.agent,
-        task: lightweightInput!.task,
-        skills: lightweightInput!.skills,
-      });
+      defaultConfig = configDraft
+        ? normalizeLightweightConfigDraft(configDraft)
+        : createLightweightConfig({
+            filename,
+            workflowName,
+            workingDirectory,
+            workspaceMode,
+            description,
+            agent: lightweightInput!.agent,
+            task: lightweightInput!.task,
+          });
     } else if (configDraft) {
       defaultConfig = configDraft;
     } else if (referenceWorkflow) {
@@ -395,6 +413,14 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
     defaultConfig = configValidation.normalized;
+    if (workflowMode === 'lightweight') {
+      delete defaultConfig.workflow.supervisor;
+      delete defaultConfig.workflow.maxTransitions;
+      defaultConfig.workflow.states = (defaultConfig.workflow.states || []).map((state: any) => ({
+        ...state,
+        steps: (state.steps || []).map(normalizeLightweightStep),
+      }));
+    }
     const dependencyIssues = await validateSubworkflowDependenciesForConfig(defaultConfig);
     if (dependencyIssues.length > 0) {
       return jsonOk({ error: '工作流草案验证失败', details: dependencyIssues }, { status: 400 });
@@ -409,13 +435,12 @@ export async function POST(request: Request) {
             skills: Array.isArray(lightweightStep.skills)
               ? lightweightStep.skills.filter((skill: unknown): skill is string => typeof skill === 'string')
               : [],
-            tasklistDirectory: defaultConfig.workflow.lightweight?.tasklistDirectory,
           };
         })()
       : undefined;
 
     const message = workflowMode === 'lightweight' ? '轻量工作流已创建' : '配置文件已创建';
-    let creationSession = creationSessionId && (workflowMode === 'lightweight' || !skipSpecCoding)
+    let creationSession = creationSessionId && (workflowMode === 'lightweight' || specCodingEnabled)
       ? await loadCreationSession(creationSessionId)
       : null;
     if (creationSession?.createdBy && creationSession.createdBy !== auth.id) {
@@ -424,7 +449,7 @@ export async function POST(request: Request) {
     if (creationSession && creationSession.mode !== workflowMode) {
       return jsonError('创建态会话类型与当前工作流类型不匹配', 400);
     }
-    if (skipSpecCoding) {
+    if (!specCodingEnabled) {
       if (workflowMode === 'lightweight') {
         if (creationSession) {
           creationSession = await updateCreationSession(creationSession.id, {

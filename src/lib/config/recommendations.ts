@@ -1,10 +1,11 @@
 import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
+import { isRetiredCatalogAgentName } from '@/lib/agent/catalog';
 
 export const DEFAULT_RECOMMENDED_AGENT_FALLBACK = [
+  'generalist',
   'architect',
   'developer',
   'tester',
-  'code-auditor',
   'documentation-writer',
 ] as const;
 
@@ -24,6 +25,7 @@ export function buildRecommendedAgents(input: {
   const add = (name?: string) => {
     const normalized = typeof name === 'string' ? name.trim() : '';
     if (!normalized) return;
+    if (isRetiredCatalogAgentName(normalized)) return;
     if (input.availableAgents.size > 0 && !input.availableAgents.has(normalized)) return;
     if (!lineup.includes(normalized) && normalized !== DEFAULT_SUPERVISOR_NAME) {
       lineup.push(normalized);

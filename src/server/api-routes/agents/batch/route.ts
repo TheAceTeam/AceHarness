@@ -2,6 +2,7 @@ import { readdir, readFile, writeFile, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { getRuntimeAgentsDirPath } from '@/lib/run/runtime-configs';
+import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
 export async function POST(request: Request) {
@@ -28,6 +29,9 @@ export async function POST(request: Request) {
       );
       if (normalizedNames.size !== names.length) {
         return jsonError('包含无效 Agent 名称', 400);
+      }
+      if (normalizedNames.has(DEFAULT_SUPERVISOR_NAME)) {
+        return jsonError('default-supervisor 是系统协调角色，不能删除', 400);
       }
 
       for (const file of yamlFiles) {

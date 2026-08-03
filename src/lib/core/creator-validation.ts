@@ -8,6 +8,7 @@ import {
 import { normalizeAgentAvatar } from '@/lib/agent/personas';
 import { getWorkspaceAgentsDir } from '@/lib/core/app-paths';
 import { getSubworkflowConfigFile, isSubworkflowStep, normalizeWorkflowConfigRef } from '@/lib/workflow/subworkflow-config';
+import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
 
 export interface ValidationIssue {
   path: string[];
@@ -84,9 +85,10 @@ function getAvailableAgents(): string[] {
   try {
     const agentsDir = getWorkspaceAgentsDir();
     if (!existsSync(agentsDir)) return [];
-    return readdirSync(agentsDir)
+    const names = readdirSync(agentsDir)
       .filter((entry) => entry.endsWith('.yaml') || entry.endsWith('.yml'))
       .map((entry) => entry.replace(/\.(yaml|yml)$/i, ''));
+    return Array.from(new Set([...names, DEFAULT_SUPERVISOR_NAME]));
   } catch {
     return [];
   }
@@ -106,6 +108,10 @@ export function buildDefaultAgentDraft(input?: Partial<any>) {
     description: typeof input?.description === 'string' ? input.description : '示例 Agent',
     keywords: Array.isArray(input?.keywords) ? input.keywords : ['示例'],
     tags: Array.isArray(input?.tags) ? input.tags : ['AI创建'],
+    expertPacks: Array.isArray(input?.expertPacks) ? input.expertPacks : [],
+    catalogVisibility: typeof input?.catalogVisibility === 'string' ? input.catalogVisibility : 'default',
+    baseCapability: typeof input?.baseCapability === 'string' ? input.baseCapability : undefined,
+    taskModes: Array.isArray(input?.taskModes) ? input.taskModes : [],
     skills: Array.isArray(input?.skills) ? input.skills : [],
   };
 }
@@ -125,12 +131,17 @@ function preprocessAgentDraftInput(input: any) {
         ? 'supervisor'
         : 'normal';
   const seed = typeof source.name === 'string' && source.name.trim() ? source.name.trim() : 'agent';
+  const isDefaultSupervisor = seed === DEFAULT_SUPERVISOR_NAME;
+  const normalizedTeam = isDefaultSupervisor ? 'black-gold' : team;
+  const normalizedRoleType = isDefaultSupervisor ? 'supervisor' : roleType;
 
   return {
     ...source,
-    team,
-    roleType,
-    avatar: normalizeAgentAvatar(source.avatar, seed, { team, roleType }),
+    name: seed,
+    team: normalizedTeam,
+    roleType: normalizedRoleType,
+    catalogVisibility: isDefaultSupervisor ? 'system' : source.catalogVisibility,
+    avatar: normalizeAgentAvatar(source.avatar, seed, { team: normalizedTeam, roleType: normalizedRoleType }),
   };
 }
 
@@ -153,6 +164,14 @@ export function validateAgentDraft(input: any): ValidationResult<any> {
 
   if (normalized.team === 'black-gold' && normalized.roleType !== 'supervisor') {
     pushIssue(issues, 'error', ['roleType'], 'black-gold 阵营必须使用 supervisor 角色类型');
+  }
+
+  if (normalized.roleType === 'supervisor' && normalized.name !== DEFAULT_SUPERVISOR_NAME) {
+    pushIssue(issues, 'error', ['roleType'], '系统只保留 default-supervisor 作为唯一 Supervisor');
+  }
+
+  if (normalized.name === DEFAULT_SUPERVISOR_NAME && normalized.catalogVisibility !== 'system') {
+    pushIssue(issues, 'error', ['catalogVisibility'], 'default-supervisor 必须作为系统指挥官保留');
   }
 
   if (normalized.activeEngine && !normalized.engineModels[normalized.activeEngine]) {
@@ -185,6 +204,7 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   const validationMode = options.mode || 'runtime';
   const shouldCheckRuntimeEnvironment = validationMode === 'runtime';
   const workflowAny = normalized.workflow as any;
+  const isLightweightWorkflow = workflowAny.profile === 'lightweight';
   const projectRoot = typeof normalized?.context?.projectRoot === 'string'
     ? normalized.context.projectRoot.trim()
     : '';
@@ -328,15 +348,24 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   }
 
   const supervisorAgent = normalized.workflow.supervisor?.agent?.trim();
-  const effectiveSupervisorAgent = supervisorAgent || 'default-supervisor';
-  if (!supervisorAgent) {
+  const effectiveSupervisorAgent = isLightweightWorkflow
+    ? undefined
+    : (supervisorAgent || DEFAULT_SUPERVISOR_NAME);
+  if (isLightweightWorkflow) {
+    if (input?.workflow?.supervisor) {
+      pushIssue(issues, 'error', ['workflow', 'supervisor'], '轻量工作流不支持 Supervisor 配置');
+    }
+    // The schema supplies defaults for ordinary state-machine workflows. Do
+    // not let that default leak into the normalized lightweight config.
+    delete workflowAny.supervisor;
+  } else if (!supervisorAgent) {
     pushIssue(issues, 'warning', ['workflow', 'supervisor', 'agent'], '未显式指定 supervisor，将回退到 default-supervisor');
   } else if (availableAgents && availableAgents.size > 0 && !availableAgents.has(supervisorAgent)) {
     pushIssue(issues, 'error', ['workflow', 'supervisor', 'agent'], `supervisor "${supervisorAgent}" 当前未在 agents 目录中找到`);
   }
 
   for (const stepRef of stepAgentRefs) {
-    if (stepRef.agent === effectiveSupervisorAgent) {
+    if (effectiveSupervisorAgent && stepRef.agent === effectiveSupervisorAgent) {
       pushIssue(
         issues,
         'error',

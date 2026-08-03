@@ -3,8 +3,8 @@ import { mcpServerSchema } from '@/lib/mcp/types';
 import {
   LIGHTWEIGHT_TASKLIST_SKILL,
   LIGHTWEIGHT_WORKFLOW_PROFILE,
-  normalizeLightweightTasklistDirectory,
 } from '@/lib/workflow/lightweight';
+import { AGENT_CATALOG_VISIBILITIES } from '@/lib/agent/catalog';
 
 const agentTeamSchema = z.enum(['blue', 'red', 'judge', 'black-gold']);
 const agentRoleTypeSchema = z.enum(['normal', 'supervisor']);
@@ -274,6 +274,10 @@ export const roleConfigSchema = z.object({
   category: z.string().optional(),
   tags: z.array(z.string()).optional(),
   specialtyTags: z.array(z.string()).optional(),
+  expertPacks: z.array(z.string().min(1)).max(12).default([]),
+  catalogVisibility: z.enum(AGENT_CATALOG_VISIBILITIES).default('default'),
+  baseCapability: z.string().optional(),
+  taskModes: z.array(z.string().min(1)).max(16).default([]),
   alwaysAvailableForChat: z.boolean().optional(),
   workspaceProfile: agentWorkspaceProfileSchema,
   // ---- Supervisor-Lite 新增（给 Supervisor 路由器用，不注入 Agent prompt）----
@@ -749,8 +753,7 @@ export const issueRoutingRuleSchema = z.object({
 
 // 状态机工作流配置 Schema
 const lightweightWorkflowConfigSchema = z.object({
-  tasklistDirectory: z.string().trim().min(1, 'tasklistDirectory is required'),
-});
+}).optional();
 
 export const stateMachineWorkflowSchema = z.object({
   workflow: z.object({
@@ -781,24 +784,6 @@ export const stateMachineWorkflowSchema = z.object({
       });
     }
     return;
-  }
-
-  if (!workflow.lightweight) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['workflow', 'lightweight'],
-      message: 'lightweight workflows require workflow.lightweight.tasklistDirectory',
-    });
-  } else {
-    try {
-      normalizeLightweightTasklistDirectory(workflow.lightweight.tasklistDirectory);
-    } catch (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['workflow', 'lightweight', 'tasklistDirectory'],
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   if (workflow.states.length !== 1) {

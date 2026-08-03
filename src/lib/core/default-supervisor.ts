@@ -10,37 +10,49 @@ export function createDefaultSupervisorConfig(): RoleConfig {
     activeEngine: '',
     engineModels: {},
     capabilities: [
-      '全局计划审阅',
-      '阶段复盘',
-      '检查点建议',
-      '协作评分',
-      '经验沉淀',
+      '全局进度判断',
+      '检查点协调',
+      '风险升级',
+      '交付总结',
     ],
     systemPrompt: [
-      '你是 ACEHarness 的默认指挥官 Supervisor。',
-      '你的职责是统筹工作流节奏、理解阶段结果、给出后续推进建议，并在需要时组织人工决策。',
-      '你不直接替代执行 Agent 完成编码任务，而是站在全局视角评估进度、风险、依赖和迭代方向。',
-      '输出应保持简洁、明确、可执行，优先给出下一步建议和需要关注的风险。',
+      '你是系统 Supervisor，负责协调工作流而非替代步骤 Agent 完成任务。',
+      '基于已提交的产物、日志和裁决，判断是否可以继续、需要补充证据，还是应升级给用户。',
+      '只给出明确的检查点建议、风险和下一步，不重复执行实现、研究或测试工作。',
     ].join('\n'),
-    category: '指挥官',
-    tags: ['supervisor', '指挥官', '黑金'],
-    description: '默认全局指挥官，负责 ACEHarness Spec Coding 制品修订、阶段审阅、检查点建议、评分与经验沉淀。',
-    keywords: ['aceharness-spec-coding', 'spec-coding', 'supervisor', '指挥官', '审阅', '评分', '经验'],
+    category: '系统协调',
+    tags: ['系统', '协调', '检查点'],
+    expertPacks: [],
+    catalogVisibility: 'system',
+    baseCapability: 'supervision',
+    taskModes: ['orchestrate', 'checkpoint', 'escalate', 'summarize'],
+    description: '统一协调工作流进度、检查点和风险升级的系统角色。',
+    keywords: ['协调', '检查点', '风险', '总结', '升级'],
     alwaysAvailableForChat: true,
   };
 }
 
 export function ensureDefaultSupervisorConfig(configs: RoleConfig[]): RoleConfig[] {
-  if (configs.some((config) => config.name === DEFAULT_SUPERVISOR_NAME)) {
-    return configs;
-  }
-  return [...configs, createDefaultSupervisorConfig()];
+  const existing = configs.find((config) => config.name === DEFAULT_SUPERVISOR_NAME);
+  const supervisor = existing
+    ? {
+        ...existing,
+        name: DEFAULT_SUPERVISOR_NAME,
+        team: 'black-gold' as const,
+        roleType: 'supervisor' as const,
+        catalogVisibility: 'system' as const,
+      }
+    : createDefaultSupervisorConfig();
+
+  return [
+    ...configs.filter((config) => (
+      config.name !== DEFAULT_SUPERVISOR_NAME
+      && config.roleType !== 'supervisor'
+    )),
+    supervisor,
+  ];
 }
 
-export function resolveWorkflowSupervisorAgent(config: StateMachineWorkflowConfig): string {
-  const enabled = config.workflow.supervisor?.enabled ?? true;
-  if (!enabled) {
-    return DEFAULT_SUPERVISOR_NAME;
-  }
-  return config.workflow.supervisor?.agent?.trim() || DEFAULT_SUPERVISOR_NAME;
+export function resolveWorkflowSupervisorAgent(_config: StateMachineWorkflowConfig): string {
+  return DEFAULT_SUPERVISOR_NAME;
 }
