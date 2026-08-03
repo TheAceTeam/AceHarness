@@ -1,6 +1,150 @@
 # Recent Verification
 
-Updated: 2026-07-30 17:13:10 +08:00
+Updated: 2026-08-01 15:51:26 +08:00
+
+## 2026-08-01 15:51:00 Tasks 30 And 31 Coordinator Update
+
+- Task 30 is accepted: lightweight overview no longer renders persistent Skills/Git preparation cards; its shared live location now includes both phase and step during preparation and removes duplicated state prefixes from internal step keys. `npx vitest run tests/workbench-lightweight-overview-observability.test.ts --reporter verbose` passed `1 file / 2 tests`; `npx tsc --noEmit --pretty false` passed.
+- Task 31 child repair is in review: recommendation and model-selector focused regressions passed, and TypeScript passed. The complete Task 10 gate has not yet been rerun.
+
+## 2026-08-01 15:25:00 Task 10 Fresh Gate Failure
+
+- Scope: complete gate after Tasks 28 and 29.
+- Result: `npm test -- --maxWorkers=1` failed after `503.89s`: `2 failed | 171 passed | 1 skipped`, `2 failed | 1120 passed | 7 skipped`. The two failures are `config-recommendations` unexpectedly returning `code-hunter` and `model-select` staying disabled in `loading`. Components passed `34 files / 159 tests`, TypeScript passed, and E2E passed `5/5`.
+- Follow-up: Task 30 corrects lightweight preparation presentation; Task 31 diagnoses and repairs both full-suite failures. The gate must rerun after both.
+
+## 2026-08-01 15:10:00 Tasks 28 And 29 Focused Acceptance
+
+- Scope: lightweight overview observability and the concrete TypeScript residuals found by the pre-Task-28 gate.
+- Evidence: lightweight overview now uses existing token analytics, runtime events/configured Skills, and workspace Git state to present Token consumption plus Skills/Git preparation evidence without fabricating unavailable values. Catalog/document/API type repairs preserve their existing domain contracts.
+- Verification: `npx vitest run tests/workbench-lightweight-overview-observability.test.ts tests/agent-catalog.test.ts` passed `2 files / 5 tests`; `npx tsc --noEmit` passed; scoped `git diff --check` passed with line-ending warnings only.
+- Result: Tasks 28 and 29 are **Done** at `100%`; Task 10 proceeds with a fresh full rerun.
+
+## 2026-08-01 14:56:00 Task 10 Pre-Task-28 Gate
+
+- Scope: current worktree release-gate attempt before the lightweight overview repair.
+- Result: `npm run test:components` passed `34 files / 159 tests`; `npm run test:e2e` passed `5/5`. `npm test -- --maxWorkers=1` exceeded the 124 s command limit without a final summary. `npx tsc --noEmit` reported ten errors.
+- Follow-up: Task 28 owns the Workbench error and the requested overview recovery. Task 29 owns the remaining catalog, document-panel/API, agent-chat route, and test-helper type errors. The gate must rerun after both tasks; this partial result is not release evidence.
+
+## 2026-08-01 14:30:26 Task 8 Current Static Reconciliation
+
+- Scope: post-Task-27 static audit of the lightweight creation contract, retained AI entry paths, phase-mode removal, run-owned tasklist metadata, and tasklist status/dependency consistency. No product source or tasklist README was edited.
+- Evidence: the target creation source scan found no `phase-based`, `workflow.phases`, `workflow?.phases`, `阶段模式`, or `线性流程` matches. The target creation sources contain no `tasklistDirectory` or `docs/tasklists` references; focused tests retain only negative legacy-input assertions. `src/plugins/create-workflow` and `src/plugins/workflow-monitor` are absent. Task 27 is accepted and `implementation-order.md` records `Task 27 -> Task 08`.
+- Contract correction: retained entry paths lead to the UI-only `ai-guided` journey, which may confirm either `lightweight` or `state-machine`; persisted `ai-guided` and `phase-based` modes remain rejected. The lightweight tasklist directory is run-owned runtime metadata, not configuration/create-form metadata.
+- Result: Task 8 is **In Review** pending coordinator acceptance of this static reconciliation. Task 16 browser journey evidence and Task 10's fresh full gate remain separately owned gaps.
+
+## 2026-08-01 14:27:00 Task 27 Lightweight Runtime Task Board Accepted
+
+- Scope: a dedicated lightweight-run task board and two-column tasklist document view.
+- Evidence: lightweight overview and Agent sections now render primary Agent plus actual child-Agent activity, task ownership/current work, serial/parallel grouping, dependencies, and evidence-backed completion. Tasklist documents lock to their run-owned source and hide the third generic folder/metadata column; state-machine views retain their normal formation and document layout.
+- Verification: `npx vitest run tests/components/LightweightTaskBoard.test.tsx tests/components/lightweight-tasklist-evidence.test.ts tests/components/DocumentsPanel.layout.test.ts tests/components/DocumentsPanel.source-tabs.test.tsx` passed `4 files / 11 tests`; `npx vitest run tests/workbench-dynamic-import.test.ts tests/task8-config-documents.test.ts` passed `2 files / 4 tests`; scoped `git diff --check` passed with line-ending warnings only.
+- Result: Task 27 is **Done** at `100%`. The remaining shared static audit and full gate are tracked by Tasks 8 and 10.
+
+## 2026-08-01 16:51:00 Task 13 WSL Linux Process-Tree Integration
+
+- Scope: production Linux process-manager record filtering, `ps` child-tree expansion, and signal isolation.
+- Evidence: WSL2 Ubuntu 24.04 ran `node node_modules/vitest/vitest.mjs run tests/process-manager.linux-process-tree.integration.test.ts --reporter=verbose`; it terminated only target parent/child PIDs `914233/914247` and preserved other-run PIDs `914234/914248` (`1/1` passed).
+- Boundary: ACP-shaped records and real OS processes prove the production Linux cleanup path. No live ACPX provider session was available in WSL, so this is not claimed as an ACPX-agent integration result.
+
+## 2026-08-01 16:46:00 Task 16 Phase-Removal Cleanup Reviewed
+
+- Scope: residual user-facing/configuration phase-mode content after the AI creation recovery.
+- Evidence: `NewConfigModal` now maps displays only to `轻量工作流` or `状态机`; `configs/README.md` contains the current lightweight/state-machine and step-Skills contracts. `npx vitest run tests/components/NewConfigModal.test.tsx tests/components/WorkflowModeSelector.test.tsx tests/components/WorkflowsPage.test.tsx tests/api-configs-create.test.ts` passed `4 files / 28 tests`.
+- Result: Task 16 is **In Review** at `95%`; browser journey evidence and the shared final gate remain.
+
+## 2026-08-01 16:42:00 Task 27 Phase A Accepted
+
+- Scope: isolated lightweight task-board evidence adapter and component, with no Workbench or DocumentsPanel integration edits.
+- Evidence: `npx vitest run tests/components/LightweightTaskBoard.test.tsx` passed `1 file / 5 tests`; coordinator review added the guard that excludes bare/idle ordinary roster entries from child-Agent activity.
+- Result: Phase A accepted. Phase B is active for live tasklist parsing, lightweight Workbench/Agent integration, and two-column document layout.
+
+## 2026-08-01 16:38:00 Task 13 Current Runtime Revalidation
+
+- Scope: failure checkpoints, explicit recovery, run-scoped cleanup, live history, and status isolation.
+- Finding and repair: both normal and compact scoped status endpoints now return target-scoped idle/not-found data when the requested run record is absent, rather than falling back to a same-config manager from another run.
+- Verification: `npx vitest run tests/state-machine-workflow-manager.test.ts tests/api-workflow-recovery-routes.test.ts tests/workbench-history-live-sync.test.ts tests/api-workflow-status-route.test.ts tests/process-manager.test.ts tests/api-workflow-stop-route.test.ts` passed `6 files / 192 tests`; scoped `git diff --check` passed with only line-ending warnings.
+- Result: Task 13 is **In Review** at `99%`; a real Linux ACPX process-tree integration and shared final gate remain open.
+
+## 2026-08-01 16:31:00 Task 19 Lightweight Authoring Review
+
+- Scope: lightweight direct-create controls and current run-owned tasklist creation contract.
+- Evidence: `npx vitest run tests/components/NewConfigModal.test.tsx` passed `1 file / 11 tests`; coordinator source review confirms a synchronous re-entry guard, unified loading state, disabled Agent/goal/button controls, and no leaked tasklist path or step-Skills field.
+- Result: Task 19 is **In Review** at `95%`; browser confirmation and shared final gate remain outstanding.
+
+## 2026-08-01 16:27:00 Task 16 Residual Phase-Mode Audit Finding
+
+- Evidence: a broader user-facing/source scan found five `线性流程` fallback labels in `NewConfigModal.tsx` and a `configs/README.md` `phase-based` documentation section after the earlier identifier-only scan.
+- Result: Task 16 is reopened at `85%` for bounded cleanup. Internal generic `specCoding.phases` data is not a phase-workflow regression and remains retained.
+
+## 2026-08-01 16:20:00 Task 21 Runtime Tasklist Storage Accepted
+
+- Scope: canonical run-owned tasklist path across creation, start, rehearsal, manager resume, state persistence, document roots, and AI workflow assembly.
+- Verification: initial `6 files / 184 tests`, then post-review `7 files / 208 tests`. Tests prove no workspace `docs/tasklists` creation, source-aware runtime document reads, canonical resume, and fail-closed legacy resume/document metadata. Static source review found no remaining production workspace-directory reservation or fallback call.
+- Result: Task 21 **Done** at `100%`; Task 27 is unblocked.
+
+## 2026-08-01 16:14:00 Task 18 Workbench Header And Start-Run Review
+
+- Scope: design-header rename and successful formal-start navigation.
+- Evidence: `npx vitest run tests/workbench-history-live-sync.test.ts` passed `9/9`; coordinator reviewed immutable draft saving, save de-duplication, local history upsert, selection, and overview URL handoff.
+- Result: Task 18 is **In Review** at `95%`; focused behavior is accepted and browser confirmation remains pending.
+
+## 2026-08-01 16:10:00 Task 14 And Task 15 Corrective Reviews
+
+- Task 14 scope: shared ACPX terminal tool-event normalization and structured result projection. Top-level `formatted_output`, `result`, `error`, and exit-code fields are now retained before projection; command/search output remains visible while file bodies remain suppressed. `npx vitest run tests/runtime-adapters.test.ts tests/workflow-runtime-model-route.test.ts tests/components/RuntimeToolEventList.test.tsx` passed `3 files / 64 tests`.
+- Task 15 scope: selected global models without an active compatible runtime route. Shared validation now runs in both ordinary and streaming chat APIs before context/session/turn work; the client-visible error preserves retryability. `npx vitest run tests/chat-context.test.tsx tests/api-chat-runtime-model-route.test.ts tests/api-chat-route.test.ts tests/api-chat-stream-flow.test.ts` passed `4 files / 33 tests`.
+- Result: both tasks remain **In Review** pending the current shared TypeScript/browser/full-suite gate; their focused implementation evidence is current.
+
+## 2026-08-01 16:02:00 Task 16 And Task 20 Coordinator Review
+
+- Scope: reviewed the completed child-agent slices for retained AI-guided creation and lightweight runtime navigation.
+- Task 16 evidence: `tests/components/NewConfigModal.test.tsx` passed `10/10`; the creation-chain focused set passed `33/33`. Coordinator source review confirmed exclusive UI-only `ai-guided` selection, deferred chat-session creation, supported persisted modes only, and no active phase-mode source reference beyond negative regression assertions. Browser smoke remains open, so Task 16 is **In Review**.
+- Task 20 evidence: `tests/components/DocumentsPanel.source-tabs.test.tsx` passed `1/1`; coordinator source review confirmed lightweight tasklist locking and state-machine non-regression in Workbench navigation. Task 20 is **Done** at `100%`.
+- Result: Task 21 remains the active runtime-storage implementation. Task 27 is newly tracked for the dedicated lightweight task-board/Agent/document surface.
+
+## 2026-08-01 13:09:10 Task 22 Lightweight Supervisor-Free Runtime Accepted
+
+- Scope: Removed implicit `default-supervisor` behavior for lightweight workflows while retaining normal state-machine defaults.
+- Verification: `tests/creator-validation.test.ts`, `tests/api-workflow-start-flow.test.ts`, and `tests/state-machine-workflow-manager.test.ts` passed `3 files / 168 tests`; scoped `git diff --check` passed with line-ending warnings only.
+- Result: Task 22 **Done** at `100%`. Task 21 is unblocked.
+
+## 2026-08-01 13:00:05 Task 26 Three-Second Trailing Tool-Group Hold Accepted
+
+- Scope: Changed only the streaming terminal group stability duration from 1.2 seconds to 3 seconds.
+- Verification: `npx vitest run tests/components/RuntimeToolEventList.test.tsx` passed `1 file / 7 tests`; coverage includes the 2.999-second boundary, next-tool reset, terminal close, and immediate stream-end close.
+- Result: Task 26 **Done** at `100%`.
+
+## 2026-08-01 13:00:05 SSR Startup And Module Loading Blocker Resolved
+
+- Evidence: user confirmation that the prior SSR startup/module-loading issue is fixed.
+- Result: remove this blocker from Tasks 5, 7, 10, and 16. This does not certify the remaining AI creation work or the final test gate.
+
+## 2026-08-01 12:53:24 Task 26 Trailing Tool-Group Hold Adjustment
+
+- Scope: User-selected UI timing change only.
+- Required behavior: hold an otherwise terminal tool group open for 3 seconds while the response is streaming; a next tool resets the timer and the end of the stream closes immediately.
+- Result: delegated implementation pending. No verification is claimed by this entry.
+
+## 2026-08-01 12:45:51 Task 25 Workbench Tool-Group Identity Accepted
+
+- Scope: Repaired trailing live tool-call group remounts and extended the streaming terminal stability window to 1.2 seconds.
+- Changes: `WorkbenchClient.tsx` now gives a contiguous tool group a stable identity based on its first call. Terminal status changes and newly appended contiguous calls retain that identity; a non-tool boundary begins a new identity. Streaming end still closes the group immediately.
+- Verification: `npx vitest run tests/components/RuntimeToolEventList.test.tsx` passed `1 file / 7 tests`; the scoped `git diff --check` passed with only line-ending warnings.
+- Result: Task 25 **Done** at `100%`. Browser confirmation remains part of the shared Workbench gate, not a prerequisite for this focused correction.
+
+## 2026-08-01 12:37:03 Task 25 Workbench Tool-Group Identity Triage
+
+- Scope: Investigated user-observed expand/collapse flicker at the tail of contiguous live tool calls.
+- Evidence: `RuntimeToolEventGroup` already has a streaming-only, resettable 400 ms terminal stability timer. In `WorkbenchClient.tsx`, the virtual-list key includes both the group index ending in the current last tool ID and a `pending`/`done` suffix. A terminal update or the next contiguous tool therefore remounts the group and loses that timer/state.
+- Result: implementation delegated in the Workbench owner lane as Task 25. No completion or test result is claimed by this entry.
+
+## 2026-07-31 18:50:23 Task 17 Default Tasklist Location And Viewer
+
+- Scope: Removed tasklist-directory path displays from creation, design, and lightweight run overview surfaces; added source-aware tasklist document filtering and Workbench navigation.
+- Evidence: Persisted lightweight metadata and the Agent runtime tasklist-directory instruction were left unchanged. `GET /api/runs/:id/documents?source=tasklist` now filters before pagination and the existing content endpoint remains source-aware.
+- Focused verification: `npx vitest run tests/components/NewConfigModal.test.tsx tests/components/LightweightWorkflowDesignPanel.test.tsx tests/task8-config-documents.test.ts` passed `3 files / 12 tests`.
+- Runtime probe: the active Vite server returned HTTP 200 for `/src/client/pages/workbench/WorkbenchClient.tsx`.
+- TypeScript: `npx tsc --noEmit` reached the 120-second tool limit without diagnostics; no TypeScript pass is claimed from that attempt.
+- Result: Task 17 **Done** at `100%`. The broader full-suite gate remains governed by Task 10 and the current README blockers.
 
 ## 2026-07-30 17:13:10 Final Task 8 And Task 10 Archive
 
@@ -97,7 +241,7 @@ Updated: 2026-07-30 17:13:10 +08:00
 - Browser suite: `npm run test:e2e` passed with `5/5` after the Playwright configuration fix.
 - Repository checks: `npx tsc --noEmit` passed and `git diff --check` passed.
 - Status at that time: Task 10 was recorded as `Done` at `100%` and Task 12 was `In Progress` at `5%`. This entry predates the Task 12 source changes and is retained only as historical evidence; the current Task 10 gate is pending rerun and Task 12 is `In Review` at `90%`.
-- The retained `AI 引导创建` entry remains part of the lightweight creation flow. No legacy phase workflow, old `/workflow` path, or persisted `ai-guided` mode is restored by this verification update.
+- Historical snapshot: the retained `AI 引导创建` entry was described as part of the lightweight creation flow. The current contract supersedes that lightweight-only wording: it is a UI planning entry whose confirmed output may create lightweight or state-machine. No legacy phase workflow, old `/workflow` path, or persisted `ai-guided` mode is restored by this verification update.
 
 ## 2026-07-30 11:51:29 New Task 12 Requirements Recorded
 
@@ -108,10 +252,10 @@ Updated: 2026-07-30 17:13:10 +08:00
 - Required copy behavior: remove internal migration/audit wording and negative-facing text from user-visible surfaces; replace it with positive, friendly introductions. Internal diagnostics may remain backend-visible where required, but must not be presented as user-facing product copy.
 - Verification boundary: focused UI, precedence/empty-value, provider-specific ACPX injection, password-dialog, and copy-scan tests still need to be assigned and run. This new task is independent of the prior full `npm test` gate and does not alter its `In Progress` status.
 
-## 2026-07-30 11:42:36 AI Entry And Coordinator Status Refresh
+## 2026-07-30 11:42:36 AI Entry And Coordinator Status Refresh (Historical, Superseded)
 
 - Scope: Documentation-only synchronization of the final AI-entry handoff report. No source files were changed by this sync.
-- AI entry: `WorkflowModeSelector.tsx` now exposes the third `AI 引导创建` card; clicking it enters the lightweight `NewConfigModal` flow and creates or reuses the lightweight creation session. `WorkflowsPage.tsx` and `ChatPageContent.tsx` are both connected. The retained entry does not restore a phase workflow, the old `create-workflow` plugin, `/workflow`, or a persisted `ai-guided` mode.
+- Historical AI entry snapshot: `WorkflowModeSelector.tsx` exposed the third `AI 引导创建` card; clicking it entered the lightweight `NewConfigModal` flow and created or reused the lightweight creation session. The current contract supersedes this lightweight-only wording: the UI planning entry may confirm lightweight or state-machine. `WorkflowsPage.tsx` and `ChatPageContent.tsx` are both connected. The retained entry does not restore a phase workflow, the old `create-workflow` plugin, `/workflow`, or a persisted `ai-guided` mode.
 - AI-entry focused verification: `15/15` passing. The component suite is `127/127`, E2E is `5/5`, and TypeScript passes.
 - Additional evidence retained: Workbench dynamic-import focused test `2/2`, Vite build success, TypeScript, clean server `5187`, and exact browser module import; ModelDiagnostics `16/16`; API/mock repair cluster `3/3`; workspace API `6 passed / 4 skipped`; Agora `18/18`; `WorkspaceDirectoryPicker` `1/1`; `AgentEditModal` `1/1`; Windows cleanup `3 files / 34 tests`; Git-baseline-disabled path `109/109` plus TypeScript; ACPX lifecycle focused evidence `76/76`.
 - Status decision: Task 5 -> `In Review` (`95%`); Task 7 -> `In Review` (`95%`); Task 8 -> `In Review` (`95%`); Task 10 remains `In Progress` (`90%`); Task 11 -> `In Review` (`95%`). None of these tasks is marked `Done/100%`.
@@ -248,3 +392,45 @@ Updated: 2026-07-30 17:13:10 +08:00
 - Diagnostic scan: all raw ACP-skip phrase matches were test fixtures/assertions; no match remained in `src/client` or the workflow stop route.
 - Blocking review finding: `rerun-from-step` has no unresolved-`failedSteps` gate and `WorkflowManager.rerunFromStep` starts the requested historical state before the later transition guard. This violates the failed-checkpoint recovery lock.
 - Status consequence: Task 13 moves from `80%` to `75% / In Progress`; the combined passing test result is retained as pre-13F evidence, not final acceptance. Real Linux process-tree execution remains an environment-specific verification gap.
+
+## 2026-08-01 Task 23 Tool-Group Stability Review
+
+- Scope: `RuntimeToolEventList` group-collapse timing only.
+- Reviewed behavior: when a streaming tool group temporarily has no running calls, it holds open for a resettable 400 ms stability window. A subsequent running call clears that timer; ending the stream still closes the group immediately.
+- Verification: `npx vitest run tests/components/RuntimeToolEventList.test.tsx` reported `5 passed`.
+- Status consequence: Task 23 is accepted at `100%`. No broad suite was run for this isolated UI interaction repair.
+
+## 2026-08-01 Task 18 Workbench Action Review
+
+- Scope: Dashboard Shell name-edit action and ordinary successful-start navigation in `WorkbenchClient.tsx`.
+- Reviewed behavior: active dashboard headers receive the inline workflow-name input as a leading action; blur/Enter copy the name into the current edit draft and use the established design save path. A returned ordinary run ID is immediately selected, switched into the runs/overview surface, placed into the URL, and retained until history returns its row.
+- Verification: `git diff --check` passed. Browser verification is deliberately pending user manual confirmation; no broad test suite was run.
+- Status consequence: Task 18 is `90% / In Review` rather than Done.
+
+## 2026-08-01 Task 19 Lightweight Authoring Review
+
+- Scope: lightweight branches in `NewConfigModal`, `LightweightWorkflowDesignPanel`, and config creation route.
+- Reviewed behavior: no optional step-Skills UI remains; the tasklist skill is fixed internally; generated lightweight configs strip supervisor and transition-cap fields after schema normalization. Direct non-AI creation uses a ref-based same-tick re-entry guard and visible create-in-progress state.
+- Verification: static search and `git diff --check` passed. Browser confirmation remains pending by request; no broad suite was run.
+- Status consequence: Task 19 is `90% / In Review`.
+
+## 2026-08-01 Task 21 Runtime Tasklist Path Audit (Historical, Superseded)
+
+- Scope: read-only trace of lightweight configuration, start/resume metadata, document-root resolution, and Agent instruction paths.
+- Historical finding at the pre-implementation snapshot: the design still derived and resolved `docs/tasklists/<config>` under the configured project workspace. `getWorkspaceRunsDir()` supplied the canonical runtime parent but had no shared per-run helper.
+- Required target: `<ACE runtime>/runs/<runId>/tasklist`, with persisted runtime metadata and resume/document-root containment checks. Legacy workspace-root metadata must fail closed rather than write to the workspace.
+- Status consequence at that snapshot: Task 21 remained pending implementation after Task 22 because the startup and recovery files overlapped. It is superseded by the accepted Task 21 runtime-storage entry above.
+
+## 2026-08-01 Task 24 Lightweight Design Integration Review
+
+- Scope: lightweight design panel props, its state-machine design container call, and focused component tests.
+- Reviewed behavior: no stale `availableSkills` prop remains, the panel has no arbitrary-prop escape hatch, and state/task edits force exactly the internal `aceharness-tasklist` Skill.
+- Verification: `npx vitest run tests/components/LightweightWorkflowDesignPanel.test.tsx` reported `1 file / 3 tests passed`.
+- Status consequence: Task 24 is accepted at `100%`.
+
+## 2026-08-01 Task 35 ACPX Opaque Subagent Regression Registration
+
+- User live reproduction remains open: provider-private ACPX `spawnAgent` and `wait` cards render as `other` in both terminal and running states, and the lightweight overview reports no child-Agent activity.
+- Read-only source trace: runtime projection already maps canonical `spawnAgent`/`wait` names to `subagent-dispatch`/`subagent-wait`; the existing ACPX persisted ToolUse enrichment only starts from `source.toolCallId` and copies a narrow subset of fields. That is insufficient for opaque event-ID variants and lifecycle continuity.
+- Delegation: one bounded child agent owns shared ACPX adapter normalization and focused adapter/task-board regression coverage. The coordinator owns tasklist status and acceptance review.
+- Acceptance boundary: no Codex-only UI fallback, no fabricated Agent cards, and no status change until real persisted ToolUse metadata reaches both live labels and task-board evidence.

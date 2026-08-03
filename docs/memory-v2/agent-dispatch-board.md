@@ -42,7 +42,7 @@ Task 1: schema + Memory Service
 | A | Task 1 | None | V2 persistence, migrations, service contracts, scope/authorization snapshots, handoff primitives, archive registry primitives | Exported API/type inventory, migration inventory, changed-file list, static evidence, open assumptions |
 | Gate A | Contract review | Task 1 diff complete | Main Agent | Approved immutable downstream interface list or a narrowly scoped repair request |
 | B1 | Task 2 | Gate A approved | AI memory tools, decision parser, prompt manifest adapter, explicit detail reads | Protocol mapping, changed-file list, contract use report, static evidence, open assumptions |
-| B2 | Task 3 | Gate A approved | Phase/state-machine handoff adapters, run/channel persistence integration, resume path, required-read state | Workflow-path mapping, changed-file list, contract use report, static evidence, open assumptions |
+| B2 | Task 3 | Gate A approved | Lightweight tasklist/state-machine handoff adapters, run/channel persistence integration, resume path, required-read state | Workflow-path mapping, changed-file list, contract use report, static evidence, open assumptions |
 | B3 | Task 4 | Gate A approved | Chat/collaboration consumers, legacy route retirement, feature-flag and archive wiring, session continuity | Consumer/legacy-path inventory, changed-file list, contract use report, static evidence, open assumptions |
 | Gate B | Integration review | B1, B2, B3 complete | Main Agent | Compatibility findings, ownership-conflict decision, required repair tasks |
 | B-R1 | Task 1 repair | Gate B finding: session-short ordinary manifest omission | V2 `memory-service` only | Static proof that a matching session-short `handoff: none` item appears only in its own session manifest |
@@ -87,7 +87,7 @@ Task 4A and Task 4B are accepted for static review. Task 5 may now begin in the 
 |---|---|---|
 | Task 1 | New V2 schema/service/types/database initialization and persistence adapters | Workflow managers, chat page components, governance UI, legacy consumer routing except the minimal V2 connection boundary |
 | Task 2 | AI engine adapters, memory tool contracts/parsers, prompt assembly, detail-read adapter | Schema implementation, workflow managers, chat UI/routes, governance UI |
-| Task 3 | Phase workflow manager, state-machine manager, channel/run handoff adapters, workflow context assembly | Chat consumers, legacy retirement routes, governance UI, Task 1 schema internals |
+| Task 3 | Lightweight tasklist/state-machine workflow managers, channel/run handoff adapters, workflow context assembly | Chat consumers, legacy retirement routes, governance UI, Task 1 schema internals |
 | Task 4 | Homepage/Agent/chat/collaboration consumers, legacy memory endpoints, feature flags, archive access guards, chat session continuity | Workflow managers, AI protocol parser/prompt adapter, Task 1 schema internals, governance UI |
 | Task 5 | Agent-management UI removal, system audit/review UI, workflow handoff UI, metrics/diagnostics/cutover UI | Task 1 schema internals and stable Task 2/3/4 adapters unless a reviewed integration repair specifically requires it |
 

@@ -100,7 +100,7 @@ workflow:
           task: 质疑根因分析结论，检查是否遗漏其他可能原因、是否只看到表象
         - id: root-cause-judge
           name: 根因裁决
-          agent: fix-judge
+          agent: code-judge
           role: judge
           specTaskBinding:
             taskIds: [T2.3]
@@ -151,9 +151,9 @@ workflow:
             requirementIds: [R3]
             artifactKeys: [tasks]
           task: 攻击修复代码，检查是否真正修复、是否引入新 bug、边界条件是否覆盖
-        - id: fix-judge
+        - id: repair-judge
           name: 修复裁决
-          agent: fix-judge
+          agent: code-judge
           role: judge
           specTaskBinding:
             taskIds: [T3.3]

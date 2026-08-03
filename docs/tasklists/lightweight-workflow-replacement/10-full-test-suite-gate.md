@@ -1,8 +1,8 @@
 # Task 10: Full Test-Suite Gate
 
-Status: Done (100%)
+Status: Blocked
 
-Updated: 2026-07-30 17:10:27 +08:00
+Updated: 2026-08-01 14:56:00 +08:00
 
 ## Execution Contract
 
@@ -16,13 +16,18 @@ Updated: 2026-07-30 17:10:27 +08:00
 
 Meet the user's release condition that every configured test passes before delivery.
 
+## Current Gate Status
+
+- The 2026-08-01 pre-Task-28 gate is not accepted: component tests passed `34 files / 159 tests` and E2E passed `5/5`, but full Vitest exceeded the 124 s command limit without a summary and TypeScript reported ten errors.
+- Tasks 28 and 29 are accepted, but the fresh gate found two full-suite regressions. Task 30 owns the corrected lightweight preparation presentation and Task 31 owns the two regression root causes. The complete gate must rerun after both are accepted. The older completion record below remains historical evidence only.
+
 ## Current State
 
 - The historical aggregate claims are superseded by the final command-level record below.
 - Node `v24.13.1`, npm `11.8.0`, installed dependencies, current `dist`, and Playwright Chromium satisfied the configured prerequisites.
 - Before E2E, port `5188` was confirmed free of a residual server and `PLAYWRIGHT_BASE_URL` was unset. Playwright therefore started the current production artifact through `start:start`, rather than reusing a stale service.
 
-## Completion
+## Historical Completion
 
 - The configured release gate completed without narrowing test selection or changing assertions.
 - `npm test` includes the Git-baseline regression coverage: disabled isolated copies skip `.git`, enabled copies retain `.git`, and rerun refreshes a newly disabled baseline configuration.
@@ -37,6 +42,8 @@ Meet the user's release condition that every configured test passes before deliv
 
 ## Verification Record
 
+- 2026-08-01 pre-Task-28 gate: `npm run test:components` **pass** (`34 files / 159 tests`); `npm run test:e2e` **pass** (`5/5`); `npm test -- --maxWorkers=1` **timeout** at 124 s without final summary; `npx tsc --noEmit` **fail** (ten errors). No source files were changed by the gate runner.
+- 2026-08-01 fresh gate: `npm test -- --maxWorkers=1` **fail** after `503.89s` (`2 failed | 171 passed | 1 skipped`, `2 failed | 1120 passed | 7 skipped`). Failures are the unexpected `code-hunter` recommendation and model selector permanently showing `loading`. Components (`34 files / 159 tests`), TypeScript, and E2E (`5/5`) passed. Tasks 30 and 31 must close before rerun.
 - `npm test`: **pass**, `160 files / 1047 passed / 6 skipped`.
 - `npm run test:components`: **pass**, `29 files / 132 passed`.
 - `npm run test:e2e`: **pass**, `5 passed`; port `5188` was free, `PLAYWRIGHT_BASE_URL` was unset, and the suite ran against current `dist` through `start:start`.

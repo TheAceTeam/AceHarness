@@ -28,7 +28,7 @@ This document is based on the current memory and workflow-context audit, [PRD.md
 - `memory.sqlite` already persists role, project, workflow, and chat records, but it retrieves by recency and injects text directly; `runtimeEnabled` controls read injection while automatic writers still persist records.
 - The state-machine manager writes final review/experience data but only injects raw tails from the prior two states. It has no automatic handoff for normal serial steps within the same state.
 - `channelOutputsById` is process-local and is not present in persisted run state, so it is lost during resume.
-- Phase-based and state-machine workflows use materially different context-transfer paths. Memory V2 must give both modes the same handoff query contract.
+- Lightweight tasklist and state-machine workflows use the same V2 handoff query contract.
 - Workflow short memory must span the complete `run` and remain available across authorized participating Agents; the source Agent is provenance only.
 - Every short record needs a unique session/run lifecycle anchor. Relevance bindings cannot widen it into another conversation or run.
 - Existing YAML experience and relationship stores are legacy sources outside Memory V2. V2 starts empty and never imports or reads them as memory.
