@@ -49,6 +49,17 @@ async function withStore<T>(
   });
 }
 
+async function withGitCeiling<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.GIT_CEILING_DIRECTORIES;
+  process.env.GIT_CEILING_DIRECTORIES = path.resolve(tmpdir());
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+    else process.env.GIT_CEILING_DIRECTORIES = previous;
+  }
+}
+
 afterEach(() => {
   delete process.env.ACE_HOME;
   vi.doUnmock('@/lib/run/runtime-skills');
@@ -293,17 +304,19 @@ describe('agora workspace store', () => {
 
   test('never stages pre-existing user content when initializing a plain directory', async () => {
     await withStore(async ({ store }) => {
-      await withTempDir('aceharness-plain-dir-', async (plainDir) => {
-        await mkdir(path.join(plainDir, '.ssh'), { recursive: true });
-        await writeFile(path.join(plainDir, '.ssh', 'id_rsa'), 'PRIVATE KEY\n', 'utf-8');
-        await writeFile(path.join(plainDir, 'notes.md'), 'private notes\n', 'utf-8');
+      await withGitCeiling(async () => {
+        await withTempDir('aceharness-plain-dir-', async (plainDir) => {
+          await mkdir(path.join(plainDir, '.ssh'), { recursive: true });
+          await writeFile(path.join(plainDir, '.ssh', 'id_rsa'), 'PRIVATE KEY\n', 'utf-8');
+          await writeFile(path.join(plainDir, 'notes.md'), 'private notes\n', 'utf-8');
 
-        await store.ensureAgoraWorkspace({ sessionId: 'plain-dir', targetWorkspace: plainDir });
+          await store.ensureAgoraWorkspace({ sessionId: 'plain-dir', targetWorkspace: plainDir });
 
-        // 基线存在（变更视图可用），但提交里只有标记文件，用户既有内容一律未被纳入。
-        expect(await git(plainDir, ['rev-parse', '--verify', 'HEAD'])).toBeTruthy();
-        const tracked = await git(plainDir, ['ls-files']);
-        expect(tracked.split('\n').filter(Boolean)).toEqual(['.ace-agora-baseline']);
+          // 基线存在（变更视图可用），但提交里只有标记文件，用户既有内容一律未被纳入。
+          expect(await git(plainDir, ['rev-parse', '--verify', 'HEAD'])).toBeTruthy();
+          const tracked = await git(plainDir, ['ls-files']);
+          expect(tracked.split('\n').filter(Boolean)).toEqual(['.ace-agora-baseline']);
+        });
       });
     });
   });
