@@ -10,7 +10,7 @@ import { useTheme } from 'next-themes';
 import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
 import * as ReactSpinners from 'react-spinners';
 import BrandLoadingScreen from '@/components/BrandLoadingScreen';
-import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type GitBrowserSummaryResponse, type NotebookScope } from '@/lib/core/api';
+import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type GitBrowserSummaryResponse, type NotebookScope, type RunDocumentSource } from '@/lib/core/api';
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import { fetchWorkflowEvents, fetchWorkflowStateHistory, fetchWorkflowStatusCompact, fetchWorkflowStepLogs } from '@/client/query/workflow-runtime';
@@ -29,10 +29,13 @@ import {
   useWorkflowEventRows,
 } from '@/client/db/collections';
 import { useGitBrowserSummaryQuery } from '@/client/query/workspace';
+import { useLightweightRuntimeToolEventsQuery, useLightweightTasklistEvidenceQuery } from '@/client/query/lightweight-tasklist';
 
 const { ClipLoader } = ReactSpinners;
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import LightweightWorkflowExecutionView from '@/components/workflow/LightweightWorkflowExecutionView';
+import LightweightTaskBoard from '@/components/workflow/LightweightTaskBoard';
+import LightweightTaskExecutionGraph from '@/components/workflow/LightweightTaskExecutionGraph';
 import AgentFormationDiagram from '@/components/AgentFormationDiagram';
 import AgentPanel from '@/components/AgentPanel';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
@@ -93,7 +96,7 @@ import { RuntimeToolEventCard, RuntimeToolEventGroup } from '@/components/chat/R
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
-import { calculateWorkflowRunTiming } from '@/lib/workflow/run-timing';
+import { calculateWorkflowRunTiming, resolveWorkflowOverviewTiming } from '@/lib/workflow/run-timing';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
 import { getStreamingAceProcessReadyContent, mergeAceProcessChunkItems, mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
@@ -136,7 +139,11 @@ import type { TasksMarkdownValidationIssue } from '@/lib/spec/coding-store';
 import {
   buildWorkflowConversationDirectory,
 } from '@/lib/agent/conversations';
-import { isLightweightWorkflowConfig } from '@/lib/workflow/lightweight';
+import {
+  isLightweightWorkflowConfig,
+  resolveWorkflowPolicyAgentNames,
+  resolveWorkflowPolicySupervisorAgentName,
+} from '@/lib/workflow/lightweight';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
@@ -145,6 +152,7 @@ import type {
   DeltaMergeState,
   HumanQuestion,
   HumanQuestionAnswer,
+  WorkflowGitState,
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
 import type { StateMachineState, WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
@@ -156,6 +164,7 @@ import { resolveWorkspaceLinkTarget, resolveWorkspaceRootFromRoute } from '@/lib
 import { VirtualList } from '@/client/virtual/VirtualList';
 import { parseAceSseEventData, storeAceAgentMessage, storeChatStreamSseEventAsAgentMessage, storeWorkflowSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { mergeRuntimeToolEvents, type RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
+import { getStableLiveToolGroupIdentity } from './live-tool-group-identity';
 import styles from './page.module.css';
 
 const loadingPanel = () => (
@@ -229,11 +238,130 @@ const MonacoEditor = dynamic(
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
-type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
-type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
+export type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
+export type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
+export type DocumentSourceFilter = RunDocumentSource | 'all';
+export type RunDetailNavItem = {
+  id: string;
+  key: RunDetailSection;
+  label: string;
+  icon: string;
+  documentSource?: DocumentSourceFilter;
+};
 type RunLeftPanelTab = 'summary' | 'directory';
 type RunRightPanelTab = 'detail' | 'live' | 'context' | 'questions' | 'diff';
 const WORKFLOW_RUN_PANEL_TABS_STORAGE_PREFIX = 'aceharness:workflow-run:panel-tabs';
+
+export function buildWorkflowConfigWithName(config: any, name: string) {
+  const trimmedName = name.trim();
+  if (!config || !trimmedName) return null;
+
+  const nextConfig = JSON.parse(JSON.stringify(config));
+  nextConfig.workflow = { ...(nextConfig.workflow || {}), name: trimmedName };
+  return nextConfig;
+}
+
+export function upsertStartedRunInHistory(historyRuns: any[], startedRun: any) {
+  return [startedRun, ...historyRuns.filter((run) => run?.id !== startedRun.id)];
+}
+
+export function buildWorkbenchPreviewDetailNavItems(input: {
+  isLightweightWorkflow: boolean;
+  runtimeSpecAvailable?: boolean;
+}): Array<{ key: RunDetailSection; label: string; icon: string }> {
+  return [
+    { key: 'overview', label: '总览', icon: 'dashboard' },
+    { key: 'state', label: '状态图', icon: 'hub' },
+    ...(!input.isLightweightWorkflow ? [{ key: 'agents' as const, label: 'Agents', icon: 'groups' }] : []),
+    { key: 'workspace', label: '工作区', icon: 'folder_open' },
+    ...(input.runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
+  ];
+}
+
+export function buildWorkbenchRunDetailNavItems(input: {
+  isLightweightWorkflow: boolean;
+  runtimeSpecAvailable?: boolean;
+}): RunDetailNavItem[] {
+  return [
+    { id: 'overview', key: 'overview', label: '总览', icon: 'dashboard' },
+    { id: 'state', key: 'state', label: '状态图', icon: 'hub' },
+    ...(!input.isLightweightWorkflow ? [{ id: 'agents', key: 'agents' as const, label: 'Agents', icon: 'groups' }] : []),
+    { id: 'workspace', key: 'workspace', label: '工作区', icon: 'folder_open' },
+    { id: 'changes', key: 'changes', label: '变更', icon: 'difference' },
+    ...(!input.isLightweightWorkflow
+      ? [{ id: 'documents', key: 'documents' as const, label: '步骤文档', icon: 'description', documentSource: 'runtime-output' as const }]
+      : []),
+    ...(input.isLightweightWorkflow
+      ? [{ id: 'tasklist', key: 'documents' as const, label: '任务清单', icon: 'checklist', documentSource: 'tasklist' as const }]
+      : []),
+    { id: 'live', key: 'live', label: '实时输出', icon: 'cell_tower' },
+    ...(input.runtimeSpecAvailable ? [{ id: 'spec', key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
+  ];
+}
+
+export function resolveWorkbenchPreviewRouteSection(routeSection: string): RunDetailSection {
+  return routeSection === 'preview-state'
+    ? 'state'
+    : routeSection === 'preview-agents'
+      ? 'agents'
+      : routeSection === 'preview-workspace'
+        ? 'workspace'
+        : routeSection === 'preview-spec'
+          ? 'spec'
+          : 'overview';
+}
+
+export function resolveLightweightWorkbenchRunTabRedirect(input: {
+  requestedTab: RunWorkbenchTab;
+  requestedDocumentSource: DocumentSourceFilter;
+}): { section: RunDetailSection; tab: RunWorkbenchTab; documentSource: DocumentSourceFilter } | null {
+  if (input.requestedTab === 'agents') {
+    return { section: 'overview', tab: 'overview', documentSource: 'all' };
+  }
+  if (
+    (input.requestedTab === 'documents' && input.requestedDocumentSource !== 'tasklist')
+    || input.requestedDocumentSource === 'runtime-output'
+  ) {
+    return { section: 'documents', tab: 'documents', documentSource: 'tasklist' };
+  }
+  return null;
+}
+
+const WORKBENCH_STREAM_CHUNK_SEPARATOR = '\n\n<!-- chunk-boundary -->\n\n';
+const WORKBENCH_STREAM_CHUNK_BOUNDARY_REGEX = /\r?\n*\s*<!--\s*chunk-boundary\s*-->\s*\r?\n*/gi;
+
+export function splitWorkbenchLiveStreamContent(content: string): string[] {
+  return String(content || '').split(WORKBENCH_STREAM_CHUNK_BOUNDARY_REGEX).filter(Boolean);
+}
+
+/**
+ * Stream frames are transport increments, so they must be reassembled before
+ * Markdown sees them. A double newline here would turn every frame into a p.
+ */
+export function reconstructWorkbenchCachedLiveStreamContent(
+  rows: Array<{ id?: string; content?: string; chunks?: string[] }>,
+  runId: string,
+  stepKey: string,
+): string {
+  const liveMessageId = `workflow:${runId}:${stepKey}:live`;
+  const liveMessage = rows.find((row) => row.id === liveMessageId);
+  if (liveMessage) return liveMessage.content || liveMessage.chunks?.filter(Boolean).join('') || '';
+
+  return rows.map((row) => {
+    if (Array.isArray(row.chunks) && row.chunks.length > 0) {
+      return row.chunks.filter(Boolean).join('');
+    }
+    return row.content || '';
+  }).join('');
+}
+
+export function applyWorkbenchLiveStreamTransportFrame(
+  currentRaw: string,
+  frame: { kind: 'snapshot' | 'delta'; content: string },
+): string {
+  return frame.kind === 'snapshot' ? frame.content : `${currentRaw}${frame.content}`;
+}
+
 const WORKFLOW_RUN_DELETED_EVENT = 'ace:workflow-run-deleted';
 const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'crashed']);
 type StopProgressStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
@@ -407,6 +535,48 @@ function normalizeActiveWorkflowSteps(input: {
   return Array.from(new Set(normalized));
 }
 
+function normalizeWorkflowStepName(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function uniqueWorkflowStepNames(values: unknown[]): string[] {
+  return Array.from(new Set(values.map(normalizeWorkflowStepName).filter(Boolean)));
+}
+
+export function resolveWorkbenchLiveStreamStepKeys(input: {
+  activeSteps?: unknown;
+  currentStep?: unknown;
+  currentPhase?: unknown;
+  currentState?: unknown;
+  completedSteps?: unknown;
+  failedSteps?: unknown;
+  terminal?: boolean;
+  fallbackStepName?: unknown;
+}): string[] {
+  if (input.terminal) {
+    const terminalSteps = uniqueWorkflowStepNames([
+      ...(Array.isArray(input.completedSteps) ? input.completedSteps : []),
+      ...(Array.isArray(input.failedSteps) ? input.failedSteps : []),
+      input.currentStep,
+      ...(Array.isArray(input.activeSteps) ? input.activeSteps : []),
+    ]);
+    return terminalSteps.length > 0 ? terminalSteps : uniqueWorkflowStepNames([input.fallbackStepName]);
+  }
+
+  const activeSteps = normalizeActiveWorkflowSteps(input);
+  return activeSteps.length > 0 ? activeSteps : uniqueWorkflowStepNames([input.fallbackStepName]);
+}
+
+export function resolveSoleConfiguredWorkflowStepName(workflow: unknown): string {
+  const states = Array.isArray((workflow as any)?.states) ? (workflow as any).states : [];
+  const stepNames = uniqueWorkflowStepNames(states.flatMap((state: any) => (
+    Array.isArray(state?.steps)
+      ? state.steps.map((step: any) => step?.name)
+      : []
+  )));
+  return stepNames.length === 1 ? stepNames[0] : '';
+}
+
 function countGitWorkingTreeFiles(summary?: GitBrowserSummaryResponse | null): number {
   if (!summary?.available) return 0;
   const changed = new Set<string>();
@@ -455,6 +625,28 @@ function formatWorkflowStatusLabel(status: unknown): string {
   if (value === 'waiting') return '等待中';
   if (value === 'pending') return '待处理';
   return value || '待处理';
+}
+
+export function formatWorkflowLocation(
+  phase?: string | null,
+  step?: string | null,
+  fallback = 'Ready',
+): string {
+  const formatStateName = (name: string) => {
+    if (name === '__origin__') return '开始';
+    if (name === '__human_approval__') return '人工审查';
+    return name;
+  };
+  const phaseName = String(phase || '').trim();
+  const stepName = String(step || '').trim();
+  const displayStepName = phaseName && stepName.startsWith(`${phaseName}-`)
+    ? stepName.slice(phaseName.length + 1)
+    : stepName;
+  if (phaseName && displayStepName && phaseName !== displayStepName) {
+    return `${formatStateName(phaseName)} / ${formatStateName(displayStepName)}`;
+  }
+  const value = phaseName || displayStepName;
+  return value ? formatStateName(value) : fallback;
 }
 
 function formatRunClockTime(value: unknown): string {
@@ -655,6 +847,11 @@ function getRunWorkbenchTabFromSearchParams(searchParams: { get: (key: string) =
   return 'overview';
 }
 
+function getDocumentSourceFilterFromSearchParams(searchParams: { get: (key: string) => string | null }): DocumentSourceFilter {
+  const source = searchParams.get('documentSource');
+  return source === 'tasklist' || source === 'runtime-output' ? source : 'all';
+}
+
 function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailable = true): RunDetailSection {
   if (tab === 'state') return 'state';
   if (tab === 'workspace') return 'workspace';
@@ -685,6 +882,7 @@ const WORKBENCH_OUTER_QUERY_KEYS = [
   'workspaceColumn',
   'changes',
   'tab',
+  'documentSource',
   'history',
   'designTab',
   'focus',
@@ -975,6 +1173,50 @@ function formatTokenCount(value: number): string {
 function formatTokenPercent(part: number, total: number): string {
   if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return '0%';
   return `${Math.round(Math.max(0, (part / total) * 100))}%`;
+}
+
+export type LightweightOverviewEvidenceTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+
+export type LightweightOverviewMetricEvidence = {
+  status: string;
+  value: string;
+  details: string[];
+  tone: LightweightOverviewEvidenceTone;
+  available: boolean;
+};
+
+export type LightweightTokenConsumptionMetricInput = {
+  total?: Partial<AggregatedTokenUsage> | null;
+  hasData?: boolean;
+} | null;
+
+export function buildLightweightTokenConsumptionMetric(
+  analytics?: LightweightTokenConsumptionMetricInput,
+): LightweightOverviewMetricEvidence {
+  const totalUsage = normalizeAggregatedTokenUsage(analytics?.total);
+  const hasTokenEvidence = analytics?.hasData !== false && totalUsage.totalTokens > 0;
+  if (!hasTokenEvidence) {
+    return {
+      status: '未记录',
+      value: '不可用',
+      details: ['当前运行没有 runtime tokenUsage 或 step log tokenUsage 证据。'],
+      tone: 'neutral',
+      available: false,
+    };
+  }
+
+  const cacheHitTokens = totalUsage.cacheReadInputTokens;
+  const cacheHitRatio = formatTokenPercent(cacheHitTokens, totalUsage.inputTokens + cacheHitTokens);
+  return {
+    status: '已记录',
+    value: formatTokenCount(totalUsage.totalTokens),
+    details: [
+      `输入 ${formatTokenCount(totalUsage.inputTokens)} · 输出 ${formatTokenCount(totalUsage.outputTokens)}`,
+      `缓存命中 ${formatTokenCount(cacheHitTokens)} / ${cacheHitRatio}`,
+    ],
+    tone: 'info',
+    available: true,
+  };
 }
 
 function flattenRuntimeSpecTasks(tasks: RuntimeSpecTask[]): RuntimeSpecTask[] {
@@ -1542,11 +1784,6 @@ export default function WorkbenchPage({
     return name;
   };
 
-  const formatWorkflowLocation = (phase?: string | null, step?: string | null, fallback = 'Ready') => {
-    const value = String(phase || step || '').trim();
-    return value ? formatStateName(value) : fallback;
-  };
-
   const initialMode = normalizeViewMode(effectiveSearchParams.get('mode'));
   const initialRunId = effectiveSearchParams.get('run') || effectiveSearchParams.get('runId');
   const initialHistoryRun = effectiveSearchParams.get('history') === '1';
@@ -1668,11 +1905,15 @@ export default function WorkbenchPage({
   } | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
+  const nameSaveInFlightRef = useRef(false);
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
   const [runWorkbenchTab, setRunWorkbenchTab] = useState<RunWorkbenchTab>(() => {
     if (hasRunWorkbenchTabSearchParam(effectiveSearchParams)) return getRunWorkbenchTabFromSearchParams(effectiveSearchParams);
     return readWorkflowRunPanelTabs(configFile).center || 'overview';
   });
+  const [documentSourceFilter, setDocumentSourceFilter] = useState<DocumentSourceFilter>(() => (
+    getDocumentSourceFilterFromSearchParams(effectiveSearchParams)
+  ));
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState('');
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>(undefined);
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
@@ -2446,6 +2687,7 @@ export default function WorkbenchPage({
       || specRevisionVote
       || specRevisionVoteHistory.length > 0,
   );
+  const isLightweightWorkflow = isLightweightWorkflowConfig(workflowConfig);
   const specDesignEnabled = !specCodingDisabled && Boolean(
     workflowConfig?.context?.specCodingEnabled === true
       || editingConfig?.context?.specCodingEnabled === true
@@ -2483,6 +2725,63 @@ export default function WorkbenchPage({
     staleTime: 1_000,
     refetchInterval: isRuntimeWorkflowStatusActive(workflowStatus) ? 2_000 : false,
   });
+  const lightweightTasklistQuery = useLightweightTasklistEvidenceQuery(
+    activeRuntimeRunId,
+    isLightweightWorkflow,
+    isRuntimeWorkflowStatusActive(workflowStatus),
+  );
+  const lightweightTaskBoardStepNames = useMemo(() => Array.from(new Set([
+    currentStep,
+    ...activeSteps,
+    ...completedSteps,
+    ...failedSteps,
+    ...(workflowConfig?.workflow?.states || []).flatMap((stateNode: any) => (stateNode.steps || [])
+      .map((step: any) => String(step?.name || step?.task || '').trim())),
+  ].map((step) => String(step || '').trim()).filter(Boolean))), [
+    activeSteps,
+    completedSteps,
+    currentStep,
+    failedSteps,
+    workflowConfig?.workflow?.states,
+  ]);
+  const lightweightRuntimeToolEventsQuery = useLightweightRuntimeToolEventsQuery(
+    activeRuntimeRunId,
+    lightweightTaskBoardStepNames,
+    isLightweightWorkflow,
+    isRuntimeWorkflowStatusActive(workflowStatus),
+  );
+  const lightweightTaskBoardToolEvents = useMemo(() => {
+    let events: RuntimeToolEvent[] = [];
+    for (const event of [...(lightweightRuntimeToolEventsQuery.data || []), ...liveToolEvents]) {
+      events = mergeRuntimeToolEvents(events, event);
+    }
+    return events;
+  }, [lightweightRuntimeToolEventsQuery.data, liveToolEvents]);
+  const lightweightTaskBoardInput = useMemo(() => ({
+    workflow: {
+      profile: workflowConfig?.workflow?.profile,
+      primaryAgent: workflowConfig?.workflow?.states?.[0]?.steps?.[0]?.agent,
+      states: workflowConfig?.workflow?.states,
+    },
+    run: {
+      profile: workflowConfig?.workflow?.profile,
+      primaryAgent: workflowConfig?.workflow?.states?.[0]?.steps?.[0]?.agent,
+      agents: Array.isArray((statusCompactQuery.data as any)?.agents)
+        ? (statusCompactQuery.data as any).agents
+        : (Array.isArray(runDetail?.agents) ? runDetail.agents : agents),
+      runtimeAgents: Array.isArray((statusCompactQuery.data as any)?.runtimeAgents)
+        ? (statusCompactQuery.data as any).runtimeAgents
+        : runDetail?.runtimeAgents,
+      agentActivity: Array.isArray((statusCompactQuery.data as any)?.agentActivity)
+        ? (statusCompactQuery.data as any).agentActivity
+        : runDetail?.agentActivity,
+      toolEvents: lightweightTaskBoardToolEvents,
+      activeSteps,
+      completedSteps,
+      failedSteps,
+    },
+    tasklist: lightweightTasklistQuery.data?.tasklist || (statusCompactQuery.data as any)?.tasklist || runDetail?.tasklist,
+  }), [activeSteps, agents, completedSteps, failedSteps, lightweightTaskBoardToolEvents, lightweightTasklistQuery.data?.tasklist, runDetail, statusCompactQuery.data, workflowConfig?.workflow]);
   const appliedStatusCacheSignatureRef = useRef<string | null>(null);
   const workflowEventSeqByRunIdRef = useRef<Map<string, number>>(new Map());
   const workflowEventSyncInflightRef = useRef<Map<string, Promise<void>>>(new Map());
@@ -2751,22 +3050,11 @@ export default function WorkbenchPage({
   );
   const workflowAgentNames = useMemo(() => {
     const workflow = editingConfig?.workflow || workflowConfig?.workflow;
-    if (!workflow) return [] as string[];
-    const names = new Set<string>();
-    const addName = (value?: string | null) => {
-      if (value && value.trim()) names.add(value.trim());
-    };
-    const nodes = workflow?.states || [];
-    for (const node of nodes) {
-      addName(node?.agent);
-      for (const step of node?.steps || []) {
-        addName(step?.agent);
-      }
-    }
-    const supervisorFromWorkflow = workflow?.supervisor?.agent;
-    const supervisorFromRoles = agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name;
-    addName(supervisorFromWorkflow || supervisorFromRoles || 'default-supervisor');
-    return Array.from(names);
+    return resolveWorkflowPolicyAgentNames({
+      workflow,
+      agentConfigs,
+      supervisorPosition: 'last',
+    });
   }, [agentConfigs, editingConfig?.workflow, workflowConfig?.workflow]);
   const designSpecBindingValidation = useMemo(() => {
     const sourceConfig = editingConfig || workflowConfig;
@@ -2900,8 +3188,15 @@ export default function WorkbenchPage({
     setRunDetailSection('workspace');
   }, [currentRunWorkspacePath, requestedWorkspaceColumn, requestedWorkspaceFile, requestedWorkspaceLineNumber, requestedWorkspaceRoot]);
 
-  const handleRunWorkbenchTabChange = useCallback((tab: RunWorkbenchTab) => {
+  const handleRunWorkbenchTabChange = useCallback((
+    tab: RunWorkbenchTab,
+    options: { documentSource?: DocumentSourceFilter } = {},
+  ) => {
+    const nextDocumentSource = tab === 'documents'
+      ? (options.documentSource || documentSourceFilter)
+      : 'all';
     setRunWorkbenchTab(tab);
+    if (tab === 'documents') setDocumentSourceFilter(nextDocumentSource);
     if (tab === 'workspace') {
       setWorkspaceEditorPath(currentRunWorkspacePath);
       setWorkspaceEditorTitle('工作区');
@@ -2911,6 +3206,7 @@ export default function WorkbenchPage({
     }
     updateUrl({
       tab,
+      documentSource: tab === 'documents' && nextDocumentSource !== 'all' ? nextDocumentSource : null,
       workspace: tab === 'workspace' ? '1' : null,
       workspaceRoot: tab === 'workspace' ? currentRunWorkspacePath : null,
       changes: tab === 'changes' ? '1' : null,
@@ -2918,7 +3214,7 @@ export default function WorkbenchPage({
       workspaceLine: null,
       workspaceColumn: null,
     });
-  }, [currentRunWorkspacePath, updateUrl]);
+  }, [currentRunWorkspacePath, documentSourceFilter, updateUrl]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2932,13 +3228,17 @@ export default function WorkbenchPage({
   }, [configFile, leftRunPanelTab, rightPanelTab, runWorkbenchTab]);
 
   useEffect(() => {
+    if (isLightweightWorkflow && runWorkbenchTab === 'agents') {
+      handleRunWorkbenchTabChange('overview');
+      return;
+    }
     if (runWorkbenchTab === 'changes' && !currentRunWorkspacePath) {
       handleRunWorkbenchTabChange('overview');
     }
     if (runWorkbenchTab === 'spec' && !runtimeSpecAvailable) {
       handleRunWorkbenchTabChange('overview');
     }
-  }, [currentRunWorkspacePath, handleRunWorkbenchTabChange, runWorkbenchTab, runtimeSpecAvailable]);
+  }, [currentRunWorkspacePath, handleRunWorkbenchTabChange, isLightweightWorkflow, runWorkbenchTab, runtimeSpecAvailable]);
 
   useEffect(() => {
     setRunDetailSection((current) => {
@@ -4571,26 +4871,12 @@ export default function WorkbenchPage({
 
   const configuredWorkflowAgents = useMemo(() => {
     const workflow = workflowConfig?.workflow;
-    const names: string[] = [];
-    const seen = new Set<string>();
-    const addName = (name?: string | null) => {
-      const trimmed = name?.trim();
-      if (!trimmed || seen.has(trimmed)) return;
-      seen.add(trimmed);
-      names.push(trimmed);
-    };
-
-    const supervisorFromWorkflow = workflow?.supervisor?.agent;
-    const supervisorFromRoles = agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name;
-    addName(supervisorFromWorkflow || supervisorFromRoles || 'default-supervisor');
-
-    const nodes = workflow?.states || [];
-    for (const node of nodes) {
-      addName(node?.agent);
-      for (const step of node?.steps || []) {
-        addName(step?.agent);
-      }
-    }
+    const names = resolveWorkflowPolicyAgentNames({
+      workflow,
+      agentConfigs,
+      supervisorPosition: 'first',
+    });
+    const supervisorPolicyAgent = resolveWorkflowPolicySupervisorAgentName(workflow, agentConfigs);
 
     return names.map((name) => {
       const roleConfig = agentConfigs.find((role: any) => role.name === name);
@@ -4608,7 +4894,7 @@ export default function WorkbenchPage({
         : null;
       return {
         name,
-        team: roleConfig?.team || (name === (supervisorFromWorkflow || supervisorFromRoles) ? 'black-gold' : 'blue'),
+        team: roleConfig?.team || (name === supervisorPolicyAgent ? 'black-gold' : 'blue'),
         engine: selection?.effectiveEngine || '',
         model: selection?.effectiveModel || '',
         status: 'waiting' as const,
@@ -4708,20 +4994,36 @@ export default function WorkbenchPage({
     return () => window.clearInterval(timer);
   }, [actionIsRunning, isRunMode]);
 
-  const runStartedAtForOverview = runStartTime || runDetail?.startTime || selectedRun?.startTime || null;
-  const runEndedAtForOverview = runEndTime
-    || runDetail?.endTime
-    || runDetail?.summary?.endTime
-    || selectedRun?.endTime
-    || (!actionIsRunning ? (runDetail?.updatedAt || selectedRun?.updatedAt || null) : null);
+  const { startTime: runStartedAtForOverview, endTime: runEndedAtForOverview } = useMemo(() => (
+    resolveWorkflowOverviewTiming({
+      actionRunId,
+      actionIsRunning,
+      runtimeRunId: runId,
+      runtimeStartTime: runStartTime,
+      runtimeEndTime: runEndTime,
+      status: statusCompactQuery.data as any,
+      historyRuns,
+      runDetail,
+      selectedRun,
+    })
+  ), [
+    actionIsRunning,
+    actionRunId,
+    historyRuns,
+    runDetail,
+    runEndTime,
+    runId,
+    runStartTime,
+    selectedRun,
+    statusCompactQuery.data,
+  ]);
   const runTiming = useMemo(() => calculateWorkflowRunTiming({
     startTime: runStartedAtForOverview,
-    endTime: actionIsRunning ? null : runEndedAtForOverview,
+    endTime: runEndedAtForOverview,
     nowMs: runClockNow,
     accumulatedWaitMs: runAccumulatedWaitMs,
     waitStartedAt: runWaitStartedAt,
   }), [
-    actionIsRunning,
     runAccumulatedWaitMs,
     runClockNow,
     runEndedAtForOverview,
@@ -5908,14 +6210,26 @@ export default function WorkbenchPage({
     setHistoryLoaded(false);
     try {
       const { runs } = await runsApi.listByConfig(configFile);
-      setHistoryRuns(runs);
+      const locallyStartedRunId = latestRunIdRef.current;
+      setHistoryRuns((current) => {
+        const locallyStartedRun = locallyStartedRunId
+          ? current.find((run: any) => run.id === locallyStartedRunId)
+          : null;
+        return locallyStartedRun && !runs.some((run: any) => run.id === locallyStartedRunId)
+          ? upsertStartedRunInHistory(runs, locallyStartedRun)
+          : runs;
+      });
       setSelectedRun((current: any) => {
         if (!current?.id) return current;
         const latest = runs.find((item: any) => item.id === current.id);
-        if (!latest) return null;
+        if (!latest) return current.id === runId || current.id === locallyStartedRunId ? current : null;
         return { ...current, ...latest };
       });
-      if (selectedRun?.id && !runs.some((item: any) => item.id === selectedRun.id)) {
+      if (
+        selectedRun?.id
+        && selectedRun.id !== locallyStartedRunId
+        && !runs.some((item: any) => item.id === selectedRun.id)
+      ) {
         setRunRecordDrilled(false);
         setRunDetailSection('overview');
         setRunWorkbenchTab('overview');
@@ -5928,7 +6242,7 @@ export default function WorkbenchPage({
       setHistoryLoaded(true);
       setHistoryLoading(false);
     }
-  }, [configFile, selectedRun?.id]);
+  }, [configFile, runId, selectedRun?.id]);
 
   const entryRefreshKeyRef = useRef('');
   useEffect(() => {
@@ -5945,18 +6259,29 @@ export default function WorkbenchPage({
     const routeSection = effectiveSearchParams.get('section') || '';
     const requestedRunId = effectiveSearchParams.get('runId') || effectiveSearchParams.get('run') || '';
     const hasHistoryRun = effectiveSearchParams.get('history') === '1' || Boolean(requestedRunId);
+    const requestedTab = getRunWorkbenchTabFromSearchParams(effectiveSearchParams);
+    const requestedDocumentSource = getDocumentSourceFilterFromSearchParams(effectiveSearchParams);
+
+    if (isLightweightWorkflow) {
+      const redirect = resolveLightweightWorkbenchRunTabRedirect({ requestedTab, requestedDocumentSource });
+      if (redirect) {
+        setWorkbenchNavSection('runs');
+        setRunRecordDrilled(true);
+        setRunDetailSection(redirect.section);
+        setRunWorkbenchTab(redirect.tab);
+        setDocumentSourceFilter(redirect.documentSource);
+        updateUrl({
+          tab: redirect.tab,
+          documentSource: redirect.documentSource === 'all' ? null : redirect.documentSource,
+        });
+        return;
+      }
+    }
+
     if (routeSection.startsWith('preview') && !hasHistoryRun) {
       setWorkbenchNavSection((current) => current === 'preview' ? current : 'preview');
       setRunRecordDrilled((current) => current ? false : current);
-      const nextPreviewSection = routeSection === 'preview-state'
-        ? 'state'
-        : routeSection === 'preview-agents'
-          ? 'agents'
-        : routeSection === 'preview-workspace'
-          ? 'workspace'
-          : routeSection === 'preview-spec'
-            ? 'spec'
-            : 'overview';
+      const nextPreviewSection = resolveWorkbenchPreviewRouteSection(routeSection);
       setRunDetailSection((current) => current === nextPreviewSection ? current : nextPreviewSection);
       return;
     }
@@ -6026,7 +6351,12 @@ export default function WorkbenchPage({
       }
       return fromHistory || current || { id: requestedRunId, status: workflowStatus || 'unknown', configFile };
     });
-  }, [configFile, dispatch, historyLoaded, historyLoading, historyRuns, runId, runtimeSpecAvailable, searchParamsString, updateUrl, viewMode, workflowStatus]);
+  }, [configFile, dispatch, historyLoaded, historyLoading, historyRuns, isLightweightWorkflow, runId, runtimeSpecAvailable, searchParamsString, updateUrl, viewMode, workflowStatus]);
+
+  useEffect(() => {
+    const next = getDocumentSourceFilterFromSearchParams(effectiveSearchParams);
+    setDocumentSourceFilter((current) => current === next ? current : next);
+  }, [searchParamsString]);
 
   const loadContexts = async () => {
     try {
@@ -7327,16 +7657,6 @@ export default function WorkbenchPage({
     }
   };
 
-  const saveWorkflowName = useCallback(async (newName: string) => {
-    if (!newName.trim() || !workflowConfig) return;
-    try {
-      const config = { ...workflowConfig, workflow: { ...workflowConfig.workflow, name: newName.trim() } };
-      await configApi.saveConfig(configFile, config);
-      syncSavedWorkflowConfig(config);
-    } catch { /* non-critical */ }
-    setEditingName(false);
-  }, [configFile, syncSavedWorkflowConfig, workflowConfig]);
-
   const hasContextEditableRun = Boolean(runId || initialRunId || selectedRun?.id);
 
   const requestStartWorkflow = useCallback(async (
@@ -7586,14 +7906,25 @@ export default function WorkbenchPage({
         return;
       }
       if (!isRehearsalStart && startResult.runId) {
+        const newRunId = String(startResult.runId);
+        const startedRun = {
+          id: newRunId,
+          runId: newRunId,
+          configFile,
+          status: 'preparing',
+          startTime: new Date().toISOString(),
+        };
         latestRunIdRef.current = startResult.runId;
+        setHistoryRuns((current) => upsertStartedRunInHistory(current, startedRun));
+        setSelectedRun(startedRun);
+        setViewingHistoryRun(false);
         dispatch({ type: 'SET_RUN_ID', payload: startResult.runId });
         dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
         setWorkbenchNavSection('runs');
         setRunRecordDrilled(true);
         setRunDetailSection('overview');
         setRunWorkbenchTab('overview');
-        updateUrl({
+        await updateUrl({
           mode: 'run',
           run: startResult.runId,
           history: null,
@@ -8310,6 +8641,11 @@ export default function WorkbenchPage({
   const openStepRecordInStateDiagram = (record: any) => {
     const stepName = String(record?.rawStepName || record?.stepName || '').trim();
     if (!stepName) return;
+    if (isLightweightWorkflowConfig(workflowConfig)) {
+      setOverviewStepRecord(null);
+      openRunDetailSection('overview');
+      return;
+    }
     if (record?.stateName) {
       setFocusedState(record.stateName);
     }
@@ -8322,7 +8658,8 @@ export default function WorkbenchPage({
   };
 
   const openRunRecordDocument = (input: { stepName: string; filename?: string }) => {
-    setDocumentFocusRequest({
+    const documentSource = isLightweightWorkflowConfig(workflowConfig) ? 'tasklist' : 'runtime-output';
+    setDocumentFocusRequest(documentSource === 'tasklist' ? null : {
       requestId: Date.now(),
       stepName: input.stepName,
       filename: input.filename,
@@ -8330,7 +8667,7 @@ export default function WorkbenchPage({
     setWorkbenchNavSection('runs');
     setRunRecordDrilled(true);
     setRunDetailSection('documents');
-    handleRunWorkbenchTabChange('documents');
+    handleRunWorkbenchTabChange('documents', { documentSource });
   };
 
   const openPersistedStepRecord = (log: {
@@ -8348,12 +8685,11 @@ export default function WorkbenchPage({
   };
 
   // Chunk separator used in persisted stream files
-  const CHUNK_SEP = '\n\n<!-- chunk-boundary -->\n\n';
-  const CHUNK_BOUNDARY_REGEX = /\r?\n*\s*<!--\s*chunk-boundary\s*-->\s*\r?\n*/gi;
+  const CHUNK_SEP = WORKBENCH_STREAM_CHUNK_SEPARATOR;
+  const CHUNK_BOUNDARY_REGEX = WORKBENCH_STREAM_CHUNK_BOUNDARY_REGEX;
   const CHUNK_BOUNDARY_SEARCH_REGEX = /\r?\n*\s*<!--\s*chunk-boundary\s*-->\s*\r?\n*/i;
   const CHUNK_WITH_TIME_REGEX = /^<!-- timestamp: (.+?) -->\n/;
-  const splitStreamChunks = (content: string): string[] =>
-    String(content || '').split(CHUNK_BOUNDARY_REGEX).filter(Boolean);
+  const splitStreamChunks = splitWorkbenchLiveStreamContent;
   const isLifecycleStatusChunk = useCallback((chunk: string): boolean => {
     const normalized = String(chunk || '').replace(/<!--.*?-->/gs, '').trim().toLowerCase();
     return normalized === 'running'
@@ -8592,15 +8928,16 @@ export default function WorkbenchPage({
     };
 
     const parentRunId = runId || selectedRun?.id || '';
-    const rootActiveSteps = normalizeActiveWorkflowSteps({
+    const rootLiveStreamSteps = resolveWorkbenchLiveStreamStepKeys({
       activeSteps: liveStreamTarget.parallelActiveSteps.length ? liveStreamTarget.parallelActiveSteps : [liveStreamTarget.activeStep],
       currentStep,
       currentPhase,
       completedSteps,
       failedSteps,
       terminal: isTerminalWorkflowStatus(workflowStatus),
+      fallbackStepName: isLightweightWorkflow ? resolveSoleConfiguredWorkflowStepName(workflowConfig?.workflow) : '',
     });
-    for (const stepKey of rootActiveSteps) {
+    for (const stepKey of rootLiveStreamSteps) {
       pushSource({
         runId: parentRunId,
         stepKey,
@@ -8612,7 +8949,7 @@ export default function WorkbenchPage({
     const appendChildStatus = (child: any, status: any, depth: number) => {
       const childRunId = child?.runId || status?.runId;
       const scope = `${'子'.repeat(Math.max(1, depth))}工作流${child?.parentStepName ? ` · ${child.parentStepName}` : ''}`;
-      const childActiveSteps = normalizeActiveWorkflowSteps({
+      const childLiveStreamSteps = resolveWorkbenchLiveStreamStepKeys({
         activeSteps: status?.activeSteps,
         currentStep: status?.currentStep,
         currentPhase: status?.currentPhase,
@@ -8621,7 +8958,7 @@ export default function WorkbenchPage({
         failedSteps: status?.failedSteps,
         terminal: isTerminalWorkflowStatus(status?.status),
       });
-      for (const stepKey of childActiveSteps) {
+      for (const stepKey of childLiveStreamSteps) {
         pushSource({
           runId: childRunId,
           stepKey: String(stepKey),
@@ -8657,6 +8994,7 @@ export default function WorkbenchPage({
     currentStep,
     failedSteps,
     getSubworkflowCacheKey,
+    isLightweightWorkflow,
     liveStreamTarget.activeStep,
     liveStreamTarget.parallelActiveSteps,
     resolveLiveStreamSource,
@@ -8664,6 +9002,7 @@ export default function WorkbenchPage({
     selectedRun?.id,
     subworkflowDrilldownStack,
     subworkflowRuns,
+    workflowConfig?.workflow,
     workflowStatus,
   ]);
 
@@ -8683,18 +9022,20 @@ export default function WorkbenchPage({
     };
   }, [liveStreamSourceSelection, liveStreamSources, liveStreamTarget.runId, liveStreamTarget.stepKey]);
   const dbAgentMessageRows = useAgentMessageRows();
-  const getCachedLiveStreamChunks = useCallback((sourceRunId?: string | null, stepKey?: string | null) => {
+  const getCachedLiveStreamContent = useCallback((sourceRunId?: string | null, stepKey?: string | null) => {
     const normalizedRunId = String(sourceRunId || '').trim();
     const normalizedStepKey = String(stepKey || '').trim();
-    if (!normalizedRunId || !normalizedStepKey) return [] as string[];
-    return dbAgentMessageRows
+    if (!normalizedRunId || !normalizedStepKey) return '';
+    const rows = dbAgentMessageRows
       .filter((row) => row.runId === normalizedRunId && row.stepKey === normalizedStepKey)
-      .flatMap((row) => {
-        if (Array.isArray(row.chunks) && row.chunks.length > 0) return row.chunks;
-        return row.content ? [row.content] : [];
-      })
-      .filter((chunk) => String(chunk || '').trim().length > 0 && !isLifecycleStatusChunk(chunk));
-  }, [dbAgentMessageRows, isLifecycleStatusChunk]);
+      .map((row) => ({ id: row.id, content: row.content, chunks: row.chunks }));
+    return reconstructWorkbenchCachedLiveStreamContent(rows, normalizedRunId, normalizedStepKey);
+  }, [dbAgentMessageRows]);
+  const getCachedLiveStreamChunks = useCallback((sourceRunId?: string | null, stepKey?: string | null) =>
+    normalizeLiveStreamChunks(splitStreamChunks(getCachedLiveStreamContent(sourceRunId, stepKey))), [
+      getCachedLiveStreamContent,
+      normalizeLiveStreamChunks,
+    ]);
 
   const refreshLiveStreamContent = useCallback(async () => {
     const rid = selectedLiveStreamSource.runId || runId || selectedRun?.id || '';
@@ -8712,6 +9053,7 @@ export default function WorkbenchPage({
     liveStreamRunRef.current = rid;
     liveStreamStepRef.current = activeStep;
 
+    const cachedContent = getCachedLiveStreamContent(rid, activeStep);
     const cachedChunks = getCachedLiveStreamChunks(rid, activeStep);
     let content = '';
     let toolEvents: RuntimeToolEvent[] = [];
@@ -8742,14 +9084,14 @@ export default function WorkbenchPage({
           return [...parts.filter(Boolean), ...(trailing ? [trailing] : [])];
         })()
       : cachedChunks);
-    const raw = chunks.join('\n\n');
-    liveStreamRawRef.current = content || raw;
+    liveStreamRawRef.current = content || cachedContent;
     liveStreamLenRef.current = liveStreamRawRef.current.length;
     setLiveStream(chunks);
     setLiveToolEvents(toolEvents);
     setLiveStreamVisibleCount(LIVE_STREAM_PAGE_SIZE);
   }, [
     getCachedLiveStreamChunks,
+    getCachedLiveStreamContent,
     liveStreamTarget.stepKey,
     normalizeLiveStreamChunks,
     runId,
@@ -8911,7 +9253,9 @@ export default function WorkbenchPage({
     const rid = selectedLiveStreamSource.runId;
     const activeStep = selectedLiveStreamSource.stepKey;
     const cachedChunks = getCachedLiveStreamChunks(rid, activeStep);
-    const cachedRaw = cachedChunks.join('\n\n');
+    // `chunks` are presentation segments. Keep the persisted transcript as
+    // raw text so a cache restore cannot manufacture Markdown paragraphs.
+    const cachedRaw = getCachedLiveStreamContent(rid, activeStep);
     liveStreamLenRef.current = cachedRaw.length;
     liveStreamRawRef.current = cachedRaw;
     setLiveStream(normalizeLiveStreamChunks(cachedChunks));
@@ -8934,45 +9278,39 @@ export default function WorkbenchPage({
       let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined = cachedRaw
         ? { id: liveMessageId, content: cachedRaw, toolCalls: [] }
         : undefined;
+      const applyRawStream = (nextRaw: string) => {
+        sseRaw = nextRaw;
+        liveStreamRawRef.current = sseRaw;
+        liveStreamLenRef.current = sseRaw.length;
+
+        const parts = sseRaw.split(CHUNK_BOUNDARY_REGEX);
+        sseBuffer = parts.pop() || '';
+        const rebuilt = normalizeLiveStreamChunks([...parts.filter(Boolean), ...(sseBuffer ? [sseBuffer] : [])]);
+        setLiveStream(rebuilt);
+      };
       const es = streamApi.connectLiveStream(
         rid,
         activeStep,
         (content) => {
-          // SSE may replay the full accumulated content after reconnect.
-          // Normalize it into a monotonic raw stream before splitting chunks.
-          const nextRaw = sseRaw && content.startsWith(sseRaw)
-            ? content
-            : content.length >= sseRaw.length && content.startsWith(sseRaw)
-              ? content
-              : sseRaw && sseRaw.startsWith(content)
-                ? sseRaw
-                : sseRaw + content;
+          const nextRaw = applyWorkbenchLiveStreamTransportFrame(sseRaw, { kind: 'delta', content });
 
           if (nextRaw === sseRaw) return;
 
-          const delta = nextRaw.startsWith(sseRaw) ? nextRaw.slice(sseRaw.length) : nextRaw;
-          if (delta) {
+          if (content) {
             const row = storeWorkflowSseEventAsAgentMessage({
               type: 'workflow-step-delta',
               data: {
                 messageId: liveMessageId,
                 runId: rid,
                 stepKey: activeStep,
-                content: delta,
+                content,
                 timestamp: new Date().toISOString(),
               },
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
           }
 
-          sseRaw = nextRaw;
-          liveStreamRawRef.current = sseRaw;
-          liveStreamLenRef.current = sseRaw.length;
-
-          const parts = sseRaw.split(CHUNK_BOUNDARY_REGEX);
-          sseBuffer = parts.pop() || '';
-          const rebuilt = normalizeLiveStreamChunks([...parts.filter(Boolean), ...(sseBuffer ? [sseBuffer] : [])]);
-          setLiveStream(rebuilt);
+          applyRawStream(nextRaw);
         },
         (_status) => {
           if (aiPrevious) {
@@ -8994,6 +9332,25 @@ export default function WorkbenchPage({
         },
         (tool) => {
           setLiveToolEvents((current) => mergeRuntimeToolEvents(current, tool));
+        },
+        (content) => {
+          const snapshot = applyWorkbenchLiveStreamTransportFrame(sseRaw, { kind: 'snapshot', content });
+          const now = new Date().toISOString();
+          const row = storeAceAgentMessage({
+            id: liveMessageId,
+            runId: rid,
+            stepKey: activeStep,
+            role: 'assistant',
+            status: 'streaming',
+            content: snapshot,
+            chunks: snapshot ? [snapshot] : [],
+            toolCalls: aiPrevious?.toolCalls || [],
+            toolEvents: [],
+            createdAt: now,
+            updatedAt: now,
+          });
+          aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
+          applyRawStream(snapshot);
         },
       );
       liveStreamRef.current = es;
@@ -9028,7 +9385,7 @@ export default function WorkbenchPage({
             stepName: selectedLiveStreamSource.stepName || curStep,
           });
           const nextCachedChunks = getCachedLiveStreamChunks(curRid, curStep);
-          const nextCachedRaw = nextCachedChunks.join('\n\n');
+          const nextCachedRaw = getCachedLiveStreamContent(curRid, curStep);
           liveStreamLenRef.current = nextCachedRaw.length;
           liveStreamRawRef.current = nextCachedRaw;
           setLiveStream(normalizeLiveStreamChunks(nextCachedChunks));
@@ -9361,7 +9718,7 @@ export default function WorkbenchPage({
         groupedTimelineItems.push({
           type: 'tool-group',
           tools,
-          index: `tool-group:${item.index}:${tools[tools.length - 1].id}`,
+          index: getStableLiveToolGroupIdentity(item.index),
         });
       } else {
         groupedTimelineItems.push(item);
@@ -9541,7 +9898,7 @@ export default function WorkbenchPage({
                 : item.type === 'thinking'
                   ? `thinking:${index}`
                   : item.type === 'tool-group'
-                    ? `tool-group:${item.index}:${item.tools.some((tool) => tool.status === 'running') ? 'pending' : 'done'}`
+                    ? item.index
                   : item.type === 'tool'
                     ? `tool:${item.tool.id}:${item.tool.status}`
                     : `chunk:${item.index}`}
@@ -10152,6 +10509,33 @@ export default function WorkbenchPage({
     toast,
     workflowConfig?.workflow?.name,
   ]);
+
+  const saveWorkflowName = useCallback(async (newName: string) => {
+    const draftConfig = latestEditingConfigRef.current || editingConfig || workflowConfig;
+    const nextConfig = buildWorkflowConfigWithName(draftConfig, newName);
+    if (!nextConfig) {
+      setNameValue(draftConfig?.workflow?.name || workflowConfig?.workflow?.name || '');
+      setEditingName(false);
+      return;
+    }
+    if (nextConfig.workflow.name === draftConfig?.workflow?.name) {
+      setEditingName(false);
+      return;
+    }
+    if (nameSaveInFlightRef.current) return;
+
+    nameSaveInFlightRef.current = true;
+    try {
+      latestEditingConfigRef.current = nextConfig;
+      dispatch({ type: 'SET_EDITING_CONFIG', payload: nextConfig });
+
+      if (await handleSaveConfig()) {
+        setEditingName(false);
+      }
+    } finally {
+      nameSaveInFlightRef.current = false;
+    }
+  }, [dispatch, editingConfig, handleSaveConfig, workflowConfig]);
 
   const handleSaveAgent = async (agent: any) => {
     try {
@@ -11536,12 +11920,16 @@ export default function WorkbenchPage({
     <Input
       value={nameValue}
       onChange={(e) => setNameValue(e.target.value)}
-      onBlur={() => saveWorkflowName(nameValue)}
+      onBlur={() => void saveWorkflowName(nameValue)}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') saveWorkflowName(nameValue);
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          void saveWorkflowName(nameValue);
+        }
         if (e.key === 'Escape') setEditingName(false);
       }}
       className="h-8 w-[220px] text-sm font-semibold"
+      aria-label="工作流名称"
       autoFocus
     />
   ) : workflowConfig?.workflow?.name || configFile;
@@ -11584,7 +11972,7 @@ export default function WorkbenchPage({
       if (!isDesignMode || editingName) return [];
       return [{
         id: 'edit-name',
-        label: '名称',
+        label: '修改名称',
         icon: <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>,
         group: 'edit',
         onSelect: () => {
@@ -11772,31 +12160,23 @@ export default function WorkbenchPage({
   const { isDashboardShell } = useDashboardShellHeader({
     title: workbenchShellTitle,
     subtitle: `${workbenchModeSubtitle} · ${configFile}`,
+    leadingActions: editingName ? workbenchObjectName : undefined,
     actions: dashboardShellActions,
-  }, [workbenchShellTitle, workbenchModeSubtitle, configFile, dashboardShellActionSignature]);
+  }, [workbenchShellTitle, workbenchModeSubtitle, configFile, dashboardShellActionSignature, editingName, nameValue]);
 
   const selectedRunId = runId || selectedRun?.id || null;
   const runRecordItems = [
     ...(selectedRun ? [selectedRun] : []),
     ...historyRuns.filter((item: any) => item.id !== selectedRun?.id),
   ].slice(0, 12);
-  const previewDetailNavItems = [
-    { key: 'overview' as const, label: '总览', icon: 'dashboard' },
-    { key: 'state' as const, label: '状态图', icon: 'hub' },
-    { key: 'agents' as const, label: 'Agents', icon: 'groups' },
-    { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
-    ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
-  ];
-  const runDetailNavItems = [
-    { key: 'overview' as const, label: '总览', icon: 'dashboard' },
-    { key: 'state' as const, label: '状态图', icon: 'hub' },
-    { key: 'agents' as const, label: 'Agents', icon: 'groups' },
-    { key: 'workspace' as const, label: '工作区', icon: 'folder_open' },
-    { key: 'changes' as const, label: '变更', icon: 'difference' },
-    { key: 'documents' as const, label: '工作总结', icon: 'description' },
-    { key: 'live' as const, label: '实时输出', icon: 'cell_tower' },
-    ...(runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
-  ];
+  const previewDetailNavItems = buildWorkbenchPreviewDetailNavItems({
+    isLightweightWorkflow,
+    runtimeSpecAvailable,
+  });
+  const runDetailNavItems = buildWorkbenchRunDetailNavItems({
+    isLightweightWorkflow,
+    runtimeSpecAvailable,
+  });
 
   const openPreviewSection = () => {
     setWorkbenchNavSection('preview');
@@ -11814,6 +12194,7 @@ export default function WorkbenchPage({
       workspace: null,
       workspaceRoot: null,
       changes: null,
+      documentSource: null,
       workspaceFile: null,
       workspaceLine: null,
       workspaceColumn: null,
@@ -11821,17 +12202,18 @@ export default function WorkbenchPage({
   };
 
   const openPreviewDetailSection = (section: RunDetailSection) => {
+    const nextSection = section;
     setWorkbenchNavSection('preview');
     setRunRecordDrilled(false);
-    setRunDetailSection(section);
+    setRunDetailSection(nextSection);
     dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
-    const previewSection = section === 'state'
+    const previewSection = nextSection === 'state'
       ? 'preview-state'
-      : section === 'agents'
+      : nextSection === 'agents'
         ? 'preview-agents'
-      : section === 'workspace'
+      : nextSection === 'workspace'
         ? 'preview-workspace'
-        : section === 'spec'
+        : nextSection === 'spec'
           ? 'preview-spec'
           : 'preview-overview';
     updateUrl({
@@ -11842,6 +12224,7 @@ export default function WorkbenchPage({
       runId: null,
       history: null,
       tab: null,
+      documentSource: null,
       workspace: null,
       workspaceRoot: null,
       changes: null,
@@ -11851,20 +12234,29 @@ export default function WorkbenchPage({
     });
   };
 
-  const openRunDetailSection = (section: RunDetailSection) => {
-    if (section === runDetailSection || runDetailNavigationPendingRef.current) return;
+  const openRunDetailSection = (
+    section: RunDetailSection,
+    options: { documentSource?: DocumentSourceFilter } = {},
+  ) => {
+    const nextSection = section;
+    const nextDocumentSource = nextSection === 'documents'
+      ? (options.documentSource || documentSourceFilter)
+      : 'all';
+    const changesDocumentSource = nextSection === 'documents' && nextDocumentSource !== documentSourceFilter;
+    if ((nextSection === runDetailSection && !changesDocumentSource) || runDetailNavigationPendingRef.current) return;
     const navigationToken = runDetailNavigationTokenRef.current + 1;
     runDetailNavigationTokenRef.current = navigationToken;
-    runDetailNavigationPendingRef.current = section;
-    setRunDetailNavigationPending(section);
+    runDetailNavigationPendingRef.current = nextSection;
+    setRunDetailNavigationPending(nextSection);
 
-    const tab = runDetailSectionToWorkbenchTab(section);
+    const tab = runDetailSectionToWorkbenchTab(nextSection);
     returnedRunIdRef.current = null;
     setWorkbenchNavSection('runs');
     setRunRecordDrilled(true);
-    setRunDetailSection(section);
+    setRunDetailSection(nextSection);
     setRunWorkbenchTab(tab);
-    if (section === 'workspace') {
+    if (nextSection === 'documents') setDocumentSourceFilter(nextDocumentSource);
+    if (nextSection === 'workspace') {
       setWorkspaceEditorPath(currentRunWorkspacePath);
       setWorkspaceEditorTitle('工作区');
       setWorkspaceEditorFilePath(null);
@@ -11875,9 +12267,10 @@ export default function WorkbenchPage({
       mode: 'run',
       section: null,
       tab,
-      workspace: section === 'workspace' ? '1' : null,
-      workspaceRoot: section === 'workspace' ? currentRunWorkspacePath : null,
-      changes: section === 'changes' ? '1' : null,
+      documentSource: nextSection === 'documents' && nextDocumentSource !== 'all' ? nextDocumentSource : null,
+      workspace: nextSection === 'workspace' ? '1' : null,
+      workspaceRoot: nextSection === 'workspace' ? currentRunWorkspacePath : null,
+      changes: nextSection === 'changes' ? '1' : null,
       workspaceFile: null,
       workspaceLine: null,
       workspaceColumn: null,
@@ -12006,27 +12399,9 @@ export default function WorkbenchPage({
             {subworkflowDrilldownStack.length > 0 ? (
               renderSubworkflowDrilldown()
             ) : isLightweightWorkflowConfig(workflowConfig) ? (
-              <LightweightWorkflowExecutionView
-                workflow={workflowConfig.workflow}
-                runId={runId || selectedRun?.id || null}
-                status={workflowStatus}
-                currentState={currentPhase || null}
-                currentStep={currentStep || null}
-                activeSteps={activeSteps}
-                completedSteps={completedSteps}
-                failedSteps={failedSteps}
-                humanQuestionPanel={pendingHumanQuestion?.status === 'unanswered' ? (
-                  <HumanQuestionCard
-                    question={pendingHumanQuestion}
-                    submitting={submittingHumanQuestion}
-                    collapsible={false}
-                    onSubmit={handleSubmitHumanQuestion}
-                  />
-                ) : null}
-                onOpenTaskDocuments={() => openRunDetailSection('documents')}
-                onOpenRuntimeOutput={() => openRunDetailSection('live')}
-                onOpenWorkspace={() => openRunDetailSection('workspace')}
-                workspaceAvailable={Boolean(currentRunWorkspacePath)}
+              <LightweightTaskExecutionGraph
+                {...lightweightTaskBoardInput}
+                className="h-full"
               />
             ) : (
               <StateMachineExecutionView
@@ -12080,6 +12455,21 @@ export default function WorkbenchPage({
 
   const renderAgentFormationPanel = (mode: 'preview' | 'run') => {
     const isPreview = mode === 'preview';
+    if (isLightweightWorkflow) {
+      return (
+        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
+          <div className="mb-3 shrink-0">
+            <div className={styles.workbenchPreviewKicker}>{isPreview ? '运行预览' : '运行 Agent'}</div>
+            <h2 className="mt-2 text-xl font-semibold tracking-tight">任务与 Agent</h2>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">显示本次运行已产生的主 Agent、子 Agent 活动和任务清单证据。</p>
+          </div>
+          <LightweightTaskBoard
+            {...lightweightTaskBoardInput}
+            className="min-h-0 flex-1 rounded-xl"
+          />
+        </div>
+      );
+    }
     const activeCount = isPreview ? 0 : activeFormationAgentNames.length;
     const statusLabel = isPreview
       ? '待运行'
@@ -12318,15 +12708,20 @@ export default function WorkbenchPage({
                   const unavailable = (item.key === 'workspace' && !currentRunWorkspacePath)
                     || (item.key === 'changes' && !currentRunWorkspacePath);
                   const navigationBlocked = Boolean(runDetailNavigationPending && runDetailNavigationPending !== item.key);
-                  const isNavigatingToItem = runDetailNavigationPending === item.key;
+                  const isNavigatingToItem = runDetailNavigationPending === item.key && item.key !== 'documents';
+                  const isActive = runDetailSection === item.key && (
+                    item.key !== 'documents'
+                    || item.documentSource === documentSourceFilter
+                    || (item.id === 'documents' && documentSourceFilter === 'all')
+                  );
                   return (
                     <button
-                      key={item.key}
+                      key={item.id}
                       type="button"
                       disabled={unavailable || navigationBlocked}
                       aria-busy={isNavigatingToItem ? 'true' : undefined}
-                      className={cn(styles.workbenchSubItem, runDetailSection === item.key && styles.workbenchSubItemActive)}
-                      onClick={() => openRunDetailSection(item.key)}
+                      className={cn(styles.workbenchSubItem, isActive && styles.workbenchSubItemActive)}
+                      onClick={() => openRunDetailSection(item.key, { documentSource: item.documentSource })}
                     >
                       {isNavigatingToItem ? (
                         <ClipLoader size={13} color="currentColor" />
@@ -12358,12 +12753,9 @@ export default function WorkbenchPage({
           </div>
           <div className={styles.workbenchPreviewCanvas}>
             {workflowConfig && isLightweightWorkflowConfig(workflowConfig) ? (
-              <LightweightWorkflowExecutionView
-                workflow={workflowConfig.workflow}
-                status="idle"
-                currentState={null}
-                currentStep={null}
-                workspaceAvailable={Boolean(previewWorkspacePath)}
+              <LightweightTaskExecutionGraph
+                {...lightweightTaskBoardInput}
+                className="h-full"
               />
             ) : workflowConfig?.workflow?.mode === 'state-machine' ? (
               <StateMachineExecutionView
@@ -12493,6 +12885,54 @@ export default function WorkbenchPage({
   };
 
   const renderRunOverviewPanel = () => {
+    if (isLightweightWorkflow) {
+      const lightweightTokenMetric = buildLightweightTokenConsumptionMetric(workflowTokenAnalytics);
+      const visibleStatusReason = String(
+        runStatusReason
+        || runDetail?.statusReason
+        || selectedRun?.statusReason
+        || ''
+      ).trim();
+      const showStatusReason = Boolean(visibleStatusReason)
+        && ['failed', 'crashed'].includes(normalizeWorkflowStatusCode(actionWorkflowStatus || workflowStatus));
+      return (
+        <div className="h-full min-h-0 overflow-auto bg-muted/20 p-4">
+          <div className="mx-auto flex max-w-6xl flex-col gap-4">
+            <div className="rounded-xl border bg-background p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className={styles.workbenchPreviewKicker}>轻量运行总览</div>
+                  <h2 className="mt-2 truncate text-xl font-semibold tracking-tight">{selectedRunId || '当前运行'} · {workflowBaseTitle}</h2>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">任务清单、Agent 活动和运行状态会随本次运行实时更新。</p>
+                </div>
+                <StatusPill tone={getWorkflowStatusTone(actionWorkflowStatus || workflowStatus)}>
+                  {formatWorkflowStatusLabel(actionWorkflowStatus || workflowStatus)}
+                </StatusPill>
+              </div>
+              {showStatusReason ? (
+                <div role="alert" className="mt-4 border-l-2 border-destructive pl-3 text-sm leading-6 text-destructive">
+                  <div className="font-semibold">运行失败原因</div>
+                  <div>{visibleStatusReason}</div>
+                </div>
+              ) : null}
+              <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                <div className={styles.workbenchMetric}><span>当前位置</span><strong>{formatWorkflowLocation(currentPhase, currentStep)}</strong></div>
+                <div className={styles.workbenchMetric}><span>总历时</span><strong>{formatRunDuration(runTiming.totalMs)}</strong></div>
+                <div className={styles.workbenchMetric}><span>工作区变更</span><strong>{workspaceChangeCount}</strong></div>
+                <div className={styles.workbenchMetric}>
+                  <span>Token 消耗</span>
+                  <strong>{lightweightTokenMetric.value}</strong>
+                  <small className="mt-1 block text-xs font-normal leading-5 text-muted-foreground">
+                    {lightweightTokenMetric.details[0] || lightweightTokenMetric.status}
+                  </small>
+                </div>
+              </div>
+            </div>
+            <LightweightTaskBoard {...lightweightTaskBoardInput} />
+          </div>
+        </div>
+      );
+    }
     const totalTokenUsage = workflowTokenAnalytics.total;
     const cacheHitTokens = totalTokenUsage.cacheReadInputTokens;
     const cacheHitRatio = formatTokenPercent(cacheHitTokens, totalTokenUsage.inputTokens + cacheHitTokens);
@@ -12512,7 +12952,9 @@ export default function WorkbenchPage({
           {selectedRunId || '当前运行'} · {workflowBaseTitle}
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          汇总当前运行状态、当前位置和关键执行数据。状态图和工作区通过左侧运行记录子菜单进入。
+          {isLightweightWorkflow
+            ? '汇总当前运行状态、当前位置和关键执行数据。任务清单、实时输出和工作区通过左侧运行记录子菜单进入。'
+            : '汇总当前运行状态、当前位置和关键执行数据。状态图和工作区通过左侧运行记录子菜单进入。'}
         </p>
         {showStatusReason ? (
           <div role="alert" className="mt-4 border-l-2 border-destructive pl-3 text-sm leading-6 text-destructive">
@@ -12821,13 +13263,21 @@ export default function WorkbenchPage({
                       <DocumentsPanel
                         runId={runId || selectedRun?.id || null}
                         focusRequest={documentFocusRequest}
+                        documentSource={isLightweightWorkflow ? 'tasklist' : documentSourceFilter}
+                        lockedDocumentSource={isLightweightWorkflow ? 'tasklist' : undefined}
+                        onDocumentSourceChange={(source: DocumentSourceFilter) => {
+                          if (isLightweightWorkflow && source !== 'tasklist') return;
+                          setDocumentSourceFilter(source);
+                          void updateUrl({ documentSource: source === 'all' ? null : source });
+                        }}
                         phaseDefinitions={(workflowConfig?.workflow?.states || []).map((state: any, order: number) => ({
                           name: String(state?.name || ''),
                           label: String(state?.label || state?.title || state?.displayName || ''),
                           order,
                         }))}
                         onOpenWorkspaceDirectory={(path: string) => openWorkspaceEditorAtPath(path, '文档目录')}
-                        previewPresentation="drawer"
+                        previewPresentation={isLightweightWorkflow ? 'inline' : 'drawer'}
+                        lightweightTasklistLayout={isLightweightWorkflow}
                       />
                     </div>
                   ) : runDetailSection === 'spec' && runtimeSpecAvailable ? (
@@ -12900,18 +13350,20 @@ export default function WorkbenchPage({
                 <DetailDrawerBody className="space-y-4">
                   {overviewStepRecord ? (
                     <>
-                      <div className="flex justify-end">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-8 gap-1.5 text-xs"
-                          onClick={() => openStepRecordInStateDiagram(overviewStepRecord)}
-                        >
-                          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>hub</span>
-                          在状态图查看
-                        </Button>
-                      </div>
+                      {!isLightweightWorkflow ? (
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-1.5 text-xs"
+                            onClick={() => openStepRecordInStateDiagram(overviewStepRecord)}
+                          >
+                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>hub</span>
+                            在状态图查看
+                          </Button>
+                        </div>
+                      ) : null}
                       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         <div className="rounded-lg border bg-background p-3">
                           <div className="text-xs text-muted-foreground">状态</div>
@@ -13583,7 +14035,9 @@ export default function WorkbenchPage({
                   <div className="text-xs font-medium text-muted-foreground">当前对象</div>
                   <div className="mt-2 text-lg font-semibold">{editingConfig.workflow.name || configFile}</div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {isLightweightWorkflowConfig(editingConfig) ? '轻量工作流' : '状态机工作流'} · {totalSteps} 步
+                    {isLightweightWorkflowConfig(editingConfig)
+                      ? '轻量工作流 · 任务清单执行'
+                      : `状态机工作流 · ${totalSteps} 步`}
                   </div>
                 </div>
                 <div className={styles.workbenchInspectorCard}>
@@ -13591,11 +14045,11 @@ export default function WorkbenchPage({
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div className="rounded-lg border bg-background px-2 py-2">
                       <div className="text-muted-foreground">模式</div>
-                      <div className="mt-1 font-semibold">{isLightweightWorkflowConfig(editingConfig) ? '轻量状态机' : '状态机'}</div>
+                      <div className="mt-1 font-semibold">{isLightweightWorkflowConfig(editingConfig) ? '轻量工作流' : '状态机'}</div>
                     </div>
                     <div className="rounded-lg border bg-background px-2 py-2">
-                      <div className="text-muted-foreground">步骤</div>
-                      <div className="mt-1 font-semibold">{totalSteps}</div>
+                      <div className="text-muted-foreground">{isLightweightWorkflowConfig(editingConfig) ? '执行方式' : '步骤'}</div>
+                      <div className="mt-1 font-semibold">{isLightweightWorkflowConfig(editingConfig) ? '任务清单' : totalSteps}</div>
                     </div>
                   </div>
                 </div>
