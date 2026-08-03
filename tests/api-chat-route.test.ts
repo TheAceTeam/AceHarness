@@ -13,6 +13,7 @@ const routeMocks = vi.hoisted(() => ({
   getWorkspaceRunsDir: vi.fn(),
   getWorkspaceDataFile: vi.fn(),
   requireAuth: vi.fn(),
+  resolveActiveChatModelRoute: vi.fn(),
 }));
 
 vi.mock('@/lib/chat/chat-engine-runtime', () => ({
@@ -37,6 +38,11 @@ vi.mock('@/lib/auth/middleware', () => ({
   requireAuth: routeMocks.requireAuth,
 }));
 
+vi.mock('@/lib/chat/model-route-validation', () => ({
+  chatModelRouteError: (engine: string, model: string) => `模型「${model}」当前没有可用于引擎「${engine}」的有效运行路由，请选择已配置的模型后重试。`,
+  resolveActiveChatModelRoute: routeMocks.resolveActiveChatModelRoute,
+}));
+
 describe('/api/chat route', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -49,6 +55,7 @@ describe('/api/chat route', () => {
     routeMocks.getWorkspaceRoot.mockReturnValue('/tmp/workspace');
     routeMocks.getWorkspaceRunsDir.mockReturnValue('/tmp/workspace/runs');
     routeMocks.getWorkspaceDataFile.mockImplementation((...segments: string[]) => ['/tmp/workspace/data', ...segments].join('/'));
+    routeMocks.resolveActiveChatModelRoute.mockReturnValue({ modelRouteId: 'route-opencode-glm' });
     routeMocks.requireAuth.mockResolvedValue({
       id: 'user-1',
       username: 'Tester',

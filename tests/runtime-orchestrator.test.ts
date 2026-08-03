@@ -161,6 +161,59 @@ describe('runtime orchestrator', () => {
     }
   });
 
+  test('defers native binding creation until the first turn when requested', async () => {
+    const adapter = new ReconnectingRuntimeAdapter();
+    const { db, orchestrator } = makeHarness(adapter);
+    try {
+      const session = await orchestrator.openSession({
+        agentId: 'codex',
+        kind: 'workflow-agent',
+        cwd: process.cwd(),
+        deferAdapterSessionInitialization: true,
+      });
+
+      expect(adapter.createSessionInputs).toHaveLength(0);
+      expect(db.prepare('SELECT COUNT(*) AS count FROM runtime_bindings WHERE session_id = ?').get(session.runtimeSessionId))
+        .toMatchObject({ count: 0 });
+
+      await collect(orchestrator.runTurn({
+        runtimeSessionId: session.runtimeSessionId,
+        requestId: 'request-first-turn',
+        input: 'start',
+      }));
+
+      expect(adapter.createSessionInputs).toHaveLength(1);
+      expect(adapter.reconnectInputs).toHaveLength(0);
+      expect(db.prepare('SELECT COUNT(*) AS count FROM runtime_bindings WHERE session_id = ?').get(session.runtimeSessionId))
+        .toMatchObject({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('replaces a legacy empty workflow binding instead of reconnecting it', async () => {
+    const adapter = new ReconnectingRuntimeAdapter();
+    const { db, orchestrator } = makeHarness(adapter);
+    try {
+      const session = await orchestrator.openSession({
+        agentId: 'codex',
+        kind: 'workflow-agent',
+        cwd: process.cwd(),
+      });
+
+      await collect(orchestrator.runTurn({
+        runtimeSessionId: session.runtimeSessionId,
+        requestId: 'request-legacy-empty-workflow-binding',
+        input: 'start',
+      }));
+
+      expect(adapter.createSessionInputs).toHaveLength(2);
+      expect(adapter.reconnectInputs).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
   test('runTurn claims the requested turn, persists normalized events, and completes the turn', async () => {
     const { db, orchestrator } = makeHarness();
     try {

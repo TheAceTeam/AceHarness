@@ -71,6 +71,53 @@ describe('subworkflow config dependencies', () => {
     });
   });
 
+  test('normalizes legacy Spec metadata out of a lightweight run snapshot', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const configsDir = path.join(aceHome, 'configs');
+      await mkdir(configsDir, { recursive: true });
+      const legacyConfig: any = {
+        workflow: {
+          name: 'Legacy lightweight',
+          mode: 'state-machine',
+          profile: 'lightweight',
+          lightweight: {},
+          supervisor: { enabled: true, agent: 'default-supervisor' },
+          states: [{
+            name: 'Execute',
+            isInitial: true,
+            isFinal: true,
+            steps: [{ name: 'Run tasklist', agent: 'developer', task: 'Complete the tasklist' }],
+            transitions: [],
+          }],
+        },
+        context: { projectRoot: '{project_root}' },
+      };
+      legacyConfig.workflow.states[0].steps[0].specTaskBinding = {
+        taskId: 'T1.1',
+        taskIds: ['T1.1'],
+      };
+      await writeFile(path.join(configsDir, 'lightweight.yaml'), stringify(legacyConfig), 'utf-8');
+
+      const { createWorkflowConfigSnapshot, readWorkflowConfigSnapshot } = await loadSubworkflowConfig();
+      await createWorkflowConfigSnapshot({
+        rootConfigFile: 'lightweight.yaml',
+        runId: 'run-lightweight-snapshot',
+      });
+
+      const snapshot = await readWorkflowConfigSnapshot({
+        rootRunId: 'run-lightweight-snapshot',
+        configFile: 'lightweight.yaml',
+      });
+      const normalized = parse(snapshot.content) as any;
+      expect(normalized.workflow.supervisor).toBeUndefined();
+      expect(normalized.workflow.states[0].steps[0].specTaskBinding).toBeUndefined();
+      expect(normalized.workflow.states[0].steps[0].skills).toContain('aceharness-tasklist');
+
+      const original = parse(await readFile(path.join(configsDir, 'lightweight.yaml'), 'utf-8')) as any;
+      expect(original.workflow.states[0].steps[0].specTaskBinding?.taskId).toBe('T1.1');
+    });
+  });
+
   test('rejects recursive subworkflow dependency graphs', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       const configsDir = path.join(aceHome, 'configs');

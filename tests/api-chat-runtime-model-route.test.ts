@@ -223,13 +223,75 @@ describe('/api/chat runtime model route resolution', () => {
     });
   });
 
+  test('rejects a catalog model without an active compatible route before starting a stream', async () => {
+    const { ensureSession, runTurn } = await setupImportedCodexGpt55Low();
+    const { getWorkspaceDataFile } = await import('@/lib/core/app-paths');
+    const { openRuntimeSqliteDatabase } = await import('@/lib/runtime-agent/sqlite/database');
+    const { upsertModelCatalogEntry } = await import('@/lib/runtime-agent/models/model-routes');
+    const db = openRuntimeSqliteDatabase(getWorkspaceDataFile('runtime-agent.sqlite'));
+    upsertModelCatalogEntry(db, {
+      id: 'user-added-model-that-is-not-routed',
+      displayName: 'User Added Model',
+      now: '2026-07-09T00:00:00.000Z',
+    });
+    db.close();
+
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
+    const response = await POST(makeRequest('/api/chat/stream', {
+      json: {
+        message: 'hello',
+        engine: 'codex',
+        model: 'user-added-model-that-is-not-routed',
+      },
+    }));
+    const body = await responseJson(response);
+
+    expect(response.status).toBe(422);
+    expect(body.error).toContain('user-added-model-that-is-not-routed');
+    expect(body.error).toContain('codex');
+    expect(routeMocks.buildChatRequestContext).not.toHaveBeenCalled();
+    expect(ensureSession).not.toHaveBeenCalled();
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  test('rejects a catalog model without an active compatible route before non-streaming execution', async () => {
+    const { ensureSession, runTurn } = await setupImportedCodexGpt55Low();
+    const { getWorkspaceDataFile } = await import('@/lib/core/app-paths');
+    const { openRuntimeSqliteDatabase } = await import('@/lib/runtime-agent/sqlite/database');
+    const { upsertModelCatalogEntry } = await import('@/lib/runtime-agent/models/model-routes');
+    const db = openRuntimeSqliteDatabase(getWorkspaceDataFile('runtime-agent.sqlite'));
+    upsertModelCatalogEntry(db, {
+      id: 'user-added-model-that-is-not-routed',
+      displayName: 'User Added Model',
+      now: '2026-07-09T00:00:00.000Z',
+    });
+    db.close();
+
+    const { POST } = await import('@/server/api-routes/chat/route');
+    const response = await POST(makeRequest('/api/chat', {
+      json: {
+        message: 'hello',
+        engine: 'codex',
+        model: 'user-added-model-that-is-not-routed',
+      },
+    }));
+    const body = await responseJson(response);
+
+    expect(response.status).toBe(422);
+    expect(body.error).toContain('user-added-model-that-is-not-routed');
+    expect(body.error).toContain('codex');
+    expect(routeMocks.buildChatRequestContext).not.toHaveBeenCalled();
+    expect(ensureSession).not.toHaveBeenCalled();
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
   test('streaming chat wraps acpx tool events as ace-process blocks', async () => {
     const { runTurn } = await setupImportedCodexGpt55Low();
     runTurn.mockImplementation((async function* (_binding: any, input: any) {
       yield { type: 'text_delta', text: '我会先读取这个 skill 的入口说明。', stream: 'output' };
       yield {
         type: 'tool_call',
-        text: "Get-Content 'C:\\workspace\\skills\\example\\SKILL.md' (in_progress): Get-Content 'C:\\workspace\\skills\\example\\SKILL.md'",
+        text: "powershell -Command \"Write-Output '# Example Skill'\" (in_progress): powershell -Command \"Write-Output '# Example Skill'\"",
         title: 'shell',
         status: 'in_progress',
         toolCallId: 'tool-1',
@@ -260,16 +322,22 @@ describe('/api/chat runtime model route resolution', () => {
       .map((event) => String(event.data.content || ''))
       .join('');
     const done = events.find((event) => event.event === 'done');
+    const doneResult = String(done?.data.result || '');
 
     expect(deltaContent).toContain('<ace-process>');
     expect(deltaContent).toContain('"kind":"tool-call"');
     expect(deltaContent).toContain('"kind":"tool-result"');
     expect(deltaContent).toContain('"toolId":"tool-1"');
-    expect(deltaContent).toContain('"toolName":"skill"');
+    expect(deltaContent).toContain('"toolName":"bash"');
     expect(deltaContent).toContain('Example Skill');
-    expect(deltaContent).not.toContain('(in_progress): Get-Content');
-    expect(String(done?.data.result || '')).toContain('<ace-process>');
-    expect(String(done?.data.result || '')).not.toContain('(in_progress): Get-Content');
+    expect(deltaContent).not.toContain('(in_progress): powershell');
+    expect(events.some((event) => event.event === 'tool')).toBe(false);
+    expect(doneResult).toContain('<ace-process>');
+    expect(doneResult).toContain('"kind":"tool-call"');
+    expect(doneResult).toContain('"kind":"tool-result"');
+    expect(doneResult).toContain('"toolId":"tool-1"');
+    expect(doneResult).toContain('Example Skill');
+    expect(doneResult).not.toContain('(in_progress): powershell');
   });
 });
 

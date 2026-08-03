@@ -697,6 +697,23 @@ describe('TanStack Virtual, DB and AI client adapters', () => {
     expect(agentMessagesCollection.get(row.id)?.diagnostics?.provider).toBe('workflow-runtime');
   });
 
+  test('AI adapter does not turn workflow status or event type into transcript text', () => {
+    const row = storeWorkflowSseEventAsAgentMessage({
+      type: 'status',
+      data: {
+        runId: 'run-status-only',
+        stepKey: 'implement',
+        status: 'running',
+      },
+    });
+
+    expect(row).toMatchObject({
+      id: 'workflow:run-status-only:implement:status',
+      content: '',
+      chunks: [],
+    });
+  });
+
   test('AI adapter stores chat stream SSE events without duplicating final output', () => {
     const first = storeChatStreamSseEventAsAgentMessage('delta', {
       content: 'Hel',

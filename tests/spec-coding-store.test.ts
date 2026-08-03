@@ -228,7 +228,6 @@ describe('spec-coding-store', () => {
           agent: 'developer',
           task: 'Run the lightweight tasklist flow',
           skills: ['review-skill'],
-          tasklistDirectory: 'docs/tasklists/lightweight-roundtrip',
         },
         config,
       });
@@ -241,7 +240,6 @@ describe('spec-coding-store', () => {
         agent: 'developer',
         task: 'Run the lightweight tasklist flow',
         skills: ['review-skill'],
-        tasklistDirectory: 'docs/tasklists/lightweight-roundtrip',
       });
     });
   });

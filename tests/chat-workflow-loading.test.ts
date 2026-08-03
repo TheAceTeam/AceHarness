@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { isChatAiBusy } from '@/components/chat/ChatPageContent';
+import { isChatAiBusy, resolveWorkflowCreatorSessionId } from '@/components/chat/ChatPageContent';
 
 describe('chat loading guard', () => {
   test('keeps the bottom thinking indicator while a regular response is loading', () => {
@@ -25,5 +25,13 @@ describe('chat loading guard', () => {
       streamingMessageId: null,
       messages: [{ workflowThinking: true }],
     })).toBe(true);
+  });
+
+  test('does not allocate a conversation merely by opening AI workflow creation', () => {
+    expect(resolveWorkflowCreatorSessionId({})).toBeNull();
+    expect(resolveWorkflowCreatorSessionId({
+      activeSessionId: 'active-session',
+      activeSessionIdFallback: 'legacy-session',
+    })).toBe('active-session');
   });
 });

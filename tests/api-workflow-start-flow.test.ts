@@ -221,10 +221,10 @@ describe('workflow start flow', () => {
         name: 'Lightweight rehearsal',
         mode: 'state-machine',
         profile: 'lightweight',
-        lightweight: { tasklistDirectory: 'tasks/rehearsal' },
+        lightweight: {},
         states: [{
           name: 'Execute',
-          steps: [{ name: 'Run tasklist', agent: 'default-supervisor', skills: ['aceharness-tasklist'] }],
+          steps: [{ name: 'Run tasklist', agent: 'developer', skills: ['aceharness-tasklist'] }],
         }],
       },
       context: { projectRoot: '/tmp/project' },
@@ -239,14 +239,23 @@ describe('workflow start flow', () => {
 
     expect(response.status).toBe(200);
     const { saveRunState } = await import('@/lib/run/state-persistence');
+    const { mkdir } = await import('fs/promises');
+    const persistedRun = (saveRunState as any).mock.calls[0][0];
+    expect(mkdir).toHaveBeenCalledWith(persistedRun.lightweight.resolvedTasklistDirectory, { recursive: true });
+    expect(persistedRun.lightweight.resolvedTasklistDirectory).not.toContain('docs');
     expect(saveRunState).toHaveBeenCalledWith(expect.objectContaining({
       lightweight: expect.objectContaining({
         profile: 'lightweight',
-        tasklistDirectory: 'tasks/rehearsal',
+        tasklistDirectory: 'tasklist',
+        resolvedTasklistDirectory: expect.stringMatching(/[\\/]runs[\\/]run-/),
       }),
     }));
-    const persistedRun = (saveRunState as any).mock.calls[0][0];
     expect(persistedRun.workingDirectory).toBe(persistedRun.lightweight.workspaceRoot);
+    expect(persistedRun).not.toHaveProperty('supervisorAgent');
+    expect(persistedRun).not.toHaveProperty('supervisorSessionId');
+    const rehearsalTranscripts = transcriptMocks.appendWorkflowRuntimeTranscript.mock.calls.map(([input]) => input);
+    expect(rehearsalTranscripts.every((input: any) => input.speakerName !== 'default-supervisor')).toBe(true);
+    expect(JSON.stringify(rehearsalTranscripts)).not.toContain('default-supervisor');
     expect(runtimeSessionMocks.bindWorkflowRunToConversation).toHaveBeenCalledWith(expect.objectContaining({
       requireLightweightMetadata: true,
       lightweight: expect.objectContaining({ profile: 'lightweight' }),
@@ -256,7 +265,7 @@ describe('workflow start flow', () => {
     );
   });
 
-  test('rejects a formal lightweight run with an occupied tasklist directory before binding a conversation', async () => {
+  test('does not reject a lightweight run because another run owns its tasklist directory', async () => {
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
     const { parse } = await import('yaml');
@@ -265,24 +274,15 @@ describe('workflow start flow', () => {
         name: 'Lightweight conflict',
         mode: 'state-machine',
         profile: 'lightweight',
-        lightweight: { tasklistDirectory: 'tasks/conflict' },
+        lightweight: {},
         states: [{
           name: 'Execute',
-          steps: [{ name: 'Run tasklist', agent: 'default-supervisor', skills: ['aceharness-tasklist'] }],
+          steps: [{ name: 'Run tasklist', agent: 'developer', skills: ['aceharness-tasklist'] }],
         }],
       },
       context: { projectRoot: '/tmp/project' },
       roles: [],
     });
-    const { findActiveRuns } = await import('@/lib/run/state-persistence');
-    const path = await import('path');
-    (findActiveRuns as any).mockResolvedValue([{
-      runId: 'run-active-lightweight',
-      lightweight: {
-        profile: 'lightweight',
-        resolvedTasklistDirectory: path.resolve('/tmp/project', 'tasks/conflict'),
-      },
-    }]);
     const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue({
       getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
@@ -296,12 +296,9 @@ describe('workflow start flow', () => {
       json: { configFile: 'lightweight.yaml', skipPreflight: true, frontendSessionId: 'sess-1' },
     }));
 
-    expect(response.status).toBe(409);
-    await expect(responseJson<any>(response)).resolves.toMatchObject({
-      error: '轻量工作流任务文档目录已被活动运行占用',
-      runId: 'run-active-lightweight',
-    });
-    expect(runtimeSessionMocks.ensureWorkflowRuntimeConversation).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    await expect(responseJson<any>(response)).resolves.toMatchObject({ success: true });
+    expect(runtimeSessionMocks.ensureWorkflowRuntimeConversation).toHaveBeenCalled();
   });
 
   test('returns 409 when workflow is already running', async () => {
@@ -419,6 +416,46 @@ describe('workflow start flow', () => {
       runId: json.runId,
       transcript: expect.objectContaining({ type: 'run-starting' }),
     }));
+  });
+
+  test('formal lightweight start emits no default-supervisor event or speaker', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
+    const { parse } = await import('yaml');
+    (parse as any).mockReturnValue({
+      workflow: {
+        name: 'Lightweight formal start',
+        mode: 'state-machine',
+        profile: 'lightweight',
+        lightweight: {},
+        states: [{
+          name: 'Execute',
+          steps: [{ name: 'Run tasklist', agent: 'developer', skills: ['aceharness-tasklist'] }],
+        }],
+      },
+      context: { projectRoot: '/tmp/project' },
+      roles: [],
+    });
+    const mockManager = {
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      start: vi.fn().mockResolvedValue(undefined),
+      emit: vi.fn(),
+    };
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'lightweight-formal.yaml', skipPreflight: true },
+    }));
+
+    expect(response.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockManager.start).toHaveBeenCalled();
+    const transcriptInputs = transcriptMocks.appendWorkflowRuntimeTranscript.mock.calls.map(([input]) => input);
+    expect(transcriptInputs.every((input: any) => input.speakerName !== 'default-supervisor')).toBe(true);
+    expect(JSON.stringify(transcriptInputs)).not.toContain('default-supervisor');
   });
 
   test('concurrent start requests cannot both pass while the start transcript is pending', async () => {

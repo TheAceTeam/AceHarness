@@ -1,4 +1,5 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { stringify } from 'yaml';
 import { describe, expect, test, vi } from 'vitest';
@@ -89,14 +90,15 @@ describe('task 8 config and document paging/lazy loading', () => {
       const { listRunDocuments, readRunDocumentContent } = await import('@/lib/run/documents');
       const documentsRoute = await import('@/server/api-routes/runs/[id]/documents/route');
       const workspace = path.join(aceHome, 'workspace');
-      const tasklistDirectory = path.join(workspace, 'docs', 'tasklists', 'run-docs');
+      const tasklistDirectory = path.join(getWorkspaceRunsDir(), 'run-docs', 'tasklist');
+      await mkdir(workspace, { recursive: true });
       await mkdir(tasklistDirectory, { recursive: true });
       await saveRunState(runState('run-docs', {
         workingDirectory: workspace,
         childRunIds: ['child-docs'],
         lightweight: {
           profile: 'lightweight',
-          tasklistDirectory: 'docs/tasklists/run-docs',
+          tasklistDirectory: 'tasklist',
           workspaceRoot: workspace,
           resolvedTasklistDirectory: tasklistDirectory,
           stateName: '执行',
@@ -137,8 +139,20 @@ describe('task 8 config and document paging/lazy loading', () => {
         tasklist: tasklistDirectory,
         'runtime-output': outputsDir,
       });
+      expect(existsSync(path.join(workspace, 'docs', 'tasklists'))).toBe(false);
       expect(runtimeSummary).not.toHaveProperty('content');
       expect(summary?.files.some((file) => file.filename === '2026-01-01T00-00-03-____-____.md')).toBe(false);
+
+      const tasklistOnly = await listRunDocuments('run-docs', {
+        scope: 'root',
+        source: 'tasklist',
+      });
+      expect(tasklistOnly?.files).toEqual([
+        expect.objectContaining({
+          documentSource: 'tasklist',
+          relativePath: 'nested/plan.md',
+        }),
+      ]);
 
       const details = await listRunDocuments('run-docs', {
         scope: 'root',
@@ -187,6 +201,17 @@ describe('task 8 config and document paging/lazy loading', () => {
         source: 'tasklist',
         content: '# Tasklist plan',
       });
+
+      const tasklistListResponse = await documentsRoute.GET(
+        makeRequest('/api/runs/run-docs/documents?source=tasklist&summaryOnly=1'),
+        params,
+      );
+      expect(tasklistListResponse.status).toBe(200);
+      const tasklistFiles = (await responseJson<any>(tasklistListResponse)).files;
+      expect(tasklistFiles).toEqual(expect.arrayContaining([
+        expect.objectContaining({ documentSource: 'tasklist', relativePath: 'nested/plan.md' }),
+      ]));
+      expect(tasklistFiles.every((file: any) => file.documentSource === 'tasklist')).toBe(true);
 
       const childPreviewResponse = await documentsRoute.GET(
         makeRequest('/api/runs/run-docs/documents?file=child-only.md&source=runtime-output&sourceRunId=child-docs'),
@@ -265,6 +290,20 @@ describe('task 8 config and document paging/lazy loading', () => {
         params,
       );
       expect(invalidSourceResponse.status).toBe(400);
+
+      await saveRunState(runState('run-legacy-documents', {
+        workingDirectory: workspace,
+        lightweight: {
+          profile: 'lightweight',
+          tasklistDirectory: 'docs/tasklists/run-legacy-documents',
+          workspaceRoot: workspace,
+          resolvedTasklistDirectory: path.join(workspace, 'docs', 'tasklists', 'run-legacy-documents'),
+          stateName: '执行',
+          stepName: '执行任务',
+          effectiveStepSkills: ['aceharness-tasklist'],
+        },
+      }));
+      await expect(listRunDocuments('run-legacy-documents')).rejects.toThrow(/legacy|inconsistent/i);
     });
   });
 });

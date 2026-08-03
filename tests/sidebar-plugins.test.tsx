@@ -196,13 +196,13 @@ describe('sidebar plugin system', () => {
       expect(screen.getByRole('button', { name: /AI 引导创建工作流/ })).toBeInTheDocument();
     });
 
-    test('AI workflow creator guide opens the lightweight creation action', async () => {
+    test('AI workflow creator guide opens the AI guided creation action', async () => {
       const user = userEvent.setup();
       const onAction = vi.fn();
       render(<QuickActions onAction={onAction} />);
 
       await user.click(screen.getByRole('button', { name: /AI 引导创建工作流/ }));
-      await user.click(screen.getByRole('button', { name: '打开轻量创建' }));
+      await user.click(screen.getByRole('button', { name: '打开 AI 引导创建' }));
 
       expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:create_workflow');
     });

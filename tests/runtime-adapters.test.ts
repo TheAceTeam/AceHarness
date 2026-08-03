@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, test, vi } from 'vitest';
 import { createRuntimeAdapterRegistry, resolveRuntimeForAgent } from '@/lib/runtime-agent/adapters/adapter-registry';
 import { AcpxAdapter, normalizeAcpxRuntimeEvent, resolveAcpxCommand } from '@/lib/runtime-agent/adapters/acpx-adapter';
@@ -222,6 +223,34 @@ describe('runtime adapters', () => {
       aggregated_output: '# Skill',
       exit_code: 0,
     });
+  });
+
+  test('keeps top-level formatted output and errors in terminal tool payloads', () => {
+    const completed = normalizeAcpxRuntimeEvent({
+      type: 'tool_call_update',
+      toolCallId: 'tool-formatted-output-1',
+      status: 'completed',
+      kind: 'execute',
+      formatted_output: 'src/runtime.ts:42:export function run() {}',
+      exit_code: 0,
+    });
+    const failed = normalizeAcpxRuntimeEvent({
+      type: 'tool_call_update',
+      toolCallId: 'tool-error-output-1',
+      status: 'failed',
+      kind: 'execute',
+      error: { message: 'command not found' },
+      exit_code: 127,
+    });
+
+    expect(completed.payload).toEqual(expect.objectContaining({
+      formatted_output: 'src/runtime.ts:42:export function run() {}',
+      exit_code: 0,
+    }));
+    expect(failed.payload).toEqual(expect.objectContaining({
+      error: { message: 'command not found' },
+      exit_code: 127,
+    }));
   });
 
   test('keeps ACPX file-edit metadata while omitting the file body', () => {
@@ -1140,6 +1169,154 @@ describe('runtime adapters', () => {
     });
   });
 
+  test('recovers ACPX request token usage from persisted failed terminal turns', async () => {
+    const previousAceHome = process.env.ACE_HOME;
+    const aceHome = mkdtempSync(join(tmpdir(), 'ace-acpx-terminal-usage-'));
+    const recordId = 'record-terminal-failed-usage';
+    try {
+      process.env.ACE_HOME = aceHome;
+      const sessionsDir = join(aceHome, 'data', 'acpx-runtime', 'sessions');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify({
+        request_token_usage: {
+          'msg-old': {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_input_tokens: 1,
+            cache_creation_input_tokens: 1,
+            total_tokens: 4,
+          },
+          'msg-new': {
+            input_tokens: 17,
+            output_tokens: 19,
+            cache_read_input_tokens: 23,
+            cache_creation_input_tokens: 29,
+            thought_tokens: 31,
+            total_tokens: 119,
+          },
+        },
+      }), 'utf8');
+
+      const runtime = {
+        ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+          sessionKey: input.sessionKey,
+          backend: 'acpx',
+          runtimeSessionName: input.sessionKey,
+          cwd: process.cwd(),
+          acpxRecordId: recordId,
+        })),
+        startTurn: vi.fn((): AcpRuntimeTurn => ({
+          requestId: 'request-terminal-failed-usage',
+          events: eventStream([]),
+          result: Promise.resolve({
+            status: 'failed',
+            error: { message: 'provider failed after using tokens', code: 'FAILED' },
+          }),
+          cancel: vi.fn(async () => undefined),
+          closeStream: vi.fn(async () => undefined),
+        })),
+        cancel: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } satisfies AcpRuntime;
+      const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+      const adapter = new AcpxAdapter(client);
+      const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-terminal-failed-usage', 'codegenie', 'acpx'));
+
+      const events = await collect(adapter.runTurn(binding, createTurnInput()));
+      const failed = events.find((event) => event.type === 'turn.failed');
+
+      expect(failed).toMatchObject({
+        type: 'turn.failed',
+        usage: {
+          inputTokens: 17,
+          outputTokens: 19,
+          cacheReadInputTokens: 23,
+          cacheCreationInputTokens: 29,
+          thoughtTokens: 31,
+          totalTokens: 119,
+          missing: false,
+          sourceStatus: 'reported',
+        },
+      });
+    } finally {
+      if (previousAceHome === undefined) delete process.env.ACE_HOME;
+      else process.env.ACE_HOME = previousAceHome;
+      rmSync(aceHome, { recursive: true, force: true });
+    }
+  });
+
+  test('recovers ACPX cumulative token usage from persisted cancelled terminal turns', async () => {
+    const previousAceHome = process.env.ACE_HOME;
+    const aceHome = mkdtempSync(join(tmpdir(), 'ace-acpx-terminal-usage-'));
+    const recordId = 'record-terminal-cancelled-usage';
+    try {
+      process.env.ACE_HOME = aceHome;
+      const sessionsDir = join(aceHome, 'data', 'acpx-runtime', 'sessions');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify({
+        cumulative_token_usage: {
+          inputTokens: 11,
+          outputTokens: 13,
+          cachedReadTokens: 17,
+          cachedWriteTokens: 19,
+          totalTokens: 60,
+        },
+        cumulative_cost: {
+          amount: 0.061,
+          currency: 'USD',
+        },
+      }), 'utf8');
+
+      const runtime = {
+        ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+          sessionKey: input.sessionKey,
+          backend: 'acpx',
+          runtimeSessionName: input.sessionKey,
+          cwd: process.cwd(),
+          acpxRecordId: recordId,
+        })),
+        startTurn: vi.fn((): AcpRuntimeTurn => ({
+          requestId: 'request-terminal-cancelled-usage',
+          events: eventStream([]),
+          result: Promise.resolve({ status: 'cancelled', stopReason: 'cancelled' }),
+          cancel: vi.fn(async () => undefined),
+          closeStream: vi.fn(async () => undefined),
+        })),
+        cancel: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } satisfies AcpRuntime;
+      const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+      const adapter = new AcpxAdapter(client);
+      const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-terminal-cancelled-usage', 'nga', 'acpx'));
+
+      const events = await collect(adapter.runTurn(binding, createTurnInput()));
+      const completed = events.find((event) => event.type === 'turn.completed');
+
+      expect(completed).toMatchObject({
+        type: 'turn.completed',
+        usage: {
+          inputTokens: 11,
+          outputTokens: 13,
+          cacheReadInputTokens: 17,
+          cacheCreationInputTokens: 19,
+          totalTokens: 60,
+          missing: false,
+          sourceStatus: 'reported',
+        },
+        cost: {
+          amount: 0.061,
+          currency: 'USD',
+          missing: false,
+          sourceStatus: 'reported',
+        },
+      });
+    } finally {
+      if (previousAceHome === undefined) delete process.env.ACE_HOME;
+      else process.env.ACE_HOME = previousAceHome;
+      rmSync(aceHome, { recursive: true, force: true });
+    }
+  });
+
   test('acpx runtime client completes tool events when ACP omits the tool result', async () => {
     const runtime = {
       ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
@@ -1179,6 +1356,575 @@ describe('runtime adapters', () => {
         }),
       }),
     });
+  });
+
+  test('acpx runtime client completes an in-progress tool_call_update when ACP omits its result', async () => {
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-tool-update-without-result',
+        events: eventStream([{
+          type: 'tool_call_update',
+          toolCallId: 'tool-command-update-1',
+          status: 'in_progress',
+          title: 'Run command',
+          kind: 'powershell',
+          rawInput: { command: "Get-Content 'src/jinja2/runtime.py'" },
+        }]),
+        result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+        cancel: vi.fn(async () => undefined),
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-tool-update-fallback', 'codex', 'acpx'));
+
+    const events = await collect(adapter.runTurn(binding, createTurnInput()));
+    const completion = events.find((event) => event.type === 'tool.updated' && (event.payload as any)?.status === 'completed');
+
+    expect(completion).toMatchObject({
+      toolCallId: 'tool-command-update-1',
+      payload: expect.objectContaining({
+        rawInput: { command: "Get-Content 'src/jinja2/runtime.py'" },
+        rawOutput: expect.objectContaining({ resultUnavailable: true }),
+      }),
+    });
+    expect((completion?.payload as any)?.rawOutput).not.toHaveProperty('output');
+  });
+
+  test('closes an ACPX tool on an explicit empty terminal status without inventing output', async () => {
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-empty-native-terminal',
+        events: eventStream([
+          {
+            type: 'tool_call_update',
+            toolCallId: 'tool-empty-native-terminal-1',
+            status: 'in_progress',
+            title: 'Run command',
+            kind: 'execute',
+            rawInput: { command: 'Get-ChildItem' },
+          },
+          {
+            type: 'tool_call_update',
+            toolCallId: 'tool-empty-native-terminal-1',
+            status: 'completed',
+          },
+        ]),
+        result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+        cancel: vi.fn(async () => undefined),
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-empty-native-terminal', 'codex', 'acpx'));
+
+    const events = await collect(adapter.runTurn(binding, createTurnInput()));
+    const terminalEvents = events.filter((event) => (
+      event.type === 'tool.updated'
+      && (event.payload as any)?.toolCallId === 'tool-empty-native-terminal-1'
+      && (event.payload as any)?.status === 'completed'
+    ));
+
+    expect(terminalEvents).toHaveLength(1);
+    expect(terminalEvents[0]).toMatchObject({
+      toolCallId: 'tool-empty-native-terminal-1',
+      payload: expect.objectContaining({ status: 'completed' }),
+    });
+    expect(terminalEvents[0]?.payload).not.toHaveProperty('rawOutput');
+  });
+
+  test('does not infer a terminal tool state from ACPX empty persisted placeholders', async () => {
+    const previousAceHome = process.env.ACE_HOME;
+    const aceHome = mkdtempSync(join(tmpdir(), 'ace-acpx-empty-tool-placeholder-'));
+    const recordId = 'record-empty-tool-placeholder';
+    let releaseEvents: (() => void) | undefined;
+    let resolveResult: ((value: { status: 'completed'; stopReason: string }) => void) | undefined;
+    try {
+      process.env.ACE_HOME = aceHome;
+      const sessionsDir = join(aceHome, 'data', 'acpx-runtime', 'sessions');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify({
+        tool_results: {
+          'tool-empty-placeholder-1': {
+            content: { Text: '' },
+          },
+        },
+      }), 'utf8');
+
+      const nativeEvents = (async function* (): AsyncGenerator<Record<string, unknown>> {
+        yield {
+          type: 'tool_call_update',
+          toolCallId: 'tool-empty-placeholder-1',
+          status: 'in_progress',
+          title: 'Run command',
+          kind: 'execute',
+          rawInput: { command: 'Get-ChildItem' },
+        };
+        await new Promise<void>((resolve) => {
+          releaseEvents = resolve;
+        });
+      })();
+      const result = new Promise<{ status: 'completed'; stopReason: string }>((resolve) => {
+        resolveResult = resolve;
+      });
+      const runtime = {
+        ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+          sessionKey: input.sessionKey,
+          backend: 'acpx',
+          runtimeSessionName: input.sessionKey,
+          acpxRecordId: recordId,
+        })),
+        startTurn: vi.fn((): AcpRuntimeTurn => ({
+          requestId: 'request-empty-tool-placeholder',
+          events: nativeEvents,
+          result,
+          cancel: vi.fn(async () => undefined),
+          closeStream: vi.fn(async () => undefined),
+        })),
+        cancel: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } satisfies AcpRuntime;
+      const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+      const adapter = new AcpxAdapter(client);
+      const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-empty-tool-placeholder', 'codex', 'acpx'));
+      const iterator = adapter.runTurn(binding, createTurnInput())[Symbol.asyncIterator]();
+
+      await iterator.next();
+      const running = await iterator.next();
+      expect(running.value).toMatchObject({
+        type: 'tool.updated',
+        toolCallId: 'tool-empty-placeholder-1',
+        payload: expect.objectContaining({ status: 'in_progress' }),
+      });
+
+      const terminal = iterator.next();
+      let terminalArrived = false;
+      void terminal.then(() => { terminalArrived = true; });
+      await new Promise((resolve) => setTimeout(resolve, 320));
+      expect(terminalArrived).toBe(false);
+
+      releaseEvents?.();
+      resolveResult?.({ status: 'completed', stopReason: 'end_turn' });
+      const completed = await terminal;
+      expect(completed.value).toMatchObject({
+        type: 'tool.updated',
+        toolCallId: 'tool-empty-placeholder-1',
+        payload: expect.objectContaining({
+          status: 'completed',
+          rawOutput: { completed: true, resultUnavailable: true },
+        }),
+      });
+      expect((completed.value as any)?.payload?.rawOutput).not.toHaveProperty('output');
+    } finally {
+      if (previousAceHome === undefined) delete process.env.ACE_HOME;
+      else process.env.ACE_HOME = previousAceHome;
+      rmSync(aceHome, { recursive: true, force: true });
+    }
+  });
+
+  test('closes unresolved ACPX tools as failed when the turn is cancelled', async () => {
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-cancelled-tool',
+        events: eventStream([{
+          type: 'tool_call_update',
+          toolCallId: 'tool-cancelled-1',
+          status: 'in_progress',
+          title: 'Run command',
+          kind: 'execute',
+          rawInput: { command: 'Get-ChildItem' },
+        }]),
+        result: Promise.resolve({ status: 'cancelled', stopReason: 'cancelled' }),
+        cancel: vi.fn(async () => undefined),
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-cancelled-tool', 'codex', 'acpx'));
+
+    const events = await collect(adapter.runTurn(binding, createTurnInput()));
+    const terminal = events.find((event) => (
+      event.type === 'tool.updated'
+      && (event.payload as any)?.toolCallId === 'tool-cancelled-1'
+      && (event.payload as any)?.status === 'failed'
+    ));
+
+    expect(terminal).toMatchObject({
+      toolCallId: 'tool-cancelled-1',
+      payload: expect.objectContaining({
+        status: 'failed',
+        rawOutput: expect.objectContaining({ cancelled: true, resultUnavailable: true }),
+      }),
+    });
+    expect((terminal?.payload as any)?.rawOutput).not.toHaveProperty('output');
+  });
+
+  test('recovers persisted ACPX tool results after an empty completed update', async () => {
+    const previousAceHome = process.env.ACE_HOME;
+    const aceHome = mkdtempSync(join(tmpdir(), 'ace-acpx-tool-result-'));
+    const recordId = 'record-persisted-tool-result';
+    try {
+      process.env.ACE_HOME = aceHome;
+      const sessionsDir = join(aceHome, 'data', 'acpx-runtime', 'sessions');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify({
+        tool_results: {
+          'tool-search-result-1': {
+            output: {
+              formatted_output: 'src/jinja2/exceptions.py:58:class TemplateRuntimeError(TemplateError):',
+              exit_code: 0,
+            },
+          },
+        },
+      }), 'utf8');
+
+      const runtime = {
+        ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+          sessionKey: input.sessionKey,
+          backend: 'acpx',
+          runtimeSessionName: input.sessionKey,
+          acpxRecordId: recordId,
+        })),
+        startTurn: vi.fn((): AcpRuntimeTurn => ({
+          requestId: 'request-persisted-tool-result',
+          events: eventStream([
+            {
+              type: 'tool_call_update',
+              toolCallId: 'tool-search-result-1',
+              status: 'in_progress',
+              title: 'Search source',
+              kind: 'execute',
+              rawInput: { command: 'rg -n "TemplateRuntimeError" src' },
+            },
+            {
+              type: 'tool_call_update',
+              toolCallId: 'tool-search-result-1',
+              status: 'completed',
+              title: 'tool call',
+              kind: 'execute',
+              exit_code: 0,
+            },
+          ]),
+          result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+          cancel: vi.fn(async () => undefined),
+          closeStream: vi.fn(async () => undefined),
+        })),
+        cancel: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } satisfies AcpRuntime;
+      const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+      const adapter = new AcpxAdapter(client);
+      const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-persisted-tool-result', 'codex', 'acpx'));
+
+      const events = await collect(adapter.runTurn(binding, createTurnInput()));
+      const recovered = events.find((event) => (
+        event.type === 'tool.updated'
+        && (event.payload as any)?.rawOutput?.output === 'src/jinja2/exceptions.py:58:class TemplateRuntimeError(TemplateError):'
+      ));
+
+      expect(recovered).toMatchObject({
+        toolCallId: 'tool-search-result-1',
+        payload: expect.objectContaining({
+          rawOutput: expect.objectContaining({
+            output: 'src/jinja2/exceptions.py:58:class TemplateRuntimeError(TemplateError):',
+            exitCode: 0,
+          }),
+        }),
+      });
+    } finally {
+      rmSync(aceHome, { recursive: true, force: true });
+      if (previousAceHome === undefined) delete process.env.ACE_HOME;
+      else process.env.ACE_HOME = previousAceHome;
+    }
+  });
+
+  test('canonicalizes opaque ACPX orchestration calls from persisted ToolUse metadata across lifecycle updates', async () => {
+    const previousAceHome = process.env.ACE_HOME;
+    const aceHome = mkdtempSync(join(tmpdir(), 'ace-acpx-orchestration-tools-'));
+    const recordId = 'record-opaque-orchestration-tools';
+    try {
+      process.env.ACE_HOME = aceHome;
+      const sessionsDir = join(aceHome, 'data', 'acpx-runtime', 'sessions');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify({
+        messages: [{
+          Agent: {
+            content: [
+              {
+                ToolUse: {
+                  id: 'exec-spawn-agent-1',
+                  name: 'spawnAgent',
+                  raw_input: '{"prompt":"check dependency graph","receiverThreadIds":["child-1"],"agentsStates":{"child-1":{"status":"pendingInit"}},"model":"gpt-5.6-luna","reasoningEffort":"high"}',
+                  input: {
+                    prompt: 'check dependency graph',
+                    receiverThreadIds: ['child-1'],
+                    agentsStates: { 'child-1': { status: 'pendingInit' } },
+                    model: 'gpt-5.6-luna',
+                    reasoningEffort: 'high',
+                  },
+                },
+              },
+              {
+                ToolUse: {
+                  id: 'exec-wait-agent-1',
+                  name: 'wait',
+                  raw_input: '{"receiverThreadIds":["child-1"],"agentsStates":{"child-1":{"status":"running"}}}',
+                },
+              },
+            ],
+          },
+        }],
+      }), 'utf8');
+
+      const runtime = {
+        ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+          sessionKey: input.sessionKey,
+          backend: 'acpx',
+          runtimeSessionName: input.sessionKey,
+          acpxRecordId: recordId,
+        })),
+        startTurn: vi.fn((): AcpRuntimeTurn => ({
+          requestId: 'request-opaque-orchestration-tools',
+          events: eventStream([
+            {
+              type: 'tool_call',
+              id: 'exec-spawn-agent-1',
+              toolName: 'other',
+              title: 'other',
+              kind: 'other',
+              status: 'in_progress',
+            },
+            {
+              type: 'tool_call_update',
+              data: { tool_call_id: 'exec-spawn-agent-1' },
+              toolName: 'other',
+              title: 'other',
+              kind: 'other',
+              status: 'completed',
+            },
+            {
+              type: 'tool_call',
+              payload: { id: 'exec-wait-agent-1' },
+              toolName: 'other',
+              title: 'other',
+              kind: 'other',
+              status: 'in_progress',
+            },
+          ] as any),
+          result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+          cancel: vi.fn(async () => undefined),
+          closeStream: vi.fn(async () => undefined),
+        })),
+        cancel: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } satisfies AcpRuntime;
+      const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+      const adapter = new AcpxAdapter(client);
+      const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-opaque-orchestration-tools', 'codex', 'acpx'));
+
+      const events = await collect(adapter.runTurn(binding, createTurnInput()));
+      const spawnLifecycle = events.filter((event) => (event.payload as any)?.toolCallId === 'exec-spawn-agent-1');
+      const waitLifecycle = events.filter((event) => (event.payload as any)?.toolCallId === 'exec-wait-agent-1');
+
+      expect(spawnLifecycle).toHaveLength(2);
+      expect(spawnLifecycle).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: 'exec-spawn-agent-1',
+          payload: expect.objectContaining({
+            name: 'subagent-dispatch',
+            toolName: 'subagent-dispatch',
+            rawInput: expect.objectContaining({
+              receiverThreadIds: ['child-1'],
+              model: 'gpt-5.6-luna',
+              reasoningEffort: 'high',
+            }),
+          }),
+        }),
+      ]));
+      expect(spawnLifecycle.map((event) => (event.payload as any)?.toolName)).toEqual([
+        'subagent-dispatch',
+        'subagent-dispatch',
+      ]);
+      expect(waitLifecycle).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: 'exec-wait-agent-1',
+          payload: expect.objectContaining({
+            name: 'subagent-wait',
+            toolName: 'subagent-wait',
+            rawInput: expect.objectContaining({ receiverThreadIds: ['child-1'] }),
+          }),
+        }),
+      ]));
+    } finally {
+      rmSync(aceHome, { recursive: true, force: true });
+      if (previousAceHome === undefined) delete process.env.ACE_HOME;
+      else process.env.ACE_HOME = previousAceHome;
+    }
+  });
+
+  test('does not append a fallback after an error-only terminal update', async () => {
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-error-only-tool-update',
+        events: eventStream([
+          {
+            type: 'tool_call_update',
+            toolCallId: 'tool-error-only-1',
+            status: 'in_progress',
+            title: 'Run command',
+            kind: 'execute',
+            rawInput: { command: 'missing-command' },
+          },
+          {
+            type: 'tool_call_update',
+            toolCallId: 'tool-error-only-1',
+            status: 'failed',
+            error: { message: 'command not found' },
+          },
+        ]),
+        result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+        cancel: vi.fn(async () => undefined),
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-error-only-tool-update', 'codex', 'acpx'));
+
+    const events = await collect(adapter.runTurn(binding, createTurnInput()));
+    const completions = events.filter((event) => (
+      event.type === 'tool.updated'
+      && (event.payload as any)?.toolCallId === 'tool-error-only-1'
+      && ['failed', 'completed'].includes((event.payload as any)?.status)
+    ));
+
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({
+      toolCallId: 'tool-error-only-1',
+      payload: expect.objectContaining({
+        status: 'failed',
+      }),
+      error: expect.objectContaining({ message: 'command not found' }),
+    });
+  });
+
+  test('recovers persisted failed ACPX tool results after an empty terminal update', async () => {
+    const previousAceHome = process.env.ACE_HOME;
+    const aceHome = mkdtempSync(join(tmpdir(), 'ace-acpx-failed-tool-result-'));
+    const recordId = 'record-persisted-failed-tool-result';
+    try {
+      process.env.ACE_HOME = aceHome;
+      const sessionsDir = join(aceHome, 'data', 'acpx-runtime', 'sessions');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(join(sessionsDir, `${encodeURIComponent(recordId)}.json`), JSON.stringify({
+        tool_results: {
+          'tool-command-failed-1': {
+            is_error: true,
+            output: 'command not found',
+            exit_code: 127,
+          },
+        },
+      }), 'utf8');
+
+      const runtime = {
+        ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+          sessionKey: input.sessionKey,
+          backend: 'acpx',
+          runtimeSessionName: input.sessionKey,
+          acpxRecordId: recordId,
+        })),
+        startTurn: vi.fn((): AcpRuntimeTurn => ({
+          requestId: 'request-persisted-failed-tool-result',
+          events: eventStream([
+            {
+              type: 'tool_call_update',
+              toolCallId: 'tool-command-failed-1',
+              status: 'in_progress',
+              title: 'Run command',
+              kind: 'execute',
+              rawInput: { command: 'missing-command' },
+            },
+            {
+              type: 'tool_call_update',
+              toolCallId: 'tool-command-failed-1',
+              status: 'completed',
+              title: 'tool call',
+              kind: 'execute',
+            },
+          ]),
+          result: Promise.resolve({
+            status: 'failed',
+            error: { message: 'tool execution failed', code: 'TOOL_FAILED' },
+          }),
+          cancel: vi.fn(async () => undefined),
+          closeStream: vi.fn(async () => undefined),
+        })),
+        cancel: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } satisfies AcpRuntime;
+      const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+      const adapter = new AcpxAdapter(client);
+      const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-persisted-failed-tool-result', 'codex', 'acpx'));
+
+      const events = await collect(adapter.runTurn(binding, createTurnInput()));
+      const recovered = events.find((event) => (
+        event.type === 'tool.updated'
+        && (event.payload as any)?.rawOutput?.output === 'command not found'
+      ));
+
+      expect(recovered).toMatchObject({
+        toolCallId: 'tool-command-failed-1',
+        payload: expect.objectContaining({
+          status: 'failed',
+          rawOutput: expect.objectContaining({
+            output: 'command not found',
+            exitCode: 127,
+          }),
+        }),
+      });
+      expect(events.at(-1)).toMatchObject({
+        type: 'turn.failed',
+        error: expect.objectContaining({
+          code: 'ADAPTER_FAILED',
+          cause: expect.objectContaining({ code: 'TOOL_FAILED' }),
+        }),
+      });
+    } finally {
+      rmSync(aceHome, { recursive: true, force: true });
+      if (previousAceHome === undefined) delete process.env.ACE_HOME;
+      else process.env.ACE_HOME = previousAceHome;
+    }
   });
 
   test('closes the acpx runtime after normal completion and consumer disconnect', async () => {
@@ -1278,6 +2024,73 @@ describe('runtime adapters', () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledWith(expect.objectContaining({
       reason: 'aceharness-runtime-start-failed',
+    }));
+  });
+
+  test('does not close an active ACPX turn during cancellation before terminal usage is emitted', async () => {
+    let releaseTerminal: (() => void) | undefined;
+    let statusCallCount = 0;
+    const turnCancel = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        acpxRecordId: 'record-active-cancel-usage',
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-active-cancel-usage',
+        events: (async function* () {
+          yield { type: 'message_delta', payload: { text: 'started' } };
+          await new Promise<void>((resolve) => {
+            releaseTerminal = resolve;
+          });
+        })(),
+        result: Promise.resolve({ status: 'cancelled', stopReason: 'cancelled' }),
+        cancel: turnCancel,
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close,
+      getStatus: vi.fn(async () => {
+        statusCallCount += 1;
+        return {
+          usage: {
+            cumulative: statusCallCount === 1
+              ? { inputTokens: 0, outputTokens: 0 }
+              : { inputTokens: 37, outputTokens: 41 },
+          },
+        };
+      }),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-active-cancel-usage', 'codegenie', 'acpx'));
+    const eventsPromise = collect(adapter.runTurn(binding, createTurnInput()));
+
+    await vi.waitFor(() => expect(runtime.startTurn).toHaveBeenCalledTimes(1));
+    await adapter.cancel(binding, {
+      turnId: 'turn-1',
+      requestId: 'cancel-active-usage',
+      reason: 'test active cancel',
+    });
+    expect(turnCancel).toHaveBeenCalledWith({ reason: 'test active cancel' });
+    expect(close).not.toHaveBeenCalled();
+
+    releaseTerminal?.();
+    const events = await eventsPromise;
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'turn.completed',
+      usage: {
+        inputTokens: 37,
+        outputTokens: 41,
+      },
+    });
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'aceharness-runtime-turn-complete',
+      discardPersistentState: false,
     }));
   });
 

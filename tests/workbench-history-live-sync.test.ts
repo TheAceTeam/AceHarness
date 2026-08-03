@@ -2,11 +2,17 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, test, vi } from 'vitest';
 import {
   applyAcceptedWorkbenchRecovery,
+  applyWorkbenchLiveStreamTransportFrame,
+  buildWorkflowConfigWithName,
   mergeUserVisibleStopProgressSteps,
+  reconstructWorkbenchCachedLiveStreamContent,
   selectCurrentStepAttemptLogs,
   shouldConnectWorkbenchRunStatusStream,
   shouldEnableWorkbenchStatusSync,
+  upsertStartedRunInHistory,
   formatLiveOutputTimestamp,
+  resolveSoleConfiguredWorkflowStepName,
+  resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
 } from '@/client/pages/workbench/WorkbenchClient';
 
@@ -19,10 +25,59 @@ const initialStopSteps: WorkbenchStopProgressStep[] = [
 ];
 
 describe('Workbench historical run live sync', () => {
+  test('keeps a newly started run locally selectable before history refresh completes', () => {
+    const startedRun = { id: 'run-new', status: 'preparing' };
+
+    expect(upsertStartedRunInHistory([
+      { id: 'run-old', status: 'completed' },
+      { id: 'run-new', status: 'failed' },
+    ], startedRun)).toEqual([
+      startedRun,
+      { id: 'run-old', status: 'completed' },
+    ]);
+  });
+
+  test('builds an immutable workflow-name save draft from the active edit value', () => {
+    const config = { workflow: { name: 'Before', mode: 'lightweight' }, context: { keep: true } };
+
+    expect(buildWorkflowConfigWithName(config, '  After  ')).toEqual({
+      workflow: { name: 'After', mode: 'lightweight' },
+      context: { keep: true },
+    });
+    expect(config.workflow.name).toBe('Before');
+    expect(buildWorkflowConfigWithName(config, '   ')).toBeNull();
+  });
+
   test('formats live-output separators with the complete Chinese date and time', () => {
     expect(formatLiveOutputTimestamp('2026-05-06T07:08:09')).toBe('2026/5/6 07:08:09');
     expect(formatLiveOutputTimestamp('')).toBeNull();
     expect(formatLiveOutputTimestamp('not-a-timestamp')).toBeNull();
+  });
+
+  test('reassembles cached transport frames without manufacturing Markdown paragraphs', () => {
+    const content = reconstructWorkbenchCachedLiveStreamContent([
+      {
+        id: 'workflow:run-live:step-live:live',
+        chunks: ['。', '由于', '本', '次', '目标', '我将使用 aceharness-tasklist'],
+      },
+    ], 'run-live', 'step-live');
+
+    expect(content).toBe('。由于本次目标我将使用 aceharness-tasklist');
+    expect(content).not.toContain('\n\n');
+  });
+
+  test('replaces stale cached transcript with the authoritative snapshot before appending deltas', () => {
+    const staleCache = 'runningrunningrunning\n旧开场文本';
+    const snapshot = '<!-- timestamp: 2026-08-01T10:35:58.818Z -->\n首条真实消息';
+    const current = applyWorkbenchLiveStreamTransportFrame(staleCache, { kind: 'snapshot', content: snapshot });
+
+    expect(current).toBe(snapshot);
+    expect(applyWorkbenchLiveStreamTransportFrame(current, { kind: 'delta', content: '，后续增量' }))
+      .toBe(`${snapshot}，后续增量`);
+    expect(reconstructWorkbenchCachedLiveStreamContent([
+      { id: 'workflow:run-live:step-live:live', content: '' },
+      { id: 'workflow:run-live:step-live:status', content: 'running' },
+    ], 'run-live', 'step-live')).toBe('');
   });
 
   test('does not commit recovery UI state when the launch request is rejected', async () => {
@@ -85,6 +140,33 @@ describe('Workbench historical run live sync', () => {
     expect(selectCurrentStepAttemptLogs(attempts)).toEqual([
       { id: 'current', superseded: false },
     ]);
+  });
+
+  test('retains completed and failed terminal steps as live-output sources', () => {
+    expect(resolveWorkbenchLiveStreamStepKeys({
+      activeSteps: [],
+      currentStep: 'review',
+      completedSteps: ['implement', 'test'],
+      failedSteps: ['review'],
+      terminal: true,
+    })).toEqual(['implement', 'test', 'review']);
+  });
+
+  test('falls back to the sole lightweight execution step when terminal status has no runtime step keys', () => {
+    const workflow = {
+      states: [
+        { name: 'execute', steps: [{ name: 'execute-task' }] },
+      ],
+    };
+
+    expect(resolveSoleConfiguredWorkflowStepName(workflow)).toBe('execute-task');
+    expect(resolveWorkbenchLiveStreamStepKeys({
+      activeSteps: [],
+      completedSteps: [],
+      failedSteps: [],
+      terminal: true,
+      fallbackStepName: resolveSoleConfiguredWorkflowStepName(workflow),
+    })).toEqual(['execute-task']);
   });
 });
 

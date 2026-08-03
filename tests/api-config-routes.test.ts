@@ -113,6 +113,43 @@ describe('config API routes', () => {
         expect(json.validation.issues.some((issue: any) => issue.severity === 'error')).toBe(false);
         expect(json.validation.normalized.workflow.name).toBe('Validated Workflow');
         expect(json.validation.normalized.context.projectRoot).toBe(workspace);
+
+        const historicalLightweightResponse = await validate.POST(makeRequest('/api/configs/validate', {
+          token,
+          json: {
+            config: stateMachineConfig(workspace, {
+              workflow: {
+                name: 'Historical Lightweight',
+                profile: 'lightweight',
+                lightweight: {},
+                supervisor: { enabled: true, agent: 'default-supervisor' },
+                states: [{
+                  name: 'Execute',
+                  isInitial: true,
+                  isFinal: true,
+                  steps: [{
+                    name: 'Run tasklist',
+                    type: 'agent',
+                    agent: 'developer',
+                    task: 'Run the lightweight tasklist',
+                    skills: ['aceharness-tasklist'],
+                    specTaskBinding: { taskIds: ['T1.1'] },
+                  }],
+                  transitions: [],
+                }],
+              },
+              context: {
+                requirements: 'Run the lightweight tasklist',
+              },
+            }),
+          },
+        }));
+        expect(historicalLightweightResponse.status).toBe(200);
+        const historicalLightweightJson = await responseJson<any>(historicalLightweightResponse);
+        expect(historicalLightweightJson.validation.ok).toBe(true);
+        expect(historicalLightweightJson.validation.normalized.workflow.profile).toBe('lightweight');
+        expect(historicalLightweightJson.validation.normalized.workflow.supervisor).toBeUndefined();
+        expect(historicalLightweightJson.validation.normalized.workflow.states[0].steps[0].specTaskBinding).toBeUndefined();
       });
     });
   });
@@ -147,7 +184,7 @@ describe('config API routes', () => {
           name: 'Lightweight Child',
           mode: 'state-machine',
           profile: 'lightweight',
-          lightweight: { tasklistDirectory: 'docs/tasklists/lightweight-child' },
+          lightweight: {},
           states: [{
             name: 'Execute',
             isInitial: true,
@@ -193,7 +230,7 @@ describe('config API routes', () => {
     });
   });
 
-  test('config create route writes state-machine and lightweight workflows and rejects duplicates', async () => {
+  test('config create route ignores a client tasklist directory override and rejects duplicates', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token, user } = await createAuthToken();
@@ -209,6 +246,7 @@ describe('config API routes', () => {
             mode: 'lightweight',
             description: 'Created from route test',
             lightweight: {
+              // Legacy client input is intentionally ignored by the creation route.
               tasklistDirectory: 'docs/tasklists/lightweight-created',
               agent: 'developer',
               task: 'Implement the requested change',
@@ -229,6 +267,8 @@ describe('config API routes', () => {
         expect(lightweightYaml.workflow.states).toHaveLength(1);
         expect(lightweightYaml.workflow.states[0].steps[0].skills).toContain('aceharness-tasklist');
         expect(lightweightYaml.context.projectRoot).toBe(workspace);
+        expect(lightweightYaml.workflow.lightweight?.tasklistDirectory).toBeUndefined();
+        expect(JSON.stringify(lightweightYaml)).not.toContain('docs/tasklists');
 
         response = await create.POST(makeRequest('/api/configs/create', {
           token,
@@ -416,6 +456,104 @@ describe('config API routes', () => {
       expect(json.referenceUpdate.updated).toEqual([{ filename: 'parent.yaml', count: 1 }]);
       const parent = parse(await readFile(path.join(configsDir, 'parent.yaml'), 'utf-8'));
       expect(parent.workflow.states[0].steps[0].workflow).toBe('child-new.yaml');
+    });
+  });
+
+  test('config save normalizes historical lightweight supervisor while preserving state-machine supervisor', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token } = await createAuthToken();
+        const route = await import('@/server/api-routes/configs/[filename]/route');
+
+        const lightweightConfig = {
+          workflow: {
+            name: 'Historical Lightweight',
+            mode: 'state-machine',
+            profile: 'lightweight',
+            lightweight: {},
+            supervisor: { enabled: true, agent: 'default-supervisor' },
+            states: [{
+              name: 'Execute',
+              isInitial: true,
+              isFinal: true,
+              steps: [{
+                name: 'Run tasklist',
+                type: 'agent',
+                agent: 'developer',
+                task: 'Run the lightweight tasklist',
+                skills: ['aceharness-tasklist'],
+              }],
+              transitions: [],
+            }],
+          },
+          context: {
+            projectRoot: workspace,
+            workspaceMode: 'in-place',
+            requirements: 'Run the lightweight tasklist',
+            executionPolicy: {
+              defaultModel: 'gpt-5',
+              agentOverrides: {
+                'default-supervisor': {
+                  enabled: true,
+                  model: 'gpt-5-supervisor',
+                },
+                developer: {
+                  enabled: true,
+                  model: 'gpt-5-dev',
+                },
+              },
+            },
+          },
+        };
+
+        const lightweightResponse = await route.POST(
+          makeRequest('/api/configs/historical-lightweight.yaml', {
+            token,
+            json: { config: lightweightConfig },
+          }),
+          { params: Promise.resolve({ filename: 'historical-lightweight.yaml' }) }
+        );
+
+        expect(lightweightResponse.status).toBe(200);
+        const lightweightJson = await responseJson<any>(lightweightResponse);
+        expect(lightweightJson.success).toBe(true);
+        const persistedLightweight = parse(await readFile(path.join(aceHome, 'configs', 'historical-lightweight.yaml'), 'utf-8'));
+        expect(persistedLightweight.workflow.profile).toBe('lightweight');
+        expect(persistedLightweight.workflow.supervisor).toBeUndefined();
+        expect(persistedLightweight.context.executionPolicy.agentOverrides).toEqual({
+          developer: {
+            enabled: true,
+            model: 'gpt-5-dev',
+          },
+        });
+
+        const stateConfig = stateMachineConfig(workspace, {
+          workflow: { name: 'Supervisor State Machine' },
+          context: { requirements: 'Keep state-machine supervisor' },
+        });
+        const stateResponse = await route.POST(
+          makeRequest('/api/configs/supervisor-state-machine.yaml', {
+            token,
+            json: { config: stateConfig },
+          }),
+          { params: Promise.resolve({ filename: 'supervisor-state-machine.yaml' }) }
+        );
+
+        expect(stateResponse.status).toBe(200);
+        const stateJson = await responseJson<any>(stateResponse);
+        expect(stateJson.success).toBe(true);
+        const persistedState = parse(await readFile(path.join(aceHome, 'configs', 'supervisor-state-machine.yaml'), 'utf-8'));
+        expect(persistedState.workflow.profile).toBeUndefined();
+        expect(persistedState.workflow.supervisor).toEqual({
+          enabled: true,
+          agent: 'default-supervisor',
+          stageReviewEnabled: true,
+          stageReviewAsync: true,
+          checkpointAdviceEnabled: true,
+          scoringEnabled: true,
+          experienceEnabled: true,
+        });
+      });
     });
   });
 

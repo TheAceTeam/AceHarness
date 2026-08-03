@@ -36,6 +36,36 @@ function validStateMachineConfig(projectRoot: string) {
 }
 
 describe('validateWorkflowDraft', () => {
+  test('lightweight config normalization removes the supervisor default', () => {
+    const config = {
+      workflow: {
+        name: 'Lightweight workflow',
+        mode: 'state-machine',
+        profile: 'lightweight',
+        lightweight: {},
+        states: [{
+          name: 'Execute',
+          isInitial: true,
+          isFinal: true,
+          steps: [{
+            name: 'Run tasklist',
+            agent: 'developer',
+            task: 'Execute the tasklist',
+            skills: ['aceharness-tasklist'],
+          }],
+          transitions: [],
+        }],
+      },
+      context: { projectRoot: mkdtempSync(join(tmpdir(), 'test-')) },
+    };
+
+    const result = validateWorkflowDraft(config);
+
+    expect(result.ok).toBe(true);
+    expect((result.normalized as any).workflow.supervisor).toBeUndefined();
+    expect((result.normalized as any).workflow.lightweight?.tasklistDirectory).toBeUndefined();
+  });
+
   test('valid state-machine config passes validation', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
     const result = validateWorkflowDraft(validStateMachineConfig(tmpDir));

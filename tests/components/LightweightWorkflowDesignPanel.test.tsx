@@ -27,16 +27,6 @@ vi.mock('@/components/ui/combobox', () => ({
       {options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
   ),
-  MultiCombobox: ({ value = [], onValueChange, options = [] }: any) => (
-    <select
-      aria-label="步骤 Skills"
-      multiple
-      value={value}
-      onChange={(event) => onValueChange(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}
-    >
-      {options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
-    </select>
-  ),
 }));
 
 function createStates(): StateMachineState[] {
@@ -51,6 +41,7 @@ function createStates(): StateMachineState[] {
       agent: 'developer',
       task: '完成任务清单中的工作。',
       skills: [LIGHTWEIGHT_TASKLIST_SKILL, 'review-skill'],
+      specTaskBinding: { taskIds: ['T1.1'], requirementIds: [], artifactKeys: [] },
     }],
   }];
 }
@@ -68,24 +59,39 @@ describe('LightweightWorkflowDesignPanel', () => {
         states={states}
         onStatesChange={onStatesChange}
         availableAgents={[{ name: 'developer', description: '实现任务' }]}
-        availableSkills={[
-          { name: LIGHTWEIGHT_TASKLIST_SKILL, description: 'required' },
-          { name: 'review-skill', description: '审查' },
-        ]}
         metadata={{
           workflowName: '任务清单工作流',
           workspace: 'C:/workspace/demo',
-          tasklistDirectory: 'docs/tasklists/tasklist-flow',
         }}
       />,
     );
 
     expect(screen.getByText('轻量工作流设计')).toBeInTheDocument();
-    expect(screen.getByText('docs/tasklists/tasklist-flow')).toBeInTheDocument();
+    expect(screen.queryByText('任务清单目录（只读）')).not.toBeInTheDocument();
+    expect(screen.queryByText('docs/tasklists/tasklist-flow')).not.toBeInTheDocument();
     expect(screen.queryByText(LIGHTWEIGHT_TASKLIST_SKILL)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('步骤 Skills')).not.toBeInTheDocument();
     expect(screen.queryByText('状态转移规则')).not.toBeInTheDocument();
     expect(screen.queryByText('添加状态')).not.toBeInTheDocument();
     expect(hasLightweightWorkflowTopology(states)).toBe(true);
+  });
+
+  test('does not offer the system Supervisor as a lightweight execution Agent', () => {
+    render(
+      <LightweightWorkflowDesignPanel
+        states={createStates()}
+        onStatesChange={vi.fn()}
+        availableAgents={[
+          { name: 'default-supervisor', roleType: 'supervisor', catalogVisibility: 'system' },
+          { name: 'developer', description: '实现任务' },
+        ]}
+      />,
+    );
+
+    const selector = screen.getByLabelText('执行 Agent') as HTMLSelectElement;
+    const optionValues = Array.from(selector.options, (option) => option.value);
+    expect(optionValues).toContain('developer');
+    expect(optionValues).not.toContain('default-supervisor');
   });
 
   test('normalizes edits without allowing topology or required-skill removal', () => {
@@ -100,8 +106,6 @@ describe('LightweightWorkflowDesignPanel', () => {
             setStates(nextStates);
           }}
           availableAgents={[{ name: 'developer' }, { name: 'tester' }]}
-          availableSkills={[{ name: 'review-skill', description: '审查' }]}
-          metadata={{ tasklistDirectory: 'docs/tasklists/tasklist-flow' }}
         />
       );
     }
@@ -111,12 +115,8 @@ describe('LightweightWorkflowDesignPanel', () => {
     );
 
     fireEvent.change(screen.getByLabelText('执行 Agent'), { target: { value: 'tester' } });
-    fireEvent.change(screen.getByLabelText('执行任务'), { target: { value: '更新后的任务' } });
-    const skills = screen.getByLabelText('步骤 Skills') as HTMLSelectElement;
-    const reviewSkill = Array.from(skills.options).find((option) => option.value === 'review-skill');
-    if (!reviewSkill) throw new Error('Missing review-skill option');
-    reviewSkill.selected = true;
-    fireEvent.change(skills);
+    fireEvent.change(screen.getByLabelText('完整目标'), { target: { value: '更新后的任务' } });
+    expect(screen.queryByLabelText('步骤 Skills')).not.toBeInTheDocument();
 
     const nextStates = onStatesChange.mock.calls.at(-1)?.[0];
     expect(nextStates).toHaveLength(1);
@@ -131,6 +131,7 @@ describe('LightweightWorkflowDesignPanel', () => {
       agent: 'tester',
       task: '更新后的任务',
     });
-    expect(nextStates[0].steps[0].skills).toEqual([LIGHTWEIGHT_TASKLIST_SKILL, 'review-skill']);
+    expect(nextStates[0].steps[0].skills).toEqual([LIGHTWEIGHT_TASKLIST_SKILL]);
+    expect(nextStates[0].steps[0].specTaskBinding).toBeUndefined();
   });
 });

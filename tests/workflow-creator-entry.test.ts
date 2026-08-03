@@ -28,7 +28,7 @@ describe('AI workflow creator entry protocol', () => {
     expect(isAiWorkflowCreatorStarterAction(AI_WORKFLOW_CREATOR_COMPAT_STARTER_ACTION)).toBe(true);
   });
 
-  test('routes the Codespec workflow action into the lightweight creator', () => {
+  test('routes the Codespec workflow action into the workflow creator', () => {
     expect(CODESPEC_WORKFLOW_CREATOR_ACTION).toBe('__HOME_ACTION__:create_workflow_from_codespec');
     expect(isCodespecWorkflowCreatorAction(CODESPEC_WORKFLOW_CREATOR_ACTION)).toBe(true);
     expect(CODESPEC_WORKFLOW_CREATOR_REQUIREMENTS).toContain('Codespec');
@@ -36,7 +36,7 @@ describe('AI workflow creator entry protocol', () => {
   });
 
   test('recognizes an explicit ordinary homepage creation request', () => {
-    expect(looksLikeAiWorkflowCreationRequest('我想创建一个轻量工作流，工作目录是 C:/workspace/demo')).toBe(true);
+    expect(looksLikeAiWorkflowCreationRequest('我想创建一个状态机工作流，工作目录是 C:/workspace/demo')).toBe(true);
     expect(looksLikeAiWorkflowCreationRequest('请帮我设计一个 workflow')).toBe(true);
   });
 
@@ -47,7 +47,7 @@ describe('AI workflow creator entry protocol', () => {
   });
 
   test('ordinary homepage conversation opens the same creator only in an idle creator session', () => {
-    const request = '我想创建一个轻量工作流，目标是完成模块验收。';
+    const request = '我想创建一个状态机工作流，目标是完成模块验收。';
     expect(shouldOpenAiWorkflowCreatorFromConversation(request, {
       creationAssistantEnabled: true,
       sessionCreationAssistantEnabled: true,

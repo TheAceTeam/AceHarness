@@ -128,14 +128,12 @@ describe('workflow runtime conversation binding', () => {
       runId: 'run-lightweight-3',
       configFile: 'lightweight.yaml',
       status: 'running',
-      supervisorAgent: 'default-supervisor',
-      attachedAgentSessions: { 'default-supervisor': 'agent-session-1' },
       requireLightweightMetadata: true,
       lightweight: {
         profile: 'lightweight',
-        tasklistDirectory: 'tasks/example',
+        tasklistDirectory: 'tasklist',
         workspaceRoot: 'C:/workspace',
-        resolvedTasklistDirectory: 'C:/workspace/tasks/example',
+        resolvedTasklistDirectory: 'C:/runtime/runs/run-lightweight-3/tasklist',
         stateName: 'Execute',
         stepName: 'Run tasklist',
         effectiveStepSkills: ['aceharness-tasklist'],
@@ -148,6 +146,9 @@ describe('workflow runtime conversation binding', () => {
       runId: 'run-lightweight-3',
       configFile: 'lightweight.yaml',
     });
+    expect(saved.workflowBinding.supervisorAgent).toBeUndefined();
+    expect(saved.workflowBinding).not.toHaveProperty('tasklistDirectory');
+    expect(saved.workflowBinding).not.toHaveProperty('resolvedTasklistDirectory');
     expect(saved.sessionWorkbenchState.collaborationRoom).toBeUndefined();
   });
 

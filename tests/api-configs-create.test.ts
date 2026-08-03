@@ -50,6 +50,31 @@ describe('configs create route', () => {
     });
   });
 
+  test('rejects UI-only and retired workflow modes as persisted config modes', async () => {
+    await withIsolatedAceHome(async () => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token } = await createAuthToken();
+        vi.resetModules();
+        const { POST } = await import('@/server/api-routes/configs/create/route');
+
+        for (const mode of ['ai-guided', 'phase-based']) {
+          const response = await POST(makeRequest('/api/configs/create', {
+            token,
+            json: {
+              filename: `${mode}.yaml`,
+              workflowName: mode,
+              workingDirectory: workspace,
+              workspaceMode: 'in-place',
+              mode,
+            },
+          }));
+
+          await assertErrorResponse(response, 400);
+        }
+      });
+    });
+  });
+
   test('rejects duplicate filenames', async () => {
     await withIsolatedAceHome(async () => {
       await withTempWorkspace(async ({ workspace }) => {
@@ -103,13 +128,13 @@ describe('configs create route', () => {
         expect(response.status).toBe(200);
         const json = await responseJson<any>(response);
         expect(json.success).toBe(true);
+        expect(json.specCodingSkipped).toBe(true);
         expect(json.creationSession).toMatchObject({
           createdBy: expect.any(String),
           mode: 'lightweight',
           lightweight: {
             agent: 'developer',
             task: 'Implement the requested change',
-            tasklistDirectory: 'docs/tasklists/lightweight-test',
           },
         });
 
@@ -118,13 +143,16 @@ describe('configs create route', () => {
         expect(yamlContent.workflow.description).toBe('A test workflow');
         expect(yamlContent.workflow.mode).toBe('state-machine');
         expect(yamlContent.workflow.profile).toBe('lightweight');
-        expect(yamlContent.workflow.lightweight.tasklistDirectory).toBe('docs/tasklists/lightweight-test');
+        expect(yamlContent.workflow.lightweight.tasklistDirectory).toBeUndefined();
+        expect(JSON.stringify(yamlContent)).not.toContain('docs/tasklists');
         expect(yamlContent.workflow.states).toHaveLength(1);
         expect(yamlContent.workflow.states[0]).toMatchObject({ isInitial: true, isFinal: true });
         expect(yamlContent.workflow.states[0].steps[0].skills).toContain('aceharness-tasklist');
-        expect(yamlContent.workflow.supervisor.enabled).toBe(true);
-        expect(yamlContent.workflow.supervisor.agent).toBe('default-supervisor');
+        expect(yamlContent.workflow.states[0].steps[0].specTaskBinding).toBeUndefined();
+        expect(yamlContent.workflow.supervisor).toBeUndefined();
+        expect(yamlContent.workflow.maxTransitions).toBeUndefined();
         expect(yamlContent.context.projectRoot).toBe(workspace);
+        expect(yamlContent.context.timeoutMinutes).toBe(300);
       });
     });
   });
@@ -238,6 +266,80 @@ describe('configs create route', () => {
     });
   });
 
+  test('accepts an AI lightweight draft and drops legacy tasklist metadata', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token } = await createAuthToken();
+        vi.resetModules();
+        const { POST } = await import('@/server/api-routes/configs/create/route');
+        const { readFile } = await import('fs/promises');
+        const { parse } = await import('yaml');
+        const path = await import('path');
+
+        const configDraft = {
+          workflow: {
+            name: 'AI selected lightweight workflow',
+            mode: 'state-machine',
+            profile: 'lightweight',
+            lightweight: {
+              // Legacy draft metadata is intentionally dropped during creation.
+              tasklistDirectory: 'docs/tasklists/old-name',
+            },
+            maxTransitions: 1,
+            supervisor: { enabled: true, agent: 'default-supervisor' },
+            states: [{
+              name: '执行',
+              isInitial: true,
+              isFinal: true,
+              steps: [{
+                name: '执行任务',
+                type: 'agent',
+                agent: 'developer',
+                task: '执行 AI 草案任务',
+                skills: ['aceharness-tasklist'],
+              }],
+              transitions: [],
+            }],
+          },
+          context: {
+            projectRoot: workspace,
+            workspaceMode: 'in-place',
+            requirements: '执行 AI 草案任务',
+          },
+        };
+        const response = await POST(makeRequest('/api/configs/create', {
+          token,
+          json: {
+            filename: 'ai-draft.yaml',
+            workflowName: 'Outer name',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            skipSpecCoding: true,
+            configDraft,
+          },
+        }));
+
+        expect(response.status).toBe(200);
+        const json = await responseJson<any>(response);
+        expect(json.creationSession).toMatchObject({
+          mode: 'lightweight',
+          lightweight: {
+            agent: 'developer',
+            task: '执行 AI 草案任务',
+            skills: ['aceharness-tasklist'],
+          },
+        });
+        const yamlContent = parse(await readFile(path.join(aceHome, 'configs', 'ai-draft.yaml'), 'utf8'));
+        expect(yamlContent.workflow.lightweight.tasklistDirectory).toBeUndefined();
+        expect(JSON.stringify(yamlContent)).not.toContain('docs/tasklists');
+        expect(yamlContent.workflow.supervisor).toBeUndefined();
+        expect(yamlContent.workflow.maxTransitions).toBeUndefined();
+        expect(yamlContent.workflow.states[0].steps[0].skills).toEqual(['aceharness-tasklist']);
+        expect(yamlContent.context.timeoutMinutes).toBe(300);
+      });
+    });
+  });
+
   test('keeps reference-workflow authorization for state-machine creation', async () => {
     await withIsolatedAceHome(async () => {
       await withTempWorkspace(async ({ workspace }) => {
@@ -290,7 +392,7 @@ describe('configs create route', () => {
     });
   });
 
-  test('ignores client tasklist directory overrides and derives the directory from the filename', async () => {
+  test('ignores client tasklist directory overrides and keeps output location runtime-owned', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
         const { token } = await createAuthToken();
@@ -309,6 +411,7 @@ describe('configs create route', () => {
             workspaceMode: 'in-place',
             mode: 'lightweight',
             lightweight: {
+              // Legacy client input is intentionally ignored by the creation route.
               tasklistDirectory: '../outside-workspace',
               agent: 'developer',
               task: 'Create the derived tasklist workflow',
@@ -317,9 +420,10 @@ describe('configs create route', () => {
         }));
         expect(response.status).toBe(200);
         const json = await responseJson<any>(response);
-        expect(json.creationSession.lightweight.tasklistDirectory).toBe('docs/tasklists/unsafe-lightweight');
+        expect(json.creationSession.lightweight.tasklistDirectory).toBeUndefined();
         const yamlContent = parse(await readFile(path.join(aceHome, 'configs', 'unsafe-lightweight.yaml'), 'utf8'));
-        expect(yamlContent.workflow.lightweight.tasklistDirectory).toBe('docs/tasklists/unsafe-lightweight');
+        expect(yamlContent.workflow.lightweight.tasklistDirectory).toBeUndefined();
+        expect(JSON.stringify(yamlContent)).not.toContain('docs/tasklists');
       });
     });
   });

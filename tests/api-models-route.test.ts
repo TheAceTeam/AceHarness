@@ -75,6 +75,22 @@ describe('models API route', () => {
             models: {
               availableModelIds: ['gpt-5.5[high]', 'gpt-5.5[high]', 'gpt-5.4[medium]'],
             },
+            configOptions: [
+              {
+                id: 'model',
+                type: 'select',
+                options: [
+                  { value: 'gpt-5.6-sol', label: 'GPT 5.6 Sol' },
+                  { value: 'gpt-5.6-terra', label: 'GPT 5.6 Terra' },
+                ],
+              },
+              {
+                id: 'reasoning_effort',
+                type: 'select',
+                label: 'Reasoning effort for model',
+                options: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+              },
+            ],
           })),
           close: vi.fn(async () => undefined),
         }),
@@ -87,7 +103,12 @@ describe('models API route', () => {
       expect(body).toMatchObject({
         source: 'acpx',
       });
-      expect(body.models.map((model) => model.modelId)).toEqual(['gpt-5.5[high]', 'gpt-5.4[medium]']);
+      expect(body.models.map((model) => model.modelId)).toEqual([
+        'gpt-5.5[high]',
+        'gpt-5.4[medium]',
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+      ]);
     });
   });
 

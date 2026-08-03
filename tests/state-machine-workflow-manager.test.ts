@@ -1,5 +1,6 @@
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { MockEngine } from './helpers/mock-engine';
+import { resolve } from 'path';
 
 const registryMocks = vi.hoisted(() => ({
   getManagerForRun: vi.fn(),
@@ -75,6 +76,14 @@ vi.mock('@/lib/chat/persistence', () => ({
 
 vi.mock('@/lib/workflow/runtime-session', () => ({
   bindWorkflowRunToConversation: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@/lib/workflow/lightweight-runtime', () => ({
+  resolveLightweightTasklistDirectory: vi.fn(({ runId, workspaceRoot }) => ({
+    tasklistDirectory: 'tasklist',
+    workspaceRoot: resolve(workspaceRoot),
+    resolvedTasklistDirectory: resolve('/tmp/runs', runId, 'tasklist'),
+  })),
 }));
 
 vi.mock('@/lib/workflow/runtime-transcript', () => ({
@@ -224,6 +233,41 @@ function makeConfig(overrides: Record<string, any> = {}) {
       { name: 'developer', systemPrompt: 'You are a developer' },
     ],
     ...rest,
+  } as any;
+}
+
+function makeLightweightConfig() {
+  return {
+    workflow: {
+      name: 'Lightweight Workflow',
+      mode: 'state-machine',
+      profile: 'lightweight',
+      lightweight: {},
+      states: [{
+        name: 'Execute',
+        isInitial: true,
+        isFinal: true,
+        steps: [{
+          name: 'Run tasklist',
+          agent: 'developer',
+          task: 'Execute the tasklist',
+          skills: ['aceharness-tasklist'],
+        }],
+        transitions: [],
+      }],
+    },
+    context: {
+      projectRoot: '/tmp/project',
+      prewarmAgents: false,
+    },
+    roles: [{
+      name: 'developer',
+      team: 'blue',
+      engineModels: {},
+      activeEngine: '',
+      capabilities: ['development'],
+      systemPrompt: 'You are a developer',
+    }],
   } as any;
 }
 
@@ -1350,6 +1394,73 @@ describe('engine-level failure detection', () => {
     expect(engine.calls).toHaveLength(1);
     expect(engine.calls.some((call) => call.options.prompt.includes('系统自动恢复'))).toBe(false);
   });
+
+  test('retains observed token usage in failed step logs and agent run state', async () => {
+    const { saveRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(saveRunState).mockClear();
+    const engine = new MockEngine({
+      success: false,
+      output: '',
+      error: 'invalid api key after provider reported tokens',
+      sessionId: 'failed-terminal-session',
+      metadata: {
+        usage: {
+          input_tokens: 101,
+          output_tokens: 103,
+          cache_creation_input_tokens: 107,
+          cache_read_input_tokens: 109,
+        },
+        cost_usd: 0.456,
+        duration_ms: 789,
+      },
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+    const state = config.workflow.states[0];
+    const step = state.steps[0];
+    (manager as any).currentState = state.name;
+    (manager as any).persistState = Object.getPrototypeOf(manager).persistState.bind(manager);
+
+    await expect((manager as any).executeStep(step, state, config, 'Build a feature'))
+      .rejects.toThrow('invalid api key after provider reported tokens');
+
+    expect((manager as any).stepLogs).toHaveLength(1);
+    expect((manager as any).stepLogs[0]).toMatchObject({
+      status: 'failed',
+      costUsd: 0.456,
+      durationMs: 789,
+      tokenUsage: {
+        inputTokens: 101,
+        outputTokens: 103,
+        cacheCreationInputTokens: 107,
+        cacheReadInputTokens: 109,
+      },
+      sessionId: 'failed-terminal-session',
+    });
+    expect(manager.getStatus().agents[0]).toMatchObject({
+      status: 'failed',
+      costUsd: 0.456,
+      sessionId: 'failed-terminal-session',
+      tokenUsage: {
+        inputTokens: 101,
+        outputTokens: 103,
+        cacheCreationInputTokens: 107,
+        cacheReadInputTokens: 109,
+      },
+    });
+    expect(vi.mocked(saveRunState).mock.calls.at(-1)?.[0]).toMatchObject({
+      agents: [expect.objectContaining({
+        costUsd: 0.456,
+        sessionId: 'failed-terminal-session',
+        tokenUsage: {
+          inputTokens: 101,
+          outputTokens: 103,
+          cacheCreationInputTokens: 107,
+          cacheReadInputTokens: 109,
+        },
+      })],
+    });
+  });
 });
 
 describe('human-help runtime output', () => {
@@ -1521,6 +1632,163 @@ describe('state machine live feedback', () => {
       interrupt: true,
     });
     expect(events.map((event) => event.status)).toEqual(['queued', 'interrupting']);
+  });
+
+  test('builds a tasklist-owned full-goal prompt for lightweight workflows', async () => {
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeLightweightConfig();
+    (manager as any).lightweightRunMetadata = {
+      profile: 'lightweight',
+      tasklistDirectory: 'tasklist',
+      workspaceRoot: '/tmp/project',
+      resolvedTasklistDirectory: '/tmp/runs/run-prompt/tasklist',
+      stateName: 'Execute',
+      stepName: 'Run tasklist',
+      effectiveStepSkills: ['aceharness-tasklist'],
+    };
+
+    const context = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Implement the complete user goal and verify it.',
+    );
+
+    expect(context).toContain('# 完整目标');
+    expect(context).toContain('Implement the complete user goal and verify it.');
+    expect(context).toContain('请使用 aceharness-tasklist。');
+    expect(context).toMatch(/aceharness-tasklist[\\\\/]SKILL\.md/);
+    expect(context).toContain('约十条边界清晰、依赖明确、可独立验证的任务');
+    expect(context).toContain('当前 Agent 完成任务清单中的全部实施、验证与记录');
+    expect(context).toContain('持续推进全部任务');
+    expect(context).toContain('/tmp/runs/run-prompt/tasklist');
+    expect(context).not.toContain('# 最终裁决格式');
+    expect(context).toContain('# 步骤结束协议');
+    expect(context).toContain('<step-conclusion>');
+  });
+
+  test('lightweight step confirms completion and repairs its conclusion in the original session', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      expect(options.timeoutMs).toBe(5 * 60 * 60 * 1000);
+      if (engine.calls.length === 1) {
+        return {
+          success: true,
+          sessionId: 'lightweight-session-1',
+          output: '任务清单已完成，正在整理步骤结论。',
+        };
+      }
+
+      expect(options.sessionId).toBe('lightweight-session-1');
+      expect(options.appendSystemPrompt).toBe(true);
+      expect(options.prompt).toContain('确认步骤结束状态');
+      expect(options.prompt).toContain('当前步骤已经结束时');
+      return {
+        success: true,
+        sessionId: 'lightweight-session-1',
+        output: '<step-conclusion>\n## 结果 / 裁决\n- 当前步骤结束，交付物和风险已归档。\n</step-conclusion>',
+      };
+    };
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    const output = await (manager as any).executeStep(
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Complete the tasklist.',
+    );
+
+    expect(engine.calls).toHaveLength(2);
+    expect(output).toContain('<step-conclusion>');
+    expect((manager as any).completedSteps).toContain('Execute-Run tasklist');
+    expect((manager as any).failedSteps).not.toContain('Execute-Run tasklist');
+  });
+
+  test('lightweight step remains failed when the completion check has no conclusion', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async () => ({
+      success: true,
+      sessionId: 'lightweight-session-2',
+      output: '```json\n{"verdict":"fail","remaining_issues":1,"summary":"work remains"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    await expect((manager as any).executeStep(
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Complete the tasklist.',
+    )).rejects.toThrow('确认结束状态后仍缺少 <step-conclusion>');
+
+    expect(engine.calls).toHaveLength(2);
+    expect((manager as any).completedSteps).not.toContain('Execute-Run tasklist');
+    expect((manager as any).failedSteps).toContain('Execute-Run tasklist');
+  });
+
+  test('lightweight state completes from a step conclusion without a final verdict JSON', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '<step-conclusion>\n## 结果 / 裁决\n- 任务清单的实施和验证已完成。\n</step-conclusion>',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    const result = await (manager as any).executeState(
+      config.workflow.states[0],
+      config,
+      'Complete the tasklist.',
+    );
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls).toHaveLength(1);
+  });
+
+  test('retries a model-capacity response reported as a completed runtime turn before failing the step', async () => {
+    vi.useFakeTimers();
+    const capacityMessage = 'Selected model is at capacity. Please try a different model.';
+    const engine = new MockEngine();
+    engine.executeImpl = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: capacityMessage, sessionId: 'capacity-session' })
+      .mockResolvedValueOnce({ success: true, output: capacityMessage, sessionId: 'capacity-session' })
+      .mockResolvedValueOnce({ success: true, output: capacityMessage, sessionId: 'capacity-session' });
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    try {
+      const execution = (manager as any).executeStep(
+        config.workflow.states[0].steps[0],
+        config.workflow.states[0],
+        config,
+        'Complete the tasklist.',
+      );
+      const failure = execution.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      const error = await failure;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/model is at capacity/i);
+      expect(engine.calls).toHaveLength(3);
+      expect(engine.calls.some((call) => call.options.prompt.includes('确认步骤结束状态'))).toBe(false);
+      expect((manager as any).completedSteps).not.toContain('Execute-Run tasklist');
+      expect((manager as any).failedSteps).toContain('Execute-Run tasklist');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('injects the global workflow route into each step context', async () => {
@@ -2327,6 +2595,73 @@ describe('state machine execution flow', () => {
     expect(result.stepOutputs[0]).toContain('streamed pass');
   });
 
+  test('persists each streamed delta only once while observing the running process', async () => {
+    const { appendStreamContent } = await import('@/lib/run/state-persistence');
+    const { processManager } = await import('@/lib/core/process-manager');
+    const streamListeners = new Set<(event: any) => void>();
+    const proc: any = {
+      status: 'running',
+      sessionId: null,
+      streamContent: '',
+    };
+
+    vi.mocked(appendStreamContent).mockClear();
+    vi.mocked(processManager.registerExternalProcess).mockImplementation(() => proc);
+    vi.mocked(processManager.getProcess).mockImplementation(() => proc);
+    vi.mocked(processManager.getProcessRaw).mockImplementation(() => proc);
+    vi.mocked(processManager.appendStreamContent).mockImplementation((_id, chunk) => {
+      proc.streamContent += chunk;
+      return proc.streamContent;
+    });
+    vi.mocked(processManager.on).mockImplementation((event, listener) => {
+      if (event === 'stream') streamListeners.add(listener as (payload: any) => void);
+      return processManager as any;
+    });
+    vi.mocked(processManager.off).mockImplementation((event, listener) => {
+      if (event === 'stream') streamListeners.delete(listener as (payload: any) => void);
+      return processManager as any;
+    });
+    vi.mocked(processManager.emit).mockImplementation((event, ...args) => {
+      if (event === 'stream') {
+        for (const listener of streamListeners) listener(args[0]);
+      }
+      return true;
+    });
+
+    try {
+      const engine = new MockEngine({ success: true, output: '' });
+      engine.executeImpl = async () => {
+        engine.emitStream('single streamed delta');
+        return { success: true, output: '' };
+      };
+      const manager = await createManagerForTest(engine);
+      const config = makeConfig();
+      const step = config.workflow.states[0].steps[0];
+      (manager as any).currentState = '设计';
+
+      await (manager as any).runAgentStep(step, 'Build a feature', config, 'stream-once-test');
+
+      expect(appendStreamContent).toHaveBeenCalledTimes(1);
+      expect(appendStreamContent).toHaveBeenCalledWith(
+        'test-run-001',
+        '设计-design-step',
+        'single streamed delta',
+      );
+    } finally {
+      vi.mocked(processManager.registerExternalProcess).mockReset().mockReturnValue({
+        status: 'running',
+        sessionId: null,
+        streamContent: '',
+      } as any);
+      vi.mocked(processManager.getProcess).mockReset().mockReturnValue(undefined);
+      vi.mocked(processManager.getProcessRaw).mockReset().mockReturnValue(undefined);
+      vi.mocked(processManager.appendStreamContent).mockReset().mockReturnValue('');
+      vi.mocked(processManager.on).mockReset();
+      vi.mocked(processManager.off).mockReset();
+      vi.mocked(processManager.emit).mockReset();
+    }
+  });
+
   test('non-final defender and judge steps execute without requiring verdict JSON', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async (options) => {
@@ -2373,6 +2708,28 @@ describe('state machine execution flow', () => {
     expect(result.stepOutputs[0]).toContain('Defense implementation completed');
     expect(result.stepOutputs[1]).toContain('不输出 verdict JSON');
     expect(result.verdict).toBe('pass');
+  });
+
+  test('does not write a first-turn timestamp marker before the runtime emits output', async () => {
+    const { appendStreamContent } = await import('@/lib/run/state-persistence');
+    const engine = new MockEngine();
+    engine.executeImpl = async () => {
+      expect(appendStreamContent).not.toHaveBeenCalled();
+      return { success: true, output: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"done"}\n```' };
+    };
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+    (manager as any).currentState = '设计';
+    vi.mocked(appendStreamContent).mockClear();
+
+    await (manager as any).executeStep(
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Build a feature',
+    );
+
+    expect(engine.calls).toHaveLength(1);
   });
 
   test('step context requires conclusions for every step but verdict JSON only for final decision step', async () => {
@@ -2983,6 +3340,133 @@ describe('state machine execution flow', () => {
       'default-supervisor',
       'developer',
     ]);
+  });
+
+  test('lightweight runtime roster and prewarm targets exclude default-supervisor', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentSupervisorAgent = '';
+
+    (manager as any).initializeAgents(config);
+
+    expect((manager as any).agents.map((agent: any) => agent.name)).toEqual(['developer']);
+    expect((manager as any).collectWorkflowAgentPrewarmTargets(config).map((target: any) => target.runtimeAgentName))
+      .toEqual(['developer']);
+    expect(manager.getStatus().supervisorAgent).toBeUndefined();
+  });
+
+  test('lightweight formal start persists no supervisor identity and resume keeps it absent', async () => {
+    const { loadRunState, saveRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    const config = makeLightweightConfig();
+    const runState = {
+      runId: 'run-lightweight-resume',
+      configFile: 'lightweight.yaml',
+      mode: 'state-machine',
+      status: 'stopped',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: null,
+      currentState: 'Execute',
+      currentPhase: 'Execute',
+      currentStep: null,
+      completedSteps: [],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [{ name: 'developer', sessionId: null }],
+      iterationStates: {},
+      processes: [],
+      requirements: 'Run the tasklist',
+      workflowFrontendSessionId: null,
+      attachedAgentSessions: {},
+      stateHistory: [],
+      issueTracker: [],
+      transitionCount: 0,
+      globalContext: '',
+      phaseContexts: {},
+      workingDirectory: '/tmp/project',
+      qualityChecks: [],
+      runSpecCoding: {
+        id: 'legacy-lightweight-spec',
+        workflowName: 'Lightweight Workflow',
+        version: 1,
+        status: 'confirmed',
+        requirements: [],
+        phases: [],
+        assignments: [],
+        checkpoints: [],
+        tasks: [],
+        artifacts: {},
+        progress: { overallStatus: 'pending', completedPhaseIds: [], summary: '' },
+        revisions: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+      bindingValidation: { ok: true, bindings: [], errors: [], warnings: [] },
+      stepTaskBindingsSnapshot: [{ stepKey: 'state:Execute#1:Run tasklist', taskIds: ['T1.1'] }],
+      lightweight: {
+        profile: 'lightweight',
+        tasklistDirectory: 'tasklist',
+        workspaceRoot: '/tmp/project',
+        resolvedTasklistDirectory: resolve('/tmp/runs', 'run-lightweight-resume', 'tasklist'),
+        stateName: 'Execute',
+        stepName: 'Run tasklist',
+        effectiveStepSkills: ['aceharness-tasklist'],
+      },
+    } as any;
+    vi.mocked(parse).mockReturnValue(config);
+    vi.mocked(loadRunState).mockReset().mockResolvedValueOnce(null).mockResolvedValueOnce(runState);
+    vi.mocked(saveRunState).mockClear();
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeEngine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeMemoryV2 = vi.fn().mockResolvedValue(undefined);
+    (manager as any).executeStateMachine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).disableWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).readWorkflowConfigContent = vi.fn().mockResolvedValue('lightweight config');
+    (manager as any).assertRequiredVerdictTransitions = vi.fn();
+    (manager as any).syncSkillsToWorkspace = vi.fn().mockResolvedValue(undefined);
+    delete (manager as any).persistState;
+
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentSupervisorAgent = '';
+    await (manager as any).start('lightweight.yaml', undefined, [], undefined, 'run-lightweight-formal');
+
+    const formalPersistedStates = vi.mocked(saveRunState).mock.calls.map(([state]) => state as any);
+    expect(formalPersistedStates.length).toBeGreaterThan(0);
+    expect(formalPersistedStates.every((state) => !('supervisorAgent' in state))).toBe(true);
+    expect(formalPersistedStates.every((state) => state.supervisorSessionId == null)).toBe(true);
+    const { mkdir } = await import('fs/promises');
+    expect(mkdir).toHaveBeenCalledWith(resolve('/tmp/runs', 'run-lightweight-formal', 'tasklist'), { recursive: true });
+
+    await (manager as any).resume('run-lightweight-resume');
+
+    expect((manager as any).currentSupervisorAgent).toBe('');
+    expect((manager as any).agents.map((agent: any) => agent.name)).toEqual(['developer']);
+    expect(manager.getStatus().supervisorAgent).toBeUndefined();
+    expect((manager as any).currentRunSpecCoding).toBeNull();
+    expect((manager as any).stepTaskBindingsSnapshot).toEqual([]);
+  });
+
+  test('lightweight resume rejects legacy workspace tasklist metadata', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    await expect((manager as any).restoreLightweightRunMetadata({
+      runId: 'run-legacy-tasklist',
+      workingDirectory: '/tmp/project',
+      lightweight: {
+        profile: 'lightweight',
+        tasklistDirectory: 'docs/tasklists/legacy',
+        workspaceRoot: '/tmp/project',
+        resolvedTasklistDirectory: resolve('/tmp/project', 'docs/tasklists/legacy'),
+        stateName: 'Execute',
+        stepName: 'Run tasklist',
+        effectiveStepSkills: ['aceharness-tasklist'],
+      },
+    })).rejects.toThrow(/legacy|inconsistent/i);
   });
 
   test('run spec coding is not marked completed before workflow reaches a final state', async () => {

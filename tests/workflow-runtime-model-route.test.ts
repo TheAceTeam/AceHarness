@@ -41,6 +41,15 @@ function runtimeToolEvent(type: string, payload: Record<string, unknown>, toolCa
   };
 }
 
+function projectedContent(event: ReturnType<typeof projectWorkflowRuntimeEvent>): string | undefined {
+  return event && event.type !== 'tool' ? event.content : undefined;
+}
+
+function projectedTool(event: ReturnType<typeof projectWorkflowRuntimeEvent>) {
+  if (!event || event.type !== 'tool') throw new Error('Expected a structured tool projection');
+  return event.tool;
+}
+
 describe('workflow runtime model selection', () => {
   beforeEach(() => {
     resolveRuntimeModelRoute.mockReset();
@@ -85,13 +94,17 @@ describe('workflow runtime stream projection', () => {
       toolObservedAfterMessage: false,
     };
 
-    expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第一'), state)?.content).toBe('第一');
-    expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '段'), state)?.content).toBe('段');
-    expect(projectWorkflowRuntimeEvent(runtimeEvent('thought.delta', '思考'), state)?.content).toBe('思考');
-    expect(projectWorkflowRuntimeEvent(runtimeToolEvent('tool.started', { name: 'read', input: { filePath: 'README.md' } }), state)?.type).toBe('text');
-    expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第二段'), state)?.content)
+    expect(projectedContent(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第一'), state)))
+      .toBe('<!-- timestamp: 1970-01-01T00:00:00.000Z -->\n第一');
+    expect(projectedContent(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '段'), state))).toBe('段');
+    expect(projectedContent(projectWorkflowRuntimeEvent(runtimeEvent('thought.delta', '思考'), state))).toBe('思考');
+    expect(projectedTool(projectWorkflowRuntimeEvent(runtimeToolEvent('tool.started', { name: 'read', input: { filePath: 'README.md' } }), state))).toMatchObject({
+      toolName: 'read',
+      status: 'running',
+    });
+    expect(projectedContent(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第二段'), state)))
       .toBe(`${ACE_CHUNK_BOUNDARY}<!-- timestamp: 1970-01-01T00:00:00.000Z -->\n第二段`);
-    expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '继续'), state)?.content).toBe('继续');
+    expect(projectedContent(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '继续'), state))).toBe('继续');
   });
 
   test('does not create empty chunks for tools before the first message', () => {
@@ -101,10 +114,11 @@ describe('workflow runtime stream projection', () => {
     };
 
     projectWorkflowRuntimeEvent(runtimeEvent('tool.updated', 'read completed'), state);
-    expect(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第一段'), state)?.content).toBe('第一段');
+    expect(projectedContent(projectWorkflowRuntimeEvent(runtimeEvent('message.delta', '第一段'), state)))
+      .toBe('<!-- timestamp: 1970-01-01T00:00:00.000Z -->\n第一段');
   });
 
-  test('does not leak unformatted tool status text as live output', () => {
+  test('projects tool status into its structured tool channel', () => {
     const state: WorkflowRuntimeProjectionState = {
       hasMessageText: false,
       toolObservedAfterMessage: false,
@@ -125,10 +139,130 @@ describe('workflow runtime stream projection', () => {
       rawInput: { command, cwd: 'C:\\Users\\Shawn\\Desktop\\speclang' },
     }), state);
 
-    expect(projected?.type).toBe('text');
-    expect(projected?.content).toContain('<ace-process>');
-    expect(projected?.content).toContain('"command"');
-    expect(projected?.content).not.toContain('(in_progress):');
+    const tool = projectedTool(projected);
+    expect(tool).toMatchObject({
+      status: 'running',
+      input: { command },
+    });
+    expect(JSON.stringify(tool)).not.toContain('(in_progress):');
+  });
+
+  test('keeps ACPX formatted command output on the completed tool event', () => {
+    const state: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
+    const command = 'rg -n "TemplateRuntimeError" src';
+
+    projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: command,
+      status: 'in_progress',
+      kind: 'execute',
+      rawInput: { command },
+    }, 'tool-search-1'), state);
+    const completed = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'tool call',
+      status: 'completed',
+      formatted_output: 'src/jinja2/exceptions.py:58:class TemplateRuntimeError(TemplateError):',
+      exit_code: 0,
+    }, 'tool-search-1'), state);
+
+    expect(projectedTool(completed)).toMatchObject({
+      id: 'tool-search-1',
+      status: 'completed',
+      result: {
+        stdout: 'src/jinja2/exceptions.py:58:class TemplateRuntimeError(TemplateError):',
+        exitCode: 0,
+      },
+    });
+  });
+
+  test('keeps a terminal tool error from the adapter payload', () => {
+    const state: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
+
+    projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'missing-command',
+      status: 'in_progress',
+      kind: 'execute',
+      rawInput: { command: 'missing-command' },
+    }, 'tool-error-1'), state);
+    const failed = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'tool call',
+      status: 'failed',
+      error: { message: 'command not found' },
+      exit_code: 127,
+    }, 'tool-error-1'), state);
+
+    expect(projectedTool(failed)).toMatchObject({
+      id: 'tool-error-1',
+      status: 'failed',
+      result: {
+        error: 'command not found',
+        exitCode: 127,
+      },
+    });
+  });
+
+  test('projects a string result into standard output', () => {
+    const state: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
+
+    projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'search',
+      status: 'in_progress',
+      kind: 'search',
+      rawInput: { query: 'TemplateRuntimeError' },
+    }, 'tool-string-1'), state);
+    const completed = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'tool call',
+      status: 'completed',
+      rawOutput: 'src/jinja2/exceptions.py:58',
+    }, 'tool-string-1'), state);
+
+    expect(projectedTool(completed)).toMatchObject({
+      status: 'completed',
+      result: { stdout: 'src/jinja2/exceptions.py:58' },
+    });
+  });
+
+  test('keeps structured command results from every runtime in the tool output channel', () => {
+    const state: WorkflowRuntimeProjectionState = {
+      hasMessageText: false,
+      toolObservedAfterMessage: false,
+    };
+    const command = 'find source files';
+
+    projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: command,
+      status: 'in_progress',
+      kind: 'execute',
+      rawInput: { command },
+    }, 'tool-structured-1'), state);
+    const completed = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
+      title: 'tool call',
+      status: 'completed',
+      rawOutput: {
+        output: {
+          matches: ['src/main.cj', 'src/runtime.cj'],
+          total: 2,
+        },
+        exit_code: 0,
+      },
+    }, 'tool-structured-1'), state);
+
+    expect(projectedTool(completed)).toMatchObject({
+      id: 'tool-structured-1',
+      status: 'completed',
+      result: {
+        stdout: expect.stringContaining('src/main.cj'),
+        exitCode: 0,
+      },
+    });
   });
 
   test('finishes an ACPX file edit from its status event when no tool output arrives', () => {
@@ -153,14 +287,27 @@ describe('workflow runtime stream projection', () => {
     const completed = projectWorkflowRuntimeEvent(runtimeToolEvent('tool.updated', {
       title: 'tool call',
       status: 'completed',
+      rawOutput: { content: fileBody, filePath: 'docs/dependency-analysis.md' },
     }, 'tool-edit-1'), state);
 
-    expect(started?.content).toContain('docs/dependency-analysis.md');
-    expect(started?.content).toContain('"addedLines":2');
-    expect(started?.content).not.toContain(fileBody);
-    expect(completed?.content).toContain('"kind":"tool-result"');
-    expect(completed?.content).toContain('"toolId":"tool-edit-1"');
-    expect(completed?.content).toContain('docs/dependency-analysis.md');
+    expect(projectedTool(started)).toMatchObject({
+      id: 'tool-edit-1',
+      status: 'running',
+      input: {
+        filePath: 'docs/dependency-analysis.md',
+        changes: [{ filePath: 'docs/dependency-analysis.md', addedLines: 2 }],
+      },
+    });
+    expect(JSON.stringify(projectedTool(started))).not.toContain(fileBody);
+    expect(projectedTool(completed)).toMatchObject({
+      id: 'tool-edit-1',
+      status: 'completed',
+      result: {
+        filePath: 'docs/dependency-analysis.md',
+        changes: [{ filePath: 'docs/dependency-analysis.md', addedLines: 2 }],
+      },
+    });
+    expect(JSON.stringify(projectedTool(completed))).not.toContain(fileBody);
   });
 
   test('ignores empty pending search tool placeholders', () => {

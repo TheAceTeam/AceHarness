@@ -33,7 +33,7 @@ describe('office org store', () => {
       await mkdir(agentsDir, { recursive: true });
       await mkdir(dataDir, { recursive: true });
       await writeAgent(agentsDir, {
-        name: 'ceo-founder',
+        name: 'default-supervisor',
         team: 'black-gold',
         title: '总裁',
         category: '总裁',
@@ -80,7 +80,7 @@ describe('office org store', () => {
             title: 'CEO / Founder',
             zone: 'core',
             reportsTo: null,
-            agentName: 'ceo-founder',
+            agentName: 'default-supervisor',
             responsibilities: ['方向和优先级'],
           },
           {
@@ -109,7 +109,7 @@ describe('office org store', () => {
       expect(engineerAfterDraftUpdate.workspaceProfile).toBeUndefined();
 
       const applied = await applyOfficeOrgDraft({ draftId: draft.id });
-      expect(applied.teamState.activeAgentNames).toEqual(['ceo-founder', 'app-engineer']);
+      expect(applied.teamState.activeAgentNames).toEqual(['default-supervisor', 'app-engineer']);
       expect(applied.org.status).toBe('current');
       expect(applied.org.revision).toBe(1);
 
@@ -131,7 +131,7 @@ describe('office org store', () => {
       expect(restored.org.id).not.toBe(draft.id);
       expect(restored.org.revision).toBe(2);
       expect(restored.org.generationTrace.restoredFromVersionId).toBe(draft.id);
-      expect(restored.teamState.activeAgentNames).toEqual(['ceo-founder', 'app-engineer']);
+      expect(restored.teamState.activeAgentNames).toEqual(['default-supervisor', 'app-engineer']);
       expect(await listOfficeOrgVersions()).toHaveLength(2);
     });
   });

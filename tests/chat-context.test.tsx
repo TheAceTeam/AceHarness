@@ -598,6 +598,60 @@ describe('ChatProvider', () => {
     });
   });
 
+  test('shows a visible model-route error when the stream start rejects an unavailable user model', async () => {
+    sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, 'sess-1');
+    localStorage.setItem('chat-model', 'user-added-model-that-is-not-routed');
+    let streamStartRequests = 0;
+
+    vi.stubGlobal('fetch', vi.fn((async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || 'GET';
+      if (url === '/api/engine') {
+        return jsonResponse({ engine: 'claude-code', defaultModel: 'claude-sonnet-4-20250514' });
+      }
+      if (url === '/api/chat/settings') {
+        return jsonResponse({ skills: {}, discoveredSkills: [], workingDirectory: '/tmp/project' });
+      }
+      if (url === '/api/chat/sessions' && method === 'GET') {
+        return jsonResponse({ sessions: sessionSummaries });
+      }
+      if (url.startsWith('/api/chat/sessions/')) {
+        const sessionId = decodeURIComponent(url.split('/api/chat/sessions/')[1] || '');
+        if (method === 'PUT') return jsonResponse({ ok: true });
+        return jsonResponse({ session: sessionStore[sessionId] || null }, Boolean(sessionStore[sessionId]));
+      }
+      if (url.startsWith('/api/chat/stream?checkActive=')) {
+        return jsonResponse({ active: false });
+      }
+      if (url === '/api/chat/stream' && method === 'POST') {
+        streamStartRequests += 1;
+        return jsonResponse({
+          error: '模型「user-added-model-that-is-not-routed」当前没有可用于引擎「claude」的有效运行路由，请选择已配置的模型后重试。',
+        }, false);
+      }
+      return jsonResponse({});
+    }) as typeof fetch));
+
+    render(
+      <ChatProvider>
+        <StreamingProbe />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stream-active-session').textContent).toBe('sess-1');
+    });
+
+    fireEvent.click(screen.getByText('send-hello'));
+
+    await waitFor(() => {
+      const text = screen.getByTestId('stream-messages').textContent || '';
+      expect(text).toContain('hello from sess-1');
+      expect(text).toContain('请求失败：模型「user-added-model-that-is-not-routed」');
+    });
+    expect(streamStartRequests).toBe(1);
+  });
+
   test('deleting the active group chat falls back to the next unified conversation', async () => {
     sessionSummaries = [
       {

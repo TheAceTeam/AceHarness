@@ -39,6 +39,12 @@ describe('chat SQLite persistence', () => {
       updatedAt: 200,
       createdBy: 'user-1',
       visibility: 'public',
+      sessionWorkbenchState: {
+        collaborationRoom: {
+          roomId: 'room-sqlite',
+          messages: [{ id: 'room-message-1', content: 'keep this in detail' }],
+        },
+      } as any,
       messages: [
         { id: 'm1', role: 'user', content: 'hello', timestamp: 100 },
         { id: 'm2', role: 'assistant', content: 'world', timestamp: 200 },
@@ -51,6 +57,9 @@ describe('chat SQLite persistence', () => {
     const loaded = await persistence.loadChatSession('session-1');
     expect(loaded?.title).toBe('SQLite session');
     expect(loaded?.messages).toHaveLength(2);
+    expect(loaded?.sessionWorkbenchState?.collaborationRoom?.messages).toEqual([
+      expect.objectContaining({ id: 'room-message-1' }),
+    ]);
 
     const summaries = await persistence.listChatSessions();
     expect(summaries).toMatchObject([
@@ -61,6 +70,7 @@ describe('chat SQLite persistence', () => {
         createdBy: 'user-1',
       },
     ]);
+    expect(summaries[0].sessionWorkbenchState?.collaborationRoom?.messages).toEqual([]);
   });
 
   it('keeps legacy JSON sessions readable when no SQLite row exists', async () => {
@@ -72,6 +82,12 @@ describe('chat SQLite persistence', () => {
       model: 'legacy-model',
       createdAt: 10,
       updatedAt: 20,
+      sessionWorkbenchState: {
+        collaborationRoom: {
+          roomId: 'room-legacy',
+          messages: [{ id: 'legacy-room-message', content: 'legacy detail' }],
+        },
+      },
       messages: [
         { id: 'm1', role: 'user', content: 'old hello', timestamp: 10 },
       ],
@@ -80,8 +96,13 @@ describe('chat SQLite persistence', () => {
     const persistence = await importPersistence(dataDir);
     const loaded = await persistence.loadChatSession('legacy-1');
     expect(loaded?.title).toBe('Legacy session');
+    expect(loaded?.sessionWorkbenchState?.collaborationRoom?.messages).toEqual([
+      expect.objectContaining({ id: 'legacy-room-message' }),
+    ]);
 
     const summaries = await persistence.listChatSessions();
-    expect(summaries.some((session) => session.id === 'legacy-1')).toBe(true);
+    const legacySummary = summaries.find((session) => session.id === 'legacy-1');
+    expect(legacySummary).toBeTruthy();
+    expect(legacySummary?.sessionWorkbenchState?.collaborationRoom?.messages).toEqual([]);
   });
 });
