@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -8,7 +9,7 @@ const { execFileSyncMock, execSyncMock, isWindowsMock } = vi.hoisted(() => ({
   isWindowsMock: vi.fn(),
 }));
 
-const TEST_ACE_HOME = `/tmp/aceharness-process-manager-test-${process.pid}`;
+const TEST_ACE_HOME = join(tmpdir(), `aceharness-process-manager-test-${process.pid}`);
 const ORIGINAL_ACE_HOME = process.env.ACE_HOME;
 
 vi.mock('child_process', async (importOriginal) => {

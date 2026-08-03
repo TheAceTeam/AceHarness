@@ -16,6 +16,7 @@ import type {
   RuntimeProfileSnapshot,
 } from '@/lib/runtime-agent/contracts';
 import type { AcpRuntime, AcpRuntimeEnsureInput, AcpRuntimeOptions, AcpRuntimeTurn } from 'acpx/runtime';
+import { withIsolatedAceHome } from './helpers/module-helpers';
 
 const requireFromProject = createRequire(`${process.cwd()}/package.json`);
 
@@ -445,76 +446,78 @@ describe('runtime adapters', () => {
   });
 
   test('writes acpx debug trace NDJSON only when ACE_ACPX_DEBUG_TRACE is enabled', async () => {
-    const previousTrace = process.env.ACE_ACPX_DEBUG_TRACE;
-    const traceDir = getAcpxDebugTraceDirectory();
-    const offSessionId = `trace-session-off-${Date.now()}`;
-    const onSessionId = `trace-session-on-${Date.now()}`;
-    const offTraceFile = join(traceDir, `${offSessionId}__turn-1.ndjson`);
-    const onTraceFile = join(traceDir, `${onSessionId}__turn-1.ndjson`);
-    try {
-      rmSync(offTraceFile, { force: true });
-      rmSync(onTraceFile, { force: true });
-      process.env.ACE_ACPX_DEBUG_TRACE = 'false';
+    await withIsolatedAceHome(async () => {
+      const previousTrace = process.env.ACE_ACPX_DEBUG_TRACE;
+      const traceDir = getAcpxDebugTraceDirectory();
+      const offSessionId = `trace-session-off-${Date.now()}`;
+      const onSessionId = `trace-session-on-${Date.now()}`;
+      const offTraceFile = join(traceDir, `${offSessionId}__turn-1.ndjson`);
+      const onTraceFile = join(traceDir, `${onSessionId}__turn-1.ndjson`);
+      try {
+        rmSync(offTraceFile, { force: true });
+        rmSync(onTraceFile, { force: true });
+        process.env.ACE_ACPX_DEBUG_TRACE = 'false';
 
-      const acpx = new AcpxAdapter({
-        async *runTurn(_binding, input) {
-          yield { type: 'message_delta', payload: { text: `off:${input.turnId}` } };
-        },
-      });
-      await collect(acpx.runTurn(await acpx.createOrLoadSession(createSessionInput(offSessionId, 'codex', 'acpx')), createTurnInput()));
-      expect(existsSync(offTraceFile)).toBe(false);
+        const acpx = new AcpxAdapter({
+          async *runTurn(_binding, input) {
+            yield { type: 'message_delta', payload: { text: `off:${input.turnId}` } };
+          },
+        });
+        await collect(acpx.runTurn(await acpx.createOrLoadSession(createSessionInput(offSessionId, 'codex', 'acpx')), createTurnInput()));
+        expect(existsSync(offTraceFile)).toBe(false);
 
-      process.env.ACE_ACPX_DEBUG_TRACE = 'true';
-      writeAcpxDebugTrace({
-        stage: 'acpx.raw_event',
-        context: {
-          runtimeSessionId: onSessionId,
-          turnId: 'turn-1',
-        },
-        payload: { direct: true, apiKey: 'trace-secret-value' },
-      });
-      expect(existsSync(onTraceFile)).toBe(true);
+        process.env.ACE_ACPX_DEBUG_TRACE = 'true';
+        writeAcpxDebugTrace({
+          stage: 'acpx.raw_event',
+          context: {
+            runtimeSessionId: onSessionId,
+            turnId: 'turn-1',
+          },
+          payload: { direct: true, apiKey: 'trace-secret-value' },
+        });
+        expect(existsSync(onTraceFile)).toBe(true);
 
-      const runtime = {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: onSessionId,
-          backend: 'acpx',
-          runtimeSessionName: onSessionId,
-          cwd: process.cwd(),
-        })),
-        startTurn: vi.fn((): AcpRuntimeTurn => ({
-          requestId: 'request-1',
-          events: eventStream([{ type: 'message_delta', payload: { text: 'hello trace' } }]),
-          result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+        const runtime = {
+          ensureSession: vi.fn(async () => ({
+            sessionKey: onSessionId,
+            backend: 'acpx',
+            runtimeSessionName: onSessionId,
+            cwd: process.cwd(),
+          })),
+          startTurn: vi.fn((): AcpRuntimeTurn => ({
+            requestId: 'request-1',
+            events: eventStream([{ type: 'message_delta', payload: { text: 'hello trace' } }]),
+            result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+            cancel: vi.fn(async () => undefined),
+            closeStream: vi.fn(async () => undefined),
+          })),
           cancel: vi.fn(async () => undefined),
-          closeStream: vi.fn(async () => undefined),
-        })),
-        cancel: vi.fn(async () => undefined),
-        close: vi.fn(async () => undefined),
-      } satisfies AcpRuntime;
-      const client = createAcpxRuntimeClient({ runtime });
-      const binding = await new AcpxAdapter({ ensureSession: client.ensureSession, runTurn: client.runTurn })
-        .createOrLoadSession(createSessionInput(onSessionId, 'codex', 'acpx'));
+          close: vi.fn(async () => undefined),
+        } satisfies AcpRuntime;
+        const client = createAcpxRuntimeClient({ runtime });
+        const binding = await new AcpxAdapter({ ensureSession: client.ensureSession, runTurn: client.runTurn })
+          .createOrLoadSession(createSessionInput(onSessionId, 'codex', 'acpx'));
 
-      await collect(new AcpxAdapter({ runTurn: client.runTurn }).runTurn(binding, createTurnInput()));
+        await collect(new AcpxAdapter({ runTurn: client.runTurn }).runTurn(binding, createTurnInput()));
 
-      const traceText = readFileSync(onTraceFile, 'utf8');
-      expect(traceText).not.toContain('trace-secret-value');
-      const lines = traceText
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line) as { stage: string });
-      expect(lines.map((line) => line.stage)).toEqual(expect.arrayContaining([
-        'acpx.raw_event',
-        'adapter.normalized_event',
-        'acpx.turn_result',
-      ]));
-    } finally {
-      if (previousTrace === undefined) delete process.env.ACE_ACPX_DEBUG_TRACE;
-      else process.env.ACE_ACPX_DEBUG_TRACE = previousTrace;
-      rmSync(offTraceFile, { force: true });
-      rmSync(onTraceFile, { force: true });
-    }
+        const traceText = readFileSync(onTraceFile, 'utf8');
+        expect(traceText).not.toContain('trace-secret-value');
+        const lines = traceText
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as { stage: string });
+        expect(lines.map((line) => line.stage)).toEqual(expect.arrayContaining([
+          'acpx.raw_event',
+          'adapter.normalized_event',
+          'acpx.turn_result',
+        ]));
+      } finally {
+        if (previousTrace === undefined) delete process.env.ACE_ACPX_DEBUG_TRACE;
+        else process.env.ACE_ACPX_DEBUG_TRACE = previousTrace;
+        rmSync(offTraceFile, { force: true });
+        rmSync(onTraceFile, { force: true });
+      }
+    });
   });
 
   test('acpx runtime client translates ACEHarness session and turn input to acpx runtime contract', async () => {

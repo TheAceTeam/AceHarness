@@ -13,6 +13,10 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
+    // Test files mutate process.env and module mocks; separate worker
+    // processes keep those file-local fixtures from racing while preserving
+    // file-level parallelism.
+    pool: 'forks',
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     exclude: ['tests/ai-integration/**', 'node_modules', '.next', 'dist', 'dist-build'],
     setupFiles: ['tests/setup/component-test-setup.ts'],
