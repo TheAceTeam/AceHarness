@@ -1451,17 +1451,18 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
               />
             ) : (
               <>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 lg:grid-cols-3">
             {displayedWorkflows.map((workflow, index) => (
               <motion.div
                 key={workflow.filename}
+                className="h-full"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: Math.min(index, 12) * 0.03 }}
               >
                 <DataCard
                   selected={selectedWorkflows.has(workflow.filename)}
-                  className="relative cursor-pointer"
+                  className="relative flex h-full flex-col cursor-pointer"
                   onClick={() => setDrawerWorkflow(workflow)}
                 >
                   <div className="absolute left-3 top-3 z-10" onClick={(event) => event.stopPropagation()}>
@@ -1471,7 +1472,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
                     />
                   </div>
 
-                <div className="pl-6">
+                <div className="flex min-h-0 flex-1 flex-col pl-6">
                   <DataCardHeader className="mb-3">
                     <div className="min-w-0 flex-1">
                       <DataCardTitle>{workflow.name}</DataCardTitle>
@@ -1496,25 +1497,29 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
                     {workflow.ownerName ? <span className="text-xs text-muted-foreground">所有者：{workflow.ownerName}</span> : null}
                   </div>
 
-                  <DataCardActions className="justify-start" onClick={(event) => event.stopPropagation()}>
-                    <Button size="sm" variant="outline" onClick={() => openWorkbench(workflow.filename)}>
-                        <LogIn className="w-3 h-3 mr-1" />
-                        打开运行工作台
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => openWorkbench(workflow.filename, 'design')}>
-                        <Edit className="w-3 h-3 mr-1" />
-                        打开设计工作台
-                    </Button>
-                    {renderCopyMenu(workflow)}
-                    <Button size="sm" variant="outline" title="另存为模板" onClick={() => setSaveTemplateWorkflow(workflow)}>
-                      <PackagePlus className="h-3 w-3" />
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => openShareDialog(workflow)}>
-                      <Share2 className="w-3 h-3" />
-                    </Button>
-                    <Button size="sm" variant="destructive" aria-label={`删除工作流 ${workflow.name || workflow.filename}`} onClick={() => handleDelete(workflow)}>
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
+                  <DataCardActions className="mt-auto w-full flex-col items-stretch gap-2 pt-2" onClick={(event) => event.stopPropagation()}>
+                    <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Button size="sm" variant="outline" className="min-w-0 w-full justify-center whitespace-nowrap" onClick={() => openWorkbench(workflow.filename)}>
+                        <LogIn className="mr-1 h-3 w-3 shrink-0" />
+                        运行工作台
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-w-0 w-full justify-center whitespace-nowrap" onClick={() => openWorkbench(workflow.filename, 'design')}>
+                        <Edit className="mr-1 h-3 w-3 shrink-0" />
+                        设计工作台
+                      </Button>
+                    </div>
+                    <div className="flex w-full flex-wrap items-center justify-end gap-2">
+                      {renderCopyMenu(workflow)}
+                      <Button size="sm" variant="outline" title="另存为模板" aria-label="另存为模板" onClick={() => setSaveTemplateWorkflow(workflow)}>
+                        <PackagePlus className="h-3 w-3" />
+                      </Button>
+                      <Button size="sm" variant="outline" title="分享" aria-label="分享" onClick={() => openShareDialog(workflow)}>
+                        <Share2 className="h-3 w-3" />
+                      </Button>
+                      <Button size="sm" variant="destructive" aria-label={`删除工作流 ${workflow.name || workflow.filename}`} onClick={() => handleDelete(workflow)}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </DataCardActions>
                 </div>
                 </DataCard>

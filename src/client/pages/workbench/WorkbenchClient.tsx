@@ -144,6 +144,7 @@ import {
   resolveWorkflowPolicyAgentNames,
   resolveWorkflowPolicySupervisorAgentName,
 } from '@/lib/workflow/lightweight';
+import { formatWorkflowFailureReason, formatWorkflowFailureReasonWithStepLogs, isLiveTextTruncated } from '@/lib/workflow/error-summary';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
@@ -223,6 +224,10 @@ const StateMachineDesignPanel = dynamic(() => import('@/components/StateMachineD
   ssr: false,
   loading: () => designTabLoadingPanel('正在加载状态机编排...'),
 });
+const WorkflowSupervisorAgoraPanel = dynamic(() => import('@/components/workflow/WorkflowSupervisorAgoraPanel'), {
+  ssr: false,
+  loading: () => loadingPanel(),
+});
 const MonacoEditor = dynamic(
   async () => {
     const monaco = await import('monaco-editor');
@@ -238,8 +243,8 @@ const MonacoEditor = dynamic(
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
-export type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
-export type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'live' | 'spec';
+export type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
+export type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
 export type DocumentSourceFilter = RunDocumentSource | 'all';
 export type RunDetailNavItem = {
   id: string;
@@ -294,6 +299,7 @@ export function buildWorkbenchRunDetailNavItems(input: {
     ...(input.isLightweightWorkflow
       ? [{ id: 'tasklist', key: 'documents' as const, label: '任务清单', icon: 'checklist', documentSource: 'tasklist' as const }]
       : []),
+    ...(!input.isLightweightWorkflow ? [{ id: 'agora', key: 'agora' as const, label: '对话', icon: 'forum' }] : []),
     { id: 'live', key: 'live', label: '实时输出', icon: 'cell_tower' },
     ...(input.runtimeSpecAvailable ? [{ id: 'spec', key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
   ];
@@ -315,7 +321,7 @@ export function resolveLightweightWorkbenchRunTabRedirect(input: {
   requestedTab: RunWorkbenchTab;
   requestedDocumentSource: DocumentSourceFilter;
 }): { section: RunDetailSection; tab: RunWorkbenchTab; documentSource: DocumentSourceFilter } | null {
-  if (input.requestedTab === 'agents') {
+  if (input.requestedTab === 'agents' || input.requestedTab === 'agora') {
     return { section: 'overview', tab: 'overview', documentSource: 'all' };
   }
   if (
@@ -858,6 +864,7 @@ function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailab
   if (tab === 'changes') return 'changes';
   if (tab === 'documents') return 'documents';
   if (tab === 'agents') return 'agents';
+  if (tab === 'agora') return 'agora';
   if (tab === 'live') return 'live';
   if (tab === 'spec' && runtimeSpecAvailable) return 'spec';
   return 'overview';
@@ -902,6 +909,7 @@ function isRunWorkbenchTab(value: unknown): value is RunWorkbenchTab {
     || value === 'changes'
     || value === 'documents'
     || value === 'agents'
+    || value === 'agora'
     || value === 'live'
     || value === 'spec';
 }
@@ -929,6 +937,7 @@ function readWorkflowRunPanelTabs(configFile: string): {
           || parsed.center === 'changes'
           || parsed.center === 'documents'
           || parsed.center === 'agents'
+          || parsed.center === 'agora'
           || parsed.center === 'live'
           || parsed.center === 'spec'
             ? parsed.center
@@ -3228,7 +3237,7 @@ export default function WorkbenchPage({
   }, [configFile, leftRunPanelTab, rightPanelTab, runWorkbenchTab]);
 
   useEffect(() => {
-    if (isLightweightWorkflow && runWorkbenchTab === 'agents') {
+    if (isLightweightWorkflow && (runWorkbenchTab === 'agents' || runWorkbenchTab === 'agora')) {
       handleRunWorkbenchTabChange('overview');
       return;
     }
@@ -5398,6 +5407,57 @@ export default function WorkbenchPage({
     }
     return result;
   }, [agentConfigs, orderedWorkflowAgents, runtimeSupervisorAgent, workflowConfig?.workflow]);
+  const workflowAgoraSessionId = useMemo(() => {
+    const candidates = [
+      (statusCompactQuery.data as any)?.workflowFrontendSessionId,
+      runDetail?.workflowFrontendSessionId,
+      selectedRun?.workflowFrontendSessionId,
+    ];
+    for (const candidate of candidates) {
+      const sessionId = String(candidate || '').trim();
+      if (sessionId) return sessionId;
+    }
+    return null;
+  }, [runDetail?.workflowFrontendSessionId, selectedRun?.workflowFrontendSessionId, statusCompactQuery.data]);
+  const workflowAgoraInitialGuests = useMemo(() => (
+    supervisorFormationAgents.map((agent) => ({
+      name: agent.name,
+      sourceAgent: agent.name,
+      runtimeAgentName: agent.name,
+      engine: agent.engine || '',
+      model: agent.model || '',
+    }))
+  ), [supervisorFormationAgents]);
+  const workflowAgoraAgentSessionIds = useMemo(() => {
+    const result: Record<string, string> = {};
+    const appendSessionMap = (value: unknown) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+      for (const [agentName, sessionId] of Object.entries(value as Record<string, unknown>)) {
+        const normalizedAgentName = String(agentName || '').trim();
+        const normalizedSessionId = String(sessionId || '').trim();
+        if (normalizedAgentName && normalizedSessionId) result[normalizedAgentName] = normalizedSessionId;
+      }
+    };
+    appendSessionMap(selectedRun?.attachedAgentSessions);
+    appendSessionMap(runDetail?.attachedAgentSessions);
+    appendSessionMap((statusCompactQuery.data as any)?.attachedAgentSessions);
+    displayWorkflowAgents.forEach((agent) => {
+      const sessionId = String(agent.sessionId || '').trim();
+      if (agent.name && sessionId) result[agent.name] = sessionId;
+    });
+    if (runtimeSupervisorAgent && runtimeSupervisorSessionId) {
+      result[runtimeSupervisorAgent] = runtimeSupervisorSessionId;
+    }
+    return result;
+  }, [displayWorkflowAgents, runDetail?.attachedAgentSessions, runtimeSupervisorAgent, runtimeSupervisorSessionId, selectedRun?.attachedAgentSessions, statusCompactQuery.data]);
+  const workflowAgoraWorkingDirectory = useMemo(() => String(
+    (statusCompactQuery.data as any)?.workingDirectory
+    || runDetail?.workingDirectory
+    || selectedRun?.workingDirectory
+    || currentRunWorkspacePath
+    || resolvedProjectRoot
+    || ''
+  ).trim(), [currentRunWorkspacePath, resolvedProjectRoot, runDetail?.workingDirectory, selectedRun?.workingDirectory, statusCompactQuery.data]);
   const workflowFormationStates = useMemo(() => {
     const workflow = workflowConfig?.workflow;
     return (workflow?.states || []) as StateMachineState[];
@@ -5897,13 +5957,21 @@ export default function WorkbenchPage({
     const resolvedRunId = resolveRuntimeRunId(status, requestedRunId) || requestedRunId;
     if (!resolvedRunId) return;
     const taskInput = normalizeWorkflowTaskInput(status.taskInput);
+    const incomingStatusReason = typeof status.statusReason === 'string' ? status.statusReason.trim() : '';
+    const compactStatusReason = formatWorkflowFailureReason(incomingStatusReason, 1800) || null;
+    const shouldPreserveDetailedReason = (previous: any): boolean => {
+      const previousReason = typeof previous?.statusReason === 'string' ? previous.statusReason.trim() : '';
+      if (!previousReason || isLiveTextTruncated(previousReason) || !compactStatusReason) return false;
+      return previousReason.length > compactStatusReason.length * 2
+        && (previousReason.length > 1800 || /<!--\s*(?:timestamp|chunk-boundary)/i.test(previousReason));
+    };
     const patch = {
       id: resolvedRunId,
       runId: resolvedRunId,
       configFile,
       status: status.status,
       workflowStatus: status.status,
-      statusReason: status.statusReason || null,
+      statusReason: compactStatusReason,
       currentPhase: status.currentPhase || status.currentState || null,
       currentState: status.currentState || status.currentPhase || null,
       currentStep: status.currentStep || null,
@@ -5918,11 +5986,17 @@ export default function WorkbenchPage({
       taskTitle: getWorkflowTaskInputTitle(taskInput) || undefined,
       taskIssueUrl: taskInput.issueUrl,
     };
-    setHistoryRuns((prev) => prev.map((item) => item.id === resolvedRunId ? { ...item, ...patch } : item));
-    setSelectedRun((prev: any) => prev?.id === resolvedRunId ? { ...prev, ...patch } : prev);
+    setHistoryRuns((prev) => prev.map((item) => item.id === resolvedRunId
+      ? { ...item, ...patch, statusReason: shouldPreserveDetailedReason(item) ? item.statusReason : patch.statusReason }
+      : item));
+    setSelectedRun((prev: any) => prev?.id === resolvedRunId
+      ? { ...prev, ...patch, statusReason: shouldPreserveDetailedReason(prev) ? prev.statusReason : patch.statusReason }
+      : prev);
     setRunDetail((prev: any) => {
       const prevRunId = String(prev?.id || prev?.runId || '');
-      return prevRunId === resolvedRunId ? { ...prev, ...patch } : prev;
+      return prevRunId === resolvedRunId
+        ? { ...prev, ...patch, statusReason: shouldPreserveDetailedReason(prev) ? prev.statusReason : patch.statusReason }
+        : prev;
     });
   }, [configFile, resolveRuntimeRunId]);
 
@@ -5961,7 +6035,7 @@ export default function WorkbenchPage({
       }
 
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: status.status });
-      const statusReason = String(status.statusReason || '').trim();
+      const statusReason = formatWorkflowFailureReason(status.statusReason);
       setRunStatusReason(statusReason || null);
       const statusIsActive = isRuntimeWorkflowStatusActive(status.status);
       const statusIsTerminal = isTerminalWorkflowStatus(status.status);
@@ -6627,7 +6701,7 @@ export default function WorkbenchPage({
     }
     if (typeof snapshot.status === 'string' && snapshot.status) {
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: snapshot.status });
-      setRunStatusReason(snapshot.statusReason || null);
+      setRunStatusReason(formatWorkflowFailureReason(snapshot.statusReason) || null);
     }
     if (snapshot.runId) {
       dispatch({ type: 'SET_RUN_ID', payload: snapshot.runId });
@@ -7187,7 +7261,7 @@ export default function WorkbenchPage({
 
       // Restore all state into the run view
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: detail.status === 'crashed' ? 'failed' : detail.status });
-      setRunStatusReason(detail.statusReason || null);
+      setRunStatusReason(formatWorkflowFailureReason(detail.statusReason) || null);
       dispatch({ type: 'SET_RUN_ID', payload: runId });
       dispatch({ type: 'SET_AGENTS', payload: agents });
       dispatch({ type: 'SET_COMPLETED_STEPS', payload: detail.completedSteps || [] });
@@ -12509,6 +12583,52 @@ export default function WorkbenchPage({
     );
   };
 
+  const renderRunAgoraPanel = () => (
+    <div className="h-full min-h-0 overflow-hidden bg-background">
+      <WorkflowSupervisorAgoraPanel
+        sessionId={workflowAgoraSessionId}
+        title={`Supervisor 协作 · ${workflowBaseTitle}`}
+        configFile={configFile}
+        runId={selectedRunId}
+        supervisorAgent={runtimeSupervisorAgent}
+        supervisorSessionId={runtimeSupervisorSessionId}
+        workingDirectory={workflowAgoraWorkingDirectory}
+        workflowStatus={workflowStatus}
+        initialGuests={workflowAgoraInitialGuests}
+        agentSessionIds={workflowAgoraAgentSessionIds}
+        pendingHumanQuestion={pendingHumanQuestion}
+        submittingHumanQuestion={submittingHumanQuestion}
+        onSubmitHumanQuestion={handleSubmitHumanQuestion}
+        specRevisionVote={specRevisionVote}
+        specRevisionVoteHistory={specRevisionVoteHistory}
+        formationPanel={(
+          <div className="h-full min-h-0 bg-muted/20 p-4">
+            <div className="h-full min-h-[420px] overflow-hidden rounded-2xl border bg-background">
+              <AgentFormationDiagram
+                states={workflowFormationStates}
+                agents={supervisorFormationAgents}
+                supervisorAgent={runtimeSupervisorAgent}
+                currentStep={currentStep}
+                activeSteps={activeSteps}
+                status={workflowStatus as any}
+                className="h-full"
+              />
+            </div>
+          </div>
+        )}
+        summaryPanel={workflowStatus === 'completed' && finalReview ? (
+          <div className="h-full overflow-y-auto bg-muted/20 p-4">
+            {renderFinalReviewCard()}
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+            工作流完成后会在这里展示战后总结。
+          </div>
+        )}
+      />
+    </div>
+  );
+
   const renderRunLiveOutputPanel = () => (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/10">
       {pendingHumanQuestion?.status === 'unanswered' ? (
@@ -12885,14 +13005,26 @@ export default function WorkbenchPage({
   };
 
   const renderRunOverviewPanel = () => {
+    const runFailureStepKeys = Array.from(new Set([
+      ...(Array.isArray(runDetail?.failedSteps) ? runDetail.failedSteps : []),
+      ...(Array.isArray((statusCompactQuery.data as any)?.failedSteps) ? (statusCompactQuery.data as any).failedSteps : []),
+      ...(Array.isArray(failedSteps) ? failedSteps : []),
+    ].map((stepKey) => String(stepKey || '').trim()).filter(Boolean)));
+    const runFailureStepLogs = [
+      ...(Array.isArray(runDetail?.stepLogs) ? runDetail.stepLogs : []),
+      ...(Array.isArray((statusCompactQuery.data as any)?.stepLogs) ? (statusCompactQuery.data as any).stepLogs : []),
+      ...persistedStepLogs,
+    ];
     if (isLightweightWorkflow) {
       const lightweightTokenMetric = buildLightweightTokenConsumptionMetric(workflowTokenAnalytics);
-      const visibleStatusReason = String(
-        runStatusReason
-        || runDetail?.statusReason
+      const visibleStatusReason = formatWorkflowFailureReasonWithStepLogs(
+        runDetail?.statusReason
+        || runStatusReason
         || selectedRun?.statusReason
-        || ''
-      ).trim();
+        || '',
+        runFailureStepKeys,
+        runFailureStepLogs,
+      );
       const showStatusReason = Boolean(visibleStatusReason)
         && ['failed', 'crashed'].includes(normalizeWorkflowStatusCode(actionWorkflowStatus || workflowStatus));
       return (
@@ -12912,7 +13044,7 @@ export default function WorkbenchPage({
               {showStatusReason ? (
                 <div role="alert" className="mt-4 border-l-2 border-destructive pl-3 text-sm leading-6 text-destructive">
                   <div className="font-semibold">运行失败原因</div>
-                  <div>{visibleStatusReason}</div>
+                  <div className="whitespace-pre-wrap break-words">{visibleStatusReason}</div>
                 </div>
               ) : null}
               <div className="mt-4 grid gap-3 sm:grid-cols-4">
@@ -12936,12 +13068,14 @@ export default function WorkbenchPage({
     const totalTokenUsage = workflowTokenAnalytics.total;
     const cacheHitTokens = totalTokenUsage.cacheReadInputTokens;
     const cacheHitRatio = formatTokenPercent(cacheHitTokens, totalTokenUsage.inputTokens + cacheHitTokens);
-    const visibleStatusReason = String(
-      runStatusReason
-      || runDetail?.statusReason
+    const visibleStatusReason = formatWorkflowFailureReasonWithStepLogs(
+      runDetail?.statusReason
+      || runStatusReason
       || selectedRun?.statusReason
-      || ''
-    ).trim();
+      || '',
+      runFailureStepKeys,
+      runFailureStepLogs,
+    );
     const showStatusReason = Boolean(visibleStatusReason)
       && ['failed', 'crashed'].includes(normalizeWorkflowStatusCode(actionWorkflowStatus || workflowStatus));
     return (
@@ -12962,7 +13096,7 @@ export default function WorkbenchPage({
               <span className="material-symbols-outlined mt-0.5 shrink-0" style={{ fontSize: 18 }}>error</span>
               <div className="min-w-0 break-words">
                 <div className="font-semibold">运行失败原因</div>
-                <div>{visibleStatusReason}</div>
+                <div className="whitespace-pre-wrap break-words">{visibleStatusReason}</div>
               </div>
             </div>
           </div>
@@ -13256,6 +13390,8 @@ export default function WorkbenchPage({
                     renderRunStateMapPanel()
                   ) : runDetailSection === 'agents' ? (
                     renderAgentFormationPanel('run')
+                  ) : runDetailSection === 'agora' ? (
+                    renderRunAgoraPanel()
                   ) : runDetailSection === 'live' ? (
                     renderRunLiveOutputPanel()
                   ) : runDetailSection === 'documents' ? (
