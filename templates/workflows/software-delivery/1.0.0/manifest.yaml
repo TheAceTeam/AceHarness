@@ -10,7 +10,7 @@ metadata:
   featured: true
 spec:
   entrypoint: workflow.yaml
-  mode: phase-based
+  mode: state-machine
   compatibility:
     aceharness: ">=1.0.0-rc.8 <2.0.0"
   parameters:

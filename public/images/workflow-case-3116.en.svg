@@ -68,21 +68,21 @@
     <circle cx="122" cy="428" r="8" fill="#ef4444"/>
     <text x="140" y="424" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
       <tspan x="140" y="424">Red Team</tspan>
-      <tspan x="140" dy="18">issue-reproducer / architect</tspan>
+      <tspan x="140" dy="18">architect / developer</tspan>
     </text>
 
     <rect x="332" y="402" width="214" height="54" rx="18" fill="#0b1223" stroke="#475569"/>
     <circle cx="358" cy="428" r="8" fill="#38bdf8"/>
     <text x="376" y="424" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
       <tspan x="376" y="424">Blue Team</tspan>
-      <tspan x="376" dy="18">fix-breaker / code reviewer</tspan>
+      <tspan x="376" dy="18">issue-reproducer / code-hunter</tspan>
     </text>
 
     <rect x="568" y="402" width="214" height="54" rx="18" fill="#0b1223" stroke="#475569"/>
     <circle cx="594" cy="428" r="8" fill="#f59e0b"/>
     <text x="612" y="424" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
       <tspan x="612" y="424">Judge</tspan>
-      <tspan x="612" dy="18">fix-judge / code-auditor</tspan>
+      <tspan x="612" dy="18">code-judge / evidence-judge</tspan>
     </text>
 
     <rect x="126" y="480" width="194" height="92" rx="24" fill="url(#cardBlue)" stroke="#38bdf8" stroke-width="2"/>

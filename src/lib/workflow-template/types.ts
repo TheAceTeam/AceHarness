@@ -4,7 +4,7 @@ export const WORKFLOW_TEMPLATE_API_VERSION = 'aceharness.io/v1alpha1' as const;
 
 export const workflowTemplateSourceSchema = z.enum(['builtin', 'local']);
 export const workflowTemplateVisibilitySchema = z.enum(['private', 'public']);
-export const workflowTemplateModeSchema = z.enum(['phase-based', 'state-machine']);
+export const workflowTemplateModeSchema = z.literal('state-machine');
 
 const templateIdSchema = z.string()
   .min(2)
@@ -165,7 +165,6 @@ export interface WorkflowTemplateSummary extends WorkflowTemplateIdentity {
   createdAt?: number;
   ownerId?: string;
   stateCount: number;
-  phaseCount: number;
   stepCount: number;
   parameterCount: number;
   preCommandCount: number;

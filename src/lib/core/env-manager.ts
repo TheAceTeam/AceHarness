@@ -8,6 +8,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 const ENV_VARS_PATH = getWorkspaceDataFile('env-vars.yaml');
 const USER_ENV_DIR = getWorkspaceDataFile('env-vars.users');
@@ -16,6 +17,46 @@ export interface EnvVar {
   key: string;
   value: string;
   enabled: boolean;
+}
+
+function normalizeKey(key: unknown): string {
+  return typeof key === 'string' ? key.trim() : '';
+}
+
+function keyIdentity(key: string): string {
+  return isWindows() ? key.toUpperCase() : key;
+}
+
+function hasUsableValue(variable: EnvVar | undefined): variable is EnvVar {
+  return Boolean(
+    variable
+    && variable.enabled
+    && normalizeKey(variable.key)
+    && typeof variable.value === 'string'
+    && variable.value.trim(),
+  );
+}
+
+/** Merge system and personal settings without letting an empty personal row shadow a value. */
+export function mergeEnvVars(systemVars: EnvVar[], userVars: EnvVar[]): EnvVar[] {
+  const merged = new Map<string, EnvVar>();
+
+  for (const item of systemVars) {
+    const key = normalizeKey(item?.key);
+    if (!key) continue;
+    merged.set(keyIdentity(key), { ...item, key });
+  }
+
+  for (const item of userVars) {
+    const key = normalizeKey(item?.key);
+    if (!key) continue;
+    const identity = keyIdentity(key);
+    if (!merged.has(identity) || hasUsableValue(item)) {
+      merged.set(identity, { ...item, key });
+    }
+  }
+
+  return Array.from(merged.values());
 }
 
 function getUserEnvPath(userId: string): string {
@@ -52,16 +93,7 @@ export async function loadEnvVars(options?: { scope?: 'system' | 'user' | 'merge
 
   const systemVars = await readVarsFromFile(ENV_VARS_PATH);
   const userVars = options?.userId ? await readVarsFromFile(getUserEnvPath(options.userId)) : [];
-  const merged = new Map<string, EnvVar>();
-  for (const item of systemVars) {
-    if (!item?.key) continue;
-    merged.set(item.key, item);
-  }
-  for (const item of userVars) {
-    if (!item?.key) continue;
-    merged.set(item.key, item);
-  }
-  return Array.from(merged.values());
+  return mergeEnvVars(systemVars, userVars);
 }
 
 export function loadEnvVarsSync(options?: { scope?: 'system' | 'user' | 'merged'; userId?: string }): EnvVar[] {
@@ -74,16 +106,7 @@ export function loadEnvVarsSync(options?: { scope?: 'system' | 'user' | 'merged'
 
   const systemVars = readVarsFromFileSync(ENV_VARS_PATH);
   const userVars = options?.userId ? readVarsFromFileSync(getUserEnvPath(options.userId)) : [];
-  const merged = new Map<string, EnvVar>();
-  for (const item of systemVars) {
-    if (!item?.key) continue;
-    merged.set(item.key, item);
-  }
-  for (const item of userVars) {
-    if (!item?.key) continue;
-    merged.set(item.key, item);
-  }
-  return Array.from(merged.values());
+  return mergeEnvVars(systemVars, userVars);
 }
 
 export async function saveEnvVars(vars: EnvVar[], options?: { scope?: 'system' | 'user'; userId?: string }): Promise<void> {
@@ -99,8 +122,9 @@ export async function saveEnvVars(vars: EnvVar[], options?: { scope?: 'system' |
 export function buildEnvObject(vars: EnvVar[]): Record<string, string> {
   const env: Record<string, string> = {};
   for (const v of vars) {
-    if (v.enabled && v.key && String(v.value || '').trim()) {
-      env[v.key] = v.value;
+    const key = normalizeKey(v?.key);
+    if (hasUsableValue(v)) {
+      env[key] = v.value;
     }
   }
   return env;

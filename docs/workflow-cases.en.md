@@ -295,6 +295,6 @@ Real execution data (`run-20260323172056345`):
 - Delivered full-stack development for 3 APIs (`lstatSync`, `mkdtempSync`, `getxattrSync`), with C++ FFI compilation passing
 - Injected 5 specialized Skills so each agent carried Cangjie / HarmonyOS domain knowledge
 - Produced **11 structured documents** covering gap analysis, architecture design, implementation, compile validation, blue-team review, review verdict, final review, API docs, and delivery summary
-- Wrote all outputs to `.ace-outputs/{runId}/` for full traceability
+- Wrote runtime outputs to the persisted ACEHarness run directory, `runs/{runId}/outputs`, for full traceability
 
 ---

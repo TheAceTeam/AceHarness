@@ -7,7 +7,7 @@ const outDir = path.resolve('tmp/imagegen/office-agents');
 const publicOutDir = 'public/office/agents';
 
 const roles = [
-  'ceo-founder',
+  'default-supervisor',
   'product-manager',
   'architect',
   'developer',
@@ -16,7 +16,7 @@ const roles = [
 ];
 
 const visualProfiles = {
-  'ceo-founder': 'confident founder CEO, sharp modern business-casual outfit, calm decision-maker presence',
+  'default-supervisor': 'calm workflow supervisor, refined dark business-casual outfit, composed coordination presence',
   'product-manager': 'thoughtful product lead, smart casual outfit, holding a small tablet, approachable strategist',
   architect: 'senior software architect, minimalist dark jacket, analytical and composed, subtle blueprint motif',
   developer: 'focused software engineer, hoodie layered with clean workwear, practical and energetic',

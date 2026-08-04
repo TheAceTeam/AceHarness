@@ -1,5 +1,6 @@
 import { rewriteFirstAceProcessBlockPayload, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
+import type { RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -11,6 +12,9 @@ export type AceNormalizedFileChange = {
   oldString?: string;
   newString?: string;
   kind?: string;
+  changedLines?: number;
+  addedLines?: number;
+  removedLines?: number;
 };
 
 const KNOWN_TOOLS = new Set([
@@ -31,6 +35,8 @@ const KNOWN_TOOLS = new Set([
   'ls',
   'skill',
   'context-compression',
+  'subagent-dispatch',
+  'subagent-wait',
   'multiedit',
   'patch',
 ]);
@@ -76,6 +82,8 @@ export function getAceToolTitle(toolName: string): string {
     websearch: '🔎 搜索网页',
     skill: '技能文档',
     'context-compression': '上下文压缩',
+    'subagent-dispatch': '启动子 Agent',
+    'subagent-wait': '等待子 Agent',
   };
   return titleMap[toolName] || `🔧 ${toolName}`;
 }
@@ -155,6 +163,34 @@ function inputText(value: unknown, fallback = ''): string {
 
 export function formatAceReasoning(text: string): string {
   return wrapAceProcessBlock('reasoning', {}, text || '');
+}
+
+/** Serialize one runtime tool lifecycle event into the shared transcript format. */
+export function formatAceRuntimeToolEvent(tool: RuntimeToolEvent): string {
+  if (!tool || typeof tool !== 'object') return '';
+
+  const toolName = String(tool.toolName || 'tool').trim() || 'tool';
+  const title = String(tool.title || '').trim() || undefined;
+  const toolId = String(tool.id || '').trim() || undefined;
+  if (tool.status === 'running') {
+    return formatAceToolCall({
+      toolName,
+      title,
+      toolId,
+      rawInput: tool.input && typeof tool.input === 'object' ? { ...tool.input } : undefined,
+    });
+  }
+
+  if (tool.status === 'completed' || tool.status === 'failed') {
+    const rawOutput = tool.result && typeof tool.result === 'object'
+      ? tool.result
+      : tool.status === 'failed'
+        ? { error: '工具调用失败，运行时未返回详细结果。' }
+        : { completed: true, resultUnavailable: true };
+    return formatAceToolResult({ toolName, title, toolId, rawOutput });
+  }
+
+  return '';
 }
 
 export function formatAceSubtaskStart(params: {
@@ -527,12 +563,50 @@ function isFileMutationTool(toolName: string): boolean {
   return ['write', 'edit', 'multiedit', 'patch'].includes(toolName);
 }
 
+function lineCount(value: string): number {
+  return value ? value.split(/\r?\n/).length : 0;
+}
+
+function finiteLineCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function extractFileChangeLineStats(
+  source: UnknownRecord,
+  oldText: string,
+  newText: string,
+  content: string,
+): Pick<AceNormalizedFileChange, 'changedLines' | 'addedLines' | 'removedLines'> {
+  const changedLines = finiteLineCount(source.changedLines ?? source.changed_lines);
+  const addedLines = finiteLineCount(source.addedLines ?? source.added_lines);
+  const removedLines = finiteLineCount(source.removedLines ?? source.removed_lines);
+  if (changedLines !== undefined || addedLines !== undefined || removedLines !== undefined) {
+    return {
+      ...(changedLines !== undefined ? { changedLines } : {}),
+      ...(addedLines !== undefined ? { addedLines } : {}),
+      ...(removedLines !== undefined ? { removedLines } : {}),
+    };
+  }
+
+  if (!oldText && !newText && !content) return {};
+  const before = lineCount(oldText);
+  const after = lineCount(newText || content);
+  return {
+    ...(Math.min(before, after) > 0 ? { changedLines: Math.min(before, after) } : {}),
+    ...(Math.max(0, after - before) > 0 ? { addedLines: after - before } : {}),
+    ...(Math.max(0, before - after) > 0 ? { removedLines: before - after } : {}),
+  };
+}
+
 function compactFileChange(change: AceNormalizedFileChange): AceNormalizedFileChange {
   return {
     toolName: change.toolName,
     title: change.title,
     filePath: change.filePath,
     kind: change.kind,
+    ...(change.changedLines !== undefined ? { changedLines: change.changedLines } : {}),
+    ...(change.addedLines !== undefined ? { addedLines: change.addedLines } : {}),
+    ...(change.removedLines !== undefined ? { removedLines: change.removedLines } : {}),
   };
 }
 
@@ -550,6 +624,7 @@ export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange
     ? source.newText
     : (typeof source.new_text === 'string' ? source.new_text : (typeof source.newString === 'string' ? source.newString : (typeof source.new_string === 'string' ? source.new_string : (typeof source.after === 'string' ? source.after : ''))));
   const content = typeof source.content === 'string' ? source.content : '';
+  const lineStats = extractFileChangeLineStats(source, oldText, newText, content);
 
   if (newText && !oldText) {
     return {
@@ -558,6 +633,7 @@ export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange
       filePath,
       content: newText,
       kind,
+      ...lineStats,
     };
   }
 
@@ -569,6 +645,7 @@ export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange
       oldString: oldText,
       newString: newText,
       kind,
+      ...lineStats,
     };
   }
 
@@ -579,6 +656,7 @@ export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange
       filePath,
       content,
       kind,
+      ...lineStats,
     };
   }
 
@@ -589,6 +667,7 @@ export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange
       filePath,
       content: '',
       kind,
+      ...lineStats,
     };
   }
 
@@ -597,6 +676,7 @@ export function normalizeAceFileChange(change: unknown): AceNormalizedFileChange
     title: '📝 文件变更',
     filePath,
     kind,
+    ...lineStats,
   };
 }
 
@@ -605,6 +685,7 @@ export function formatAceFileChangesResult(params: {
   fallbackToolName?: string;
   fallbackTitle?: string;
   output?: string;
+  toolId?: string;
 }): string {
   const normalized = params.changes
     .map((change) => normalizeAceFileChange(change))
@@ -614,13 +695,22 @@ export function formatAceFileChangesResult(params: {
   const mutationTool = isFileMutationTool(params.fallbackToolName || normalized[0]?.toolName || '');
   const displayChanges = mutationTool ? normalized.map(compactFileChange) : normalized;
   const primary = displayChanges[0];
-  return wrapAceProcessBlock('tool-result', {
+  const block = wrapAceProcessBlock('tool-result', {
     toolName: primary?.toolName || params.fallbackToolName || 'edit',
     title: primary?.title || params.fallbackTitle || getAceToolTitle(params.fallbackToolName || 'edit'),
     changes: displayChanges,
     output: !mutationTool && params.output ? safeToolResultText(params.output) : '',
     ...(displayChanges.length === 1 ? primary : {}),
   }, '');
+  return appendToolIdToAceBlock(block, params.toolId);
+}
+
+function compactFileChanges(value: unknown): AceNormalizedFileChange[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((change) => normalizeAceFileChange(change))
+    .filter((change): change is AceNormalizedFileChange => Boolean(change))
+    .map(compactFileChange);
 }
 
 export function formatAceToolCall(params: {
@@ -633,6 +723,7 @@ export function formatAceToolCall(params: {
   const skillReadInfo = getSkillReadInfo(params.toolName || 'tool', rawInput);
   const toolName = skillReadInfo ? 'skill' : (params.toolName || 'tool');
   const title = params.title || getAceToolTitle(toolName);
+  const changes = compactFileChanges(rawInput.changes);
 
   let block = '';
   switch (toolName) {
@@ -656,6 +747,7 @@ export function formatAceToolCall(params: {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
+        ...(changes.length > 0 ? { changes } : {}),
       }, '');
       break;
     case 'edit':
@@ -665,6 +757,7 @@ export function formatAceToolCall(params: {
         toolName,
         title,
         filePath: normalizeFilePath(rawInput),
+        ...(changes.length > 0 ? { changes } : {}),
       }, '');
       break;
     case 'read':
@@ -794,6 +887,7 @@ export function formatAceToolResult(params: {
         fallbackToolName: toolName,
         fallbackTitle: title,
         output: isFileMutationTool(toolName) ? '' : extractTextFromUnknown(obj.output),
+        toolId: params.toolId,
       });
     }
     if (isFileMutationTool(toolName)) {
@@ -844,6 +938,7 @@ export function formatAceToolResult(params: {
         changes: obj.modified_files.map((filePath) => ({ filePath, kind: 'update' })),
         fallbackToolName: toolName,
         fallbackTitle: title,
+        toolId: params.toolId,
       });
     }
     if (toolName === 'skill') {
@@ -908,6 +1003,16 @@ export function formatAceToolResult(params: {
       );
       const exitCode = extractExitCode(obj);
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', { toolName, title, output, exitCode }, ''), params.toolId);
+    }
+    if (obj.completed === true || obj.status === 'completed' || obj.resultUnavailable === true) {
+      const filePath = normalizeFilePath(obj);
+      const exitCode = extractExitCode(obj);
+      return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+        toolName,
+        title,
+        ...(filePath ? { filePath } : {}),
+        ...(exitCode != null ? { exitCode } : {}),
+      }, ''), params.toolId);
     }
   }
 

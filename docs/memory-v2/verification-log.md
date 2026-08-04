@@ -39,7 +39,7 @@ Updated: 2026-07-25
 
 ## 2026-07-25 Gate B Static Integration Review
 
-- Scope: Task 2 AI protocol modules, Task 3 phase/state-machine handoff integration, and Task 4 chat/collaboration cutover.
+- Scope: Task 2 AI protocol modules, Task 3 active workflow handoff integration, and Task 4 chat/collaboration cutover.
 - Evidence: `src/lib/agent/ai-memory-protocol.ts`, `src/lib/agent/ai-memory-tools.ts`, `src/lib/workflow/memory-v2-handoff.ts`, `src/lib/workflow/manager.ts`, `src/lib/state-machine/workflow-manager.ts`, `src/lib/memory-v2/memory-service.ts`, and the cutover modules/routes. The static rule selector completed; only generic correctness/security rules with concrete TypeScript evidence were considered because most selected rules target unrelated Cangjie/C++ code.
 - Result: Fail pending bounded repair. `buildManifest` excludes ordinary session-short no-handoff items; the AI tool/fallback adapter has no production execution call site; workflow V2 bypasses the fresh-start gate; and the state-machine finalization still calls legacy `appendMemoryEntries`.
 - Follow-up: Dispatch B-R1, B-R2, and B-R3 before Task 5. No build, lint, or test command was run per user direction.
@@ -53,7 +53,7 @@ Updated: 2026-07-25
 
 ## 2026-07-25 B-R3 Follow-Up Static Review
 
-- Scope: Phase/state-machine workflow V2 initialization, legacy-memory retirement, and emitted handoff provenance.
+- Scope: Active workflow V2 initialization, legacy-memory retirement, and emitted handoff provenance.
 - Evidence: `src/lib/workflow/manager.ts`, `src/lib/state-machine/workflow-manager.ts`, `src/lib/workflow/memory-v2-handoff.ts`, and Task 2's exported `AiMemoryHandoffEligibleProposalReference` contract in `src/lib/agent/ai-memory-protocol.ts`.
 - Result: Partial. Both managers now gate adapter creation through `ensureMemoryV2FreshStart()` and no longer use the manager-owned legacy writer/raw-output handoff fallback. However, neither workflow runtime executes the Task 2 protocol wrapper, while `completeStep()` trusts parsed model `memoryIds`. An emitted handoff can therefore lack server-observed persistence evidence.
 - Follow-up: B-R3b must run the protocol in each workflow execution path and reject emitted handoff IDs unless they match successful active proposals for the server-issued source event. No build, lint, or test command was run per user direction.
@@ -123,7 +123,7 @@ Updated: 2026-07-25
 
 ## 2026-07-24 Current-System Audit
 
-- Scope: Read-only audit of memory persistence, Agent Chat injection, homepage chat compaction, phase workflow transfer, state-machine transfer, channels, resume, experience YAML, and relationship YAML.
+- Scope: Read-only audit of memory persistence, Agent Chat injection, homepage chat compaction, legacy phase workflow transfer, state-machine transfer, channels, resume, experience YAML, and relationship YAML.
 - Evidence: `src/lib/workflow/memory-store.ts`, `src/lib/agent/memory-resolver.ts`, `src/lib/agent/chat-service.ts`, `src/lib/chat/request-options.ts`, `src/lib/chat/chat-engine-runtime.ts`, `src/lib/workflow/manager.ts`, `src/lib/state-machine/workflow-manager.ts`, `src/lib/run/state-persistence.ts`, `src/lib/workflow/experience-store.ts`, and `src/lib/agent/relationship-store.ts`.
 - Result: Partial. The design facts in [00-design-locks.md](00-design-locks.md) are evidence-backed; Memory V2 implementation and tests do not exist yet.
 - Follow-up: Complete Tasks 1 through 5 in dependency order.

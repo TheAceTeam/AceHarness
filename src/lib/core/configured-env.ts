@@ -1,7 +1,8 @@
 import { delimiter } from 'path';
 import { buildEnvObject, loadEnvVars, loadEnvVarsSync } from '@/lib/core/env-manager';
+import { isWindows } from '@/lib/core/runtime-platform';
 
-type EnvInput = Record<string, string | undefined>;
+type EnvInput = Record<string, string | null | undefined>;
 type ConfiguredEnvOptions = {
   userId?: string;
 };
@@ -9,7 +10,7 @@ type ConfiguredEnvOptions = {
 function normalizeEnv(baseEnv: EnvInput): NodeJS.ProcessEnv {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
-    if (value !== undefined) {
+    if (typeof value === 'string') {
       env[key] = value;
     }
   }
@@ -21,11 +22,30 @@ function applyOverrides(target: NodeJS.ProcessEnv, overrides?: EnvInput): NodeJS
     return target;
   }
   for (const [key, value] of Object.entries(overrides)) {
-    if (value !== undefined) {
-      target[key] = value;
+    if (typeof value === 'string' && value.trim().length > 0) {
+      setEnvValue(target, key, value);
     }
   }
   return target;
+}
+
+function setEnvValue(target: NodeJS.ProcessEnv, key: string, value: string): void {
+  if (isWindows()) {
+    for (const existingKey of Object.keys(target)) {
+      if (existingKey !== key && existingKey.toLowerCase() === key.toLowerCase()) {
+        delete target[existingKey];
+      }
+    }
+  }
+  target[key] = value;
+}
+
+function applyConfiguredValues(target: NodeJS.ProcessEnv, configured: EnvInput): void {
+  for (const [key, value] of Object.entries(configured)) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      setEnvValue(target, key, value);
+    }
+  }
 }
 
 export async function loadConfiguredEnvObject(options?: ConfiguredEnvOptions): Promise<Record<string, string>> {
@@ -53,9 +73,7 @@ export async function buildConfiguredProcessEnv(
   baseEnv: EnvInput = process.env as EnvInput,
   options?: ConfiguredEnvOptions,
 ): Promise<NodeJS.ProcessEnv> {
-  const env = normalizeEnv(baseEnv);
-  Object.assign(env, await loadConfiguredEnvObject(options));
-  return applyOverrides(env, overrides);
+  return mergeConfiguredEnv(baseEnv, await loadConfiguredEnvObject(options), overrides);
 }
 
 export function buildConfiguredProcessEnvSync(
@@ -63,9 +81,7 @@ export function buildConfiguredProcessEnvSync(
   baseEnv: EnvInput = process.env as EnvInput,
   options?: ConfiguredEnvOptions,
 ): NodeJS.ProcessEnv {
-  const env = normalizeEnv(baseEnv);
-  Object.assign(env, loadConfiguredEnvObjectSync(options));
-  return applyOverrides(env, overrides);
+  return mergeConfiguredEnv(baseEnv, loadConfiguredEnvObjectSync(options), overrides);
 }
 
 export function getConfiguredEnvValueSync(key: string, options?: ConfiguredEnvOptions): string | undefined {
@@ -79,6 +95,16 @@ export function getConfiguredEnvValueSync(key: string, options?: ConfiguredEnvOp
     return processValue;
   }
   return undefined;
+}
+
+export function mergeConfiguredEnv(
+  baseEnv: EnvInput,
+  configured: EnvInput,
+  overrides?: EnvInput,
+): NodeJS.ProcessEnv {
+  const env = normalizeEnv(baseEnv);
+  applyConfiguredValues(env, configured);
+  return applyOverrides(env, overrides);
 }
 
 export function getConfiguredCliSearchPaths(extraPaths: string[] = [], options?: ConfiguredEnvOptions): string[] {

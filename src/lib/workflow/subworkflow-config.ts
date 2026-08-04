@@ -2,8 +2,13 @@ import { createHash } from 'crypto';
 import { existsSync } from 'fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises';
 import path from 'path';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { getInstallConfigsDir, getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { stateMachineWorkflowSchema } from '@/lib/core/schemas';
+import {
+  ensureLightweightWorkflowStepSkill,
+  normalizeLightweightWorkflowConfig,
+} from '@/lib/workflow/lightweight';
 import {
   ensureRuntimeConfigsSeeded,
   getRuntimeConfigsDirPath,
@@ -192,16 +197,32 @@ async function resolveWorkflowConfigDependencyGraphWithContent(
 
     visiting.add(file);
     const loaded = await readWorkflowConfigFile(file);
-    totalSnapshotBytes += Buffer.byteLength(loaded.content, 'utf-8');
+    // A run snapshot is the source used for recovery. Normalize legacy
+    // lightweight metadata here so a prior Spec binding cannot reappear when
+    // that run is inspected or resumed.
+    const normalizedConfig = ensureLightweightWorkflowStepSkill(
+      normalizeLightweightWorkflowConfig(loaded.config),
+    );
+    const content = normalizedConfig === loaded.config
+      ? loaded.content
+      : stringify(normalizedConfig);
+    totalSnapshotBytes += Buffer.byteLength(content, 'utf-8');
     if (byFile.size + 1 > maxGraphSize) {
       throw new Error(`子工作流依赖图超过最大配置数量 ${maxGraphSize}`);
     }
     if (totalSnapshotBytes > maxSnapshotBytes) {
       throw new Error(`子工作流快照总大小超过上限 ${maxSnapshotBytes} bytes`);
     }
-    const mode = String(loaded.config?.workflow?.mode || 'phase-based');
-    const refs = listSubworkflowReferences(loaded.config);
-    if (stack.length > 0 && mode !== 'state-machine') {
+    const parsedConfig = stateMachineWorkflowSchema.safeParse(normalizedConfig);
+    if (!parsedConfig.success) {
+      const detail = parsedConfig.error.issues
+        .map((issue) => `${issue.path.join('.') || 'workflow'}: ${issue.message}`)
+        .join('; ');
+      throw new Error(`子工作流配置不是有效的状态机配置: ${file}${detail ? ` (${detail})` : ''}`);
+    }
+    const mode = String(parsedConfig.data.workflow.mode);
+    const refs = listSubworkflowReferences(normalizedConfig);
+    if (mode !== 'state-machine') {
       throw new Error(`子工作流必须是状态机模式: ${file}`);
     }
 
@@ -209,11 +230,11 @@ async function resolveWorkflowConfigDependencyGraphWithContent(
       file,
       canonicalFile,
       snapshot: `configs/${safeSnapshotName(file)}`,
-      sha256: sha256(loaded.content),
-      workflowName: String(loaded.config?.workflow?.name || file),
+      sha256: sha256(content),
+      workflowName: String(normalizedConfig?.workflow?.name || file),
       mode,
       referencedBy: referencedBy ? [referencedBy] : [],
-      content: loaded.content,
+      content,
     };
     byFile.set(file, entry);
 
@@ -331,6 +352,9 @@ export async function assertSubworkflowDependenciesForConfig(
   options: { maxDepth?: number; maxGraphSize?: number; maxSnapshotBytes?: number } = {},
 ): Promise<void> {
   const refs = listSubworkflowReferences(config);
+  if (config?.workflow?.profile === 'lightweight' && refs.length > 0) {
+    throw new Error('轻量工作流不能包含子工作流步骤');
+  }
   if (refs.length === 0) return;
   const maxDepth = Math.min(
     Math.max(1, options.maxDepth || DEFAULT_SUBWORKFLOW_MAX_DEPTH),

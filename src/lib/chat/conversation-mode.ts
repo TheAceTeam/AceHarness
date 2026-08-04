@@ -6,7 +6,6 @@ export type HomeConversationMode = NonNullable<SessionWorkbenchState['conversati
 export interface ConversationModeSessionLike {
   conversationMode?: HomeConversationMode | null;
   workflowBinding?: { runId?: string | null } | null;
-  creationSession?: { status?: string | null } | null;
   sessionWorkbenchState?: SessionWorkbenchState | null;
 }
 
@@ -18,7 +17,9 @@ export function resolveConversationMode(
   }
 ): HomeConversationMode {
   const explicit = session?.conversationMode || session?.sessionWorkbenchState?.conversationMode;
-  if (explicit) return explicit;
+  if (explicit === 'plain' || explicit === 'agent-chat' || explicit === 'workflow-running' || explicit === 'workflow-completed') {
+    return explicit;
+  }
 
   const embeddedRunId = String(session?.sessionWorkbenchState?.embeddedWorkflow?.runId || '').trim();
   const runId = String(session?.workflowBinding?.runId || embeddedRunId || '').trim();
@@ -27,10 +28,6 @@ export function resolveConversationMode(
     : null;
   if (runId) {
     return isActiveWorkflowRunStatus(runStatus) ? 'workflow-running' : 'workflow-completed';
-  }
-
-  if (session?.creationSession || session?.sessionWorkbenchState?.lightweightWorkflowDraft) {
-    return 'workflow-drafting';
   }
 
   if (session?.sessionWorkbenchState?.collaborationRoom) {

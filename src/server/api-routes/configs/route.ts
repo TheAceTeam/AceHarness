@@ -35,8 +35,8 @@ export async function GET(request: Request) {
     const direction = sortDirection === 'asc' ? 1 : -1;
 
     let filteredConfigs = indexed.configs;
-    if (mode === 'phase-based' || mode === 'state-machine') {
-      filteredConfigs = filteredConfigs.filter((item) => item.mode === mode);
+    if (mode === 'lightweight' || mode === 'state-machine') {
+      filteredConfigs = filteredConfigs.filter((item) => item.kind === mode);
     }
     if (keyword) {
       filteredConfigs = filteredConfigs.filter((item) => {

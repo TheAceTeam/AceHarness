@@ -1,9 +1,9 @@
-export const HOME_SIDEBAR_TABS = ['commander', 'workflow', 'agent'] as const;
+export const HOME_SIDEBAR_TABS = ['commander', 'agent'] as const;
 export type HomeSidebarTab = typeof HOME_SIDEBAR_TABS[number];
 export type HomeSidebarMode = 'hidden' | 'peek' | 'active';
 
 export function isHomeSidebarTab(value: unknown): value is HomeSidebarTab {
-  return value === 'commander' || value === 'workflow' || value === 'agent';
+  return value === 'commander' || value === 'agent';
 }
 
 export function normalizeHomeSidebarTab(value: unknown): HomeSidebarTab | null {
@@ -22,31 +22,17 @@ export function normalizeHomeSidebarTabs(values: unknown): HomeSidebarTab[] {
 
 export type HomeSidebarIntent =
   | 'general'
-  | 'create-workflow'
   | 'create-agent'
   | 'workflow-run'
-  | 'workflow-review'
   | 'supervisor-chat';
 
 export type HomeSidebarStage =
   | 'idle'
   | 'clarifying'
-  | 'spec-draft'
-  | 'spec-review'
-  | 'workflow-draft'
   | 'agent-draft'
   | 'preflight'
   | 'running'
   | 'review';
-
-export interface HomeSidebarWorkflowDraft {
-  name?: string;
-  requirements?: string;
-  description?: string;
-  referenceWorkflow?: string;
-  workingDirectory?: string;
-  workspaceMode?: 'isolated-copy' | 'in-place';
-}
 
 export interface HomeSidebarAgentDraft {
   displayName?: string;
@@ -104,13 +90,6 @@ export interface CollaborationRoomMessage {
     mentions?: string[];
     participants?: string[];
     summaryTitle?: string;
-  };
-  werewolf?: {
-    phase?: CollaborationWerewolfPhase;
-    action?: CollaborationWerewolfAction;
-    visibility?: 'public' | 'god' | 'private' | 'werewolves';
-    audience?: string[];
-    actor?: string;
   };
 }
 
@@ -220,109 +199,6 @@ export interface CollaborationChatroomState {
   temporaryAgents?: CollaborationChatroomTemporaryAgent[];
 }
 
-export type CollaborationWerewolfPhase = 'setup' | 'night' | 'last-words' | 'day' | 'voting' | 'ended';
-export type CollaborationWerewolfAction =
-  | 'setup'
-  | 'sheriff-election'
-  | 'sheriff-speech'
-  | 'sheriff-vote'
-  | 'badge-transfer'
-  | 'badge-destroy'
-  | 'wolf-meeting'
-  | 'guard-action'
-  | 'seer-check'
-  | 'wolf-kill'
-  | 'witch-action'
-  | 'hunter-shot'
-  | 'idiot-reveal'
-  | 'last-words'
-  | 'day-speech'
-  | 'vote'
-  | 'settlement'
-  | 'system'
-  | 'idle';
-
-export interface CollaborationWerewolfPlayer {
-  agentName: string;
-  role: 'werewolf' | 'seer' | 'witch' | 'hunter' | 'idiot' | 'guard' | 'villager';
-  alive: boolean;
-  persona: string;
-  sheriffCandidate?: boolean;
-  sheriff?: boolean;
-  badgeDestroyed?: boolean;
-  idiotRevealed?: boolean;
-}
-
-export interface CollaborationWerewolfVote {
-  voter: string;
-  target: string;
-  reason?: string;
-  round: number;
-}
-
-export interface CollaborationWerewolfMemoryEntry {
-  id: string;
-  createdAt: number;
-  round: number;
-  phase: CollaborationWerewolfPhase;
-  action?: CollaborationWerewolfAction;
-  title: string;
-  summary: string;
-  visibility: 'public' | 'god' | 'private' | 'werewolves';
-  audience?: string[];
-  actor?: string;
-}
-
-export interface CollaborationWerewolfState {
-  enabled: boolean;
-  phase: CollaborationWerewolfPhase;
-  dayNumber: number;
-  boardId?: string;
-  boardName?: string;
-  players: CollaborationWerewolfPlayer[];
-  eliminated: string[];
-  votes: CollaborationWerewolfVote[];
-  lastSummary?: string;
-  lastError?: string;
-  revealedRoles?: boolean;
-  currentActor?: string;
-  currentAction?: CollaborationWerewolfAction;
-  lastNightVictim?: string;
-  pendingLastWords?: string[];
-  speechOrder?: string[];
-  sheriff?: string;
-  sheriffCandidates?: string[];
-  sheriffElectionDone?: boolean;
-  badgeDestroyed?: boolean;
-  pendingHunterShot?: string;
-  roleState?: {
-    witchAntidoteUsed?: boolean;
-    witchPoisonUsed?: boolean;
-    hunterShotUsed?: boolean;
-    guardLastTarget?: string;
-    idiotRevealed?: boolean;
-  };
-  night?: {
-    round: number;
-    guarded?: string;
-    wolfTarget?: string;
-    saved?: string;
-    poisoned?: string;
-    seerTarget?: string;
-    deaths?: string[];
-  };
-  breakpoint?: {
-    handler?: 'night' | 'sheriff-election' | 'day-speech' | 'last-words' | 'vote';
-    roundId?: string;
-    stepLabel?: string;
-    resumeFrom?: string;
-    failedActor?: string;
-    failedAt?: number;
-    error?: string;
-  };
-  memories?: CollaborationWerewolfMemoryEntry[];
-}
-
 export interface CollaborationRoomState {
   roomId?: string;
   spaceType?: 'meeting-room' | 'office';
@@ -334,30 +210,6 @@ export interface CollaborationRoomState {
   rounds: CollaborationRoomRound[];
   agentSessions?: Record<string, string>;
   chatroom?: CollaborationChatroomState | null;
-  werewolfLabConfig?: {
-    defaultEngine?: string;
-    defaultModel?: string;
-    agentOverrides?: Record<string, {
-      enabled?: boolean;
-      engine?: string;
-      model?: string;
-    }>;
-    rehearsal?: Record<string, {
-      status: 'idle' | 'running' | 'ready' | 'failed';
-      sessionId?: string;
-      engine?: string;
-      model?: string;
-      promptVersion?: number;
-      error?: string;
-      checkedAt?: number;
-    }>;
-  };
-  werewolf?: CollaborationWerewolfState | null;
-  werewolfView?: {
-    mode: 'god' | 'night';
-    viewer?: string;
-    viewerRole?: CollaborationWerewolfPlayer['role'];
-  };
 }
 
 export interface HomeSidebarHint {
@@ -374,12 +226,65 @@ export interface HomeSidebarHint {
   questions?: string[];
   recommendedNextAction?: string;
   shouldOpenModal?: boolean;
-  workflowDraft?: HomeSidebarWorkflowDraft;
   agentDraft?: HomeSidebarAgentDraft;
 }
 
+export function normalizeHomeSidebarHint(value: unknown): HomeSidebarHint | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  if (source.type !== undefined && source.type !== 'home_sidebar') return null;
+  if (source.kind !== undefined && source.kind !== 'home_sidebar') return null;
+  if (source.workflowDraft !== undefined) return null;
+
+  const mode = source.mode;
+  if (mode !== undefined && mode !== 'hidden' && mode !== 'peek' && mode !== 'active') return null;
+
+  const rawTabs = source.tabs;
+  if (rawTabs !== undefined && (!Array.isArray(rawTabs) || rawTabs.some((tab) => !isHomeSidebarTab(tab)))) return null;
+  const activeTab = source.activeTab;
+  if (activeTab !== undefined && !isHomeSidebarTab(activeTab)) return null;
+
+  const intent = source.intent;
+  if (intent !== undefined && !['general', 'create-agent', 'workflow-run', 'supervisor-chat'].includes(String(intent))) return null;
+  const stage = source.stage;
+  if (stage !== undefined && !['idle', 'clarifying', 'agent-draft', 'preflight', 'running', 'review'].includes(String(stage))) return null;
+
+  const stringFields = ['reason', 'summary', 'recommendedNextAction'] as const;
+  if (stringFields.some((field) => source[field] !== undefined && typeof source[field] !== 'string')) return null;
+
+  const listFields = ['knownFacts', 'missingFields', 'questions'] as const;
+  if (listFields.some((field) => source[field] !== undefined && (!Array.isArray(source[field]) || source[field].some((item) => typeof item !== 'string')))) return null;
+
+  if (source.shouldOpenModal !== undefined && typeof source.shouldOpenModal !== 'boolean') return null;
+
+  const rawAgentDraft = source.agentDraft;
+  if (rawAgentDraft !== undefined) {
+    if (!rawAgentDraft || typeof rawAgentDraft !== 'object') return null;
+    const draft = rawAgentDraft as Record<string, unknown>;
+    const draftFields = ['displayName', 'team', 'mission', 'style', 'specialties', 'workingDirectory'];
+    if (draftFields.some((field) => draft[field] !== undefined && typeof draft[field] !== 'string')) return null;
+  }
+
+  return {
+    type: 'home_sidebar',
+    ...(mode ? { mode: mode as HomeSidebarMode } : {}),
+    ...(rawTabs ? { tabs: rawTabs as HomeSidebarTab[] } : {}),
+    ...(activeTab ? { activeTab: activeTab as HomeSidebarTab } : {}),
+    ...(intent ? { intent: intent as HomeSidebarIntent } : {}),
+    ...(stage ? { stage: stage as HomeSidebarStage } : {}),
+    ...(typeof source.reason === 'string' ? { reason: source.reason } : {}),
+    ...(typeof source.summary === 'string' ? { summary: source.summary } : {}),
+    ...(Array.isArray(source.knownFacts) ? { knownFacts: source.knownFacts as string[] } : {}),
+    ...(Array.isArray(source.missingFields) ? { missingFields: source.missingFields as string[] } : {}),
+    ...(Array.isArray(source.questions) ? { questions: source.questions as string[] } : {}),
+    ...(typeof source.recommendedNextAction === 'string' ? { recommendedNextAction: source.recommendedNextAction } : {}),
+    ...(typeof source.shouldOpenModal === 'boolean' ? { shouldOpenModal: source.shouldOpenModal } : {}),
+    ...(rawAgentDraft ? { agentDraft: rawAgentDraft as HomeSidebarAgentDraft } : {}),
+  };
+}
+
 export interface SessionWorkbenchState {
-  conversationMode?: 'plain' | 'agent-chat' | 'workflow-drafting' | 'workflow-running' | 'workflow-completed';
+  conversationMode?: 'plain' | 'agent-chat' | 'workflow-running' | 'workflow-completed';
   creationAssistantEnabled?: boolean;
   creationTag?: boolean;
   homeSidebar?: HomeSidebarHint | null;
@@ -394,15 +299,6 @@ export interface SessionWorkbenchState {
     configFile?: string;
     collapsed?: boolean;
     activePanel?: 'status' | 'questions' | 'events' | 'changes';
-  } | null;
-  lightweightWorkflowDraft?: {
-    stage: 'discovery' | 'clarification' | 'draft' | 'confirming' | 'generating' | 'starting';
-    busy?: boolean;
-    runtimeSessionId?: string;
-    creationContextSummary?: string;
-    clarificationForm?: unknown;
-    clarificationAnswers?: Record<string, unknown>;
-    draft?: unknown;
   } | null;
   latestPreflight?: SessionPreflightSnapshot | null;
   chatWorkspace?: {
@@ -468,15 +364,12 @@ export function resolveCreationAssistantEnabled(
 
 export function isCreationAssistantSidebarHint(hint?: HomeSidebarHint | null): boolean {
   if (!hint) return false;
-  if (hint.intent === 'create-workflow' || hint.intent === 'create-agent') return true;
+  if (hint.intent === 'create-agent') return true;
   if (hint.agentDraft) return true;
-  if (hint.workflowDraft && hint.intent !== 'workflow-review') return true;
   return Boolean(
     hint.shouldOpenModal
     && (
-      hint.activeTab === 'workflow'
-      || hint.activeTab === 'agent'
-      || hint.tabs?.includes('workflow')
+      hint.activeTab === 'agent'
       || hint.tabs?.includes('agent')
     )
   );
@@ -486,16 +379,13 @@ export function inferHomeSidebarTab(
   hint?: HomeSidebarHint | null,
   context?: {
     hasWorkflowBinding?: boolean;
-    hasCreationSession?: boolean;
   }
 ): HomeSidebarTab {
   const activeTab = normalizeHomeSidebarTab(hint?.activeTab);
   if (activeTab) return activeTab;
   if (hint?.intent === 'create-agent') return 'agent';
-  if (hint?.intent === 'create-workflow' || hint?.intent === 'workflow-review') return 'workflow';
   if (hint?.intent === 'workflow-run' || hint?.intent === 'supervisor-chat') return 'commander';
   if (hint?.agentDraft) return 'agent';
-  if (hint?.workflowDraft || context?.hasCreationSession) return 'workflow';
   if (context?.hasWorkflowBinding) return 'commander';
   return 'commander';
 }
@@ -504,29 +394,22 @@ export function inferHomeSidebarMode(
   hint?: HomeSidebarHint | null,
   context?: {
     hasWorkflowBinding?: boolean;
-    hasCreationSession?: boolean;
   }
 ): HomeSidebarMode {
   if (hint?.mode) return hint.mode;
-  if (hint?.intent || hint?.workflowDraft || hint?.agentDraft) return 'active';
-  if (context?.hasWorkflowBinding || context?.hasCreationSession) return 'peek';
+  if (hint?.intent || hint?.agentDraft) return 'active';
+  if (context?.hasWorkflowBinding) return 'peek';
   return 'hidden';
 }
 
 export function isWorkflowSidebarHint(hint?: HomeSidebarHint | null): boolean {
   if (!hint) return false;
-  if (hint.intent === 'create-workflow' || hint.intent === 'workflow-run' || hint.intent === 'workflow-review') {
-    return true;
-  }
-  if (hint.activeTab === 'workflow') return true;
-  if (normalizeHomeSidebarTabs(hint.tabs).includes('workflow')) return true;
-  return Boolean(hint.workflowDraft);
+  return hint.intent === 'workflow-run' || hint.intent === 'supervisor-chat';
 }
 
 export function isCreationSidebarIntent(hint?: HomeSidebarHint | null): boolean {
   if (!hint) return false;
-  if (hint.intent === 'create-workflow' || hint.intent === 'create-agent') return true;
-  if (hint.activeTab === 'workflow' && hint.workflowDraft) return true;
+  if (hint.intent === 'create-agent') return true;
   if (hint.activeTab === 'agent' && hint.agentDraft) return true;
   return false;
 }

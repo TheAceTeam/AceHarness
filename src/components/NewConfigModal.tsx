@@ -26,9 +26,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import WorkflowModeSelector from './WorkflowModeSelector';
+import WorkflowModeSelector, { type WorkflowCreationMode } from './WorkflowModeSelector';
 import { EngineModelSelect } from './EngineModelSelect';
-import { ComboboxPortalProvider } from './ui/combobox';
+import { ComboboxPortalProvider, SingleCombobox } from './ui/combobox';
 import Markdown from './Markdown';
 import ChatMessage from './chat/ChatMessage';
 import { MessageHistoryCollapse } from './chat/MessageHistoryCollapse';
@@ -41,7 +41,6 @@ import {
   type PlanDraftResult,
   type SpecCodingArtifactDrafts,
   type SpecCodingArtifactKey,
-  type WorkflowDraftPreviewState,
 } from '@/lib/ai/result-normalizers';
 import {
   WORKFLOW_CLARIFICATION_FACTS_KIND,
@@ -69,13 +68,27 @@ import {
 } from '@/lib/ai/workflow-creation-items';
 import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
-import { agentApi } from '@/lib/core/api';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { cn } from '@/lib/core/utils';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { useCreateConfigMutation, useValidateConfigMutation } from '@/client/query/workflow-mutations';
+import { useAgentsQuery } from '@/client/query/agents';
+import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
+import {
+  LIGHTWEIGHT_WORKFLOW_DESCRIPTION,
+} from '@/lib/workflow/lightweight';
 import WorkflowTemplateBrowser from '@/components/workflow-templates/WorkflowTemplateBrowser';
+
+type WorkflowDraftPreviewState = {
+  source: string;
+  filename: string;
+  config?: any | null;
+  yaml?: string;
+  summary?: string;
+  parseError?: string;
+  validation?: any | null;
+};
 
 const MonacoEditor = dynamic(
   async () => {
@@ -117,6 +130,38 @@ const PERSIST_SPEC_MODE_STORAGE_KEY = 'aceharness.newConfig.persistMode';
 const PERSIST_SPEC_ROOT_STORAGE_KEY = 'aceharness.newConfig.specRoot';
 const SPEC_PLANNING_ENABLED_STORAGE_KEY = 'aceharness.newConfig.specPlanningEnabled';
 
+function normalizeWorkflowCreationMode(mode?: unknown): WorkflowCreationMode {
+  if (mode === 'lightweight' || mode === 'ai-guided') return mode;
+  return 'state-machine';
+}
+
+function toPersistedWorkflowMode(mode: WorkflowCreationMode): 'lightweight' | 'state-machine' {
+  return mode === 'ai-guided' ? 'state-machine' : mode;
+}
+
+type WorkflowDisplayMode = 'lightweight' | 'state-machine';
+
+export function getWorkflowDisplayMode(value: unknown): WorkflowDisplayMode {
+  if (value === 'lightweight') return 'lightweight';
+  if (!value || typeof value !== 'object') return 'state-machine';
+
+  const candidate = value as {
+    profile?: unknown;
+    workflow?: { profile?: unknown };
+  };
+  return candidate.profile === 'lightweight' || candidate.workflow?.profile === 'lightweight'
+    ? 'lightweight'
+    : 'state-machine';
+}
+
+export function getWorkflowDisplayModeLabel(value: unknown): '轻量工作流' | '状态机' {
+  return getWorkflowDisplayMode(value) === 'lightweight' ? '轻量工作流' : '状态机';
+}
+
+function isAiGuidedDraftSession(session: any): boolean {
+  return session?.mode === 'ai-guided' || session?.uiState?.workflowMode === 'ai-guided';
+}
+
 function normalizePersistSpecValues(values: { persistMode?: string; specRoot?: string }) {
   const persistMode = values.persistMode === 'repository' ? 'repository' : 'none';
   const specRoot = persistMode === 'repository'
@@ -127,24 +172,24 @@ function normalizePersistSpecValues(values: { persistMode?: string; specRoot?: s
 
 function normalizeNewConfigFormValues(
   values: Partial<NewConfigForm>,
-  mode: 'phase-based' | 'state-machine' | 'ai-guided'
+  mode: WorkflowCreationMode,
 ) {
   const { persistMode, specRoot } = normalizePersistSpecValues(values);
   return {
     ...values,
-    mode,
+    mode: toPersistedWorkflowMode(mode),
     workspaceMode: values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place',
     persistMode,
     specRoot,
   };
 }
 
-function getReferenceWorkflowMode(mode: 'phase-based' | 'state-machine' | 'ai-guided') {
-  return mode === 'state-machine' || mode === 'ai-guided' ? 'state-machine' : 'phase-based';
+function getReferenceWorkflowMode(_mode: WorkflowCreationMode) {
+  return 'state-machine' as const;
 }
 
 function normalizeReferenceWorkflowMode(mode?: string) {
-  return mode === 'state-machine' ? 'state-machine' : 'phase-based';
+  return mode === 'state-machine' ? 'state-machine' : null;
 }
 
 type ModalAiMessage =
@@ -664,7 +709,7 @@ interface NewConfigModalProps {
   onSuccess: (filename: string, result?: { creationSession?: any }) => void;
   homepageCompact?: boolean;
   resumeCreationSessionId?: string | null;
-  initialMode?: 'phase-based' | 'state-machine' | 'ai-guided';
+  initialMode?: WorkflowCreationMode;
   initialWorkflowName?: string;
   initialReferenceWorkflow?: string;
   initialRequirements?: string;
@@ -672,7 +717,7 @@ interface NewConfigModalProps {
   initialWorkingDirectory?: string;
   initialWorkspaceMode?: 'isolated-copy' | 'in-place';
   frontendSessionId?: string | null;
-  hideAiGuided?: boolean;
+  aiGuidedEntry?: boolean;
   inheritEngine?: string;
   inheritModel?: string;
   focusRequirementsOnOpen?: boolean;
@@ -682,7 +727,14 @@ type ReferenceWorkflowSummary = {
   filename: string;
   name: string;
   description?: string;
-  mode?: 'phase-based' | 'state-machine';
+  mode?: 'state-machine';
+  kind?: 'lightweight' | 'state-machine';
+  profile?: 'lightweight';
+};
+
+type LightweightFormValues = {
+  agent: string;
+  task: string;
 };
 
 type WorkflowCreationSource = 'custom' | 'template';
@@ -692,7 +744,7 @@ type WorkflowCreationRecommendations = {
     filename: string;
     name?: string;
     description?: string;
-    mode: 'phase-based' | 'state-machine';
+    mode: 'state-machine';
     agents: string[];
     supervisorAgent?: string;
   };
@@ -787,7 +839,7 @@ type WorkflowAgentTaskSummary = {
 type PlanTaskAgentMapping = {
   id: string;
   source: 'task' | 'workflow';
-  phaseName: string;
+  nodeName: string;
   stepName: string;
   taskTitle: string;
   detail: string;
@@ -797,7 +849,7 @@ type PlanTaskAgentMapping = {
 type WorkflowStepBindingItem = {
   id: string;
   nodeName: string;
-  nodeType: 'phase' | 'state';
+  nodeType: 'state';
   nodeIndex: number;
   stepIndex: number;
   stepName: string;
@@ -816,7 +868,7 @@ type WorkflowBindingChange = {
 
 type WorkflowDraftVisualNode = {
   id: string;
-  type: 'state' | 'phase';
+  type: 'state';
   index: number;
   name: string;
   description: string;
@@ -1156,18 +1208,13 @@ function createVerdictTransitions(input: {
 }
 
 function buildWorkflowDraftVisualModel(config: any): {
-  mode: 'phase-based' | 'state-machine';
+  mode: WorkflowDisplayMode;
   supervisorAgent: string;
   nodes: WorkflowDraftVisualNode[];
 } {
   const workflow = config?.workflow || {};
-  const isStateMachine = Array.isArray(workflow.states);
-  const nodeType: 'state' | 'phase' = isStateMachine ? 'state' : 'phase';
-  const rawNodes = isStateMachine
-    ? workflow.states
-    : Array.isArray(workflow.phases)
-      ? workflow.phases
-      : [];
+  const mode = getWorkflowDisplayMode(workflow);
+  const rawNodes = Array.isArray(workflow.states) ? workflow.states : [];
 
   const nodes: WorkflowDraftVisualNode[] = rawNodes.map((node: any, index: number) => {
     const steps = Array.isArray(node?.steps) ? node.steps : [];
@@ -1191,12 +1238,12 @@ function buildWorkflowDraftVisualModel(config: any): {
       : [];
 
     return {
-      id: `${nodeType}-${index}`,
-      type: nodeType,
+      id: `state-${index}`,
+      type: 'state',
       index,
       name: typeof node?.name === 'string' && node.name.trim()
         ? node.name.trim()
-        : `${isStateMachine ? '状态' : '阶段'} ${index + 1}`,
+        : `状态 ${index + 1}`,
       description: typeof node?.description === 'string' && node.description.trim()
         ? node.description.trim()
         : visualSteps.map((step: { task: string }) => step.task).filter(Boolean).join('；'),
@@ -1210,21 +1257,17 @@ function buildWorkflowDraftVisualModel(config: any): {
   });
 
   return {
-    mode: isStateMachine ? 'state-machine' : 'phase-based',
-    supervisorAgent: typeof workflow?.supervisor?.agent === 'string' && workflow.supervisor.agent.trim()
+    mode,
+    supervisorAgent: mode === 'state-machine' && typeof workflow?.supervisor?.agent === 'string' && workflow.supervisor.agent.trim()
       ? workflow.supervisor.agent.trim()
-      : 'default-supervisor',
+      : '',
     nodes,
   };
 }
 
 function buildWorkflowAgentTaskSummaries(config: any): WorkflowAgentTaskSummary[] {
   const workflow = config?.workflow || {};
-  const nodeList = Array.isArray(workflow.states)
-    ? workflow.states
-    : Array.isArray(workflow.phases)
-      ? workflow.phases
-      : [];
+  const nodeList = Array.isArray(workflow.states) ? workflow.states : [];
   const map = new Map<string, WorkflowAgentTaskSummary>();
 
   const ensureAgent = (agent: string, role?: string | null) => {
@@ -1277,13 +1320,12 @@ function buildWorkflowAgentTaskSummaries(config: any): WorkflowAgentTaskSummary[
 
 function buildWorkflowStepBindingItems(config: any): WorkflowStepBindingItem[] {
   const workflow = config?.workflow || {};
-  const isStateMachine = Array.isArray(workflow.states);
-  const nodes = isStateMachine ? workflow.states : Array.isArray(workflow.phases) ? workflow.phases : [];
-  const nodeType: 'phase' | 'state' = isStateMachine ? 'state' : 'phase';
+  const nodes = Array.isArray(workflow.states) ? workflow.states : [];
+  const nodeType: 'state' = 'state';
   const items: WorkflowStepBindingItem[] = [];
 
   nodes.forEach((node: any, nodeIndex: number) => {
-    const nodeName = node?.name || `${nodeType === 'state' ? '状态' : '阶段'} ${nodeIndex + 1}`;
+    const nodeName = node?.name || `状态 ${nodeIndex + 1}`;
     const steps = Array.isArray(node?.steps) ? node.steps : [];
     steps.forEach((step: any, stepIndex: number) => {
       items.push({
@@ -1305,68 +1347,60 @@ function buildWorkflowStepBindingItems(config: any): WorkflowStepBindingItem[] {
 
 function deriveWorkflowStructure(config: any) {
   const workflow = config?.workflow || {};
-  const phases = Array.isArray(workflow.phases)
-    ? workflow.phases.map((phase: any, index: number) => ({
-      id: `phase-${index + 1}`,
-      title: phase.name || `阶段 ${index + 1}`,
-      objective: phase.steps?.map((step: any) => step.task).filter(Boolean).join('；') || '',
-      ownerAgents: [...new Set((phase.steps || []).map((step: any) => step.agent).filter(Boolean))],
+  const nodes = Array.isArray(workflow.states)
+    ? workflow.states.map((state: any, index: number) => ({
+      id: `state-${index + 1}`,
+      title: state.name || `状态 ${index + 1}`,
+      objective: state.description || state.steps?.map((step: any) => step.task).filter(Boolean).join('；') || '',
+      ownerAgents: [...new Set((state.steps || []).map((step: any) => step.agent).filter(Boolean))],
       status: 'pending' as const,
     }))
-    : Array.isArray(workflow.states)
-      ? workflow.states.map((state: any, index: number) => ({
-        id: `state-${index + 1}`,
-        title: state.name || `状态 ${index + 1}`,
-        objective: state.description || state.steps?.map((step: any) => step.task).filter(Boolean).join('；') || '',
-        ownerAgents: [...new Set((state.steps || []).map((step: any) => step.agent).filter(Boolean))],
-        status: 'pending' as const,
-      }))
-      : [];
+    : [];
 
-  const agentNames = [...new Set(phases.flatMap((phase: { ownerAgents: string[] }) => phase.ownerAgents))] as string[];
+  const agentNames = [...new Set(nodes.flatMap((node: { ownerAgents: string[] }) => node.ownerAgents))] as string[];
   const assignments = agentNames.map((agent: string) => ({
     agent,
-    responsibility: `负责 ${phases.filter((phase: { ownerAgents: string[] }) => phase.ownerAgents.includes(agent)).map((phase: { title: string }) => phase.title).join('、') || '相关设计与执行'}`,
-    phaseIds: phases
-      .filter((phase: { ownerAgents: string[] }) => phase.ownerAgents.includes(agent))
-      .map((phase: { id: string }) => phase.id),
+    responsibility: `负责 ${nodes.filter((node: { ownerAgents: string[] }) => node.ownerAgents.includes(agent)).map((node: { title: string }) => node.title).join('、') || '相关设计与执行'}`,
+    nodeIds: nodes
+      .filter((node: { ownerAgents: string[] }) => node.ownerAgents.includes(agent))
+      .map((node: { id: string }) => node.id),
   }));
 
-  const checkpoints = Array.isArray(workflow.phases)
-    ? workflow.phases
-      .map((phase: any, index: number) => phase?.checkpoint ? {
+  const checkpoints = Array.isArray(workflow.states)
+    ? workflow.states
+      .map((state: any, index: number) => state?.checkpoint ? {
         id: `checkpoint-${index + 1}`,
-        title: phase.checkpoint.name || `检查点 ${index + 1}`,
-        phaseId: phases[index]?.id,
+        title: state.checkpoint.name || `检查点 ${index + 1}`,
+        nodeId: nodes[index]?.id,
         status: 'pending' as const,
       } : null)
       .filter(Boolean)
     : [];
 
-  return { phases, assignments, checkpoints, agentNames };
+  return { nodes, assignments, checkpoints, agentNames };
 }
 
 function buildWorkflowDraftSummaryFromConfig(config: any) {
   const workflow = config?.workflow || {};
-  const { phases, assignments, checkpoints, agentNames } = deriveWorkflowStructure(config);
+  const mode = getWorkflowDisplayMode(workflow);
+  const { nodes, assignments, checkpoints, agentNames } = deriveWorkflowStructure(config);
   return {
-    mode: workflow.mode === 'state-machine' ? 'state-machine' as const : 'phase-based' as const,
-    nodes: phases.map((phase: { title: string; objective?: string; ownerAgents?: string[] }) => ({
-      name: phase.title,
-      detail: phase.objective || '来自当前计划确认的阶段目标',
-      ownerAgents: phase.ownerAgents || [],
+    mode,
+    nodes: nodes.map((node: { title: string; objective?: string; ownerAgents?: string[] }) => ({
+      name: node.title,
+      detail: node.objective || '来自当前计划确认的状态目标',
+      ownerAgents: node.ownerAgents || [],
     })),
     assignments: assignments.map((assignment: { agent: string; responsibility: string }) => ({
       agent: assignment.agent,
       responsibility: assignment.responsibility,
     })),
     generatedConfigSummary: {
-      mode: workflow.mode === 'state-machine' ? 'state-machine' as const : 'phase-based' as const,
-      phaseCount: Array.isArray(workflow.phases) ? workflow.phases.length : 0,
+      mode,
       stateCount: Array.isArray(workflow.states) ? workflow.states.length : 0,
       agentNames,
     },
-    structure: { phases, assignments, checkpoints, agentNames },
+    structure: { nodes, assignments, checkpoints, agentNames },
   };
 }
 
@@ -1375,9 +1409,7 @@ function applyStepAgentReplacement(config: any, stepId: string, nextAgent: strin
   const items = buildWorkflowStepBindingItems(cloned);
   const target = items.find((item) => item.id === stepId);
   if (!target) return cloned;
-  const nodeCollection = target.nodeType === 'state'
-    ? cloned.workflow?.states
-    : cloned.workflow?.phases;
+  const nodeCollection = cloned.workflow?.states;
   if (!Array.isArray(nodeCollection)) return cloned;
   const targetNode = nodeCollection[target.nodeIndex];
   const targetStep = Array.isArray(targetNode?.steps) ? targetNode.steps[target.stepIndex] : null;
@@ -1595,23 +1627,23 @@ function CollapsePanelButton({
 }
 
 function buildPlanTaskAgentMappings(specCoding: any, config: any): PlanTaskAgentMapping[] {
-  const phaseById = new Map<string, any>(
+  const planNodeById = new Map<string, any>(
     Array.isArray(specCoding?.phases)
-      ? specCoding.phases.map((phase: any) => [phase.id, phase])
+      ? specCoding.phases.map((node: any) => [node.id, node])
       : []
   );
   const taskRows: PlanTaskAgentMapping[] = Array.isArray(specCoding?.tasks)
     ? specCoding.tasks.map((task: any, index: number) => {
-      const phase = task?.phaseId ? phaseById.get(task.phaseId) : null;
+      const planNode = task?.phaseId ? planNodeById.get(task.phaseId) : null;
       const owners = Array.isArray(task?.ownerAgents) && task.ownerAgents.length
         ? task.ownerAgents
-        : Array.isArray(phase?.ownerAgents)
-          ? phase.ownerAgents
+        : Array.isArray(planNode?.ownerAgents)
+          ? planNode.ownerAgents
           : [];
       return {
         id: `task-${task?.id || index}`,
         source: 'task' as const,
-        phaseName: phase?.title || '未归属阶段',
+        nodeName: planNode?.title || '未归属计划节点',
         stepName: task?.id || `Task ${index + 1}`,
         taskTitle: typeof task?.title === 'string' && task.title.trim() ? task.title.trim() : `任务 ${index + 1}`,
         detail: typeof task?.detail === 'string' && task.detail.trim() ? task.detail.trim() : '',
@@ -1623,7 +1655,7 @@ function buildPlanTaskAgentMappings(specCoding: any, config: any): PlanTaskAgent
   const workflowRows = buildWorkflowStepBindingItems(config).map((item) => ({
     id: `workflow-${item.id}`,
     source: 'workflow' as const,
-    phaseName: item.nodeName,
+    nodeName: item.nodeName,
     stepName: item.stepName,
     taskTitle: item.task || item.stepName,
     detail: item.task || '',
@@ -1633,7 +1665,7 @@ function buildPlanTaskAgentMappings(specCoding: any, config: any): PlanTaskAgent
   const merged = [...taskRows, ...workflowRows];
   const dedup = new Map<string, PlanTaskAgentMapping>();
   for (const row of merged) {
-    const key = `${row.phaseName}::${row.stepName}::${row.taskTitle}::${row.agentNames.join(',')}`;
+    const key = `${row.nodeName}::${row.stepName}::${row.taskTitle}::${row.agentNames.join(',')}`;
     if (!dedup.has(key)) dedup.set(key, row);
   }
   return [...dedup.values()];
@@ -1657,7 +1689,7 @@ function buildCreationRecommendationsPrompt(recommendations: WorkflowCreationRec
     sections.push([
       '**编排参考骨架**',
       `- 参考工作流: ${recommendations.referenceWorkflow.name || recommendations.referenceWorkflow.filename}`,
-      `- 模式: ${recommendations.referenceWorkflow.mode === 'state-machine' ? '状态机' : '阶段式'}`,
+      '- 模式: 状态机',
       recommendations.referenceWorkflow.agents.length
         ? `- 可优先复用的角色: ${recommendations.referenceWorkflow.agents.join('、')}`
         : '',
@@ -1725,18 +1757,6 @@ function cloneReferenceWorkflowConfig(referenceConfig: any, options: {
   cloned.context.workspaceMode = options.workspaceMode;
   cloned.context.requirements = options.requirements || cloned.context.requirements || '';
 
-  if (Array.isArray(cloned.workflow.phases)) {
-    cloned.workflow.phases = cloned.workflow.phases.map((phase: any, phaseIndex: number) => ({
-      ...phase,
-      steps: (phase.steps || []).map((step: any, stepIndex: number) => ({
-        ...step,
-        task: options.requirements?.trim()
-          ? `基于当前需求「${options.requirements.trim()}」，在阶段「${phase.name || `阶段 ${phaseIndex + 1}`}」中完成步骤「${step.name || `步骤 ${stepIndex + 1}`}」的任务。`
-          : step.task,
-      })),
-    }));
-  }
-
   if (Array.isArray(cloned.workflow.states)) {
     cloned.workflow.states = cloned.workflow.states.map((state: any, stateIndex: number) => ({
       ...state,
@@ -1779,48 +1799,6 @@ function pickRecommendedAgent(
   const safeFallback = excludedAgents.has(fallback) ? 'developer' : fallback;
   usedAgents.add(safeFallback);
   return safeFallback;
-}
-
-function createPhaseBasedPreviewConfig(
-  workflowName: string,
-  workingDirectory: string,
-  workspaceMode: 'isolated-copy' | 'in-place',
-  description?: string,
-  recommendedAgents?: string[],
-  recommendedSupervisorAgent?: string
-) {
-  const usedAgents = new Set<string>();
-  const excludedAgents = new Set([recommendedSupervisorAgent || 'default-supervisor', 'default-supervisor']);
-  const primaryAgent = pickRecommendedAgent(recommendedAgents, 'developer', usedAgents, excludedAgents);
-  return {
-    workflow: {
-      name: workflowName,
-      description: description || '',
-      ...{
-        supervisor: {
-          ...createDefaultWorkflowGovernance().supervisor,
-          agent: recommendedSupervisorAgent || 'default-supervisor',
-        },
-      },
-      phases: [
-        {
-          name: '阶段 1',
-          steps: [
-            {
-              name: '步骤 1',
-              agent: primaryAgent,
-              task: '请根据已确认需求补充任务内容',
-            },
-          ],
-        },
-      ],
-    },
-    context: {
-      projectRoot: workingDirectory,
-      workspaceMode,
-      requirements: '',
-    },
-  };
 }
 
 function createStateMachinePreviewConfig(
@@ -2014,7 +1992,7 @@ function WorkflowDraftPreviewCard({ preview }: { preview: WorkflowDraftPreviewSt
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           <div className="rounded-lg border bg-background/80 p-3">
             <div className="text-xs text-muted-foreground">模式</div>
-            <div className="mt-1 font-medium">{summary.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
+            <div className="mt-1 font-medium">{getWorkflowDisplayModeLabel(summary.mode)}</div>
           </div>
           <div className="rounded-lg border bg-background/80 p-3">
             <div className="text-xs text-muted-foreground">节点</div>
@@ -2035,8 +2013,8 @@ function WorkflowDraftPreviewCard({ preview }: { preview: WorkflowDraftPreviewSt
               结构视图
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant="outline">Supervisor: {visual.supervisorAgent}</Badge>
-              <Badge variant="outline">{visual.mode === 'state-machine' ? '状态流转' : '阶段顺序'}</Badge>
+              {visual.supervisorAgent ? <Badge variant="outline">Supervisor: {visual.supervisorAgent}</Badge> : null}
+              <Badge variant="outline">{visual.mode === 'state-machine' ? '状态流转' : '任务清单执行'}</Badge>
             </div>
           </div>
 
@@ -2618,7 +2596,7 @@ export default function NewConfigModal({
   initialWorkingDirectory,
   initialWorkspaceMode,
   frontendSessionId,
-  hideAiGuided = false,
+  aiGuidedEntry = false,
   inheritEngine = '',
   inheritModel = '',
   focusRequirementsOnOpen = false,
@@ -2628,15 +2606,18 @@ export default function NewConfigModal({
   const { resolvedTheme } = useTheme();
   const validateConfigMutation = useValidateConfigMutation();
   const createConfigMutation = useCreateConfigMutation();
+  const agentsQuery = useAgentsQuery();
   const [creationSource, setCreationSource] = useState<WorkflowCreationSource>('custom');
-  const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>(initialMode || 'phase-based');
+  const [workflowMode, setWorkflowMode] = useState<WorkflowCreationMode>(
+    aiGuidedEntry ? 'ai-guided' : normalizeWorkflowCreationMode(initialMode),
+  );
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
   const [formStep, setFormStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [previewSession, setPreviewSession] = useState<any | null>(null);
   const [previewConfigValidation, setPreviewConfigValidation] = useState<any | null>(null);
   const [revisionNotes, setRevisionNotes] = useState('');
   const [revisionTarget, setRevisionTarget] = useState<'requirements' | 'design' | 'tasks'>('tasks');
-  const [revisionImpactArea, setRevisionImpactArea] = useState<'phases' | 'agents' | 'checkpoints' | 'transitions'>('phases');
+  const [revisionImpactArea, setRevisionImpactArea] = useState<'structure' | 'agents' | 'checkpoints' | 'transitions'>('structure');
   const [selectedArtifactKey, setSelectedArtifactKey] = useState<SpecCodingArtifactKey>('requirements');
   const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'edit' | 'diff'>('preview');
   const [artifactDrafts, setArtifactDrafts] = useState<SpecCodingArtifactDrafts>({
@@ -2708,10 +2689,16 @@ export default function NewConfigModal({
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(null);
   const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(null);
-  const [specPlanningEnabled, setSpecPlanningEnabled] = useState(true);
+  const [specPlanningEnabled, setSpecPlanningEnabled] = useState(false);
+  const [lightweightValues, setLightweightValues] = useState<LightweightFormValues>({
+    agent: '',
+    task: '',
+  });
+  const [lightweightErrors, setLightweightErrors] = useState<Partial<Record<keyof LightweightFormValues, string>>>({});
+  const [isCreatingConfig, setIsCreatingConfig] = useState(false);
+  const nonAiCreationInFlightRef = useRef(false);
   const requirementsSectionRef = useRef<HTMLDivElement | null>(null);
   const requirementsInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const draftBootstrapStartedRef = useRef(false);
   const draftFieldSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Refs to always read latest engine/model in sendToAi
   const aiEngineRef = useRef(inheritEngine);
@@ -2720,7 +2707,8 @@ export default function NewConfigModal({
   const runtimeSessionModelRef = useRef(inheritModel);
 
   const resolveFormStepFromSession = useCallback((session: any): 1 | 2 | 3 | 4 | 5 => {
-    if (session.mode === 'ai-guided' && session.status === 'confirmed') {
+    const isAiGuidedJourney = aiGuidedEntry || workflowMode === 'ai-guided' || isAiGuidedDraftSession(session);
+    if (isAiGuidedJourney && session.status === 'confirmed') {
       return 5;
     }
     if (session.status === 'confirmed' || session.status === 'config-generated' || session.status === 'run-bound') {
@@ -2729,7 +2717,7 @@ export default function NewConfigModal({
     if (session.stageSessions?.specPlanning) return 3;
     if (session.stageSessions?.clarification) return 2;
     return 1;
-  }, []);
+  }, [aiGuidedEntry, workflowMode]);
 
   const beginSessionRestoreGuard = useCallback(() => {
     restoringSessionRef.current = true;
@@ -2760,7 +2748,7 @@ export default function NewConfigModal({
     getValues,
   } = useForm<NewConfigForm>({
     defaultValues: {
-      mode: 'phase-based',
+      mode: 'state-machine',
       referenceWorkflow: '',
       workingDirectory: '',
       workspaceMode: 'in-place',
@@ -2777,9 +2765,12 @@ export default function NewConfigModal({
   const requirementsValue = watch('requirements');
   const persistModeValue = watch('persistMode') || 'none';
   const specRootValue = watch('specRoot') || '.spec';
-  const showReferenceWorkflowOptions = workflowMode === 'ai-guided' && !hideAiGuided;
+  const isLightweight = workflowMode === 'lightweight';
+  const isDirectCreationPending = isCreatingConfig || createConfigMutation.isPending || isSubmitting;
+  const persistedWorkflowMode = toPersistedWorkflowMode(workflowMode);
+  const showReferenceWorkflowOptions = !isLightweight && (workflowMode === 'ai-guided' || workflowMode === 'state-machine');
   const useSpecPlanningFlow = workflowMode === 'ai-guided' && specPlanningEnabled;
-  const showSpecPlanningToggle = workflowMode === 'ai-guided' || workflowMode === 'state-machine';
+  const showSpecPlanningToggle = !isLightweight && (workflowMode === 'ai-guided' || workflowMode === 'state-machine');
   const selectedReferenceWorkflowMode = referenceWorkflowValue
     ? referenceWorkflows.find((workflow) => workflow.filename === referenceWorkflowValue)?.mode
     : undefined;
@@ -2787,14 +2778,56 @@ export default function NewConfigModal({
     ? normalizeReferenceWorkflowMode(selectedReferenceWorkflowMode)
     : getReferenceWorkflowMode(workflowMode);
   const filteredReferenceWorkflows = useMemo(() => (
-    referenceWorkflows.filter((workflow) => normalizeReferenceWorkflowMode(workflow.mode) === referenceWorkflowMode)
+    referenceWorkflows.filter((workflow) => (
+      workflow.kind !== 'lightweight'
+      && workflow.profile !== 'lightweight'
+      && normalizeReferenceWorkflowMode(workflow.mode) === referenceWorkflowMode
+    ))
   ), [referenceWorkflowMode, referenceWorkflows]);
   const effectiveCreationRecommendations = creationRecommendations;
   const effectiveReferenceWorkflowValue = referenceWorkflowValue || '';
+  const agents = agentsQuery.data?.agents || [];
+  const workflowStepAgents = useMemo(
+    () => agents.filter(isWorkflowStepSelectableAgent),
+    [agents],
+  );
+  const agentOptions = useMemo(() => workflowStepAgents.map((agent) => ({
+    value: agent.name,
+    label: agent.name,
+    description: [agent.description, agent.team, agent.roleType].filter(Boolean).join(' · '),
+  })), [workflowStepAgents]);
   const recommendedAgents = useMemo(() => effectiveCreationRecommendations?.recommendedAgents || [], [effectiveCreationRecommendations?.recommendedAgents]);
   const handleWorkingDirectoryChange = useCallback((path: string) => {
     setValue('workingDirectory', path, { shouldDirty: true, shouldValidate: true });
   }, [setValue]);
+  const updateLightweightValues = useCallback((changes: Partial<LightweightFormValues>) => {
+    setLightweightValues((current) => ({ ...current, ...changes }));
+    setLightweightErrors((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(changes) as Array<keyof LightweightFormValues>) {
+        delete next[key];
+      }
+      return next;
+    });
+  }, []);
+  const validateLightweightValues = useCallback(() => {
+    const nextErrors: Partial<Record<keyof LightweightFormValues, string>> = {};
+    const requestedAgent = lightweightValues.agent.trim();
+    const agent = requestedAgent || workflowStepAgents[0]?.name || '';
+    if (requestedAgent && !workflowStepAgents.some((item) => item.name === requestedAgent)) {
+      nextErrors.agent = '请选择可执行任务的 Agent';
+    }
+    const task = lightweightValues.task.trim();
+    if (!agent) nextErrors.agent = '请选择执行 Agent';
+    if (!task) nextErrors.task = '请输入执行任务';
+    setLightweightErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return null;
+
+    return {
+      agent,
+      task,
+    };
+  }, [lightweightValues, workflowStepAgents]);
   const recommendedSupervisorAgent = effectiveCreationRecommendations?.recommendedSupervisorAgent || 'default-supervisor';
   const creationDialogClassName = creationFullscreen
     ? 'flex h-screen max-h-none w-screen max-w-none flex-col p-0 sm:rounded-none'
@@ -2826,13 +2859,11 @@ export default function NewConfigModal({
   useEffect(() => {
     if (!isOpen) {
       modalWasOpenRef.current = false;
-      draftBootstrapStartedRef.current = false;
       initialFormValuesAppliedRef.current = false;
       return;
     }
     if (modalWasOpenRef.current) return;
     modalWasOpenRef.current = true;
-    draftBootstrapStartedRef.current = false;
     draftSessionCreatedInCurrentOpenRef.current = false;
     setCreationSource('custom');
     if (!resumeCreationSessionId) {
@@ -2856,9 +2887,7 @@ export default function NewConfigModal({
     if (storedRoot && storedRoot.trim()) {
       setValue('specRoot', storedRoot.trim(), { shouldDirty: false, shouldValidate: false });
     }
-    if (storedSpecPlanning === '0' || storedSpecPlanning === '1') {
-      setSpecPlanningEnabled(storedSpecPlanning !== '0');
-    }
+    setSpecPlanningEnabled(storedSpecPlanning === '1');
   }, [isOpen, resumeCreationSessionId, setValue]);
 
   useEffect(() => {
@@ -2883,17 +2912,19 @@ export default function NewConfigModal({
   }, [generateDefaultFilename, getValues, isOpen, setValue]);
 
   useEffect(() => {
-    setValue('mode', workflowMode, { shouldDirty: true, shouldValidate: false });
-  }, [setValue, workflowMode]);
+    setValue('mode', persistedWorkflowMode, { shouldDirty: true, shouldValidate: false });
+    if (isLightweight) {
+      setValue('referenceWorkflow', '', { shouldDirty: false, shouldValidate: false });
+    }
+  }, [isLightweight, persistedWorkflowMode, setValue]);
 
   useEffect(() => {
     if (!isOpen) return;
     if (initialFormValuesAppliedRef.current) return;
     initialFormValuesAppliedRef.current = true;
-    if (initialMode) {
-      setWorkflowMode(initialMode);
-      setValue('mode', initialMode, { shouldDirty: false, shouldValidate: false });
-    }
+    const initialWorkflowMode = aiGuidedEntry ? 'ai-guided' : (initialMode || 'state-machine');
+    setWorkflowMode(initialWorkflowMode);
+    setValue('mode', initialWorkflowMode === 'ai-guided' ? 'state-machine' : initialWorkflowMode, { shouldDirty: false, shouldValidate: false });
     if (initialWorkflowName !== undefined) {
       setValue('workflowName', initialWorkflowName, { shouldDirty: false, shouldValidate: false });
     }
@@ -2902,6 +2933,7 @@ export default function NewConfigModal({
     }
     if (initialRequirements !== undefined) {
       setValue('requirements', initialRequirements, { shouldDirty: false, shouldValidate: false });
+      setLightweightValues((current) => ({ ...current, task: initialRequirements }));
     }
     if (initialDescription !== undefined) {
       setValue('description', initialDescription, { shouldDirty: false, shouldValidate: false });
@@ -2912,7 +2944,12 @@ export default function NewConfigModal({
     if (initialWorkspaceMode !== undefined) {
       setValue('workspaceMode', initialWorkspaceMode, { shouldDirty: false, shouldValidate: false });
     }
-  }, [initialDescription, initialMode, initialReferenceWorkflow, initialRequirements, initialWorkflowName, initialWorkingDirectory, initialWorkspaceMode, isOpen, setValue]);
+  }, [aiGuidedEntry, initialDescription, initialMode, initialReferenceWorkflow, initialRequirements, initialWorkflowName, initialWorkingDirectory, initialWorkspaceMode, isOpen, setValue]);
+
+  useEffect(() => {
+    if (!isOpen || !isLightweight || lightweightValues.agent || !workflowStepAgents[0]?.name) return;
+    updateLightweightValues({ agent: workflowStepAgents[0].name });
+  }, [isLightweight, isOpen, lightweightValues.agent, updateLightweightValues, workflowStepAgents]);
 
   useEffect(() => {
     if (!isOpen || !focusRequirementsOnOpen || resumeCreationSessionId) return;
@@ -2929,7 +2966,10 @@ export default function NewConfigModal({
     beginSessionRestoreGuard();
     setPreviewSession(session);
     setPreviewConfigValidation(null);
-    setWorkflowMode(session.mode || 'ai-guided');
+    const restoredMode = aiGuidedEntry || workflowMode === 'ai-guided' || isAiGuidedDraftSession(session)
+      ? 'ai-guided'
+      : normalizeWorkflowCreationMode(session.mode);
+    setWorkflowMode(restoredMode);
     setDraftCreationSessionId(session.id);
     draftSessionCreatedInCurrentOpenRef.current = true;
     stageSessionsRef.current = session.stageSessions || {} as Record<CreationStageKey, any>;
@@ -2944,7 +2984,7 @@ export default function NewConfigModal({
       runtimeSessionModelRef.current = session.planningModel || inheritModel;
     }
     reset({
-      mode: session.mode || 'ai-guided',
+      mode: toPersistedWorkflowMode(restoredMode),
       workflowName: session.workflowName || '',
       filename: session.filename || '',
       referenceWorkflow: session.referenceWorkflow || '',
@@ -2955,6 +2995,12 @@ export default function NewConfigModal({
       persistMode: session.specCoding?.persistMode || 'none',
       specRoot: session.specCoding?.specRoot || '.spec',
     });
+    const restoredStep = session.config?.workflow?.states?.[0]?.steps?.[0];
+    setLightweightValues({
+      agent: session.lightweight?.agent || restoredStep?.agent || '',
+      task: session.lightweight?.task || restoredStep?.task || session.requirements || '',
+    });
+    setLightweightErrors({});
     setPlanningFrontendSessionId((prev) => (
       session.stageSessions?.workflowDraft?.frontendSessionId
       || session.stageSessions?.specPlanning?.frontendSessionId
@@ -2978,7 +3024,7 @@ export default function NewConfigModal({
     setCurrentStream('');
     setCurrentThinking('');
     finishRestoredSessionHydration();
-  }, [beginSessionRestoreGuard, finishRestoredSessionHydration, inheritEngine, inheritModel, reset, resolveFormStepFromSession]);
+  }, [aiGuidedEntry, beginSessionRestoreGuard, finishRestoredSessionHydration, inheritEngine, inheritModel, reset, resolveFormStepFromSession, workflowMode]);
 
   useEffect(() => {
     if (!isOpen || !resumeCreationSessionId) return;
@@ -3611,17 +3657,7 @@ export default function NewConfigModal({
         requirements: values.requirements,
       });
     }
-    if (workflowMode === 'state-machine' || workflowMode === 'ai-guided') {
-      return createStateMachinePreviewConfig(
-        values.workflowName,
-        values.workingDirectory,
-        values.workspaceMode,
-        values.description,
-        recommendedAgents,
-        recommendedSupervisorAgent
-      );
-    }
-    return createPhaseBasedPreviewConfig(
+    return createStateMachinePreviewConfig(
       values.workflowName,
       values.workingDirectory,
       values.workspaceMode,
@@ -3690,6 +3726,30 @@ export default function NewConfigModal({
     }));
   }, [frontendSessionId, planningFrontendSessionId, updateSessionCreationBinding]);
 
+  const restoreResumableDraftFromFrontendSession = useCallback(async () => {
+    if (!frontendSessionId || draftCreationSessionId || previewSession?.id) return previewSession;
+
+    try {
+      const data = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions?chatSessionId=${encodeURIComponent(frontendSessionId)}`);
+      const resumable = Array.isArray(data?.sessions)
+        ? data.sessions.find((session: any) => (
+            session?.id
+            && ['draft', 'confirmed'].includes(session.status)
+            && !['config-generated', 'run-bound', 'archived'].includes(session.status)
+          ))
+        : null;
+      if (!resumable?.id) return null;
+
+      const detail = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(resumable.id)}`);
+      if (!detail?.session) return null;
+      applyRestoredSession(detail.session);
+      await bindDraftCreationSessionToChat(detail.session);
+      return detail.session;
+    } catch {
+      return null;
+    }
+  }, [applyRestoredSession, bindDraftCreationSessionToChat, draftCreationSessionId, frontendSessionId, previewSession]);
+
   const createInitialDraftCreationSession = useCallback(async () => {
     if (draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current) {
       return draftCreationSessionId;
@@ -3709,7 +3769,7 @@ export default function NewConfigModal({
         filename: values.filename || generateDefaultFilename(),
         workflowName: values.workflowName || '新工作流',
         referenceWorkflow: effectiveReferenceWorkflowValue,
-        mode: workflowMode,
+        mode: persistedWorkflowMode,
         planningEngine: aiEngineRef.current || undefined,
         planningModel: aiModelRef.current || undefined,
         stageSessions: stageSessionsRef.current,
@@ -3782,7 +3842,7 @@ export default function NewConfigModal({
       filename: values.filename,
       workflowName: values.workflowName,
       referenceWorkflow: effectiveReferenceWorkflowValue,
-      mode: workflowMode,
+      mode: persistedWorkflowMode,
       planningEngine: aiEngineRef.current || undefined,
       planningModel: aiModelRef.current || undefined,
       stageSessions: stageSessionsRef.current,
@@ -3875,7 +3935,7 @@ export default function NewConfigModal({
         filename: values.filename,
         workflowName: values.workflowName,
         referenceWorkflow: effectiveReferenceWorkflowValue,
-        mode: workflowMode,
+        mode: persistedWorkflowMode,
         planningEngine: aiEngineRef.current || undefined,
         planningModel: aiModelRef.current || undefined,
         stageSessions: stageSessionsRef.current,
@@ -3930,7 +3990,7 @@ export default function NewConfigModal({
         filename: values.filename,
         workflowName: values.workflowName,
         referenceWorkflow: effectiveReferenceWorkflowValue,
-        mode: workflowMode,
+        mode: persistedWorkflowMode,
         planningEngine: aiEngineRef.current || undefined,
         planningModel: aiModelRef.current || undefined,
         stageSessions: stageSessionsRef.current,
@@ -3983,69 +4043,6 @@ export default function NewConfigModal({
   }, [ensureDraftCreationSession, planningFrontendSessionId]);
 
   useEffect(() => {
-    if (!isOpen || resumeCreationSessionId || !frontendSessionId || draftCreationSessionId || draftBootstrapStartedRef.current || !specPlanningEnabled) return;
-    let cancelled = false;
-    draftBootstrapStartedRef.current = true;
-
-    modalSessionJsonFetch<any>(`/api/spec-coding/sessions?chatSessionId=${encodeURIComponent(frontendSessionId)}`)
-      .then(async (data) => {
-        if (cancelled) return;
-        const resumable = Array.isArray(data?.sessions)
-          ? data.sessions.find((session: any) => (
-              session?.id
-              && ['draft', 'confirmed'].includes(session.status)
-              && !['config-generated', 'run-bound', 'archived'].includes(session.status)
-            ))
-          : null;
-        if (!resumable) {
-          draftBootstrapStartedRef.current = false;
-          await createInitialDraftCreationSession().catch(() => {
-            if (!cancelled) draftBootstrapStartedRef.current = false;
-          });
-          return;
-        }
-
-        const detail = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(resumable.id)}`).catch(() => null);
-        if (cancelled) return;
-        if (!detail?.session) {
-          draftBootstrapStartedRef.current = false;
-          await createInitialDraftCreationSession().catch(() => {
-            if (!cancelled) draftBootstrapStartedRef.current = false;
-          });
-          return;
-        }
-        applyRestoredSession(detail.session);
-        await bindDraftCreationSessionToChat(detail.session);
-      })
-      .catch(() => {
-        if (!cancelled) draftBootstrapStartedRef.current = false;
-      });
-
-    return () => {
-      cancelled = true;
-      draftBootstrapStartedRef.current = false;
-    };
-  }, [
-    bindDraftCreationSessionToChat,
-    createInitialDraftCreationSession,
-    draftCreationSessionId,
-    frontendSessionId,
-    isOpen,
-    resumeCreationSessionId,
-    applyRestoredSession,
-    specPlanningEnabled,
-  ]);
-
-  useEffect(() => {
-    if (!isOpen || resumeCreationSessionId || !specPlanningEnabled || frontendSessionId) return;
-    if (draftCreationSessionId || draftBootstrapStartedRef.current) return;
-    draftBootstrapStartedRef.current = true;
-    createInitialDraftCreationSession().catch(() => {
-      draftBootstrapStartedRef.current = false;
-    });
-  }, [createInitialDraftCreationSession, draftCreationSessionId, frontendSessionId, isOpen, resumeCreationSessionId, specPlanningEnabled]);
-
-  useEffect(() => {
     if (!isOpen || !draftCreationSessionId || restoringSessionRef.current) return;
 
     if (draftFieldSyncTimerRef.current) {
@@ -4064,7 +4061,7 @@ export default function NewConfigModal({
           filename: values.filename || generateDefaultFilename(),
           workflowName: values.workflowName || '新工作流',
           referenceWorkflow: effectiveReferenceWorkflowValue,
-          mode: workflowMode,
+          mode: persistedWorkflowMode,
           planningEngine: aiEngineRef.current || undefined,
           planningModel: aiModelRef.current || undefined,
           stageSessions: stageSessionsRef.current,
@@ -4613,7 +4610,7 @@ export default function NewConfigModal({
         kind: SPEC_DECISION_KIND,
         name: 'D1',
         title: '设计决策：流程拆分',
-        guidance: '生成编号为 D1 的设计决策，说明为什么这样拆分主流程、阶段或职责。',
+        guidance: '生成编号为 D1 的设计决策，说明为什么这样拆分主流程、节点或职责。',
       },
       {
         kind: SPEC_DECISION_KIND,
@@ -4958,7 +4955,7 @@ export default function NewConfigModal({
       tasks: 'tasks.md',
     }[revisionTarget];
     const revisionImpactLabel = {
-      phases: '阶段拆分',
+      structure: '状态结构',
       agents: 'Agent 分工',
       checkpoints: '检查点设计',
       transitions: '状态流转',
@@ -5305,7 +5302,7 @@ export default function NewConfigModal({
       buildCreationRecommendationsPrompt(effectiveCreationRecommendations),
       '',
       'Workflow 装配规则：状态按主要执行顺序组织；必须在 transitions 中明确 pass / conditional_pass / fail 的目标状态。三种 verdict 的下一步完全由当前状态 transitions 决定，不要根据名称假设 conditional_pass 一定前进或一定回退；如果希望它自迭代就配置到当前状态，如果希望它放行就配置到下一状态。并发只允许出现在同一个状态的 steps 内，用相同 parallelGroup 表达。',
-      `Supervisor "${effectiveCreationRecommendations?.recommendedSupervisorAgent || recommendedSupervisorAgent}" 只用于 workflow.supervisor 的调度、审阅和检查点建议，不作为任何 state.steps 或 phase.steps 的执行 agent；步骤 agent 必须选择普通执行角色。`,
+      `Supervisor "${effectiveCreationRecommendations?.recommendedSupervisorAgent || recommendedSupervisorAgent}" 只用于 workflow.supervisor 的调度、审阅和检查点建议，不作为任何 state.steps 的执行 agent；步骤 agent 必须选择普通执行角色。`,
       '每个非终态状态都应该有 1-4 个步骤；如果需要红蓝审查或多角色协作，把这些并行或协作步骤放在同一个状态中。',
       hasConfirmedSpecCoding
         ? '如果提供了 SpecCoding 任务，specTaskBinding.taskIds 必须优先使用当前 tasks 中真实存在的叶子任务 id。'
@@ -5445,6 +5442,11 @@ export default function NewConfigModal({
   // Handle "下一步": validate form then enter plan preview
   const handleNextStep = async () => {
     const draft = getValues();
+    if (workflowMode !== 'ai-guided') {
+      await onSubmit(draft);
+      return;
+    }
+
     const normalizedDraft = normalizeNewConfigFormValues({
       filename: draft.filename,
       workflowName: draft.workflowName,
@@ -5476,16 +5478,17 @@ export default function NewConfigModal({
       return;
     }
 
-    if (workflowMode !== 'ai-guided') {
-      await onSubmit(validation.data as NewConfigForm);
-      return;
-    }
-
     try {
-      if (previewSession) {
-        const resolvedStep = resolveFormStepFromSession(previewSession);
+      const restoredSession = await restoreResumableDraftFromFrontendSession();
+      const activePreviewSession = restoredSession || previewSession;
+      if (activePreviewSession) {
+        const resolvedStep = resolveFormStepFromSession(activePreviewSession);
         if (resolvedStep >= 4) {
-          setFormStep(4);
+          setFormStep(resolvedStep);
+          return;
+        }
+        if (restoredSession && resolvedStep > 1) {
+          setFormStep(resolvedStep);
           return;
         }
         // spec not fully generated — restart from clarification
@@ -5594,7 +5597,7 @@ export default function NewConfigModal({
 	      }
       await onSubmit({
         ...values,
-        mode: workflowMode,
+        mode: persistedWorkflowMode,
       } as NewConfigForm);
     } catch (error: any) {
       toast('error', error?.message || '确认计划失败');
@@ -5641,15 +5644,17 @@ export default function NewConfigModal({
       return true;
     }
 
+    const normalizedDraft = validation.normalized || draftConfigToSave;
+    const draftIsLightweight = normalizedDraft?.workflow?.profile === 'lightweight';
     setIsSavingWorkflowDraft(true);
     try {
       const result = await createConfigMutation.mutateAsync({
         ...values,
-        mode: workflowMode,
+        mode: draftIsLightweight ? 'lightweight' : persistedWorkflowMode,
         frontendSessionId: planningFrontendSessionId || frontendSessionId,
-        creationSessionId: specPlanningEnabled ? previewSession?.id : undefined,
-        skipSpecCoding: !specPlanningEnabled,
-        configDraft: validation.normalized || draftConfigToSave,
+        creationSessionId: !draftIsLightweight && specPlanningEnabled ? previewSession?.id : undefined,
+        skipSpecCoding: draftIsLightweight || !specPlanningEnabled,
+        configDraft: normalizedDraft,
       });
 
       const createdFilename = result?.filename || filename;
@@ -5747,55 +5752,74 @@ export default function NewConfigModal({
   const onSubmit = async (data: NewConfigForm) => {
     // AI-guided mode uses preview + AI flow, not direct submit
     if (workflowMode === 'ai-guided') return;
-    const normalizedData = normalizeNewConfigFormValues(data, workflowMode);
-    const validation = newConfigFormSchema.safeParse(normalizedData);
-    if (!validation.success) {
-      applySchemaIssues(validation.error.issues as any);
-      return;
-    }
-    const values = validation.data;
+    if (nonAiCreationInFlightRef.current) return;
+    nonAiCreationInFlightRef.current = true;
+    setIsCreatingConfig(true);
 
     try {
-      if (specPlanningEnabled) {
-        await validatePersistedSpecSelection(values);
-      }
-    } catch {
-      return;
-    }
+      const lightweight = isLightweight ? validateLightweightValues() : undefined;
+      if (isLightweight && !lightweight) return;
 
-    try {
-      const result = await createConfigMutation.mutateAsync({
-        ...values,
-        frontendSessionId: planningFrontendSessionId || frontendSessionId,
-        creationSessionId: specPlanningEnabled ? (previewSession?.id || draftCreationSessionId || undefined) : undefined,
-        skipSpecCoding: !specPlanningEnabled,
-      });
-      toast('success', result.message || '配置文件已创建');
-      if (result.creationSession) {
-        await bindDraftCreationSessionToChat(result.creationSession).catch(() => {});
-        await appendCreationSessionTags(result.creationSession, '配置已生成');
+      const normalizedData = normalizeNewConfigFormValues({
+        ...data,
+        referenceWorkflow: isLightweight ? '' : data.referenceWorkflow,
+        requirements: lightweight?.task || data.requirements,
+        persistMode: isLightweight ? 'none' : data.persistMode,
+        specRoot: isLightweight ? undefined : data.specRoot,
+      }, workflowMode);
+      const validation = newConfigFormSchema.safeParse(normalizedData);
+      if (!validation.success) {
+        applySchemaIssues(validation.error.issues as any);
+        return;
       }
-      reset();
-      onSuccess(values.filename, { creationSession: result.creationSession });
-      onClose();
-    } catch (error: any) {
-      const payload = error?.payload;
-      const details = Array.isArray(payload?.details)
-        ? payload.details
-        : Array.isArray(payload?.details?.issues)
-          ? payload.details.issues
-          : [];
-      if (details.length > 0) {
-        for (const issue of details) {
-          const field = issue?.path?.[0];
-          if (typeof field === 'string' && ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode', 'persistMode', 'specRoot'].includes(field)) {
-            setError(field as keyof NewConfigForm, { type: 'server', message: issue.message });
-          }
+      const values = validation.data;
+
+      try {
+        if (!isLightweight && specPlanningEnabled) {
+          await validatePersistedSpecSelection(values);
         }
-        toast('error', '表单验证失败:\n' + details.map((e: any) => e?.message || '未知校验错误').join('\n'));
-      } else {
-        toast('error', '创建失败: ' + (payload?.message || payload?.error || error.message));
+      } catch {
+        return;
       }
+
+      try {
+        const result = await createConfigMutation.mutateAsync({
+          ...values,
+          frontendSessionId: planningFrontendSessionId || frontendSessionId,
+          creationSessionId: !isLightweight && specPlanningEnabled ? (previewSession?.id || draftCreationSessionId || undefined) : undefined,
+          skipSpecCoding: isLightweight || !specPlanningEnabled,
+          ...(lightweight ? { lightweight } : {}),
+        });
+        toast('success', result.message || '配置文件已创建');
+        if (result.creationSession) {
+          await bindDraftCreationSessionToChat(result.creationSession).catch(() => {});
+          await appendCreationSessionTags(result.creationSession, '配置已生成');
+        }
+        reset();
+        onSuccess(values.filename, { creationSession: result.creationSession });
+        onClose();
+      } catch (error: any) {
+        const payload = error?.payload;
+        const details = Array.isArray(payload?.details)
+          ? payload.details
+          : Array.isArray(payload?.details?.issues)
+            ? payload.details.issues
+            : [];
+        if (details.length > 0) {
+          for (const issue of details) {
+            const field = issue?.path?.[0];
+            if (typeof field === 'string' && ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode', 'persistMode', 'specRoot'].includes(field)) {
+              setError(field as keyof NewConfigForm, { type: 'server', message: issue.message });
+            }
+          }
+          toast('error', '表单验证失败:\n' + details.map((e: any) => e?.message || '未知校验错误').join('\n'));
+        } else {
+          toast('error', '创建失败: ' + (payload?.message || payload?.error || error.message));
+        }
+      }
+    } finally {
+      nonAiCreationInFlightRef.current = false;
+      setIsCreatingConfig(false);
     }
   };
 
@@ -5898,7 +5922,7 @@ export default function NewConfigModal({
         filename,
         workflowName: values.workflowName,
         referenceWorkflow: effectiveReferenceWorkflowValue,
-        mode: workflowMode,
+        mode: persistedWorkflowMode,
         planningEngine: aiEngineRef.current || undefined,
         planningModel: aiModelRef.current || undefined,
         stageSessions: stageSessionsRef.current,
@@ -5957,8 +5981,6 @@ export default function NewConfigModal({
       setValue('filename', normalized, { shouldDirty: true, shouldValidate: true });
     }
   };
-
-  // PLACEHOLDER_RENDER_AI_VIEW
 
   const canSubmitClarificationAnswers = Boolean(clarificationForm?.questions?.length)
     && planningStage === 'awaiting-answers'
@@ -6563,12 +6585,13 @@ export default function NewConfigModal({
   }
 
   // AI conversation view (post-plan confirmation for ai-guided mode)
-  // PLACEHOLDER_RENDER_FORM
 
   if (formStep === 4 && previewSession) {
     const specCoding = previewSession.specCoding;
     const draftSummary = previewSession.workflowDraftSummary;
-    const draftMode = draftSummary?.mode || previewSession.generatedConfigSummary?.mode || 'phase-based';
+    const draftMode = getWorkflowDisplayMode(
+      previewSession.config?.workflow?.profile || draftSummary?.mode || previewSession.generatedConfigSummary?.mode,
+    );
     const draftNodes = draftSummary?.nodes || [];
     const artifactItems = [
       { key: 'requirements' as const, title: 'requirements.md', content: specCoding.artifacts?.requirements || '' },
@@ -6600,7 +6623,7 @@ export default function NewConfigModal({
         items: planTaskAgentMappings
           .filter((row) => row.agentNames.includes(agent))
           .map((row) => ({
-            nodeName: row.phaseName,
+            nodeName: row.nodeName,
             stepName: row.stepName,
             task: row.taskTitle,
             role: null,
@@ -6829,11 +6852,11 @@ export default function NewConfigModal({
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-sm font-medium">下一步将生成的 Workflow 草案</div>
                   <span className="text-[10px] rounded-full border px-2 py-0.5">
-                    {draftMode === 'state-machine' ? '状态机' : '阶段式'}
+                    {getWorkflowDisplayModeLabel(draftMode)}
                   </span>
                 </div>
                 <div className="text-xs leading-5 text-muted-foreground">
-                  确认当前计划后，系统会据此整理 workflow 步骤、阶段结构和 Agent 分配。
+                  确认当前计划后，系统会据此整理 workflow 步骤、节点结构和 Agent 分配。
                 </div>
                 {latestRevision ? (
                   <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground space-y-1">
@@ -6855,8 +6878,8 @@ export default function NewConfigModal({
                     <div>参考工作流：{previewSession.referenceWorkflow || '无'}</div>
                   </div>
                   <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
-                    <div>结构类型：{draftMode === 'state-machine' ? '状态机 workflow' : '阶段式 workflow'}</div>
-                    <div>阶段/状态数：{draftNodes.length}</div>
+                    <div>结构类型：{getWorkflowDisplayModeLabel(draftMode)}</div>
+                    <div>节点数：{draftNodes.length}</div>
                     <div>Supervisor：{previewSession.config?.workflow?.supervisor?.agent || recommendedSupervisorAgent}</div>
                   </div>
                 </div>
@@ -6870,7 +6893,7 @@ export default function NewConfigModal({
                     <span
                       key={item.name}
                       className={`rounded-full border bg-background px-2 py-1 text-[10px] ${
-                        latestRevisionMeta.impactArea === '阶段拆分'
+                        latestRevisionMeta.impactArea === '状态结构'
                           ? 'border-amber-500/50 text-amber-700 dark:text-amber-300'
                           : 'text-muted-foreground'
                       }`}
@@ -6878,7 +6901,7 @@ export default function NewConfigModal({
                       {item.name} · {item.detail}
                     </span>
                   )) : (
-                    <div className="text-xs text-muted-foreground">当前草案尚未生成阶段/状态摘要。</div>
+                    <div className="text-xs text-muted-foreground">当前草案尚未生成节点摘要。</div>
                   )}
                   </div>
                 </div>
@@ -7151,13 +7174,13 @@ export default function NewConfigModal({
                   <div className="rounded-xl border p-4 space-y-3">
                     <div className="text-sm font-medium">任务与 Agent 对应</div>
                     <div className="text-xs text-muted-foreground">
-                      这里直接展示计划任务、阶段步骤与实际绑定 Agent 的对应关系，不再只看职责摘要。
+                      这里直接展示计划任务、节点步骤与实际绑定 Agent 的对应关系，不再只看职责摘要。
                     </div>
                     {planTaskAgentMappings.length > 0 ? (
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="w-[160px]">阶段</TableHead>
+                            <TableHead className="w-[160px]">节点</TableHead>
                             <TableHead className="w-[160px]">步骤 / Task</TableHead>
                             <TableHead>任务内容</TableHead>
                             <TableHead className="w-[220px]">绑定 Agent</TableHead>
@@ -7167,7 +7190,7 @@ export default function NewConfigModal({
                           {planTaskAgentMappings.map((row) => (
                             <TableRow key={row.id}>
                               <TableCell className="align-top">
-                                <div className="text-sm font-medium">{row.phaseName}</div>
+                                <div className="text-sm font-medium">{row.nodeName}</div>
                                 <div className="mt-1 text-[11px] text-muted-foreground">
                                   {row.source === 'task' ? '计划任务' : '执行步骤'}
                                 </div>
@@ -7294,14 +7317,14 @@ export default function NewConfigModal({
                         <Label className="text-xs text-muted-foreground">主要影响哪块 workflow 草案</Label>
                         <Select
                           value={revisionImpactArea}
-                          onValueChange={(value) => setRevisionImpactArea(value as 'phases' | 'agents' | 'checkpoints' | 'transitions')}
+                          onValueChange={(value) => setRevisionImpactArea(value as 'structure' | 'agents' | 'checkpoints' | 'transitions')}
                           disabled={isRevisingPlan}
                         >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="phases">阶段拆分</SelectItem>
+                            <SelectItem value="structure">状态结构</SelectItem>
                             <SelectItem value="agents">Agent 分工</SelectItem>
                             <SelectItem value="checkpoints">检查点设计</SelectItem>
                             <SelectItem value="transitions">状态流转</SelectItem>
@@ -7314,7 +7337,7 @@ export default function NewConfigModal({
                       onChange={(event) => setRevisionNotes(event.target.value)}
                       rows={8}
                       disabled={isRevisingPlan}
-                      placeholder="例如：阶段拆分过粗、需要加入人工检查点、希望沿用某个 Agent 分工..."
+                      placeholder="例如：节点拆分过粗、需要加入人工检查点、希望沿用某个 Agent 分工..."
                     />
                     <div className="rounded-md border bg-muted/20 p-3 text-[11px] leading-5 text-muted-foreground">
                       系统会把修订目标、影响区域和修订说明一起写入 revision，便于后续把这条修订和 workflow 草案变化对应起来。
@@ -7361,6 +7384,7 @@ export default function NewConfigModal({
         onInteractOutside={preventCreationDialogOutsideClose}
         className={creationDialogClassName}
       >
+        <ComboboxPortalProvider>
         <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
           <DialogTitle>新建工作流配置</DialogTitle>
           <div className="flex items-center gap-2">
@@ -7395,12 +7419,12 @@ export default function NewConfigModal({
             {creationSource === 'custom' ? (
               <>
                 <form id="new-config-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="flex-1 overflow-auto px-6 space-y-6">
-          {useSpecPlanningFlow && !hideAiGuided ? (
+          {useSpecPlanningFlow ? (
             <>
               <CreationStageStepper currentStep={1} />
 
               <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
-                当前处于第 1 步：先收敛需求与约束，并按 `skills/aceharness-spec-coding` 生成正式计划制品。确认计划后，系统才会进入 workflow 草案阶段。
+                当前处于第 1 步：先收敛需求与约束，并按 `skills/aceharness-spec-coding` 生成正式计划制品。确认计划后，系统才会进入 workflow 草案整理。
               </div>
             </>
           ) : workflowMode === 'ai-guided' ? (
@@ -7433,7 +7457,6 @@ export default function NewConfigModal({
                   value={workflowMode}
                   onChange={setWorkflowMode}
                   showDetails={true}
-                  hideAiGuided={hideAiGuided}
                 />
               </div>
 
@@ -7442,7 +7465,43 @@ export default function NewConfigModal({
           )}
 
           {/* AI 引导模式的需求输入 */}
-          {workflowMode === 'ai-guided' && (
+          {isLightweight ? (
+            <section className="space-y-5 rounded-lg border bg-muted/20 p-4">
+              <div>
+                <h3 className="text-sm font-semibold">轻量工作流设置</h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{LIGHTWEIGHT_WORKFLOW_DESCRIPTION}</p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="lightweight-agent">执行 Agent <span className="text-destructive">*</span></Label>
+                <SingleCombobox
+                  value={lightweightValues.agent}
+                  onValueChange={(agent) => updateLightweightValues({ agent })}
+                  options={agentOptions}
+                  placeholder={agentsQuery.isLoading ? '加载 Agent 中...' : '选择执行 Agent'}
+                  emptyText="没有可用 Agent"
+                  triggerClassName={lightweightErrors.agent ? 'border-destructive' : ''}
+                  disabled={isDirectCreationPending}
+                />
+                {lightweightErrors.agent ? <p className="text-sm text-destructive">{lightweightErrors.agent}</p> : null}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="lightweight-task">完整目标 <span className="text-destructive">*</span></Label>
+                <Textarea
+                  id="lightweight-task"
+                  value={lightweightValues.task}
+                  onChange={(event) => updateLightweightValues({ task: event.target.value })}
+                  disabled={isDirectCreationPending}
+                  rows={5}
+                  className={lightweightErrors.task ? 'border-destructive' : ''}
+                  placeholder="描述要完成的任务、目标产物和验收条件..."
+                />
+                {lightweightErrors.task ? <p className="text-sm text-destructive">{lightweightErrors.task}</p> : null}
+              </div>
+
+            </section>
+          ) : workflowMode === 'ai-guided' && (
             <div
               ref={requirementsSectionRef}
               className={homepageCompact ? 'space-y-2' : 'space-y-4 bg-green-50 dark:bg-green-950/30 rounded-lg p-4 border border-green-200 dark:border-green-800'}
@@ -7465,7 +7524,7 @@ export default function NewConfigModal({
                   requirementsInputRef.current = element;
                 }}
                 id="requirements"
-                placeholder="例如：我想创建一个代码审查工作流，包含设计评审、代码审查、测试验证等阶段，需要支持发现问题时自动回退..."
+                placeholder="例如：我想创建一个代码审查工作流，包含设计评审、代码审查、测试验证等步骤，需要支持发现问题时自动回退..."
                 rows={5}
                 className="bg-background"
               />
@@ -7527,7 +7586,7 @@ export default function NewConfigModal({
             )}
           </div>
 
-          {workflowMode !== 'ai-guided' ? (
+          {workflowMode !== 'ai-guided' && !isLightweight ? (
             <div ref={requirementsSectionRef} className="space-y-2">
               <Label htmlFor="requirements">
                 需求描述 <span className="text-destructive">*</span>
@@ -7583,14 +7642,14 @@ export default function NewConfigModal({
 	                    {referenceWorkflowValue ? '已选择参考工作流' : '未选择参考工作流'}
 	                  </div>
 	                  <div>文件：{effectiveReferenceWorkflowValue}</div>
-	                  <div>模式：{referenceConfig.config?.workflow?.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
+	                    <div>模式：{getWorkflowDisplayModeLabel(referenceConfig.config)}</div>
 	                  <div>
 	                    说明：会尽量继承参考工作流的流程结构、关键节点和 Agent 安排，只更新当前需求与任务说明。
 	                  </div>
 	                </div>
               ) : null}
               <p className="text-xs text-muted-foreground">
-                只能选择同类型工作流；阶段式参考阶段式，状态机参考状态机。
+                参考工作流会沿用其状态、步骤和 Agent 安排，再按当前需求生成新的配置。
               </p>
               {recommendationsLoading ? (
                 <p className="text-xs text-muted-foreground">正在整理可用 Agent 编队...</p>
@@ -7604,7 +7663,7 @@ export default function NewConfigModal({
                   <div className="rounded-lg border bg-background/80 p-3 text-xs text-muted-foreground space-y-1">
                     <div className="font-medium text-foreground">历史工作流骨架</div>
                     <div>{effectiveCreationRecommendations.referenceWorkflow.name || effectiveCreationRecommendations.referenceWorkflow.filename}</div>
-                    <div>模式：{effectiveCreationRecommendations.referenceWorkflow.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
+                    <div>模式：{getWorkflowDisplayModeLabel(effectiveCreationRecommendations.referenceWorkflow.mode)}</div>
 	                    {effectiveCreationRecommendations.referenceWorkflow.supervisorAgent ? (
 	                      <div>指挥官：{effectiveCreationRecommendations.referenceWorkflow.supervisorAgent}</div>
 	                    ) : null}
@@ -7761,15 +7820,13 @@ export default function NewConfigModal({
                   <Button
                     type="button"
                     onClick={handleNextStep}
-                    disabled={isSubmitting || isGeneratingPlan}
+                    disabled={isGeneratingPlan || isDirectCreationPending}
                   >
                     {workflowMode === 'ai-guided'
                       ? specPlanningEnabled
                         ? (isGeneratingPlan ? '生成计划中...' : '下一步')
                         : (isGeneratingPlan ? '生成草案中...' : '直接进入编排')
-                      : workflowMode === 'state-machine' && !specPlanningEnabled
-                        ? (isSubmitting ? '创建中...' : '创建')
-                        : (isSubmitting ? '创建中...' : '创建')}
+                      : (isDirectCreationPending ? '创建中...' : '创建')}
                   </Button>
                 </div>
               </>
@@ -7784,6 +7841,7 @@ export default function NewConfigModal({
             ) : null}
           </TabsContent>
         </Tabs>
+        </ComboboxPortalProvider>
       </DialogContent>
     </Dialog>
   );

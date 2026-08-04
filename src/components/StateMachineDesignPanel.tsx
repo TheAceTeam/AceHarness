@@ -32,10 +32,15 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw } from 'lucide-react';
 import EditNodeModal from './EditNodeModal';
+import LightweightWorkflowDesignPanel, {
+  hasLightweightWorkflowTopology,
+  type LightweightWorkflowDesignMetadata,
+} from './LightweightWorkflowDesignPanel';
 import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
 import { useWorkflowConfigQuery } from '@/client/query/configs';
 import { useSaveConfigMutation } from '@/client/query/workflow-mutations';
 import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
+import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
@@ -46,6 +51,7 @@ interface StateMachineDesignPanelProps {
   onOptimizeState?: (stateIndex: number) => void;
   onOptimizeStep?: (stateIndex: number, stepIndex: number) => void;
   onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
+  lightweightMetadata?: LightweightWorkflowDesignMetadata;
 }
 
 type SubworkflowDrilldownState = {
@@ -231,6 +237,65 @@ const withoutParallelGroup = (step: WorkflowStep): WorkflowStep => {
     channelIds: undefined,
   };
 };
+
+export function buildWorkflowStepFromEditData(data: any, existingStep?: WorkflowStep | null): WorkflowStep {
+  const normalizedConstraints = Array.isArray(data.constraints)
+    ? data.constraints.filter((c: string) => typeof c === 'string' && c.trim())
+    : typeof data.constraints === 'string'
+      ? data.constraints.split('\n').filter((c: string) => c.trim())
+      : undefined;
+  const normalizedSkills: string[] | undefined = Array.isArray(data.skills)
+    ? Array.from(new Set<string>(
+        data.skills
+          .filter((skill: unknown): skill is string => typeof skill === 'string')
+          .map((skill: string) => skill.trim())
+          .filter(Boolean),
+      ))
+    : undefined;
+  const newStep: WorkflowStep = data.type === 'subworkflow'
+    ? {
+        ...(existingStep || {}),
+        name: data.name,
+        type: 'subworkflow',
+        workflow: data.workflow,
+        subworkflow: data.subworkflow,
+        inputs: data.inputs,
+        role: data.role,
+        parallelGroup: data.parallelGroup,
+        concurrency: data.concurrency,
+        agentInstanceId: data.agentInstanceId,
+        channelIds: data.channelIds,
+        specTaskBinding: data.specTaskBinding,
+      } as WorkflowStep
+    : ({
+        name: data.name,
+        agent: data.agent,
+        task: data.task,
+        role: data.role,
+        constraints: normalizedConstraints,
+        enableReviewPanel: data.enableReviewPanel,
+        parallelGroup: data.parallelGroup,
+        concurrency: data.concurrency,
+        agentInstanceId: data.agentInstanceId,
+        channelIds: data.channelIds,
+        specTaskBinding: data.specTaskBinding,
+        ...(normalizedSkills !== undefined ? { skills: normalizedSkills } : {}),
+      } as WorkflowStep);
+  if (data.type === 'subworkflow') {
+    delete (newStep as any).agent;
+    delete (newStep as any).task;
+    delete (newStep as any).constraints;
+    delete (newStep as any).enableReviewPanel;
+    delete (newStep as any).preCommands;
+    delete (newStep as any).skills;
+  }
+  if (data.type !== 'subworkflow' && Array.isArray(data.preCommands) && data.preCommands.length > 0) {
+    newStep.preCommands = data.preCommands;
+  } else if (data.type !== 'subworkflow' && Array.isArray(existingStep?.preCommands) && existingStep.preCommands.length > 0) {
+    newStep.preCommands = existingStep.preCommands;
+  }
+  return newStep;
+}
 
 const buildStepGroups = (steps: WorkflowStep[]): StepGroup[] => {
   const groups: StepGroup[] = [];
@@ -967,7 +1032,13 @@ export default function StateMachineDesignPanel({
   onOptimizeState,
   onOptimizeStep,
   onAgentSkillsChange,
+  lightweightMetadata,
 }: StateMachineDesignPanelProps) {
+  const isLightweight = Boolean(lightweightMetadata) || hasLightweightWorkflowTopology(states);
+  const workflowStepAgents = useMemo(
+    () => availableAgents.filter(isWorkflowStepSelectableAgent),
+    [availableAgents],
+  );
   const [selectedStateName, setSelectedStateName] = useState<string | null>(
     states.length > 0 ? states[0].name : null
   );
@@ -1086,51 +1157,7 @@ export default function StateMachineDesignPanel({
   const handleSaveStep = (data: any) => {
     if (!selectedState || editingStep === null) return;
     const existingStep = !editingStep.isNew ? selectedState.steps[editingStep.index] : null;
-    const normalizedConstraints = Array.isArray(data.constraints)
-      ? data.constraints.filter((c: string) => typeof c === 'string' && c.trim())
-      : typeof data.constraints === 'string'
-        ? data.constraints.split('\n').filter((c: string) => c.trim())
-        : undefined;
-    const newStep: WorkflowStep = data.type === 'subworkflow'
-      ? {
-          ...(existingStep || {}),
-          name: data.name,
-          type: 'subworkflow',
-          workflow: data.workflow,
-          subworkflow: data.subworkflow,
-          inputs: data.inputs,
-          role: data.role,
-          parallelGroup: data.parallelGroup,
-          concurrency: data.concurrency,
-          agentInstanceId: data.agentInstanceId,
-          channelIds: data.channelIds,
-          specTaskBinding: data.specTaskBinding,
-        } as WorkflowStep
-      : {
-          name: data.name,
-          agent: data.agent,
-          task: data.task,
-          role: data.role,
-          constraints: normalizedConstraints,
-          enableReviewPanel: data.enableReviewPanel,
-          parallelGroup: data.parallelGroup,
-          concurrency: data.concurrency,
-          agentInstanceId: data.agentInstanceId,
-          channelIds: data.channelIds,
-          specTaskBinding: data.specTaskBinding,
-        };
-    if (data.type === 'subworkflow') {
-      delete (newStep as any).agent;
-      delete (newStep as any).task;
-      delete (newStep as any).constraints;
-      delete (newStep as any).enableReviewPanel;
-      delete (newStep as any).preCommands;
-    }
-    if (data.type !== 'subworkflow' && Array.isArray(data.preCommands) && data.preCommands.length > 0) {
-      newStep.preCommands = data.preCommands;
-    } else if (data.type !== 'subworkflow' && Array.isArray(existingStep?.preCommands) && existingStep.preCommands.length > 0) {
-      newStep.preCommands = existingStep.preCommands;
-    }
+    const newStep = buildWorkflowStepFromEditData(data, existingStep);
     const steps = [...selectedState.steps];
     if (editingStep.isNew) {
       steps.push(newStep);
@@ -1336,8 +1363,25 @@ export default function StateMachineDesignPanel({
     }
   }, [saveSubworkflowConfigMutation, subworkflowDrilldown?.config, subworkflowDrilldown?.configFile]);
 
+  if (isLightweight) {
+    return (
+      <LightweightWorkflowDesignPanel
+        states={states}
+        onStatesChange={onStatesChange}
+        availableAgents={availableAgents}
+        metadata={lightweightMetadata}
+      />
+    );
+  }
+
   if (subworkflowDrilldown) {
     const workflow = subworkflowDrilldown.config?.workflow || {};
+    const childLightweightMetadata = workflow.profile === 'lightweight'
+      ? {
+          workflowName: workflow.name,
+          workspace: subworkflowDrilldown.config?.context?.projectRoot,
+        }
+      : undefined;
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
@@ -1357,7 +1401,7 @@ export default function StateMachineDesignPanel({
                 {workflow.name || subworkflowDrilldown.configFile}
               </div>
               <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                子工作流 · {subworkflowDrilldown.configFile}
+                子工作流 · {childLightweightMetadata ? '轻量工作流 · ' : ''}{subworkflowDrilldown.configFile}
               </div>
             </div>
           </div>
@@ -1407,6 +1451,7 @@ export default function StateMachineDesignPanel({
               availableSkills={availableSkills}
               specTasks={specTasks}
               onAgentSkillsChange={onAgentSkillsChange}
+              lightweightMetadata={childLightweightMetadata}
             />
           ) : (
             <div className="flex h-full items-center justify-center p-8">
@@ -1775,7 +1820,7 @@ export default function StateMachineDesignPanel({
           type="step"
           data={editingStep.isNew ? {
             name: '',
-            agent: availableAgents[0]?.name ?? '',
+            agent: workflowStepAgents[0]?.name ?? '',
             task: '',
             role: 'defender',
             constraints: '',
@@ -1785,12 +1830,11 @@ export default function StateMachineDesignPanel({
             channelIds: [],
             specTaskBinding: undefined,
           } : editingStepData}
-          roles={availableAgents}
+          roles={workflowStepAgents}
           availableSkills={availableSkills}
           specTasks={specTasks}
           initialSection={editingStep.focusSpec ? 'spec' : undefined}
           isNew={editingStep.isNew}
-          existingPhases={[]}
           existingSteps={selectedState?.steps ?? []}
           onClose={() => setEditingStep(null)}
           onSave={handleSaveStep}

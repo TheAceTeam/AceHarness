@@ -8,6 +8,7 @@ import {
 import { normalizeAgentAvatar } from '@/lib/agent/personas';
 import { getWorkspaceAgentsDir } from '@/lib/core/app-paths';
 import { getSubworkflowConfigFile, isSubworkflowStep, normalizeWorkflowConfigRef } from '@/lib/workflow/subworkflow-config';
+import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
 
 export interface ValidationIssue {
   path: string[];
@@ -70,10 +71,6 @@ function pushIssue(
   issues.push({ severity, path, message, code });
 }
 
-function normalizeWorkflowMode(input: any): 'phase-based' | 'state-machine' {
-  return input?.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based';
-}
-
 function hasAdvancedTransitionFilters(transition: any): boolean {
   return Boolean(
     transition?.condition?.issueTypes?.length
@@ -88,9 +85,10 @@ function getAvailableAgents(): string[] {
   try {
     const agentsDir = getWorkspaceAgentsDir();
     if (!existsSync(agentsDir)) return [];
-    return readdirSync(agentsDir)
+    const names = readdirSync(agentsDir)
       .filter((entry) => entry.endsWith('.yaml') || entry.endsWith('.yml'))
       .map((entry) => entry.replace(/\.(yaml|yml)$/i, ''));
+    return Array.from(new Set([...names, DEFAULT_SUPERVISOR_NAME]));
   } catch {
     return [];
   }
@@ -110,6 +108,10 @@ export function buildDefaultAgentDraft(input?: Partial<any>) {
     description: typeof input?.description === 'string' ? input.description : '示例 Agent',
     keywords: Array.isArray(input?.keywords) ? input.keywords : ['示例'],
     tags: Array.isArray(input?.tags) ? input.tags : ['AI创建'],
+    expertPacks: Array.isArray(input?.expertPacks) ? input.expertPacks : [],
+    catalogVisibility: typeof input?.catalogVisibility === 'string' ? input.catalogVisibility : 'default',
+    baseCapability: typeof input?.baseCapability === 'string' ? input.baseCapability : undefined,
+    taskModes: Array.isArray(input?.taskModes) ? input.taskModes : [],
     skills: Array.isArray(input?.skills) ? input.skills : [],
   };
 }
@@ -129,12 +131,17 @@ function preprocessAgentDraftInput(input: any) {
         ? 'supervisor'
         : 'normal';
   const seed = typeof source.name === 'string' && source.name.trim() ? source.name.trim() : 'agent';
+  const isDefaultSupervisor = seed === DEFAULT_SUPERVISOR_NAME;
+  const normalizedTeam = isDefaultSupervisor ? 'black-gold' : team;
+  const normalizedRoleType = isDefaultSupervisor ? 'supervisor' : roleType;
 
   return {
     ...source,
-    team,
-    roleType,
-    avatar: normalizeAgentAvatar(source.avatar, seed, { team, roleType }),
+    name: seed,
+    team: normalizedTeam,
+    roleType: normalizedRoleType,
+    catalogVisibility: isDefaultSupervisor ? 'system' : source.catalogVisibility,
+    avatar: normalizeAgentAvatar(source.avatar, seed, { team: normalizedTeam, roleType: normalizedRoleType }),
   };
 }
 
@@ -157,6 +164,14 @@ export function validateAgentDraft(input: any): ValidationResult<any> {
 
   if (normalized.team === 'black-gold' && normalized.roleType !== 'supervisor') {
     pushIssue(issues, 'error', ['roleType'], 'black-gold 阵营必须使用 supervisor 角色类型');
+  }
+
+  if (normalized.roleType === 'supervisor' && normalized.name !== DEFAULT_SUPERVISOR_NAME) {
+    pushIssue(issues, 'error', ['roleType'], '系统只保留 default-supervisor 作为唯一 Supervisor');
+  }
+
+  if (normalized.name === DEFAULT_SUPERVISOR_NAME && normalized.catalogVisibility !== 'system') {
+    pushIssue(issues, 'error', ['catalogVisibility'], 'default-supervisor 必须作为系统指挥官保留');
   }
 
   if (normalized.activeEngine && !normalized.engineModels[normalized.activeEngine]) {
@@ -186,10 +201,10 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
 
   const normalized = parsed.data;
   const issues: ValidationIssue[] = [];
-  const mode = normalizeWorkflowMode(normalized);
   const validationMode = options.mode || 'runtime';
   const shouldCheckRuntimeEnvironment = validationMode === 'runtime';
   const workflowAny = normalized.workflow as any;
+  const isLightweightWorkflow = workflowAny.profile === 'lightweight';
   const projectRoot = typeof normalized?.context?.projectRoot === 'string'
     ? normalized.context.projectRoot.trim()
     : '';
@@ -224,139 +239,133 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
 
   const availableAgents = shouldCheckRuntimeEnvironment ? new Set(getAvailableAgents()) : null;
   const referencedAgents = new Set<string>();
-  if (mode === 'state-machine') {
-    const requiredVerdicts = ['pass', 'conditional_pass', 'fail'] as const;
-    const stateNames = new Set<string>();
-    for (const [stateIndex, state] of (workflowAny.states || []).entries()) {
-      if (stateNames.has(state.name)) {
-        pushIssue(issues, 'error', ['workflow', 'states'], `状态名称重复: ${state.name}`);
-      }
-      stateNames.add(state.name);
-      for (const [stepIndex, step] of (state.steps || []).entries()) {
-        if (isSubworkflowStep(step)) {
-          const childConfigFile = getSubworkflowConfigFile(step);
-          try {
-            normalizeWorkflowConfigRef(childConfigFile);
-          } catch (error: any) {
-            pushIssue(
-              issues,
-              'error',
-              ['workflow', 'states', String(stateIndex), 'steps', String(stepIndex), 'workflow'],
-              error?.message || '子工作流配置路径非法'
-            );
-          }
-          continue;
+  const requiredVerdicts = ['pass', 'conditional_pass', 'fail'] as const;
+  const stateNames = new Set<string>();
+  for (const [stateIndex, state] of (workflowAny.states || []).entries()) {
+    if (stateNames.has(state.name)) {
+      pushIssue(issues, 'error', ['workflow', 'states'], `状态名称重复: ${state.name}`);
+    }
+    stateNames.add(state.name);
+    if (!state.isFinal && (!Array.isArray(state.steps) || state.steps.length === 0)) {
+      pushIssue(
+        issues,
+        'error',
+        ['workflow', 'states', String(stateIndex), 'steps'],
+        `非终止状态 "${state.name || `状态 ${stateIndex + 1}`}" 至少需要一个步骤`
+      );
+    }
+    for (const [stepIndex, step] of (state.steps || []).entries()) {
+      if (isSubworkflowStep(step)) {
+        const childConfigFile = getSubworkflowConfigFile(step);
+        try {
+          normalizeWorkflowConfigRef(childConfigFile);
+        } catch (error: any) {
+          pushIssue(
+            issues,
+            'error',
+            ['workflow', 'states', String(stateIndex), 'steps', String(stepIndex), 'workflow'],
+            error?.message || '子工作流配置路径非法'
+          );
         }
-        referencedAgents.add(step.agent);
-        stepAgentRefs.push({
-          agent: step.agent,
-          path: ['workflow', 'states', String(stateIndex), 'steps', String(stepIndex), 'agent'],
-          nodeName: state.name || `状态 ${stateIndex + 1}`,
-          stepName: step.name || `步骤 ${stepIndex + 1}`,
-        });
-      }
-      for (const transition of state.transitions || []) {
-        if (!stateNames.has(transition.to) && !(workflowAny.states || []).some((item: any) => item.name === transition.to)) {
-          pushIssue(issues, 'error', ['workflow', 'states', state.name, 'transitions'], `状态 "${state.name}" 的转移目标 "${transition.to}" 不存在。当前已定义的状态: [${[...stateNames].join(', ')}]。修复方法：将 to 改为已定义的状态名之一`);
-        }
-      }
-    }
-    const initialCount = (workflowAny.states || []).filter((state: any) => state.isInitial).length;
-    const finalCount = (workflowAny.states || []).filter((state: any) => state.isFinal).length;
-    if (initialCount !== 1) {
-      pushIssue(issues, 'error', ['workflow', 'states'], `状态机必须且只能有一个初始状态（isInitial: true），当前有 ${initialCount} 个。修复方法：确保有且仅有一个状态设置 isInitial: true`);
-    }
-    if (finalCount < 1) {
-      pushIssue(issues, 'error', ['workflow', 'states'], '状态机必须至少有一个终止状态（isFinal: true）。修复方法：添加一个 {"name": "完成", "isFinal": true, "steps": [], "transitions": []} 状态');
-    }
-    for (const state of workflowAny.states || []) {
-      if (state.isFinal && Array.isArray(state.transitions) && state.transitions.length > 0) {
-        pushIssue(issues, 'warning', ['workflow', 'states', state.name, 'transitions'], `终止状态 "${state.name}" 通常不应再配置转移规则`);
         continue;
       }
-      if (state.isFinal) {
-        continue;
+      referencedAgents.add(step.agent);
+      stepAgentRefs.push({
+        agent: step.agent,
+        path: ['workflow', 'states', String(stateIndex), 'steps', String(stepIndex), 'agent'],
+        nodeName: state.name || `状态 ${stateIndex + 1}`,
+        stepName: step.name || `步骤 ${stepIndex + 1}`,
+      });
+    }
+    for (const transition of state.transitions || []) {
+      if (!stateNames.has(transition.to) && !(workflowAny.states || []).some((item: any) => item.name === transition.to)) {
+        pushIssue(issues, 'error', ['workflow', 'states', state.name, 'transitions'], `状态 "${state.name}" 的转移目标 "${transition.to}" 不存在。当前已定义的状态: [${[...stateNames].join(', ')}]。修复方法：将 to 改为已定义的状态名之一`);
       }
+    }
+  }
+  const initialCount = (workflowAny.states || []).filter((state: any) => state.isInitial).length;
+  const finalCount = (workflowAny.states || []).filter((state: any) => state.isFinal).length;
+  if (initialCount !== 1) {
+    pushIssue(issues, 'error', ['workflow', 'states'], `状态机必须且只能有一个初始状态（isInitial: true），当前有 ${initialCount} 个。修复方法：确保有且仅有一个状态设置 isInitial: true`);
+  }
+  if (finalCount < 1) {
+    pushIssue(issues, 'error', ['workflow', 'states'], '状态机必须至少有一个终止状态（isFinal: true）。修复方法：添加一个 {"name": "完成", "isFinal": true, "steps": [], "transitions": []} 状态');
+  }
+  for (const state of workflowAny.states || []) {
+    if (state.isFinal && Array.isArray(state.transitions) && state.transitions.length > 0) {
+      pushIssue(issues, 'warning', ['workflow', 'states', state.name, 'transitions'], `终止状态 "${state.name}" 通常不应再配置转移规则`);
+      continue;
+    }
+    if (state.isFinal) {
+      continue;
+    }
 
-      const transitions = Array.isArray(state.transitions) ? state.transitions : [];
-      const verdictTransitions = transitions.filter((transition: any) => (
-        typeof transition?.condition?.verdict === 'string'
-        && requiredVerdicts.includes(transition.condition.verdict)
-      ));
-      const nonVerdictTransitions = transitions.filter((transition: any) => !requiredVerdicts.includes(transition?.condition?.verdict));
+    const transitions = Array.isArray(state.transitions) ? state.transitions : [];
+    const verdictTransitions = transitions.filter((transition: any) => (
+      typeof transition?.condition?.verdict === 'string'
+      && requiredVerdicts.includes(transition.condition.verdict)
+    ));
+    const nonVerdictTransitions = transitions.filter((transition: any) => !requiredVerdicts.includes(transition?.condition?.verdict));
 
-      if (nonVerdictTransitions.length > 0) {
+    if (nonVerdictTransitions.length > 0) {
+      pushIssue(
+        issues,
+        'error',
+        ['workflow', 'states', state.name, 'transitions'],
+        `状态 "${state.name}" 现在要求使用固定三路 verdict 转移，不再支持未指定 verdict 的额外转移规则`
+      );
+    }
+
+    for (const verdict of requiredVerdicts) {
+      const matches = verdictTransitions.filter((transition: any) => transition.condition.verdict === verdict);
+      if (matches.length === 0) {
         pushIssue(
           issues,
           'error',
           ['workflow', 'states', state.name, 'transitions'],
-          `状态 "${state.name}" 现在要求使用固定三路 verdict 转移，不再支持未指定 verdict 的额外转移规则`
+          `状态 "${state.name}" 缺少 ${verdict} 转移路径。每个非终止状态必须有 pass、conditional_pass、fail 三条转移。修复方法：添加 {"to": "<目标状态名>", "condition": {"verdict": "${verdict}"}}`
         );
+        continue;
       }
 
-      for (const verdict of requiredVerdicts) {
-        const matches = verdictTransitions.filter((transition: any) => transition.condition.verdict === verdict);
-        if (matches.length === 0) {
-          pushIssue(
-            issues,
-            'error',
-            ['workflow', 'states', state.name, 'transitions'],
-            `状态 "${state.name}" 缺少 ${verdict} 转移路径。每个非终止状态必须有 pass、conditional_pass、fail 三条转移。修复方法：添加 {"to": "<目标状态名>", "condition": {"verdict": "${verdict}"}}`
-          );
-          continue;
-        }
-
-        const fallbackMatches = matches.filter((transition: any) => !hasAdvancedTransitionFilters(transition));
-        if (fallbackMatches.length === 0) {
-          pushIssue(
-            issues,
-            'error',
-            ['workflow', 'states', state.name, 'transitions'],
-            `状态 "${state.name}" 的 ${verdict} 缺少兜底转移。每个 verdict 必须保留 1 条无过滤条件的基础路径。修复方法：补充一条仅包含 {"verdict": "${verdict}"} 的转移`
-          );
-        } else if (fallbackMatches.length > 1) {
-          pushIssue(
-            issues,
-            'error',
-            ['workflow', 'states', state.name, 'transitions'],
-            `状态 "${state.name}" 的 ${verdict} 存在多条兜底转移（共 ${fallbackMatches.length} 条）。每个 verdict 只能保留 1 条无过滤条件的基础路径，其余规则需要补充过滤条件或删除`
-          );
-        }
-      }
-    }
-  } else {
-    for (const [phaseIndex, phase] of (workflowAny.phases || []).entries()) {
-      for (const [stepIndex, step] of (phase.steps || []).entries()) {
-        if (isSubworkflowStep(step)) {
-          pushIssue(
-            issues,
-            'error',
-            ['workflow', 'phases', String(phaseIndex), 'steps', String(stepIndex), 'type'],
-            '子工作流步骤仅支持状态机模式，phase-based 工作流不能嵌入子工作流'
-          );
-          continue;
-        }
-        referencedAgents.add(step.agent);
-        stepAgentRefs.push({
-          agent: step.agent,
-          path: ['workflow', 'phases', String(phaseIndex), 'steps', String(stepIndex), 'agent'],
-          nodeName: phase.name || `阶段 ${phaseIndex + 1}`,
-          stepName: step.name || `步骤 ${stepIndex + 1}`,
-        });
+      const fallbackMatches = matches.filter((transition: any) => !hasAdvancedTransitionFilters(transition));
+      if (fallbackMatches.length === 0) {
+        pushIssue(
+          issues,
+          'error',
+          ['workflow', 'states', state.name, 'transitions'],
+          `状态 "${state.name}" 的 ${verdict} 缺少兜底转移。每个 verdict 必须保留 1 条无过滤条件的基础路径。修复方法：补充一条仅包含 {"verdict": "${verdict}"} 的转移`
+        );
+      } else if (fallbackMatches.length > 1) {
+        pushIssue(
+          issues,
+          'error',
+          ['workflow', 'states', state.name, 'transitions'],
+          `状态 "${state.name}" 的 ${verdict} 存在多条兜底转移（共 ${fallbackMatches.length} 条）。每个 verdict 只能保留 1 条无过滤条件的基础路径，其余规则需要补充过滤条件或删除`
+        );
       }
     }
   }
 
   const supervisorAgent = normalized.workflow.supervisor?.agent?.trim();
-  const effectiveSupervisorAgent = supervisorAgent || 'default-supervisor';
-  if (!supervisorAgent) {
+  const effectiveSupervisorAgent = isLightweightWorkflow
+    ? undefined
+    : (supervisorAgent || DEFAULT_SUPERVISOR_NAME);
+  if (isLightweightWorkflow) {
+    if (input?.workflow?.supervisor) {
+      pushIssue(issues, 'error', ['workflow', 'supervisor'], '轻量工作流不支持 Supervisor 配置');
+    }
+    // The schema supplies defaults for ordinary state-machine workflows. Do
+    // not let that default leak into the normalized lightweight config.
+    delete workflowAny.supervisor;
+  } else if (!supervisorAgent) {
     pushIssue(issues, 'warning', ['workflow', 'supervisor', 'agent'], '未显式指定 supervisor，将回退到 default-supervisor');
   } else if (availableAgents && availableAgents.size > 0 && !availableAgents.has(supervisorAgent)) {
     pushIssue(issues, 'error', ['workflow', 'supervisor', 'agent'], `supervisor "${supervisorAgent}" 当前未在 agents 目录中找到`);
   }
 
   for (const stepRef of stepAgentRefs) {
-    if (stepRef.agent === effectiveSupervisorAgent) {
+    if (effectiveSupervisorAgent && stepRef.agent === effectiveSupervisorAgent) {
       pushIssue(
         issues,
         'error',

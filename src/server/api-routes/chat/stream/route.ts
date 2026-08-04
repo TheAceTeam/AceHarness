@@ -32,6 +32,7 @@ import {
 } from '@/lib/chat/request-options';
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
+import { formatAceRuntimeToolEvent } from '@/lib/chat/ace-process-formatters';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
 import { isCreationAssistantSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
@@ -41,6 +42,7 @@ import {
   prepareHomepageChatMemoryV2,
 } from '@/lib/memory-v2-cutover/homepage-chat';
 import { AiMemoryV2EngineAdapter } from '@/lib/agent/ai-memory-engine-adapter';
+import { chatModelRouteError, resolveActiveChatModelRoute } from '@/lib/chat/model-route-validation';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 1200;
@@ -271,6 +273,11 @@ export async function POST(request: Request) {
       ? workingDirectory.trim()
       : getWorkspaceRoot();
 
+    const configuredEngine = await resolveRequestedChatRuntimeEngineType(perChatEngine);
+    if (useModel && !resolveActiveChatModelRoute(configuredEngine, useModel)) {
+      return jsonError(chatModelRouteError(configuredEngine, useModel), 422);
+    }
+
     const isResume = !!sessionId;
     const {
       systemPrompt,
@@ -295,7 +302,6 @@ export async function POST(request: Request) {
     if (isResume) {
       validRuntimeSessionId = sessionId;
     }
-    const configuredEngine = await resolveRequestedChatRuntimeEngineType(perChatEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, configuredEngine);
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
     if (!validRuntimeSessionId && streamRecoveryKey) {
@@ -394,7 +400,7 @@ export async function POST(request: Request) {
       }
 
       const onEngineStream = (evt: any) => {
-        if ((evt?.type === 'text' || evt?.type === 'tool') && evt.content) {
+        if (evt?.type === 'text' && evt.content) {
           appendEngineStreamContent(chatId, evt.content);
           const stateAfterAppend = getEngineStream(chatId);
           writeChatStreamDebugTrace({
@@ -439,6 +445,34 @@ export async function POST(request: Request) {
             saveLiveSessionSnapshot(nextLiveSession);
           }
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
+        } else if (evt?.type === 'tool' && evt.tool) {
+          const toolContent = formatAceRuntimeToolEvent(evt.tool);
+          if (!toolContent) return;
+
+          appendEngineStreamContent(chatId, toolContent);
+          processManager.appendStreamContent(chatId, toolContent);
+          if (baseLiveSession && liveAssistantMessageId) {
+            const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
+              if (!session) return session;
+              const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
+              if (!currentAssistant) return session;
+              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), toolContent);
+              const visibleText = normalizeAssistantDisplay(nextRawContent, true).visibleText || parseActions(nextRawContent).text;
+              return {
+                ...session,
+                updatedAt: Date.now(),
+                messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
+                  ...message,
+                  content: visibleText,
+                  rawContent: nextRawContent,
+                  engine: configuredEngine || message.engine,
+                  model: useModel || message.model,
+                })),
+              };
+            });
+            saveLiveSessionSnapshot(nextLiveSession);
+          }
+          engineStreamEvents.emit(chatId, { type: 'delta', content: toolContent });
         } else if (evt?.type === 'session' && evt.content) {
           setEngineStreamSessionId(chatId, evt.content);
           if (proc) proc.sessionId = evt.content;
@@ -553,7 +587,9 @@ export async function POST(request: Request) {
         setEngineStreamSessionId(chatId, resolvedRuntimeSessionId || undefined);
         if (proc) proc.sessionId = resolvedRuntimeSessionId || undefined;
         const state = getEngineStream(chatId);
-        const output = result.output || state?.streamContent || '';
+        const streamedContent = String(state?.streamContent || '');
+        const output = buildFinalRawContent(streamedContent, '', String(result.output || ''))
+          || String(result.output || streamedContent || '');
 
         // Update processManager state
         if (proc) {

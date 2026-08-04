@@ -210,19 +210,23 @@ async function readConfigsSummary(userId: string, role: 'admin' | 'user') {
         try {
           const content = await readFile(resolve(CONFIGS_DIR, entry.name), 'utf-8');
           const config = parse(content);
+          if (config?.workflow?.mode !== 'state-machine' || !Array.isArray(config?.workflow?.states)) {
+            return null;
+          }
           const name = config?.workflow?.name || entry.name;
           configNameMap[entry.name] = name;
-          const mode = config?.workflow?.mode || 'phase-based';
-          const items = mode === 'state-machine' ? config?.workflow?.states : config?.workflow?.phases;
           return {
-            filename: entry.name, name,
-            description: config?.workflow?.description || '', mode,
-            phaseCount: items?.length || 0,
-            stepCount: items?.reduce((s: number, p: any) => s + (p.steps?.length || 0), 0) || 0,
+            filename: entry.name,
+            name,
+            description: config?.workflow?.description || '',
+            mode: 'state-machine' as const,
+            kind: config?.workflow?.profile === 'lightweight' ? 'lightweight' : 'state-machine',
+            stateCount: config.workflow.states.length,
+            stepCount: config.workflow.states.reduce((sum: number, state: any) => sum + (state.steps?.length || 0), 0),
           };
         } catch {
           configNameMap[entry.name] = entry.name;
-          return { filename: entry.name, name: entry.name, description: '(解析失败)', mode: 'phase-based', phaseCount: 0, stepCount: 0 };
+          return null;
         }
       })
     );

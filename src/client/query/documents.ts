@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { runsApi } from '@/lib/core/api';
+import { runsApi, type RunDocumentReference, type RunDocumentSource } from '@/lib/core/api';
 import { queryKeys } from './query-keys';
 import {
   getDocumentMetadataSnapshot,
@@ -12,6 +12,7 @@ export type RunDocumentsParams = {
   includeChildren?: boolean;
   scope?: 'root' | 'children' | 'child';
   childRunId?: string;
+  source?: RunDocumentSource;
   groupKey?: string;
   documentKind?: 'conclusion' | 'detail';
   summaryOnly?: boolean;
@@ -34,13 +35,12 @@ export function useRunDocumentsQuery(runId: string | null | undefined, params: R
 
 export function useDocumentContentQuery(
   runId: string | null | undefined,
-  filename: string | null | undefined,
-  sourceRunId?: string,
+  reference: RunDocumentReference | null | undefined,
 ) {
   return useQuery({
-    queryKey: queryKeys.documentContent(runId || '', filename || '', sourceRunId),
-    queryFn: () => runsApi.getDocumentContent(runId || '', filename || '', { sourceRunId }),
-    enabled: Boolean(runId && filename),
+    queryKey: queryKeys.documentContent(runId || '', reference),
+    queryFn: () => runsApi.getDocumentContent(runId || '', reference!),
+    enabled: Boolean(runId && reference?.file && reference.source),
     staleTime: 60_000,
   });
 }
@@ -48,21 +48,31 @@ export function useDocumentContentQuery(
 export function useRenameDocumentMutation(runId: string | null | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ file, newName }: { file: string; newName: string }) => runsApi.renameDocument(runId || '', file, newName),
-    onMutate: async ({ file, newName }) => {
+    mutationFn: (input: RunDocumentReference & { newName: string }) => runsApi.renameDocument(runId || '', input),
+    onMutate: async ({ source, sourceRunId, file, newName }) => {
       if (!runId) return { snapshot: [] };
       await queryClient.cancelQueries({ queryKey: ['runs', runId, 'documents'] });
       const snapshot = getDocumentMetadataSnapshot(runId);
-      const oldContent = queryClient.getQueryData(queryKeys.documentContent(runId, file));
-      optimisticRenameDocumentMetadata(runId, file, newName);
+      const reference = { source, sourceRunId, file };
+      const oldContent = queryClient.getQueryData(queryKeys.documentContent(runId, reference));
+      const newFile = optimisticRenameDocumentMetadata(runId, reference, newName);
+      const renamedReference = { ...reference, file: newFile };
       if (oldContent) {
-        queryClient.setQueryData(queryKeys.documentContent(runId, newName), oldContent);
-        queryClient.removeQueries({ queryKey: queryKeys.documentContent(runId, file), exact: true });
+        queryClient.setQueryData(queryKeys.documentContent(runId, renamedReference), {
+          ...(oldContent as Record<string, unknown>),
+          file: newFile,
+        });
+        queryClient.removeQueries({ queryKey: queryKeys.documentContent(runId, reference), exact: true });
       }
-      return { snapshot };
+      return { snapshot, oldContent, reference, renamedReference };
     },
     onError: (_error, _variables, context) => {
-      if (runId && context?.snapshot) restoreDocumentMetadataSnapshot(runId, context.snapshot);
+      if (!runId || !context?.snapshot) return;
+      restoreDocumentMetadataSnapshot(runId, context.snapshot);
+      if (context.oldContent && context.reference && context.renamedReference) {
+        queryClient.setQueryData(queryKeys.documentContent(runId, context.reference), context.oldContent);
+        queryClient.removeQueries({ queryKey: queryKeys.documentContent(runId, context.renamedReference), exact: true });
+      }
     },
     onSuccess: () => {
       if (runId) void queryClient.invalidateQueries({ queryKey: ['runs', runId, 'documents'] });
@@ -73,14 +83,14 @@ export function useRenameDocumentMutation(runId: string | null | undefined) {
 export function useDeleteDocumentsMutation(runId: string | null | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (files: string[]) => runsApi.deleteDocuments(runId || '', files),
+    mutationFn: (files: RunDocumentReference[]) => runsApi.deleteDocuments(runId || '', files),
     onMutate: async (files) => {
       if (!runId) return { snapshot: [] };
       await queryClient.cancelQueries({ queryKey: ['runs', runId, 'documents'] });
       const snapshot = getDocumentMetadataSnapshot(runId);
       optimisticDeleteDocumentMetadata(runId, files);
-      files.forEach((filename) => {
-        queryClient.removeQueries({ queryKey: queryKeys.documentContent(runId, filename), exact: true });
+      files.forEach((reference) => {
+        queryClient.removeQueries({ queryKey: queryKeys.documentContent(runId, reference), exact: true });
       });
       return { snapshot };
     },
@@ -90,8 +100,8 @@ export function useDeleteDocumentsMutation(runId: string | null | undefined) {
     onSuccess: (_data, files) => {
       if (!runId) return;
       void queryClient.invalidateQueries({ queryKey: ['runs', runId, 'documents'] });
-      files.forEach((filename) => {
-        void queryClient.invalidateQueries({ queryKey: ['runs', runId, 'documents', 'content', filename] });
+      files.forEach((reference) => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.documentContent(runId, reference), exact: true });
       });
     },
   });

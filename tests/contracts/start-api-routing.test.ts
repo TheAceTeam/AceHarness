@@ -140,8 +140,10 @@ describe('Start API routing contract', () => {
     const routeFiles = await readdir(resolve(projectRoot, 'src/routes'));
 
     expect(routeFiles).not.toContain('api-route-dispatcher.ts');
-    expect(workspaceStatic).toContain("const loadApiRouteModule = () => import('@/server/api-routes/workspace/static/[workspaceToken]/[...filePath]/route')");
-    expect(chatStream).toContain("const loadApiRouteModule = () => import('@/server/api-routes/chat/stream/route')");
+    expect(workspaceStatic).toContain("import { GET as apiRouteGET } from '@/server/api-routes/workspace/static/[workspaceToken]/[...filePath]/route'");
+    expect(chatStream).toContain("import { GET as apiRouteGET, POST as apiRoutePOST, DELETE as apiRouteDELETE } from '@/server/api-routes/chat/stream/route'");
+    expect(workspaceStatic).not.toContain('loadApiRouteModule');
+    expect(chatStream).not.toContain('loadApiRouteModule');
 
     for (const file of routeFiles.filter((entry) => entry.startsWith('api.') && entry.endsWith('.ts'))) {
       const source = await readFile(resolve(projectRoot, 'src/routes', file), 'utf8');

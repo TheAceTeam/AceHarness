@@ -88,6 +88,45 @@ describe('ModelSelect', () => {
     expect(toastSpy).toHaveBeenCalledWith('info', '模型已切换: GPT-5 (1x)');
   });
 
+  test('loads non-global model choices from /api/models without waiting for engine config', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/models')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          json: async () => ({
+            models: [
+              {
+                value: 'gpt-5',
+                label: 'GPT-5',
+                costMultiplier: 1,
+              },
+            ],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/engine')) {
+        return await new Promise<Response>(() => {});
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'Content-Type': 'application/json' }),
+        json: async () => ({}),
+      } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithQuery(<ModelSelect value="" onChange={vi.fn()} />);
+
+    const gpt5Button = await screen.findByRole('button', { name: 'GPT-5' });
+    expect(gpt5Button).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledWith('/api/models', expect.anything());
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/engine'))).toBe(false);
+  });
+
   test('does not keep showing opencode-only models for nga after nga is removed from the model engines', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -114,7 +153,7 @@ describe('ModelSelect', () => {
           }),
         } as Response;
       }
-      if (url.includes('/api/agents')) {
+      if (url.includes('/api/runtime-agents')) {
         return {
           ok: true,
           status: 200,
@@ -180,7 +219,7 @@ describe('ModelSelect', () => {
           }),
         } as Response;
       }
-      if (url.includes('/api/agents')) {
+      if (url.includes('/api/runtime-agents')) {
         return {
           ok: true,
           status: 200,

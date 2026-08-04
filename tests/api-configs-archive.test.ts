@@ -36,12 +36,16 @@ function workflowConfig(projectRoot: string, name: string) {
   return {
     workflow: {
       name,
-      phases: [
+      mode: 'state-machine',
+      states: [
         {
           name: 'Build',
+          isInitial: true,
+          isFinal: true,
           steps: [
             { name: 'Implement', agent: 'developer', task: 'Implement the requested change' },
           ],
+          transitions: [],
         },
       ],
     },
@@ -57,12 +61,16 @@ function portableWorkflowConfig(name: string) {
   return {
     workflow: {
       name,
-      phases: [
+      mode: 'state-machine',
+      states: [
         {
-          name: 'Portable Phase',
+          name: 'Portable State',
+          isInitial: true,
+          isFinal: true,
           steps: [
             { name: 'Portable Step', agent: 'external-agent', task: 'Run outside this workspace' },
           ],
+          transitions: [],
         },
       ],
       supervisor: { enabled: true, agent: 'external-supervisor' },
@@ -219,7 +227,7 @@ describe('/api/configs/archive', () => {
           createdBy: user.id,
           filename: 'spec-export.yaml',
           workflowName: 'Spec Export',
-          mode: 'phase-based',
+          mode: 'state-machine',
           workingDirectory: workspace,
           workspaceMode: 'in-place',
           requirements: 'Export the SpecCoding sidecar',
@@ -481,9 +489,9 @@ describe('/api/configs/archive', () => {
           skills: ['missing-skill'],
         },
       ];
-      config.workflow.phases[0].steps[0].agent = 'ghost-agent';
-      config.workflow.phases[0].steps[0].task = 'Read /root/not-this-machine/input.txt before running.';
-      config.workflow.phases[0].steps[0].skills = ['known-skill', 'missing-step-skill'];
+      config.workflow.states[0].steps[0].agent = 'ghost-agent';
+      config.workflow.states[0].steps[0].task = 'Read /root/not-this-machine/input.txt before running.';
+      config.workflow.states[0].steps[0].skills = ['known-skill', 'missing-step-skill'];
 
       const archive = await createZip({
         'audited.yaml': stringify(config),
@@ -513,7 +521,7 @@ describe('/api/configs/archive', () => {
 
       const imported = parse(await readFile(path.join(aceHome, 'configs', 'audited.yaml'), 'utf8'));
       expect(imported.context.skills).toEqual(['known-skill']);
-      expect(imported.workflow.phases[0].steps[0].skills).toEqual(['known-skill']);
+      expect(imported.workflow.states[0].steps[0].skills).toEqual(['known-skill']);
       expect(imported.roles).toEqual([]);
       expect(imported.context.executionPolicy.agentOverrides).toEqual({});
     });
@@ -530,7 +538,7 @@ describe('/api/configs/archive', () => {
           createdBy: 'source-user',
           filename: 'spec-import.yaml',
           workflowName: 'Spec Import',
-          mode: 'phase-based',
+          mode: 'state-machine',
           workingDirectory: workspace,
           workspaceMode: 'in-place',
           requirements: 'Import the SpecCoding sidecar',

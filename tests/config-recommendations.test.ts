@@ -5,17 +5,17 @@ import {
 } from '@/lib/config/recommendations';
 
 describe('config recommendations', () => {
-  test('default recommendation fallback is the intended default delivery lineup', () => {
+  test('uses a shippable general delivery lineup', () => {
     expect(Array.from(DEFAULT_RECOMMENDED_AGENT_FALLBACK)).toEqual([
+      'generalist',
       'architect',
       'developer',
       'tester',
-      'code-auditor',
       'documentation-writer',
     ]);
   });
 
-  test('prioritizes reference agents, normalizes names, deduplicates, excludes supervisor, and caps to six', () => {
+  test('excludes retired references, excludes Supervisor, deduplicates, and caps to six', () => {
     const recommended = buildRecommendedAgents({
       availableAgents: new Set(),
       referenceAgents: [
@@ -27,7 +27,6 @@ describe('config recommendations', () => {
         'code-auditor',
         'documentation-writer',
         'ux-designer',
-        'security-reviewer',
       ],
       relationshipHints: [],
     });
@@ -36,13 +35,13 @@ describe('config recommendations', () => {
       'developer',
       'architect',
       'tester',
-      'code-auditor',
       'documentation-writer',
       'ux-designer',
+      'generalist',
     ]);
   });
 
-  test('adds only positive relationship hints in descending synergy order before fallback fill', () => {
+  test('adds only active positive relationship hints in descending synergy order before fallback fill', () => {
     const recommended = buildRecommendedAgents({
       availableAgents: new Set(),
       referenceAgents: ['architect'],
@@ -50,22 +49,21 @@ describe('config recommendations', () => {
         { agent: 'developer', counterpart: 'tester', synergyScore: 3 },
         { agent: 'code-auditor', counterpart: 'documentation-writer', synergyScore: 9 },
         { agent: 'qa-lead', counterpart: 'release-coordinator', synergyScore: 0 },
-        { agent: 'ux-designer', counterpart: 'security-reviewer', synergyScore: -2 },
       ],
     });
 
     expect(recommended).toEqual([
       'architect',
-      'code-auditor',
       'documentation-writer',
       'developer',
       'tester',
+      'generalist',
     ]);
   });
 
-  test('filters recommendations by available agents when availability is known', () => {
+  test('does not inject optional adversarial roles only because they are available', () => {
     const recommended = buildRecommendedAgents({
-      availableAgents: new Set(['architect', 'tester', 'documentation-writer', 'ux-designer']),
+      availableAgents: new Set(['architect', 'tester', 'code-hunter', 'documentation-writer']),
       referenceAgents: ['developer', 'architect'],
       relationshipHints: [
         { agent: 'code-auditor', counterpart: 'tester', synergyScore: 7 },
@@ -74,5 +72,15 @@ describe('config recommendations', () => {
     });
 
     expect(recommended).toEqual(['architect', 'tester', 'documentation-writer']);
+  });
+
+  test('preserves explicitly referenced optional adversarial roles', () => {
+    const recommended = buildRecommendedAgents({
+      availableAgents: new Set(['architect', 'tester', 'code-hunter', 'documentation-writer']),
+      referenceAgents: ['architect', 'code-hunter'],
+      relationshipHints: [],
+    });
+
+    expect(recommended).toEqual(['architect', 'code-hunter', 'tester', 'documentation-writer']);
   });
 });

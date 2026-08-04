@@ -121,6 +121,7 @@ interface StateMachineExecutionViewProps {
   activeSteps?: string[];
   activeConcurrencyGroups?: ActiveConcurrencyGroupView[];
   completedSteps?: string[];
+  failedSteps?: string[];
   stateHistory: StateTransitionRecord[];
   issueTracker: Issue[];
   transitionCount: number;
@@ -225,6 +226,7 @@ interface StateMachineExecutionViewProps {
   // 回调
   onStateClick?: (stateName: string) => void;
   onStepClick?: (step: any) => void;
+  onRerunFromStep?: (stepName: string) => void;
   onForceTransition?: (targetState: string) => void;
   onOpenSubworkflowRun?: (child: SubworkflowRunView) => void;
   onActiveTabChange?: (tab: string) => void;
@@ -238,6 +240,7 @@ export default function StateMachineExecutionView({
   activeSteps = [],
   activeConcurrencyGroups = [],
   completedSteps = [],
+  failedSteps = [],
   stateHistory,
   issueTracker,
   transitionCount,
@@ -269,6 +272,7 @@ export default function StateMachineExecutionView({
   supervisorAgent,
   onStateClick,
   onStepClick,
+  onRerunFromStep,
   onForceTransition,
   onOpenSubworkflowRun,
   onActiveTabChange,
@@ -875,6 +879,7 @@ export default function StateMachineExecutionView({
               currentStep={currentStep}
               activeSteps={activeSteps}
               completedSteps={completedSteps}
+              failedSteps={failedSteps}
               stateHistory={stateHistory}
               isRunning={isRunning}
               allowForceTransition={allowForceTransition}
@@ -883,6 +888,7 @@ export default function StateMachineExecutionView({
               pendingHumanQuestion={pendingHumanQuestion}
               onStateClick={onStateClick}
               onStepClick={onStepClick}
+              onRerunFromStep={onRerunFromStep}
               onForceTransition={onForceTransition}
             />
           ) : null}

@@ -61,6 +61,7 @@ export class MagicAdapter implements RuntimeAdapter {
   }
 
   async *runTurn(binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<AdapterRuntimeEvent> {
+    let nativeStreamCompleted = false;
     yield {
       type: 'turn.started',
       payload: { turnId: input.turnId },
@@ -90,8 +91,15 @@ export class MagicAdapter implements RuntimeAdapter {
       return;
     }
 
-    for await (const event of this.client.runTurn(binding, input)) {
-      yield normalizeMagicRuntimeEvent(event);
+    try {
+      for await (const event of this.client.runTurn(binding, input)) {
+        yield normalizeMagicRuntimeEvent(event);
+      }
+      nativeStreamCompleted = true;
+    } finally {
+      if (!nativeStreamCompleted) {
+        await this.client.close?.(binding).catch(() => {});
+      }
     }
   }
 

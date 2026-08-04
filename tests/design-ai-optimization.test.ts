@@ -15,8 +15,8 @@ describe('design-ai-optimization', () => {
     const baseConfig = {
       workflow: {
         name: 'demo',
-        mode: 'phase-based',
-        phases: [{ name: 'Build', steps: [{ name: 'Code', agent: 'dev', task: 'write code' }] }],
+        mode: 'state-machine',
+        states: [{ name: 'Build', isInitial: true, isFinal: true, steps: [{ name: 'Code', agent: 'dev', task: 'write code' }], transitions: [] }],
       },
       context: {
         projectRoot: '/repo/demo',
@@ -28,17 +28,17 @@ describe('design-ai-optimization', () => {
     };
     const target: DesignOptimizationTarget = {
       scope: 'workflow',
-      workflowMode: 'phase-based',
+      workflowMode: 'state-machine',
       workflowName: 'demo',
     };
     const payload: WorkflowPatchPayload = {
       scope: 'workflow',
-      workflowMode: 'phase-based',
+      workflowMode: 'state-machine',
       patch: {
         workflow: {
           name: 'demo-v2',
-          mode: 'phase-based',
-          phases: [{ name: 'Review', steps: [{ name: 'Check', agent: 'qa', task: 'review code' }] }],
+          mode: 'state-machine',
+          states: [{ name: 'Review', isInitial: true, isFinal: true, steps: [{ name: 'Check', agent: 'qa', task: 'review code' }], transitions: [] }],
         },
       },
     };
@@ -97,14 +97,17 @@ describe('design-ai-optimization', () => {
     const baseConfig = {
       workflow: {
         name: 'demo',
-        mode: 'phase-based',
-        phases: [
+        mode: 'state-machine',
+        states: [
           {
             name: 'Build',
+            isInitial: true,
+            isFinal: true,
             steps: [
               { name: 'Code', agent: 'dev', task: 'write code' },
               { name: 'Test', agent: 'qa', task: 'run tests' },
             ],
+            transitions: [],
           },
         ],
       },
@@ -112,8 +115,8 @@ describe('design-ai-optimization', () => {
     };
     const target: DesignOptimizationTarget = {
       scope: 'step',
-      workflowMode: 'phase-based',
-      containerType: 'phase',
+      workflowMode: 'state-machine',
+      containerType: 'state',
       containerIndex: 0,
       containerName: 'Build',
       stepIndex: 1,
@@ -121,7 +124,7 @@ describe('design-ai-optimization', () => {
     };
     const payload: WorkflowPatchPayload = {
       scope: 'step',
-      workflowMode: 'phase-based',
+      workflowMode: 'state-machine',
       patch: {
         step: {
           name: 'Test',
@@ -134,14 +137,14 @@ describe('design-ai-optimization', () => {
 
     const next = applyDesignOptimizationPatch(baseConfig, payload, target);
 
-    expect(next?.workflow.phases[0].steps[0].task).toBe('write code');
-    expect(next?.workflow.phases[0].steps[1]).toMatchObject({
+    expect(next?.workflow.states[0].steps[0].task).toBe('write code');
+    expect(next?.workflow.states[0].steps[1]).toMatchObject({
       task: 'run unit and integration tests',
       skills: ['vitest'],
     });
   });
 
-  test('rejects mismatched workflow mode and exposes scoped snapshots', () => {
+  test('rejects a mismatched patch scope and exposes scoped snapshots', () => {
     const config = {
       workflow: {
         name: 'demo',
@@ -159,8 +162,8 @@ describe('design-ai-optimization', () => {
       stepName: 'Write',
     };
     const payload: WorkflowPatchPayload = {
-      scope: 'step',
-      workflowMode: 'phase-based',
+      scope: 'state',
+      workflowMode: 'state-machine',
       patch: {
         step: { name: 'Write', agent: 'writer', task: 'rewrite draft' },
       },

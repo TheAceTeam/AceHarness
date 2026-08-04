@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, type ChangeEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
 import Link from '@/lib/navigation/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,6 +30,7 @@ import { PageToolbar } from '@/components/ui/page-toolbar';
 import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/core/utils';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { EXPERT_PACKS, isRetiredCatalogAgent, isSystemCatalogAgent } from '@/lib/agent/catalog';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import type { ReturnTarget } from '@/lib/navigation/return-target';
@@ -45,8 +46,11 @@ import {
 import { useEngineConfigQuery } from '@/client/query/engines';
 import { useAgentConfigRows, useSyncAgentConfigsToDb } from '@/client/db/collections';
 
-const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
+const CATEGORIES = ['通用协作', '研究', '分析', '产品', '体验设计', '内容', '架构', '编码', '测试', '性能', '问题诊断', '审查', '文档', '系统协调', '其他'];
 const EMPTY_AGENTS: AgentConfig[] = [];
+const EXPERT_PACK_LABELS: Readonly<Record<string, string>> = Object.fromEntries(
+  EXPERT_PACKS.map((pack) => [pack.id, pack.label]),
+);
 type DisplayTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 type AgentSortKey = 'name' | 'team' | 'category' | 'temperature';
 
@@ -96,16 +100,20 @@ export default function AgentsManager({
   const batchDeleteAgentsMutation = useBatchDeleteAgentsMutation();
   const importAgentZipMutation = useImportAgentZipMutation();
   const exportAgentsMutation = useExportAgentsMutation();
-  const agents = agentsQuery.data?.agents || EMPTY_AGENTS;
+  const sourceAgents = agentsQuery.data?.agents || EMPTY_AGENTS;
+  const agents = useMemo(
+    () => sourceAgents.filter((agent) => !isRetiredCatalogAgent(agent)),
+    [sourceAgents],
+  );
   const normalizedHighlightedAgentName = highlightedAgentName?.trim() || '';
   useSyncAgentConfigsToDb(agents);
-  const dbAgents = useAgentConfigRows({
+  const dbAgents = (useAgentConfigRows({
     keyword: '',
     group: 'all',
     team: 'all',
     category: 'all',
     tags: [],
-  }) as AgentConfig[];
+  }) as AgentConfig[]).filter((agent) => !isRetiredCatalogAgent(agent));
   const runtimeAgentsDir = agentsQuery.data?.runtimeAgentsDir || '';
   const loading = agentsQuery.isLoading && dbAgents.length === 0;
   const agentError = agentsQuery.error instanceof Error ? agentsQuery.error.message : null;
@@ -243,6 +251,10 @@ export default function AgentsManager({
   };
 
   const handleDeleteAgent = (name: string) => {
+    if (isSystemCatalogAgent({ name })) {
+      toast('warning', '系统协调角色不能删除');
+      return;
+    }
     setDeleteTargetAgentName(name);
   };
 
@@ -259,6 +271,7 @@ export default function AgentsManager({
   };
 
   const toggleAgentSelection = (name: string) => {
+    if (isSystemCatalogAgent({ name })) return;
     setSelectedAgentNames((prev) => (
       prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]
     ));
@@ -274,7 +287,9 @@ export default function AgentsManager({
 
   const toggleSelectAllFiltered = (checked: boolean | 'indeterminate') => {
     if (checked) {
-      setSelectedAgentNames(filteredAgents.map((agent) => agent.name));
+      setSelectedAgentNames(filteredAgents
+        .filter((agent) => !isSystemCatalogAgent(agent))
+        .map((agent) => agent.name));
       return;
     }
     setSelectedAgentNames([]);
@@ -360,13 +375,13 @@ export default function AgentsManager({
   const normalizeTeam = (team: AgentConfig['team']): DisplayTeam => team as DisplayTeam;
 
   // Filter agents
-  const filteredAgents = useAgentConfigRows({
+  const filteredAgents = (useAgentConfigRows({
     keyword: searchQuery,
     group: selectedGroup,
     team: selectedTeam,
     category: selectedCategory,
     tags: selectedTags,
-  }) as AgentConfig[];
+  }) as AgentConfig[]).filter((agent) => !isRetiredCatalogAgent(agent));
   const sortedAgents = [...filteredAgents].sort((a, b) => {
     const readValue = (agent: AgentConfig) => {
       if (agentSortKey === 'name') return agent.name || '';
@@ -426,8 +441,9 @@ export default function AgentsManager({
   };
   const groupLabels: Record<string, string> = { all: '全部', common: '通用', compiler: '编译器', openharmony: '仓颉' };
   const supervisorAgents = dbAgents.filter((agent) => agent.roleType === 'supervisor');
-  const allFilteredSelected = filteredAgents.length > 0 && filteredAgents.every((agent) => selectedAgentNames.includes(agent.name));
-  const hasPartialFilteredSelection = filteredAgents.some((agent) => selectedAgentNames.includes(agent.name));
+  const selectableFilteredAgents = filteredAgents.filter((agent) => !isSystemCatalogAgent(agent));
+  const allFilteredSelected = selectableFilteredAgents.length > 0 && selectableFilteredAgents.every((agent) => selectedAgentNames.includes(agent.name));
+  const hasPartialFilteredSelection = selectableFilteredAgents.some((agent) => selectedAgentNames.includes(agent.name));
 
   const toggleTag = (tag: string) => {
     setSelectedTags(prev =>
@@ -480,6 +496,9 @@ export default function AgentsManager({
               <div className="truncate font-medium">{agent.name}</div>
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {agent.roleType === 'supervisor' ? <StatusPill tone="warning">Supervisor</StatusPill> : null}
+                {(agent.expertPacks || []).map((pack) => (
+                  <Badge key={pack} variant="outline">{EXPERT_PACK_LABELS[pack] || pack}</Badge>
+                ))}
                 {getWorkspaceProfileBadges(agent).map((badge) => (
                   <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
                     {badge.label}
@@ -542,13 +561,13 @@ export default function AgentsManager({
           icon: <Sparkles className="h-4 w-4" />,
           onSelect: () => handleReviseAgent(agent),
         },
-        {
+        ...(!isSystemCatalogAgent(agent) ? [{
           id: 'delete',
           label: '删除',
           icon: <Trash2 className="h-4 w-4" />,
           destructive: true,
           onSelect: () => handleDeleteAgent(agent.name),
-        },
+        }] : []),
       ],
     },
   ];
@@ -915,6 +934,7 @@ export default function AgentsManager({
                         <div className="relative mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                           {groupedAgents[team].map(agent => {
                             const isSelected = selectedAgentNames.includes(agent.name);
+                            const isSystemAgent = isSystemCatalogAgent(agent);
                             const { avatarSrc } = getAgentRuntimeMeta(agent);
                             return (
                               <DataCard
@@ -924,13 +944,17 @@ export default function AgentsManager({
                                 onClick={() => handleEditAgent(agent)}
                               >
                                 <div className="absolute right-3 top-3 z-10 rounded-md border border-border bg-background p-1.5 opacity-70 transition-opacity duration-150 group-hover:opacity-100">
-                                  <Checkbox
-                                    checked={isSelected}
-                                    onCheckedChange={() => toggleAgentSelection(agent.name)}
-                                    onClick={(event) => event.stopPropagation()}
-                                    aria-label={isSelected ? `取消选择 Agent ${agent.name}` : `选择 Agent ${agent.name}`}
-                                    className="h-4 w-4 rounded-[4px]"
-                                  />
+                                  {isSystemAgent ? (
+                                    <span className="px-1 text-[10px] text-muted-foreground">系统</span>
+                                  ) : (
+                                    <Checkbox
+                                      checked={isSelected}
+                                      onCheckedChange={() => toggleAgentSelection(agent.name)}
+                                      onClick={(event) => event.stopPropagation()}
+                                      aria-label={isSelected ? `取消选择 Agent ${agent.name}` : `选择 Agent ${agent.name}`}
+                                      className="h-4 w-4 rounded-[4px]"
+                                    />
+                                  )}
                                 </div>
                                 <DataCardHeader className="pr-9">
                                   <div className="flex min-w-0 items-center gap-3">
@@ -952,6 +976,9 @@ export default function AgentsManager({
                                 </DataCardHeader>
                                 <DataCardMeta>
                                   {agent.roleType === 'supervisor' ? <StatusPill tone="warning">Supervisor</StatusPill> : null}
+                                  {(agent.expertPacks || []).map((pack) => (
+                                    <Badge key={pack} variant="outline">{EXPERT_PACK_LABELS[pack] || pack}</Badge>
+                                  ))}
                                   <StatusPill tone={teamTone[team]}>{teamLabels[team]}</StatusPill>
                                   {(agent.tags || []).slice(0, 3).map((tag) => (
                                     <Badge key={tag} variant="outline">{tag}</Badge>
@@ -986,17 +1013,19 @@ export default function AgentsManager({
                                   >
                                     AI 修订
                                   </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="text-destructive hover:text-destructive"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      handleDeleteAgent(agent.name);
-                                    }}
-                                  >
-                                    删除
-                                  </Button>
+                                  {!isSystemAgent ? (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-destructive hover:text-destructive"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        handleDeleteAgent(agent.name);
+                                      }}
+                                    >
+                                      删除
+                                    </Button>
+                                  ) : null}
                                 </DataCardActions>
                               </DataCard>
                             );

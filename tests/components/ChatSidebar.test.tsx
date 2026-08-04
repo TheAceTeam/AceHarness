@@ -124,6 +124,14 @@ describe('ChatSidebar', () => {
     expect(screen.getAllByText('Session Two').length).toBeGreaterThan(0);
   });
 
+  test('uses a restrained dark background for the active home session', () => {
+    render(<ChatSidebar />);
+
+    const activeRow = screen.getByText('Session One').closest('.home-chat-session-row');
+    expect(activeRow).toHaveClass('dark:bg-violet-950/45');
+    expect(activeRow).not.toHaveClass('dark:bg-violet-500/12');
+  });
+
   test('create button calls createSession', async () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
@@ -148,7 +156,7 @@ describe('ChatSidebar', () => {
     expect(mockCreateSession).toHaveBeenCalled();
   });
 
-  test('shows AI-pushed workflow sessions in the unified conversation list', async () => {
+  test('shows AI-pushed workflow runtime sessions in the unified conversation list', async () => {
     mockSessions = [
       {
         id: 'workflow-hint-1',
@@ -160,12 +168,9 @@ describe('ChatSidebar', () => {
         sessionWorkbenchState: {
           homeSidebar: {
             type: 'home_sidebar',
-            activeTab: 'workflow',
-            intent: 'create-workflow',
-            stage: 'clarifying',
-            workflowDraft: {
-              name: 'Hinted Workflow',
-            },
+            activeTab: 'commander',
+            intent: 'workflow-run',
+            stage: 'running',
           },
         },
       },

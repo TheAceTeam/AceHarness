@@ -4,7 +4,7 @@ import { makeRequest, responseJson } from './helpers/route-helpers';
 
 function minimalRunState(overrides: Record<string, any> = {}): any {
   return {
-    runId: 'run-detail-route-agora-bindings',
+    runId: 'run-detail-route-session-bindings',
     configFile: 'test-workflow.yaml',
     status: 'completed' as const,
     startTime: new Date().toISOString(),
@@ -22,7 +22,7 @@ function minimalRunState(overrides: Record<string, any> = {}): any {
 }
 
 describe('runs detail route', () => {
-  test('backfills workflow agora session bindings for preRuntime event-store snapshots', async () => {
+  test('backfills workflow session bindings for pre-runtime event-store snapshots', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
       const { saveRunState } = await import('@/lib/run/state-persistence');

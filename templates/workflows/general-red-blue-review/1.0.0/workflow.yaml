@@ -19,7 +19,7 @@ workflow:
       position: { x: 80, y: 180 }
       steps:
         - { name: 方案设计, agent: architect, role: defender, task: 基于需求形成可执行方案、范围和验收标准 }
-        - { name: 方案挑战, agent: design-breaker, role: attacker, task: 从边界、风险和遗漏角度挑战方案 }
+        - { name: 方案挑战, agent: solution-breaker, role: attacker, task: 从边界、风险和遗漏角度挑战方案 }
         - { name: 方案裁决, agent: design-judge, role: judge, task: 综合方案和挑战意见，给出 verdict 与后续要求 }
       transitions:
         - { to: 执行, condition: { verdict: pass }, priority: 10, label: 方案通过 }

@@ -4,11 +4,13 @@ import { loadRunState } from '@/lib/run/state-persistence';
 
 const WORKFLOW_ALREADY_RUNNING_ERROR = '已有工作流正在运行';
 const WORKFLOW_ALREADY_RUNNING_RESPONSE = '该配置的工作流已在运行中';
+const FAILED_STEP_TRANSITION_BLOCKED_ERROR = '当前运行存在失败步骤，请先恢复失败步骤后再继续';
+const FORCE_TRANSITION_ENDPOINT_REQUIRED_ERROR = '强制跳转请使用专用接口';
 
 export async function POST(request: Request) {
   try {
     const body = await readJsonBody<any>(request, {});
-    const { runId, action, feedback, targetState, instruction } = body;
+    const { runId, action, feedback } = body;
 
     if (!runId) {
       return jsonOk(
@@ -25,29 +27,16 @@ export async function POST(request: Request) {
       );
     }
 
+    // Normal resume always retries the persisted checkpoint.  Keeping force
+    // recovery on its dedicated endpoint prevents a generic resume request
+    // from silently changing the recovery mode.
+    if (action === 'force-transition') {
+      return jsonOk({ error: FORCE_TRANSITION_ENDPOINT_REQUIRED_ERROR }, { status: 400 });
+    }
     const manager = await workflowRegistry.getManagerByRunId(runId) || await workflowRegistry.getManager(runState.configFile);
 
     const currentStatus = manager.getStatus();
     if (currentStatus.status === 'running') {
-      const isSameRunPendingApproval =
-        currentStatus.runId === runId
-        && currentStatus.currentState === '__human_approval__';
-      if (action === 'force-transition' && isSameRunPendingApproval && isStateMachineManagerLike(manager) && targetState) {
-        const pendingQuestion = manager.getPendingHumanQuestion();
-        if (pendingQuestion?.answerSchema?.type === 'approval-transition') {
-          await manager.answerHumanQuestion(pendingQuestion.id, { selectedState: targetState, instruction });
-          return jsonOk({
-            success: true,
-            message: `已回答人工审查并请求跳转到: ${targetState}`,
-          });
-        }
-        manager.setQueuedApprovalAction('approve');
-        manager.forceTransition(targetState, instruction);
-        return jsonOk({
-          success: true,
-          message: `已请求强制跳转到: ${targetState}`,
-        });
-      }
       return jsonOk(
         { error: WORKFLOW_ALREADY_RUNNING_RESPONSE },
         { status: 409 }
@@ -61,25 +50,16 @@ export async function POST(request: Request) {
       }
     }
 
-    let queuedForceTransition: { targetState: string; instruction?: string } | null = null;
-    if (action === 'force-transition' && isStateMachineManagerLike(manager) && targetState) {
-      const pendingQuestion = manager.getPendingHumanQuestion();
-      if (pendingQuestion?.answerSchema?.type === 'approval-transition') {
-        await manager.answerHumanQuestion(pendingQuestion.id, { selectedState: targetState, instruction });
-      } else {
-        manager.setQueuedApprovalAction('approve');
-        queuedForceTransition = { targetState, instruction };
-      }
-    }
-
     if (isStateMachineManagerLike(manager)) {
+      // State-machine recovery reports startup failures before the response is
+      // acknowledged, while preserving its failed-step retry semantics.
       await manager.resumeInBackground(runId);
-      if (queuedForceTransition) {
-        manager.forceTransition(queuedForceTransition.targetState, queuedForceTransition.instruction);
-      }
     } else {
-      // Phase workflows keep their existing asynchronous resume path.
-      void manager.resume(runId).catch(() => {});
+      // Legacy phase managers only expose asynchronous resume.  Keep the
+      // established behavior; failures after this call cannot be observed by
+      // this HTTP response.
+      const legacyManager = manager as unknown as { resume: (legacyRunId: string) => Promise<void> };
+      void legacyManager.resume(runId).catch(() => {});
     }
 
     return jsonOk({
@@ -87,6 +67,9 @@ export async function POST(request: Request) {
       message: `已恢复运行: ${runId}`,
     });
   } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'FailedStepRecoveryRequiredError') {
+      return jsonOk({ error: FAILED_STEP_TRANSITION_BLOCKED_ERROR }, { status: 409 });
+    }
     if (error instanceof Error && error.message === WORKFLOW_ALREADY_RUNNING_ERROR) {
       return jsonOk(
         { error: WORKFLOW_ALREADY_RUNNING_RESPONSE },

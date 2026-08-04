@@ -33,8 +33,8 @@ export async function runNodejsInstrumentation() {
   }
 
   try {
-    const { WorkflowManager } = await import('@/lib/workflow/manager');
-    const recoverer = new WorkflowManager();
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const recoverer = new StateMachineWorkflowManager();
     await recoverer.recoverFromCrash();
   } catch (error) {
     console.error('[ACEHarness] Workflow recovery failed:', error);

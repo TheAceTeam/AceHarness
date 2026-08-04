@@ -16,7 +16,15 @@ vi.mock('@/components/StateMachineRuntimePanel', () => ({
 }));
 
 vi.mock('@/components/StateMachineDiagram', () => ({
-  default: () => <div data-testid="state-diagram" />,
+  default: ({ onRerunFromStep }: any) => (
+    <button
+      type="button"
+      data-testid="state-diagram"
+      onClick={() => onRerunFromStep?.('Build-verify')}
+    >
+      从此步骤重新运行
+    </button>
+  ),
 }));
 
 vi.mock('@/components/AgentFormationDiagram', () => ({
@@ -97,6 +105,27 @@ describe('subworkflow UI coverage', () => {
     expect(screen.getByText('Run child')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '查看子流程' }));
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-child' }));
+  });
+
+  test('StateMachineExecutionView exposes and forwards the rerun-from-step action', async () => {
+    const onRerunFromStep = vi.fn();
+    render(
+      <StateMachineExecutionView
+        states={[{ name: 'Build', steps: [{ name: 'verify' }], transitions: [] } as any]}
+        currentState="Build"
+        stateHistory={[]}
+        issueTracker={[]}
+        transitionCount={0}
+        maxTransitions={10}
+        status="failed"
+        failedSteps={['Build-verify']}
+        onRerunFromStep={onRerunFromStep}
+        activeTabOverride="trace"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: '从此步骤重新运行' }));
+    expect(onRerunFromStep).toHaveBeenCalledWith('Build-verify');
   });
 });
 

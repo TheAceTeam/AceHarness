@@ -15,8 +15,7 @@ type WorkflowStepLike = {
 };
 
 type WorkflowLike = {
-  mode?: 'state-machine' | 'phase-based';
-  phases?: Array<{ name?: string; steps?: WorkflowStepLike[] }>;
+  mode?: 'state-machine';
   states?: Array<{ name?: string; steps?: WorkflowStepLike[] }>;
 };
 
@@ -26,8 +25,7 @@ type StepEntry = {
   stepLabel: string;
   agentLabel: string;
   commands: string[];
-  stateIndex?: number;
-  phaseIndex?: number;
+  stateIndex: number;
   stepIndex: number;
 };
 
@@ -47,29 +45,14 @@ function linesToList(value: string): string[] {
 
 function collectStepEntries(workflow: WorkflowLike | null | undefined): StepEntry[] {
   if (!workflow) return [];
-
-  if (workflow.mode === 'state-machine') {
-    return (workflow.states || []).flatMap((state, stateIndex) => (
-      (state.steps || []).map((step, stepIndex) => ({
-        key: `state:${stateIndex}:${stepIndex}`,
-        scopeLabel: `状态 ${stateIndex + 1} · ${state.name || `状态${stateIndex + 1}`}`,
-        stepLabel: step.name || `步骤 ${stepIndex + 1}`,
-        agentLabel: step.agent || '未分配 Agent',
-        commands: Array.isArray(step.preCommands) ? step.preCommands : [],
-        stateIndex,
-        stepIndex,
-      }))
-    ));
-  }
-
-  return (workflow.phases || []).flatMap((phase, phaseIndex) => (
-    (phase.steps || []).map((step, stepIndex) => ({
-      key: `phase:${phaseIndex}:${stepIndex}`,
-      scopeLabel: `阶段 ${phaseIndex + 1} · ${phase.name || `阶段${phaseIndex + 1}`}`,
+  return (workflow.states || []).flatMap((state, stateIndex) => (
+    (state.steps || []).map((step, stepIndex) => ({
+      key: `state:${stateIndex}:${stepIndex}`,
+      scopeLabel: `状态 ${stateIndex + 1} · ${state.name || `状态${stateIndex + 1}`}`,
       stepLabel: step.name || `步骤 ${stepIndex + 1}`,
       agentLabel: step.agent || '未分配 Agent',
       commands: Array.isArray(step.preCommands) ? step.preCommands : [],
-      phaseIndex,
+      stateIndex,
       stepIndex,
     }))
   ));
@@ -106,9 +89,7 @@ export default function WorkflowPreflightManagerDialog({
 
     nextEntries.forEach((entry) => {
       const commands = linesToList(draft[entry.key] || '');
-      const targetStep = entry.stateIndex !== undefined
-        ? nextWorkflow.states?.[entry.stateIndex]?.steps?.[entry.stepIndex]
-        : nextWorkflow.phases?.[entry.phaseIndex || 0]?.steps?.[entry.stepIndex];
+      const targetStep = nextWorkflow.states?.[entry.stateIndex]?.steps?.[entry.stepIndex];
 
       if (!targetStep) return;
       if (commands.length > 0) {

@@ -26,7 +26,7 @@ tags:
 所有结构化结果都放在 `<result>...</result>` 内，且其中只能有一个 JSON 对象。
 
 - 卡片: `{"kind":"card","payload":{...}}`
-- 机器协议结果: `{"kind":"home_sidebar","payload":{...}}`、`{"kind":"workflow_clarification_question","data":{...}}` 等
+- 机器协议结果: `{"kind":"home_sidebar","payload":{...}}`、`{"kind":"workflow_patch_item","data":{...}}` 等
 - 不要再用 fenced code block 包裹 `<result>` 内容
 - `<result>` 外的普通文字与 `<result>` 内的 JSON 要分开
 
@@ -53,7 +53,7 @@ tags:
 以下场景不要输出 card：
 
 - `home_sidebar`
-- workflow/spec 创建小点（例如 `workflow_clarification_question`、`spec_requirement`、`workflow_state_steps`）
+- workflow/spec 编辑结果（例如 `spec_requirement`、`workflow_patch_item`）
 
 这些都应该输出对应 `kind` 的机器可读 JSON。
 

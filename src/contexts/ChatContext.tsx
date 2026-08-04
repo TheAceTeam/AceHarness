@@ -739,6 +739,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const globalEngineRef = useRef(effectiveGlobalEngine);
   const sendMessageRef = useRef<((text: string, options?: { displayText?: string; targetSessionId?: string }) => Promise<void>) | null>(null);
   const pendingSessionsRef = useRef<Record<string, ChatSession>>({});
+  const pendingCreationPromisesRef = useRef<Record<string, Promise<void> | undefined>>({});
   const sessionCacheRef = useRef<Record<string, ChatSession>>({});
   activeSessionRef.current = activeSession;
   skillSettingsRef.current = skillSettings;
@@ -765,9 +766,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return apiListSessions().then(list => {
       if (isCancelled()) return;
       const mergedList = [...list];
-      const addLocalSession = (session: ChatSession | null | undefined) => {
-        if (!session || mergedList.some((item) => item.id === session.id)) return;
-        mergedList.unshift({
+      const mergeLocalSession = (session: ChatSession | null | undefined) => {
+        if (!session) return;
+        const localSummary: SessionSummary = {
           id: session.id,
           title: session.title,
           model: session.model,
@@ -780,10 +781,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           workflowBinding: session.workflowBinding,
           agentBinding: session.agentBinding,
           sessionWorkbenchState: session.sessionWorkbenchState,
-        });
+        };
+        const existingIndex = mergedList.findIndex((item) => item.id === session.id);
+        if (existingIndex < 0) {
+          mergedList.unshift(localSummary);
+          return;
+        }
+
+        const existing = mergedList[existingIndex];
+        const localIsAhead = session.messages.length > existing.messageCount
+          || session.updatedAt >= existing.updatedAt;
+        if (localIsAhead || localSummary.lastMessage && !existing.lastMessage) {
+          mergedList[existingIndex] = { ...existing, ...localSummary };
+        }
       };
-      addLocalSession(activeSessionRef.current);
-      Object.values(sessionCacheRef.current).forEach(addLocalSession);
+      mergeLocalSession(activeSessionRef.current);
+      Object.values(sessionCacheRef.current).forEach(mergeLocalSession);
       setSessions(mergedList);
 
       const storedActiveSessionId = readStoredActiveSessionId();
@@ -987,6 +1000,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     Object.values(saveTimersRef.current).forEach((timer) => clearTimeout(timer));
     saveTimersRef.current = {};
     pendingSessionsRef.current = {};
+    pendingCreationPromisesRef.current = {};
   }, []);
 
   // Load full session when activeSessionId changes
@@ -1417,18 +1431,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   ]);
 
   // Debounced persist to server
+  const flushPendingSessionSave = useCallback((sessionId: string) => {
+    const pending = pendingSessionsRef.current[sessionId];
+    if (!pending) return;
+    delete pendingSessionsRef.current[sessionId];
+    const timer = saveTimersRef.current[sessionId];
+    if (timer) {
+      clearTimeout(timer);
+      delete saveTimersRef.current[sessionId];
+    }
+    apiSaveSession(pending).catch(console.error);
+  }, []);
+
   const scheduleSave = useCallback((session: ChatSession) => {
     pendingSessionsRef.current[session.id] = session;
     const existingTimer = saveTimersRef.current[session.id];
     if (existingTimer) clearTimeout(existingTimer);
     saveTimersRef.current[session.id] = setTimeout(() => {
-      const pending = pendingSessionsRef.current[session.id];
-      delete pendingSessionsRef.current[session.id];
       delete saveTimersRef.current[session.id];
-      if (!pending) return;
-      apiSaveSession(pending).catch(console.error);
+      if (pendingCreationPromisesRef.current[session.id]) return;
+      flushPendingSessionSave(session.id);
     }, 300);
-  }, []);
+  }, [flushPendingSessionSave]);
 
   // Flush pending save on page unload to prevent data loss
   useEffect(() => {
@@ -1872,9 +1896,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     sessionCacheRef.current[id] = session;
     setActiveSession(session);
     setActiveSessionId(id);
-    apiCreateSession(session).catch(console.error);
+    const creationPromise = apiCreateSession(session);
+    pendingCreationPromisesRef.current[id] = creationPromise;
+    void creationPromise
+      .catch(console.error)
+      .finally(() => {
+        delete pendingCreationPromisesRef.current[id];
+        flushPendingSessionSave(id);
+      });
     return id;
-  }, [creationAssistantDefaultEnabled, model, engine, runStatusById]);
+  }, [creationAssistantDefaultEnabled, flushPendingSessionSave, model, engine, runStatusById]);
 
   const deleteSession = useCallback((id: string) => {
     const sessionToDelete = sessions.find((session) => session.id === id)
@@ -2438,7 +2469,37 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const currentModel = modelRef.current || '';
     const currentEngineOverride = engineRef.current || '';
     const resolvedEngine = currentEngineOverride || globalEngineRef.current || '';
+    const recordSendFailure = async (sessionId: string, reason: string) => {
+      const attemptedText = String(options?.displayText ?? text ?? '').trim();
+      await updateSessionById(sessionId, (session) => ({
+        ...session,
+        updatedAt: Date.now(),
+        messages: [
+          ...session.messages,
+          ...(attemptedText ? [{
+            id: genId(),
+            role: 'user' as const,
+            content: attemptedText,
+            timestamp: Date.now(),
+          }] : []),
+          {
+            id: genId(),
+            role: 'error' as const,
+            content: `无法发送：${reason}`,
+            engine: resolvedEngine || undefined,
+            model: currentModel || undefined,
+            timestamp: Date.now(),
+          },
+        ],
+      }));
+    };
+
     if (!currentModel || !resolvedEngine) {
+      const targetSessionId = options?.targetSessionId || activeSessionId || createSession({ title: '新对话' });
+      const reason = !resolvedEngine
+        ? '尚未选择可用的引擎，请先完成引擎配置后重试。'
+        : '尚未选择模型，请先选择可用模型后重试。';
+      await recordSendFailure(targetSessionId, reason);
       return;
     }
 
@@ -2451,6 +2512,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const targetSessionId = sid;
     const previousSession = await loadSessionSnapshot(targetSessionId);
     if (!previousSession) {
+      await recordSendFailure(targetSessionId, '无法加载当前对话，请重新打开对话后重试。');
       return;
     }
     const creationAssistantEnabled = resolveCreationAssistantEnabled(previousSession);
@@ -2638,11 +2700,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           creationAssistantEnabled,
         }),
       });
-      const startData = await startRes.json();
+      const startData = await startRes.json().catch(() => ({}));
       if (!startRes.ok || startData.error) {
+        const startError = String(startData?.error || `HTTP ${startRes.status}`);
         await applyToTargetSession(s => ({
           ...s, updatedAt: Date.now(),
-          messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, role: 'error' as const, content: startData.error || `HTTP ${startRes.status}` } : m),
+          messages: s.messages.map(m => m.id === assistantMsgId
+            ? appendRequestFailureNotice(m, startError)
+            : m),
         }));
         setLoading(false);
         unmarkSessionStreaming(targetSessionId);
@@ -2650,7 +2715,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const { chatId } = startData;
+      const chatId = typeof startData?.chatId === 'string' ? startData.chatId.trim() : '';
+      if (!chatId) {
+        throw new Error('启动流式会话失败：服务器未返回会话 ID');
+      }
       activeChatIdRef.current = chatId;
       attachedStreamingSessionIdRef.current = targetSessionId;
       await new Promise<void>((resolve, reject) => {
@@ -2964,8 +3032,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                       }
                     } else {
                       void applyToTargetSession(s => ({
-                        ...s, messages: s.messages.map(m => m.id === assistantMsgId && !m.content
-                          ? { ...m, role: 'error' as const, content: '流式连接中断' }
+                        ...s,
+                        updatedAt: Date.now(),
+                        messages: s.messages.map(m => m.id === assistantMsgId
+                          ? appendRequestFailureNotice(m, '流式连接中断，请重试')
                           : m),
                       }));
                       setLoading(false);
@@ -2977,8 +3047,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   })
                   .catch(() => {
                     void applyToTargetSession(s => ({
-                      ...s, messages: s.messages.map(m => m.id === assistantMsgId && !m.content
-                        ? { ...m, role: 'error' as const, content: '流式连接中断' }
+                      ...s,
+                      updatedAt: Date.now(),
+                      messages: s.messages.map(m => m.id === assistantMsgId
+                        ? appendRequestFailureNotice(m, '流式连接中断，请重试')
                         : m),
                     }));
                     setLoading(false);
@@ -2988,6 +3060,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                     resolve();
                   });
               } else {
+                void applyToTargetSession(s => ({
+                  ...s,
+                  updatedAt: Date.now(),
+                  messages: s.messages.map(m => m.id === assistantMsgId
+                    ? appendRequestFailureNotice(m, '流式连接中断，请重试')
+                    : m),
+                }));
                 setLoading(false);
                 markSessionRecentlyCompleted(targetSessionId);
                 unmarkSessionStreaming(targetSessionId);
@@ -3001,11 +3080,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         connectSSE();
       });
     } catch (err: any) {
-      // If the assistant message is still empty, convert to error
+      // Preserve any partial output and always leave a visible terminal error.
       await applyToTargetSession(s => ({
         ...s, updatedAt: Date.now(),
-        messages: s.messages.map(m => m.id === assistantMsgId && !m.content
-          ? { ...m, role: 'error' as const, content: err.message || '请求失败' }
+        messages: s.messages.map(m => m.id === assistantMsgId
+          ? appendRequestFailureNotice(m, err?.message || '请求失败')
           : m),
       }));
       setLoading(false);

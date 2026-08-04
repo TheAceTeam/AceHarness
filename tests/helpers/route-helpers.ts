@@ -6,6 +6,7 @@ interface RequestOptions {
   body?: BodyInit | null;
   json?: unknown;
   token?: string;
+  signal?: AbortSignal;
 }
 
 export function makeRequest(urlPath: string, options: RequestOptions = {}): Request {
@@ -26,6 +27,7 @@ export function makeRequest(urlPath: string, options: RequestOptions = {}): Requ
     method: options.method ?? (body === undefined ? 'GET' : 'POST'),
     headers,
     body,
+    signal: options.signal,
   });
 }
 

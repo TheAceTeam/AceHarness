@@ -51,8 +51,5 @@ export function ensureChatroomRoomState(room?: CollaborationRoomState | null): C
       topic: room?.topic || '',
       participants: room?.selectedAgents || [],
     }),
-    werewolfLabConfig: room?.werewolfLabConfig,
-    werewolf: room?.werewolf ?? null,
-    werewolfView: room?.werewolfView,
   };
 }

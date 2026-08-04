@@ -9,8 +9,10 @@ export type WorkflowConfigSummary = {
   filename: string;
   name: string;
   description?: string;
-  mode?: 'phase-based' | 'state-machine';
-  phaseCount?: number;
+  mode?: 'state-machine';
+  kind?: 'lightweight' | 'state-machine';
+  profile?: 'lightweight';
+  stateCount?: number;
   stepCount?: number;
   agentCount?: number;
   createdAt?: number | string;

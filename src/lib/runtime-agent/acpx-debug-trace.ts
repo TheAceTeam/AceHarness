@@ -2,10 +2,14 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { redactDiagnosticPayload } from './security/redaction';
 
 export type AcpxDebugTraceStage =
+  | 'acpx.session_init_failed'
+  | 'acpx.session_resume_fallback'
   | 'acpx.raw_event'
   | 'acpx.turn_result'
+  | 'acpx.runtime_close_failed'
   | 'adapter.normalized_event'
   | 'chat.formatted_chunk'
   | 'chat.turn_result'
@@ -73,11 +77,12 @@ export function writeAcpxDebugTrace(entry: AcpxDebugTraceEntry): void {
   try {
     const directory = getAcpxDebugTraceDirectory();
     mkdirSync(directory, { recursive: true });
+    const redactedPayload = redactDiagnosticPayload(entry.payload).value;
     appendFileSync(traceFilePath(directory, entry.context), `${stableStringify({
       timestamp: new Date().toISOString(),
       stage: entry.stage,
       context: entry.context,
-      payload: entry.payload,
+      payload: redactedPayload,
     })}\n`, 'utf8');
   } catch {
     // Debug tracing must never affect runtime execution.

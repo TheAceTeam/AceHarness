@@ -170,6 +170,7 @@ export interface RuntimeEnvVarSnapshot {
 
 export interface RuntimeProfileSnapshot {
   agentId: string;
+  ownerUserId?: string;
   modelRouteId: string;
   cwd: string;
   systemPromptHash: string;
@@ -282,6 +283,12 @@ export interface OpenRuntimeSessionInput {
   modelRouteId?: string;
   cwd: string;
   kind: RuntimeSessionKind;
+  /**
+   * Persist the logical session now and create its native adapter binding when
+   * the first turn is claimed. This avoids starting then immediately
+   * reconnecting a backend session that has not produced a turn yet.
+   */
+  deferAdapterSessionInitialization?: boolean;
   runtimeProfileId?: string;
   mcpServers?: unknown[];
   ownerUserId?: string;
@@ -300,6 +307,12 @@ export interface RunRuntimeTurnInput {
 export interface CancelTurnInput {
   runtimeSessionId: string;
   turnId: string;
+  requestId: string;
+  reason?: string;
+}
+
+export interface CancelSessionInput {
+  runtimeSessionId: string;
   requestId: string;
   reason?: string;
 }
@@ -342,6 +355,7 @@ export interface RuntimeOrchestrator {
   openSession(input: OpenRuntimeSessionInput): Promise<RuntimeSessionRef>;
   runTurn(input: RunRuntimeTurnInput): AsyncIterable<RuntimeEvent>;
   cancelTurn(input: CancelTurnInput): Promise<void>;
+  cancelSession(input: CancelSessionInput): Promise<void>;
   getSessionStatus(input: SessionStatusInput): Promise<RuntimeSessionStatus>;
   compactSession(input: CompactSessionInput): Promise<CompactResult>;
   forkSession(input: ForkSessionInput): Promise<ForkResult>;
@@ -450,6 +464,7 @@ export interface AdapterRuntimeStatus {
 
 export interface RuntimeAdapter {
   createOrLoadSession(input: AdapterSessionInput): Promise<RuntimeBinding>;
+  reconnectSession?(input: AdapterSessionInput): Promise<RuntimeBinding>;
   runTurn(binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<AdapterRuntimeEvent>;
   cancel(binding: RuntimeBinding, input: AdapterCancelInput): Promise<void>;
   invokeCommand?(binding: RuntimeBinding, input: AdapterCommandInput): AsyncIterable<AdapterRuntimeEvent>;

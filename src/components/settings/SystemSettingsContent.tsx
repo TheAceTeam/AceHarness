@@ -19,12 +19,10 @@ import { ConfirmModal, type ConfirmModalVariant } from '@/components/ui/confirm-
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Switch } from '@/components/ui/switch';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { Progress } from '@/components/ui/progress';
-import { MemoryV2DiagnosticsPanel } from '@/components/memory-v2/MemoryV2DiagnosticsPanel';
-import { MemoryV2GovernancePanel } from '@/components/memory-v2/MemoryV2GovernancePanel';
+import { EnvVarsEditor } from '@/components/EnvVarsDialog';
 import { Download, RefreshCw } from 'lucide-react';
 import {
   cangjieSdkApi,
@@ -34,62 +32,6 @@ import {
   type SdkChannel,
   type SdkOverviewResponse,
 } from '@/lib/core/api';
-
-const ENGINE_ENV_DESCRIPTIONS = [
-  {
-    id: 'claude',
-    label: 'Claude',
-    description: 'Claude wrapper 会把这些值传给 Claude Code 进程；这里仅说明真实读取的变量，不提供编辑入口。',
-    vars: [
-      { key: 'ANTHROPIC_AUTH_TOKEN', description: 'Claude Code 使用的认证令牌。' },
-      { key: 'ANTHROPIC_BASE_URL', description: 'Claude Code 请求地址；设置后会同步写入 Claude Code base URL。' },
-      { key: 'CLAUDE_CODE_BASE_URL', description: 'Claude Code base URL 兼容变量，代码会归一化为 ANTHROPIC_BASE_URL。' },
-      { key: 'CLAUDE_CODE_API_BASE_URL', description: 'Claude Code API base URL 兼容变量，代码会归一化为 ANTHROPIC_BASE_URL。' },
-      { key: 'ACE_CLAUDE_CODE_EXECUTABLE', description: '指定 ACEHarness 使用的 Claude Code 可执行文件。' },
-      { key: 'CLAUDE_CODE_EXECUTABLE', description: 'Claude Code 可执行文件备用变量。' },
-    ],
-  },
-  {
-    id: 'codex',
-    label: 'Codex',
-    description: 'Codex wrapper 会把这些值传给 Codex SDK；这里仅说明真实读取的变量，不提供编辑入口。',
-    vars: [
-      { key: 'OPENAI_API_KEY', description: 'Codex SDK 使用的 API 密钥。' },
-      { key: 'OPENAI_BASE_URL', description: 'Codex SDK 使用的 base URL；设置后会写入 Codex model provider 配置。' },
-    ],
-  },
-  {
-    id: 'opencode',
-    label: 'OpenCode',
-    description: 'OpenCode 相关代码读取这些运行参数和配置目录变量；模型密钥通常由 OpenCode 自身配置或模型路由处理。',
-    vars: [
-      { key: 'OPENCODE_CONFIG_DIR', description: '指定 OpenCode 全局配置目录。' },
-      { key: 'ACE_OPENCODE_STREAM_TIMEOUT_MS', description: 'OpenCode HTTP stream 总超时时间，单位毫秒。' },
-      { key: 'ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS', description: 'OpenCode HTTP stream 空闲超时时间，单位毫秒。' },
-    ],
-  },
-  {
-    id: 'kiro',
-    label: 'Kiro',
-    description: '当前项目的 Kiro wrapper 只启动 kiro-cli 并传入模型参数，代码里没有定义专属 Kiro 环境变量 schema。',
-    vars: [],
-  },
-  {
-    id: 'other-cli',
-    label: '其他 CLI',
-    description: '这里只列当前代码或配置中明确出现的其他 CLI 相关变量。',
-    vars: [
-      { key: 'GEMINI_MODEL', description: 'Gemini CLI 模型覆盖变量，见模型默认配置注释。' },
-      { key: 'MAGIC_CLI_PATH', description: '指定 Magic CLI 可执行文件路径。' },
-      { key: 'ACE_NGA_SDK_BASE_URL', description: 'NGA SDK 连接外部服务地址；未设置时启动本地 serve。' },
-      { key: 'ACE_NGA_SDK_COMMAND', description: '指定 NGA SDK 启动命令。' },
-      { key: 'ACE_NGA_BIN', description: 'NGA SDK 启动命令备用变量。' },
-      { key: 'ACE_CODEGENIE_SDK_BASE_URL', description: 'CodeGenie SDK 连接外部服务地址；未设置时启动本地 serve。' },
-      { key: 'ACE_CODEGENIE_SDK_COMMAND', description: '指定 CodeGenie SDK 启动命令。' },
-      { key: 'ACE_CODEGENIE_BIN', description: 'CodeGenie SDK 启动命令备用变量。' },
-    ],
-  },
-] as const;
 
 interface EmailNotificationForm {
   enabled: boolean;
@@ -112,17 +54,12 @@ interface WorkspaceExperienceForm {
   onePersonCompanyOnboardingSeen: boolean;
 }
 
-interface AgentMemoryForm {
-  captureEnabled: boolean;
-  governanceMode: 'manual' | 'review' | 'auto';
-}
-
 interface RuntimeDebugForm {
   acpxTraceEnabled: boolean;
   acpxTraceDirectory: string;
 }
 
-type SettingsSectionId = 'system' | 'memory' | 'runtime' | 'security' | 'advanced';
+type SettingsSectionId = 'system' | 'runtime' | 'security' | 'environment';
 
 type ConfirmRequest = {
   open: boolean;
@@ -135,16 +72,15 @@ type ConfirmRequest = {
 };
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSectionId; label: string; description: string }> = [
-  { id: 'system', label: 'System', description: 'Workspace defaults, notifications, and cache parameters.' },
-  { id: 'memory', label: 'Memory', description: 'Global Memory V2 governance, audit, and cutover diagnostics.' },
-  { id: 'runtime', label: '工具链', description: '托管 SDK 与系统环境。' },
-  { id: 'security', label: 'Security', description: 'Tokens and secret-bearing notification settings.' },
-  { id: 'advanced', label: 'Advanced', description: 'Reference material and lower-frequency controls.' },
+  { id: 'system', label: '系统', description: '工作区默认值、通知和缓存参数。' },
+  { id: 'runtime', label: '工具链', description: '托管 SDK 与运行参数。' },
+  { id: 'security', label: '安全', description: 'Token 与安全通知设置。' },
+  { id: 'environment', label: '环境变量', description: 'CLI 的系统默认启动配置。' },
 ];
 
 function getManagedSourceLabel(source: SdkOverviewResponse['effective']['source']) {
   if (source === 'managed') return '托管 SDK';
-  return '未启用';
+  return '系统环境';
 }
 
 function getChannelLabel(channel: SdkChannel) {
@@ -195,10 +131,6 @@ export default function SystemSettingsContent() {
     defaultEntry: 'home',
     onePersonCompanyOnboardingSeen: false,
   });
-  const [agentMemoryForm, setAgentMemoryForm] = useState<AgentMemoryForm>({
-    captureEnabled: false,
-    governanceMode: 'review',
-  });
   const [runtimeDebugForm, setRuntimeDebugForm] = useState<RuntimeDebugForm>({
     acpxTraceEnabled: false,
     acpxTraceDirectory: '',
@@ -217,12 +149,9 @@ export default function SystemSettingsContent() {
   );
   const experienceDirty = experienceBaseline !== '' && JSON.stringify({
     workspaceExperience: workspaceExperienceForm,
-    agentMemory: agentMemoryForm,
     runtimeDebug: runtimeDebugForm,
   }) !== experienceBaseline;
   const engineCacheDirty = engineAvailabilityCacheMinutes !== engineAvailabilityCacheBaseline;
-  const systemSaving = tokenSaving || emailSaving || experienceSaving || sdkActionKey !== null;
-
   const groupedCatalog = useMemo(() => {
     const groups: Record<SdkChannel, SdkCatalogEntry[]> = { nightly: [], sts: [], lts: [] };
     for (const entry of sdkOverview?.catalog || []) {
@@ -270,10 +199,6 @@ export default function SystemSettingsContent() {
         defaultEntry: settings.workspaceExperience?.defaultEntry || (settings.workspaceExperience?.mode === 'one-person-company' ? 'office' : 'home'),
         onePersonCompanyOnboardingSeen: Boolean(settings.workspaceExperience?.onePersonCompanyOnboardingSeen),
       } satisfies WorkspaceExperienceForm;
-      const nextAgentMemoryForm = {
-        captureEnabled: Boolean(settings.agentMemory?.captureEnabled),
-        governanceMode: settings.agentMemory?.governanceMode || 'review',
-      } satisfies AgentMemoryForm;
       const nextRuntimeDebugForm = {
         acpxTraceEnabled: Boolean(settings.runtimeDebug?.acpxTraceEnabled),
         acpxTraceDirectory: settings.runtimeDebug?.acpxTraceDirectory || '',
@@ -296,9 +221,8 @@ export default function SystemSettingsContent() {
       setEngineAvailabilityCacheMinutes(String(settings.engineAvailabilityCacheMinutes || 30));
       setEngineAvailabilityCacheBaseline(String(settings.engineAvailabilityCacheMinutes || 30));
       setWorkspaceExperienceForm(nextWorkspaceExperienceForm);
-      setAgentMemoryForm(nextAgentMemoryForm);
       setRuntimeDebugForm(nextRuntimeDebugForm);
-      setExperienceBaseline(JSON.stringify({ workspaceExperience: nextWorkspaceExperienceForm, agentMemory: nextAgentMemoryForm, runtimeDebug: nextRuntimeDebugForm }));
+      setExperienceBaseline(JSON.stringify({ workspaceExperience: nextWorkspaceExperienceForm, runtimeDebug: nextRuntimeDebugForm }));
       setEmailForm(nextEmailForm);
       setEmailBaseline(normalizeEmailFormForCompare(nextEmailForm));
     } catch (error: any) {
@@ -417,16 +341,15 @@ export default function SystemSettingsContent() {
     try {
       await systemSettingsApi.save({
         workspaceExperience: workspaceExperienceForm,
-        agentMemory: agentMemoryForm,
         runtimeDebug: {
           acpxTraceEnabled: runtimeDebugForm.acpxTraceEnabled,
         },
       });
-      setExperienceBaseline(JSON.stringify({ workspaceExperience: workspaceExperienceForm, agentMemory: agentMemoryForm, runtimeDebug: runtimeDebugForm }));
-      toast('success', '体验与记忆设置已保存');
+      setExperienceBaseline(JSON.stringify({ workspaceExperience: workspaceExperienceForm, runtimeDebug: runtimeDebugForm }));
+      toast('success', '工作区体验设置已保存');
       await loadTokenSettings();
     } catch (error: any) {
-      const message = error?.message || '保存体验与记忆设置失败';
+      const message = error?.message || '保存工作区体验设置失败';
       setExperienceError(message);
       toast('error', message);
     } finally {
@@ -583,8 +506,8 @@ export default function SystemSettingsContent() {
           <DataCard className="p-0">
             <FormSection
               className="px-5"
-              title="系统工作区与 Agent 记忆"
-              description="这些是系统级默认值，会影响新会话、会议室、办公室和工作流运行时行为，不属于个人账号资料。"
+              title="系统工作区体验与运行日志"
+              description="配置新会话、会议室、办公室和工作流的默认体验。"
               actions={(
                 <Button size="sm" onClick={saveWorkspaceExperience} disabled={experienceSaving || tokenLoading}>
                   {experienceSaving ? '保存中...' : '保存设置'}
@@ -621,7 +544,7 @@ export default function SystemSettingsContent() {
                 />
                 <FormField
                   label="默认入口"
-                  description="用于系统级启动入口，不覆盖个人资料。"
+                  description="用于选择系统启动后默认进入的工作区。"
                   control={(
                     <Select
                       value={workspaceExperienceForm.defaultEntry}
@@ -634,39 +557,6 @@ export default function SystemSettingsContent() {
                         <SelectItem value="meeting-room">会议室</SelectItem>
                         <SelectItem value="office">办公室</SelectItem>
                         <SelectItem value="workflows">工作流</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <FormField
-                  label="记忆捕获"
-                  description="关闭后，AI 不会写入新的记忆；已有 Memory V2 索引仍按协议参与按需读取。"
-                  control={(
-                    <div className="flex h-10 items-center">
-                      <Switch
-                        checked={agentMemoryForm.captureEnabled}
-                        onCheckedChange={(checked) => setAgentMemoryForm((prev) => ({ ...prev, captureEnabled: checked }))}
-                        disabled={experienceSaving}
-                      />
-                    </div>
-                  )}
-                />
-                <FormField
-                  label="长期记忆治理"
-                  description="控制长期记忆候选的服务端生命周期；不会改变 AI 对短期/长期的自主分类。"
-                  control={(
-                    <Select
-                      value={agentMemoryForm.governanceMode}
-                      onValueChange={(value) => setAgentMemoryForm((prev) => ({ ...prev, governanceMode: value as AgentMemoryForm['governanceMode'] }))}
-                      disabled={experienceSaving}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="manual">全部人工审核</SelectItem>
-                        <SelectItem value="review">长期记忆待审核</SelectItem>
-                        <SelectItem value="auto">长期记忆自动生效</SelectItem>
                       </SelectContent>
                     </Select>
                   )}
@@ -731,13 +621,6 @@ export default function SystemSettingsContent() {
               />
             </FormSection>
           </DataCard>
-        ) : null}
-
-        {activeSection === 'memory' ? (
-          <div className="space-y-8">
-            <MemoryV2GovernancePanel />
-            <MemoryV2DiagnosticsPanel />
-          </div>
         ) : null}
 
         {activeSection === 'runtime' ? (
@@ -894,7 +777,7 @@ export default function SystemSettingsContent() {
               >
                 {!gitcodeConfigured && !tokenLoading ? (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                    尚未配置 GitCode Token，SDK 检测和下载功能将不可用。
+                     配置 GitCode Token 后即可使用托管 SDK 检测和下载。
                   </div>
                 ) : null}
                 {tokenError ? (
@@ -972,7 +855,7 @@ export default function SystemSettingsContent() {
                 />
                 <FormField
                   label="抄送邮箱"
-                  description="不填写时，只发给当前工作流运行的发起人邮箱。"
+                  description="可添加团队邮箱，让相关成员同步收到提醒。"
                   control={(
                     <Textarea
                       value={emailForm.ccEmails}
@@ -988,57 +871,16 @@ export default function SystemSettingsContent() {
           </div>
         ) : null}
 
-        {activeSection === 'advanced' ? (
-          <div className="space-y-5">
-            <DataCard>
-              <DataCardHeader>
-                <div>
-                  <DataCardTitle>高级设置边界</DataCardTitle>
-                  <DataCardDescription>第一批实现保留原有功能，并把低频参考信息放在 Advanced，避免挤占常用系统、安全与工具链配置。</DataCardDescription>
-                </div>
-                <StatusPill tone="accent">Advanced</StatusPill>
-              </DataCardHeader>
-              <DataCardMeta>
-                <StatusPill tone="neutral" dot={false}>没有个人 Account 表单</StatusPill>
-                <StatusPill tone="neutral" dot={false}>不含 Channels 设置</StatusPill>
-                <StatusPill tone="warning" dot={false}>未新增 reset/test API</StatusPill>
-              </DataCardMeta>
-            </DataCard>
-            <DataCard className="p-0">
-              <FormSection
-                className="px-5"
-                title="环境变量说明"
-                description="这里只展示说明；环境变量由宿主系统或运行环境提供，系统设置页不提供编辑、保存或删除入口。"
-              >
-                <Tabs defaultValue="claude" className="space-y-4">
-                  <TabsList className="flex h-auto flex-wrap justify-start">
-                    {ENGINE_ENV_DESCRIPTIONS.map((engine) => (
-                      <TabsTrigger key={engine.id} value={engine.id}>
-                        {engine.label}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                  {ENGINE_ENV_DESCRIPTIONS.map((engine) => (
-                    <TabsContent key={engine.id} value={engine.id} className="mt-0 space-y-3">
-                      <p className="text-sm text-muted-foreground">{engine.description}</p>
-                      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm text-muted-foreground">
-                        {engine.vars.length > 0 ? engine.vars.map((item) => (
-                          <div key={item.key} className="contents">
-                            <code className="font-mono text-primary">{item.key}</code>
-                            <span>{item.description}</span>
-                          </div>
-                        )) : (
-                          <div className="col-span-2 rounded-md border border-border bg-muted/20 px-3 py-2">
-                            当前代码未声明可配置的专属环境变量。
-                          </div>
-                        )}
-                      </div>
-                    </TabsContent>
-                  ))}
-                </Tabs>
-              </FormSection>
-            </DataCard>
-          </div>
+        {activeSection === 'environment' ? (
+          <DataCard className="p-0">
+            <FormSection
+              className="px-5"
+              title="系统 CLI 环境变量"
+              description="集中管理 CLI 的系统默认启动配置，个人设置中的同名配置会优先应用。"
+            >
+              <EnvVarsEditor scope="system" inline />
+            </FormSection>
+          </DataCard>
         ) : null}
 
       </div>

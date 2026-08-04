@@ -6,7 +6,7 @@ import { openRuntimeSqliteDatabase, type RuntimeSqliteDatabase } from '@/lib/run
 import { RuntimeSqliteStore } from '@/lib/runtime-agent/sqlite/runtime-store';
 import { responseJson } from './helpers/route-helpers';
 
-describe('/api/agents runtime registry', () => {
+describe('/api/runtime-agents registry', () => {
   let tempDir: string | undefined;
   let db: RuntimeSqliteDatabase | undefined;
 
@@ -58,7 +58,7 @@ describe('/api/agents runtime registry', () => {
       getWorkspaceDataFile: (...segments: string[]) => path.join(tempDir!, ...segments),
     }));
 
-    const route = await import('@/server/api-routes/agents/route');
+    const route = await import('@/server/api-routes/runtime-agents/route');
     const response = await route.GET();
 
     expect(response.status).toBe(200);

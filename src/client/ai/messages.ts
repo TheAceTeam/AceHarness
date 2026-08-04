@@ -7,8 +7,9 @@ import {
   type ToolCall,
   type UIMessage,
 } from '@tanstack/ai';
-import { upsertAgentMessage, type AgentMessageRow } from '../db/collections';
+import { agentMessagesCollection, upsertAgentMessage, type AgentMessageRow } from '../db/collections';
 import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
+import { mergeRuntimeToolEvents, type RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
 export type AceAiMessage = UIMessage<{
   runId?: string;
@@ -50,12 +51,17 @@ export type AceStreamChunk = {
   status: AgentMessageRow['status'];
   chunk: string;
   toolCalls: Array<AceToolCallState>;
+  toolEvents: Array<RuntimeToolEvent>;
   diagnostics?: AceDiagnosticMetadata;
+};
+
+type PreviousAceStreamChunk = Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> & {
+  toolEvents?: Array<RuntimeToolEvent>;
 };
 
 export function normalizeAceStreamChunk(
   chunk: StreamChunk | Record<string, unknown>,
-  previous?: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'>,
+  previous?: PreviousAceStreamChunk,
 ): AceStreamChunk {
   const record = asRecord(chunk);
   const id = stringValue(record.id) || stringValue(record.messageId) || previous?.id || generateMessageId();
@@ -65,6 +71,7 @@ export function normalizeAceStreamChunk(
     ...((previous?.toolCalls || []) as Array<AceToolCallState>),
     ...readToolCalls(record),
   ]);
+  const toolEvents = mergeToolEventList(previous?.toolEvents || [], readRuntimeToolEvents(record));
 
   return {
     id,
@@ -73,6 +80,7 @@ export function normalizeAceStreamChunk(
     status,
     chunk: text,
     toolCalls,
+    toolEvents,
     diagnostics: normalizeDiagnosticMetadata(record.metadata || record.diagnostics || record),
   };
 }
@@ -138,6 +146,7 @@ export function agentMessageRowFromAiMessage(
     content: textParts.map((part) => part.content).join(''),
     chunks: textParts.map((part) => part.content).filter(Boolean),
     toolCalls,
+    toolEvents: [],
     diagnostics: options.diagnostics,
     createdAt: message.createdAt?.toISOString?.() || now,
     updatedAt: now,
@@ -158,6 +167,7 @@ export function agentMessageRowFromStreamChunk(
     content: chunk.content,
     chunks: chunk.chunk ? [chunk.chunk] : [],
     toolCalls: chunk.toolCalls,
+    toolEvents: chunk.toolEvents,
     diagnostics: chunk.diagnostics,
     createdAt: now,
     updatedAt: now,
@@ -167,7 +177,7 @@ export function agentMessageRowFromStreamChunk(
 export function normalizeAceSseMessageEvent(
   eventName: string,
   data: string | Record<string, unknown>,
-  previous?: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'>,
+  previous?: PreviousAceStreamChunk,
 ): AceStreamChunk {
   const parsed = typeof data === 'string' ? parseSseJson(data) : data;
   const record = asRecord(parsed);
@@ -194,18 +204,26 @@ export function normalizeAceSseMessageEvent(
     type: eventName,
     status: eventStatus(eventName, record),
     toolCalls: readSseToolCalls(record, payload),
+    toolEvents: [...readRuntimeToolEvents(record), ...readRuntimeToolEvents(payload)],
     diagnostics: normalizeDiagnosticMetadata(record.diagnostics || record.metadata || payload.diagnostics || payload.metadata || record),
   }, previous);
 }
 
 export function storeAceAgentMessage(row: AgentMessageRow) {
-  upsertAgentMessage(row);
-  return row;
+  const existing = agentMessagesCollection.get(row.id);
+  const next = existing ? {
+    ...existing,
+    ...row,
+    toolCalls: normalizeToolCalls([...(existing.toolCalls || []), ...(row.toolCalls || [])]),
+    toolEvents: mergeToolEventList(existing.toolEvents || [], row.toolEvents || []),
+  } : row;
+  upsertAgentMessage(next);
+  return next;
 }
 
 export function storeWorkflowSseEventAsAgentMessage(
   event: Record<string, unknown>,
-  previous?: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'>,
+  previous?: PreviousAceStreamChunk,
 ) {
   const type = stringValue(event.type) || 'workflow-event';
   const data = asRecord(event.data);
@@ -244,7 +262,7 @@ export function storeChatStreamSseEventAsAgentMessage(
     frontendSessionId?: string;
     streamScope?: string;
   } = {},
-  previous?: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'>,
+  previous?: PreviousAceStreamChunk,
 ) {
   const record = typeof data === 'string' ? parseSseJson(data) : asRecord(data);
   const rawContent = stringValue(record.content)
@@ -304,6 +322,37 @@ function readSseToolCalls(record: Record<string, unknown>, payload: Record<strin
   ];
 }
 
+function mergeToolEventList(
+  current: readonly RuntimeToolEvent[],
+  incoming: readonly RuntimeToolEvent[],
+): RuntimeToolEvent[] {
+  let merged = [...current];
+  for (const tool of incoming) merged = mergeRuntimeToolEvents(merged, tool);
+  return merged;
+}
+
+function readRuntimeToolEvents(record: Record<string, unknown>): RuntimeToolEvent[] {
+  const candidates = [
+    record.tool,
+    ...(Array.isArray(record.toolEvents) ? record.toolEvents : []),
+  ];
+  return candidates.flatMap((candidate) => {
+    const tool = asRecord(candidate);
+    const id = stringValue(tool.id);
+    const toolName = stringValue(tool.toolName);
+    const title = stringValue(tool.title);
+    const status = stringValue(tool.status);
+    if (!id || !toolName || !title || !['running', 'completed', 'failed'].includes(status || '')) return [];
+    return [{
+      ...(tool as RuntimeToolEvent),
+      id,
+      toolName,
+      title,
+      status: status as RuntimeToolEvent['status'],
+    }];
+  });
+}
+
 function readChunkText(record: Record<string, unknown>) {
   return stringValue(record.text)
     || stringValue(record.content)
@@ -325,8 +374,7 @@ function readWorkflowEventContent(
     || stringValue(payload.output)
     || stringValue(payload.message)
     || stringValue(payload.summary)
-    || stringValue(payload.status)
-    || type;
+    || '';
 }
 
 function readChunkStatus(record: Record<string, unknown>): AgentMessageRow['status'] {

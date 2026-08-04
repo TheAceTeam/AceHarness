@@ -4,25 +4,12 @@ import { tmpdir } from 'os';
 import { mkdtempSync } from 'fs';
 import { join } from 'path';
 
-function validPhaseBasedConfig(projectRoot: string) {
-  return {
-    workflow: {
-      name: 'Test Workflow',
-      phases: [{
-        name: 'Phase 1',
-        steps: [{ name: 'Step 1', agent: 'developer', task: 'Do something' }],
-      }],
-      supervisor: { enabled: true, agent: 'default-supervisor' },
-    },
-    context: { projectRoot },
-  };
-}
-
 function validStateMachineConfig(projectRoot: string) {
   return {
     workflow: {
       name: 'Test SM',
       mode: 'state-machine',
+      supervisor: { enabled: true, agent: 'default-supervisor' },
       states: [
         {
           name: 'Init',
@@ -49,28 +36,58 @@ function validStateMachineConfig(projectRoot: string) {
 }
 
 describe('validateWorkflowDraft', () => {
-  test('valid phase-based config passes validation', () => {
+  test('lightweight config normalization removes the supervisor default', () => {
+    const config = {
+      workflow: {
+        name: 'Lightweight workflow',
+        mode: 'state-machine',
+        profile: 'lightweight',
+        lightweight: {},
+        states: [{
+          name: 'Execute',
+          isInitial: true,
+          isFinal: true,
+          steps: [{
+            name: 'Run tasklist',
+            agent: 'developer',
+            task: 'Execute the tasklist',
+            skills: ['aceharness-tasklist'],
+          }],
+          transitions: [],
+        }],
+      },
+      context: { projectRoot: mkdtempSync(join(tmpdir(), 'test-')) },
+    };
+
+    const result = validateWorkflowDraft(config);
+
+    expect(result.ok).toBe(true);
+    expect((result.normalized as any).workflow.supervisor).toBeUndefined();
+    expect((result.normalized as any).workflow.lightweight?.tasklistDirectory).toBeUndefined();
+  });
+
+  test('valid state-machine config passes validation', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
-    const result = validateWorkflowDraft(validPhaseBasedConfig(tmpDir));
+    const result = validateWorkflowDraft(validStateMachineConfig(tmpDir));
     expect(result.ok).toBe(true);
     expect(result.normalized).not.toBeNull();
     expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
   });
 
   test('empty projectRoot is an error', () => {
-    const result = validateWorkflowDraft(validPhaseBasedConfig(''));
+    const result = validateWorkflowDraft(validStateMachineConfig(''));
     expect(result.ok).toBe(false);
     expect(result.issues.some((i) => i.severity === 'error' && i.path.includes('projectRoot'))).toBe(true);
   });
 
   test('relative projectRoot is an error', () => {
-    const result = validateWorkflowDraft(validPhaseBasedConfig('relative/path'));
+    const result = validateWorkflowDraft(validStateMachineConfig('relative/path'));
     expect(result.ok).toBe(false);
     expect(result.issues.some((i) => i.message.includes('绝对路径'))).toBe(true);
   });
 
   test('nonexistent projectRoot is an error', () => {
-    const result = validateWorkflowDraft(validPhaseBasedConfig('/nonexistent/path/abc123'));
+    const result = validateWorkflowDraft(validStateMachineConfig('/nonexistent/path/abc123'));
     expect(result.ok).toBe(false);
     expect(result.issues.some((i) => i.message.includes('不存在'))).toBe(true);
   });
@@ -146,26 +163,11 @@ describe('validateWorkflowDraft', () => {
 
   test('missing supervisor is a warning', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
-    const config = validPhaseBasedConfig(tmpDir);
+    const config = validStateMachineConfig(tmpDir);
     delete (config.workflow as any).supervisor;
     const result = validateWorkflowDraft(config);
     expect(result.ok).toBe(true); // warning, not error
     expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-  });
-
-  test('phase steps cannot use the configured supervisor agent', () => {
-    const config = validPhaseBasedConfig('{project_root}');
-    config.workflow.phases[0].steps[0].agent = 'default-supervisor';
-
-    const result = validateWorkflowDraft(config, { mode: 'portable' });
-
-    expect(result.ok).toBe(false);
-    expect(result.issues.some((i) => (
-      i.severity === 'error'
-      && i.code === 'supervisor_step_agent'
-      && i.path.join('.') === 'workflow.phases.0.steps.0.agent'
-      && i.message.includes('不能使用 supervisor')
-    ))).toBe(true);
   });
 
   test('state steps cannot use the configured supervisor agent', () => {
@@ -184,17 +186,10 @@ describe('validateWorkflowDraft', () => {
   });
 
   test('portable mode allows placeholder projectRoot and unresolved agents', () => {
-    const config = {
-      workflow: {
-        name: 'Portable Workflow',
-        phases: [{
-          name: 'Phase 1',
-          steps: [{ name: 'Step 1', agent: 'external-agent', task: 'Do something' }],
-        }],
-        supervisor: { enabled: true, agent: 'external-supervisor' },
-      },
-      context: { projectRoot: '{project_root}' },
-    };
+    const config = validStateMachineConfig('{project_root}');
+    config.workflow.name = 'Portable Workflow';
+    config.workflow.supervisor = { enabled: true, agent: 'external-supervisor' };
+    config.workflow.states[0].steps[0].agent = 'external-agent';
 
     const result = validateWorkflowDraft(config, { mode: 'portable' });
     expect(result.ok).toBe(true);
@@ -275,20 +270,6 @@ describe('validateWorkflowDraft', () => {
       issue.path.join('.') === 'workflow.states.0.steps.0.type'
       && issue.severity === 'error'
     ))).toBe(true);
-  });
-
-  test('phase-based workflows reject subworkflow steps', () => {
-    const config = validPhaseBasedConfig('{project_root}');
-    (config.workflow.phases[0].steps as any[]) = [{
-      name: 'Run child workflow',
-      type: 'subworkflow',
-      workflow: 'child.yaml',
-    }];
-
-    const result = validateWorkflowDraft(config, { mode: 'portable' });
-
-    expect(result.ok).toBe(false);
-    expect(result.issues.some((i) => i.message.includes('仅支持状态机模式'))).toBe(true);
   });
 
   test('state-machine rejects unsafe subworkflow config references', () => {

@@ -1,5 +1,10 @@
 import { extractJsonObject, extractStructuredResult, getResultSections } from '@/lib/ai/result-channel';
 import type { ClarificationFormResult, ClarificationQuestionItem, PlanDraftResult } from '@/lib/ai/result-normalizers';
+import {
+  LIGHTWEIGHT_TASKLIST_SKILL,
+  LIGHTWEIGHT_WORKFLOW_DESCRIPTION,
+  LIGHTWEIGHT_WORKFLOW_PROFILE,
+} from '@/lib/workflow/lightweight';
 
 export const WORKFLOW_CLARIFICATION_SUMMARY_KIND = 'workflow_clarification_summary';
 export const WORKFLOW_CLARIFICATION_FACTS_KIND = 'workflow_clarification_facts';
@@ -14,6 +19,8 @@ export const WORKFLOW_STATE_OUTLINE_KIND = 'workflow_state_outline';
 export const WORKFLOW_STATE_STEPS_KIND = 'workflow_state_steps';
 export const WORKFLOW_PATCH_ITEM_KIND = 'workflow_patch_item';
 export const SPEC_REVISION_ITEM_KIND = 'spec_revision_item';
+
+export type WorkflowCreationMode = 'lightweight' | 'state-machine';
 
 export type WorkflowCreationItemKind =
   | typeof WORKFLOW_CLARIFICATION_SUMMARY_KIND
@@ -113,6 +120,7 @@ export interface WorkflowCreationState {
     tasks: SpecTaskItem[];
   };
   workflow: {
+    mode: WorkflowCreationMode;
     outline: WorkflowOutlineStateItem[];
     stateSteps: Record<string, any[]>;
     stateTransitions: Record<string, any[]>;
@@ -536,6 +544,7 @@ export function createEmptyWorkflowCreationState(): WorkflowCreationState {
       tasks: [],
     },
     workflow: {
+      mode: 'state-machine',
       outline: [],
       stateSteps: {},
       stateTransitions: {},
@@ -629,11 +638,17 @@ export function validateWorkflowCreationItem(
     const error = requireStringField(source, ['title', 'name'], 'data.title', '任务标题', '补齐 id、title、requirementIds、actions、deliverables、validation。');
     if (error) errors.push(error);
   } else if (result.kind === WORKFLOW_STATE_OUTLINE_KIND) {
+    const workflowMode = cleanString(data.workflowMode);
+    if (!['lightweight', 'state-machine'].includes(workflowMode)) {
+      errors.push(validationError('data.workflowMode', 'workflowMode 缺失或不是 lightweight/state-machine。', '在 data.workflowMode 填写 lightweight 或 state-machine，让系统按选定模式装配工作流。'));
+    }
     const states = normalizeOutlineStates(data);
     if (!Array.isArray(data.states)) {
       errors.push(validationError('data.states', `states 缺失或不是数组。当前 states=${describeValue(data.states)}。当前 data keys=${describeDataKeys(data)}。`, '按主要执行顺序提供至少 2 个状态对象，并给最后一个状态设置 isFinal=true；需要非线性流转时可在状态上补 transitions。'));
-    } else if (states.length < 2) {
+    } else if (workflowMode === 'state-machine' && states.length < 2) {
       errors.push(validationError('data.states', `有效状态少于 2 个。当前 states.length=${data.states.length}，规范化后有效状态数=${states.length}，原始 states=${previewValue(data.states, 500)}。`, '提供至少 2 个状态对象，每个对象至少包含 name；最后一个状态设置 isFinal=true。'));
+    } else if (workflowMode === 'lightweight' && states.length < 1) {
+      errors.push(validationError('data.states', `有效状态少于 1 个。当前 states.length=${data.states.length}，规范化后有效状态数=${states.length}。`, '提供一个执行状态，并设置 isFinal=true。'));
     }
   } else if (result.kind === WORKFLOW_STATE_STEPS_KIND) {
     const stateName = cleanString(data.stateName);
@@ -665,7 +680,7 @@ export function validateWorkflowCreationItem(
     }
   } else if (result.kind === WORKFLOW_PATCH_ITEM_KIND) {
     if (!['workflow', 'state', 'step'].includes(data.scope)) errors.push(validationError('data.scope', 'scope 不是 workflow/state/step。', '根据当前优化目标把 scope 改为 workflow、state 或 step。'));
-    if (!['phase-based', 'state-machine'].includes(data.workflowMode)) errors.push(validationError('data.workflowMode', 'workflowMode 不是 phase-based/state-machine。', '按当前工作流模式填写 phase-based 或 state-machine。'));
+    if (data.workflowMode !== 'state-machine') errors.push(validationError('data.workflowMode', 'workflowMode 必须是 state-machine。', '填写 "workflowMode":"state-machine"。'));
     if (!data.patch || typeof data.patch !== 'object') errors.push(validationError('data.patch', 'patch 缺失或不是对象。', '在 data.patch 中放入当前 scope 对应的 workflow、state 或 step 对象。'));
   } else if (result.kind === SPEC_REVISION_ITEM_KIND) {
     if (typeof data.apply !== 'boolean') errors.push(validationError('data.apply', 'apply 缺失或不是 boolean。', '明确填写 "apply":true 或 "apply":false。'));
@@ -677,7 +692,8 @@ export function validateWorkflowCreationItem(
 export function applyWorkflowCreationItem(state: WorkflowCreationState, result: WorkflowCreationItemResult): WorkflowCreationState {
   const next: WorkflowCreationState = JSON.parse(JSON.stringify(state || createEmptyWorkflowCreationState()));
   const data = result.data || {};
-  if (!next.workflow) next.workflow = { outline: [], stateSteps: {}, stateTransitions: {} };
+  if (!next.workflow) next.workflow = { mode: 'state-machine', outline: [], stateSteps: {}, stateTransitions: {} };
+  if (next.workflow.mode !== 'lightweight' && next.workflow.mode !== 'state-machine') next.workflow.mode = 'state-machine';
   if (!next.workflow.stateSteps) next.workflow.stateSteps = {};
   if (!next.workflow.stateTransitions) next.workflow.stateTransitions = {};
 
@@ -735,6 +751,9 @@ export function applyWorkflowCreationItem(state: WorkflowCreationState, result: 
       break;
     }
     case WORKFLOW_STATE_OUTLINE_KIND:
+      if (data.workflowMode === 'lightweight' || data.workflowMode === 'state-machine') {
+        next.workflow.mode = data.workflowMode;
+      }
       next.workflow.outline = normalizeOutlineStates(data);
       break;
     case WORKFLOW_STATE_STEPS_KIND: {
@@ -1254,7 +1273,63 @@ function normalizeWorkflowTransitions(input: {
   return result;
 }
 
+function assembleLightweightWorkflowConfig(state: WorkflowCreationState, input: WorkflowCreationAssemblyInput): any {
+  const outline = state.workflow.outline.length
+    ? normalizeWorkflowOutline(state.workflow.outline)
+    : [];
+  const candidateSteps = outline.flatMap((outlineState) => (
+    Array.isArray(state.workflow.stateSteps?.[outlineState.name])
+      ? state.workflow.stateSteps[outlineState.name]
+      : []
+  ));
+  const candidate = candidateSteps.find((step) => cleanString(step?.task) || cleanString(step?.prompt)) || {};
+  const agents = input.recommendedAgents?.length ? input.recommendedAgents : ['developer'];
+  const supervisorAgent = input.recommendedSupervisorAgent || 'default-supervisor';
+  const agent = replaceSupervisorStepAgent(
+    candidate,
+    pickWorkflowTaskAgent(agents, 0, supervisorAgent),
+    supervisorAgent,
+  ).agent;
+  const task = cleanString(candidate.task)
+    || cleanString(candidate.prompt)
+    || input.requirements
+    || input.description
+    || `完成 ${input.workflowName} 的任务，并产出可审查结果。`;
+
+  return {
+    workflow: {
+      name: input.workflowName,
+      description: input.description || input.requirements || LIGHTWEIGHT_WORKFLOW_DESCRIPTION,
+      mode: 'state-machine',
+      profile: LIGHTWEIGHT_WORKFLOW_PROFILE,
+      lightweight: {},
+      states: [{
+        name: '执行',
+        description: LIGHTWEIGHT_WORKFLOW_DESCRIPTION,
+        isInitial: true,
+        isFinal: true,
+        steps: [{
+          name: cleanString(candidate.name) || '执行任务',
+          type: 'agent',
+          agent: cleanString(agent) || 'developer',
+          task,
+          skills: [LIGHTWEIGHT_TASKLIST_SKILL],
+        }],
+        transitions: [],
+      }],
+    },
+    context: {
+      projectRoot: input.workingDirectory,
+      workspaceMode: input.workspaceMode,
+      requirements: input.requirements || input.description || task,
+    },
+  };
+}
+
 export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, input: WorkflowCreationAssemblyInput): any {
+  if ((state.workflow?.mode || 'state-machine') === 'lightweight') {
+    return assembleLightweightWorkflowConfig(state, input);
+  }
   const outline = state.workflow.outline.length
     ? normalizeWorkflowOutline(state.workflow.outline)
     : normalizeWorkflowOutline([

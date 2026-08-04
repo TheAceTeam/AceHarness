@@ -1,11 +1,24 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { Check, KeyRound, Plus, Save, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { EnvironmentVariables } from '@/components/ai-elements/environment-variables';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { envApi } from '@/lib/core/api';
-import { Plus, Trash2, X } from 'lucide-react';
+import {
+  CLI_ENVIRONMENT_GROUPS,
+  getCliEnvironmentGroupId,
+  getCliEnvironmentVariable,
+  type CliEnvironmentGroupId,
+} from '@/lib/core/cli-environment-variables';
 
 interface EnvVar {
   key: string;
@@ -17,61 +30,12 @@ interface EnvVarError {
   key?: string;
 }
 
-const USER_ENV_GROUPS = [
-  {
-    id: 'claude',
-    title: 'Claude',
-    description: '当前用户自己的 Claude Code 变量。未设置时继续使用系统或宿主环境提供的值。',
-    presets: [
-      { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Claude Code 使用的认证令牌' },
-      { key: 'ANTHROPIC_BASE_URL', label: 'Claude Code 请求地址' },
-      { key: 'CLAUDE_CODE_BASE_URL', label: 'Claude Code base URL 兼容变量' },
-      { key: 'CLAUDE_CODE_API_BASE_URL', label: 'Claude Code API base URL 兼容变量' },
-      { key: 'ACE_CLAUDE_CODE_EXECUTABLE', label: '指定 Claude Code 可执行文件' },
-      { key: 'CLAUDE_CODE_EXECUTABLE', label: 'Claude Code 可执行文件备用变量' },
-    ],
-  },
-  {
-    id: 'codex',
-    title: 'Codex',
-    description: '当前用户自己的 Codex SDK 变量。未设置时继续使用系统或宿主环境提供的值。',
-    presets: [
-      { key: 'OPENAI_API_KEY', label: 'Codex SDK 使用的 API 密钥' },
-      { key: 'OPENAI_BASE_URL', label: 'Codex SDK 使用的 base URL' },
-    ],
-  },
-  {
-    id: 'opencode',
-    title: 'OpenCode',
-    description: 'OpenCode 相关代码读取配置目录和 stream 超时变量；模型密钥通常由 OpenCode 自身配置或模型路由处理。',
-    presets: [
-      { key: 'OPENCODE_CONFIG_DIR', label: '指定 OpenCode 全局配置目录' },
-      { key: 'ACE_OPENCODE_STREAM_TIMEOUT_MS', label: 'OpenCode stream 总超时，单位毫秒' },
-      { key: 'ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS', label: 'OpenCode stream 空闲超时，单位毫秒' },
-    ],
-  },
-  {
-    id: 'kiro',
-    title: 'Kiro',
-    description: '当前项目的 Kiro wrapper 没有声明专属 Kiro 环境变量 schema。',
-    presets: [],
-  },
-  {
-    id: 'other-cli',
-    title: '其他 CLI',
-    description: '当前代码或配置中明确出现的其他 CLI 相关变量。',
-    presets: [
-      { key: 'GEMINI_MODEL', label: 'Gemini CLI 模型覆盖变量' },
-      { key: 'MAGIC_CLI_PATH', label: '指定 Magic CLI 可执行文件路径' },
-      { key: 'ACE_NGA_SDK_BASE_URL', label: 'NGA SDK 外部服务地址' },
-      { key: 'ACE_NGA_SDK_COMMAND', label: '指定 NGA SDK 启动命令' },
-      { key: 'ACE_NGA_BIN', label: 'NGA SDK 启动命令备用变量' },
-      { key: 'ACE_CODEGENIE_SDK_BASE_URL', label: 'CodeGenie SDK 外部服务地址' },
-      { key: 'ACE_CODEGENIE_SDK_COMMAND', label: '指定 CodeGenie SDK 启动命令' },
-      { key: 'ACE_CODEGENIE_BIN', label: 'CodeGenie SDK 启动命令备用变量' },
-    ],
-  },
-];
+export interface EnvVarsEditorProps {
+  scope?: 'system' | 'user';
+  inline?: boolean;
+  onClose?: () => void;
+  onSavingChange?: (saving: boolean) => void;
+}
 
 function validateEnvVars(vars: EnvVar[]) {
   const errors: EnvVarError[] = vars.map(() => ({}));
@@ -79,18 +43,16 @@ function validateEnvVars(vars: EnvVar[]) {
   const keyMap = new Map<string, number[]>();
 
   vars.forEach((item, index) => {
-    const trimmedKey = item.key.trim();
-    const isEmptyRow = !trimmedKey && !item.value.trim() && item.enabled;
+    const trimmedKey = item.key.trim().toUpperCase();
+    if (!trimmedKey && !item.value.trim()) return;
 
     if (!trimmedKey) {
-      if (!isEmptyRow) {
-        errors[index].key = '请输入变量名';
-      }
+      errors[index].key = '请输入变量名';
       return;
     }
 
     if (!keyPattern.test(trimmedKey)) {
-      errors[index].key = '仅支持大写字母、数字和下划线，且不能以数字开头';
+      errors[index].key = '变量名格式不正确';
       return;
     }
 
@@ -101,9 +63,7 @@ function validateEnvVars(vars: EnvVar[]) {
 
   for (const indexes of keyMap.values()) {
     if (indexes.length > 1) {
-      for (const index of indexes) {
-        errors[index].key = '变量名不能重复';
-      }
+      for (const index of indexes) errors[index].key = '变量名不能重复';
     }
   }
 
@@ -113,12 +73,19 @@ function validateEnvVars(vars: EnvVar[]) {
   };
 }
 
-export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: () => void; scope?: 'user' }) {
+export function EnvVarsEditor({
+  onClose,
+  scope = 'user',
+  inline = false,
+  onSavingChange,
+}: EnvVarsEditorProps) {
   const [vars, setVars] = useState<EnvVar[]>([]);
   const [errors, setErrors] = useState<EnvVarError[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [activeGroup, setActiveGroup] = useState<CliEnvironmentGroupId>('claude');
 
   useEffect(() => {
     let cancelled = false;
@@ -126,6 +93,7 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
     const load = async () => {
       setLoading(true);
       setSubmitError(null);
+      setSaved(false);
       try {
         const data = await envApi.get(scope);
         if (cancelled) return;
@@ -133,197 +101,208 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
         setVars(nextVars);
         setErrors(nextVars.map(() => ({})));
       } catch (error: any) {
-        if (cancelled) return;
-        setSubmitError(error?.message || '加载环境变量失败');
+        if (!cancelled) setSubmitError(error?.message || '加载环境变量失败');
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
 
-    load();
+    void load();
     return () => { cancelled = true; };
   }, [scope]);
 
-  const displayVars = useMemo(() => vars, [vars]);
+  const activeGroupDefinition = CLI_ENVIRONMENT_GROUPS.find((group) => group.id === activeGroup)!;
+  const activeRows = useMemo(
+    () => vars
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => getCliEnvironmentGroupId(item.key) === activeGroup),
+    [activeGroup, vars],
+  );
+  const activeKeys = useMemo(() => new Set(activeRows.map(({ item }) => item.key.trim().toUpperCase())), [activeRows]);
+  const configuredCount = vars.filter((item) => item.key.trim() && item.enabled).length;
 
   const updateVar = (index: number, patch: Partial<EnvVar>) => {
-    setVars((prev) => prev.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+    setSaved(false);
+    setVars((previous) => previous.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, ...patch } : item
+    )));
     if (patch.key !== undefined) {
-      setErrors((prev) => prev.map((item, itemIndex) => (itemIndex === index ? { ...item, key: undefined } : item)));
+      setErrors((previous) => previous.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, key: undefined } : item
+      )));
     }
   };
 
-  const addRow = () => {
-    setVars((prev) => [...prev, { key: '', value: '', enabled: true }]);
-    setErrors((prev) => [...prev, {}]);
-  };
-
   const addPreset = (key: string) => {
-    const exists = vars.some((item) => item.key.trim() === key);
-    if (exists) return;
-    setVars((prev) => {
-      if (prev.some((item) => item.key.trim() === key)) return prev;
-      return [...prev, { key, value: '', enabled: true }];
-    });
-    setErrors((prev) => [...prev, {}]);
+    if (vars.some((item) => item.key.trim().toUpperCase() === key)) return;
+    setSaved(false);
+    setVars((previous) => [...previous, { key, value: '', enabled: true }]);
+    setErrors((previous) => [...previous, {}]);
   };
 
   const removeVar = (index: number) => {
-    setVars((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
-    setErrors((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+    setSaved(false);
+    setVars((previous) => previous.filter((_, itemIndex) => itemIndex !== index));
+    setErrors((previous) => previous.filter((_, itemIndex) => itemIndex !== index));
   };
 
   const save = async () => {
-    const normalizedVars = vars.map((item) => ({ ...item, key: item.key.trim() }));
+    const normalizedVars = vars.map((item) => ({ ...item, key: item.key.trim().toUpperCase() }));
     const validation = validateEnvVars(normalizedVars);
     setErrors(validation.errors);
     if (validation.hasErrors) {
-      setSubmitError('请先修正错误后再保存');
+      setSaved(false);
+      setSubmitError('请先完善变量名称');
       return;
     }
 
     setSaving(true);
+    onSavingChange?.(true);
     setSubmitError(null);
     try {
       await envApi.save(scope, normalizedVars.filter((item) => item.key));
-      onClose();
+      setSaved(true);
+      if (!inline) onClose?.();
     } catch (error: any) {
+      setSaved(false);
       setSubmitError(error?.message || '保存环境变量失败');
     } finally {
       setSaving(false);
+      onSavingChange?.(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-background border rounded-xl shadow-2xl w-[720px] max-w-[calc(100vw-2rem)] max-h-[84vh] flex flex-col" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary">key</span>
-            <h2 className="text-base font-semibold">个人环境变量</h2>
-          </div>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="关闭个人环境变量">
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+    <div className={inline ? 'space-y-5' : 'flex min-h-0 flex-1 flex-col overflow-hidden'} data-env-scope={scope}>
+      <div className={inline ? 'space-y-5' : 'min-h-0 flex-1 overflow-y-auto px-6 py-5'}>
+        {loading ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">正在加载 CLI 配置</div>
+        ) : (
+          <div className="space-y-5">
+            {submitError ? (
+              <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{submitError}</div>
+            ) : null}
 
-        <div className="flex-1 overflow-y-auto px-5 py-3">
-          {loading ? (
-            <div className="text-sm text-muted-foreground text-center py-8">加载中...</div>
-          ) : (
-            <div className="space-y-4">
-              {submitError ? (
-                <div className="text-xs text-destructive bg-destructive/10 rounded-md px-2 py-1.5">{submitError}</div>
-              ) : null}
-
-              <div className="grid gap-3 md:grid-cols-2">
-                {USER_ENV_GROUPS.map((group) => (
-                  <div key={group.id} className="rounded-md border bg-muted/20 px-3 py-2">
-                    <div className="text-sm font-medium">{group.title}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">{group.description}</div>
-                    {group.presets.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {group.presets.map((preset) => {
-                        const exists = displayVars.some((item) => item.key.trim() === preset.key);
-                        return (
-                          <Button
-                            key={`${group.id}-${preset.key}`}
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => addPreset(preset.key)}
-                            disabled={exists}
-                            title={preset.label}
-                            className="h-7 px-2 font-mono text-xs"
-                          >
-                            {exists ? '已添加 ' : '添加 '}{preset.key}
-                          </Button>
-                        );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-                        没有可添加的固定变量；需要时可在下方添加自定义变量。
-                      </div>
-                    )}
-                    {group.presets.length > 0 ? (
-                      <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
-                        {group.presets.map((preset) => (
-                          <div key={`${group.id}-${preset.key}-hint`} className="grid grid-cols-[auto_1fr] gap-2">
-                            <code className="font-mono text-primary">{preset.key}</code>
-                            <span>{preset.label}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
+            <Tabs value={activeGroup} onValueChange={(value) => setActiveGroup(value as CliEnvironmentGroupId)} className="space-y-5">
+              <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-4">
+                {CLI_ENVIRONMENT_GROUPS.map((group) => (
+                  <TabsTrigger key={group.id} value={group.id}>{group.label}</TabsTrigger>
                 ))}
-              </div>
+              </TabsList>
 
-              <div className="grid grid-cols-[1fr_1fr_48px_32px] gap-2 px-1 text-xs font-medium text-muted-foreground">
-                <span>变量名</span>
-                <span>变量值</span>
-                <span className="text-center">启用</span>
-                <span></span>
-              </div>
-              {displayVars.map((item, index) => (
-                <div key={index} className="space-y-1">
-                  <div className="grid grid-cols-[1fr_1fr_48px_32px] gap-2 items-center">
-                    <Input
-                      value={item.key}
-                      onChange={(event) => updateVar(index, { key: event.target.value })}
-                      placeholder="例如 OPENAI_API_KEY"
-                      className={`h-8 text-xs font-mono ${errors[index]?.key ? 'border-destructive focus-visible:ring-destructive' : ''}`}
-                    />
-                    <Input
-                      value={item.value}
-                      onChange={(event) => updateVar(index, { value: event.target.value })}
-                      placeholder="只保存当前用户的值"
-                      className="h-8 text-xs font-mono"
-                    />
-                    <div className="flex justify-center">
-                      <Switch
-                        checked={item.enabled}
-                        onCheckedChange={(checked) => updateVar(index, { enabled: checked })}
-                        className="scale-75"
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeVar(index)}
-                      className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={`删除环境变量 ${item.key || index + 1}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+              <TabsContent value={activeGroup} className="mt-0 space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border bg-muted/20 px-4 py-3">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold">{activeGroupDefinition.label}</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">{activeGroupDefinition.description}</p>
                   </div>
-                  {errors[index]?.key ? (
-                    <div className="px-1 text-xs text-destructive">{errors[index].key}</div>
-                  ) : null}
+                  <span className="text-xs text-muted-foreground">{activeRows.length} 项配置</span>
                 </div>
-              ))}
-              {displayVars.length === 0 ? (
-                <div className="text-sm text-muted-foreground text-center py-4">暂无环境变量</div>
-              ) : null}
-            </div>
-          )}
-        </div>
 
-        <div className="flex items-center justify-between px-5 py-3 border-t">
-          <Button variant="outline" size="sm" onClick={addRow}>
-            <Plus className="mr-2 h-4 w-4" />
-            添加自定义变量
-          </Button>
-          <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={onClose}>取消</Button>
-            <Button size="sm" onClick={save} disabled={saving}>
-              {saving ? '保存中...' : '保存个人环境变量'}
-            </Button>
+                <div className="flex flex-wrap gap-2">
+                  {activeGroupDefinition.variables.map((variable) => {
+                    const exists = activeKeys.has(variable.key);
+                    return (
+                      <Button
+                        key={variable.key}
+                        type="button"
+                        variant={exists ? 'secondary' : 'outline'}
+                        size="sm"
+                        onClick={() => addPreset(variable.key)}
+                        disabled={exists}
+                        title={variable.description}
+                        className="h-8 font-mono text-xs"
+                      >
+                        {exists ? <Check className="mr-1.5 h-3.5 w-3.5" /> : <Plus className="mr-1.5 h-3.5 w-3.5" />}
+                        {variable.key}
+                      </Button>
+                    );
+                  })}
+                </div>
+
+                <EnvironmentVariables
+                  items={activeRows.map(({ item, index }) => {
+                    const definition = getCliEnvironmentVariable(item.key);
+                    return {
+                      id: `${index}-${item.key}`,
+                      key: item.key,
+                      value: item.value,
+                      enabled: item.enabled,
+                      description: definition?.description,
+                      maskValue: Boolean(definition && 'secret' in definition && definition.secret),
+                      disableKeyEdit: true,
+                      keyError: errors[index]?.key,
+                    };
+                  })}
+                  onChange={(rowIndex, patch) => {
+                    const actualIndex = activeRows[rowIndex]?.index;
+                    if (actualIndex === undefined) return;
+                    updateVar(actualIndex, patch);
+                  }}
+                  onRemove={(rowIndex) => {
+                    const actualIndex = activeRows[rowIndex]?.index;
+                    if (actualIndex !== undefined) removeVar(actualIndex);
+                  }}
+                  emptyMessage="选择上方变量名，开始配置此 CLI。"
+                />
+              </TabsContent>
+            </Tabs>
           </div>
+        )}
+      </div>
+
+      <div className={inline
+        ? 'flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4'
+        : 'flex shrink-0 flex-row items-center justify-between gap-3 border-t border-border px-6 py-4'}>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">{configuredCount} 项已启用</span>
+          {inline && saved ? <span role="status" className="text-xs text-emerald-600">已保存</span> : null}
+        </div>
+        <div className="flex gap-2">
+          {!inline ? <Button type="button" variant="outline" onClick={onClose}>取消</Button> : null}
+          <Button type="button" onClick={() => void save()} disabled={loading || saving}>
+            <Save className="mr-2 h-4 w-4" />
+            {saving ? '保存中...' : '保存配置'}
+          </Button>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function EnvVarsDialog({
+  onClose,
+  scope = 'user',
+}: {
+  onClose: () => void;
+  scope?: 'system' | 'user';
+}) {
+  const [saving, setSaving] = useState(false);
+  const title = scope === 'system' ? '系统 CLI 环境变量' : '个人 CLI 环境变量';
+  const description = scope === 'system'
+    ? '集中管理 CLI 的默认启动配置，个人设置中的同名配置会优先应用。'
+    : '按 CLI 分类管理当前账号的启动配置，保存后用于新的运行会话。';
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose(); }}>
+      <DialogContent className="flex max-h-[min(820px,calc(100vh-2rem))] w-[min(860px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b border-border px-6 py-5 text-left">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-primary">
+                <KeyRound className="h-4 w-4" />
+                <span>CLI 配置</span>
+              </div>
+              <DialogTitle>{title}</DialogTitle>
+              <DialogDescription className="mt-2">{description}</DialogDescription>
+            </div>
+            <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="关闭环境变量">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </DialogHeader>
+        <EnvVarsEditor scope={scope} onClose={onClose} onSavingChange={setSaving} />
+      </DialogContent>
+    </Dialog>
   );
 }

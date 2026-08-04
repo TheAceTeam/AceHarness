@@ -124,7 +124,6 @@ const API_DATA: ApiCategory[] = [
       { method: 'POST', path: '/api/configs/:filename', description: '保存/更新配置文件', requestBody: '{ config: object }', response: '{ success }' },
       { method: 'DELETE', path: '/api/configs/:filename', description: '删除配置文件', response: '{ success }' },
       { method: 'POST', path: '/api/configs/:filename/copy', description: '复制配置文件', requestBody: '{ newFilename, workflowName? }', response: '{ success, filename }' },
-      { method: 'POST', path: '/api/configs/ai-generate', description: 'AI 生成工作流配置草稿', requestBody: '{ requirement, constraints?, style? }', response: '{ success, config, raw? }' },
     ],
   },
   {

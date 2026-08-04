@@ -47,7 +47,7 @@ workflow:
           task: 质疑数据收集范围，检查是否遗漏关键代码路径、日志、版本差异或反例样本
         - id: collect-judge
           name: 收集裁决
-          agent: fix-reviewer
+          agent: evidence-judge
           role: judge
           specTaskBinding:
             taskIds: [T1.3]
@@ -100,7 +100,7 @@ workflow:
           task: 质疑分析结论和覆盖度，检查是否有遗漏维度、错误推断、证据不足
         - id: analysis-judge
           name: 分析裁决
-          agent: fix-reviewer
+          agent: evidence-judge
           role: judge
           specTaskBinding:
             taskIds: [T2.3]
@@ -154,7 +154,7 @@ workflow:
           task: 质疑验证方法和证据链，检查是否存在未覆盖反例、样本偏差或结论跳跃
         - id: validation-judge
           name: 验证裁决
-          agent: fix-reviewer
+          agent: evidence-judge
           role: judge
           specTaskBinding:
             taskIds: [T3.3]
@@ -206,7 +206,7 @@ workflow:
           task: 质疑报告是否证据充分、风险等级是否合理、建议是否可执行、是否遗漏限制和剩余风险
         - id: report-judge
           name: 报告裁决
-          agent: fix-reviewer
+          agent: evidence-judge
           role: judge
           specTaskBinding:
             taskIds: [T4.3]

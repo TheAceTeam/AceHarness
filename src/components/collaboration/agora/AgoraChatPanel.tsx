@@ -1284,12 +1284,14 @@ export function AgoraChatPanel({
     } catch (error: any) {
       const errorText = error?.message || '嘉宾发言失败';
       const fallbackRawContent = String(error?.rawContent || latestRawContent || errorText || '');
-      const fallbackVisibleContent = String(
+      const partialVisibleContent = String(
         error?.partialContent
         || latestVisibleContent
         || getAgoraVisibleText(fallbackRawContent, false)
-        || errorText
-      ).trim() || errorText;
+      ).trim();
+      const fallbackVisibleContent = partialVisibleContent
+        ? `${partialVisibleContent}\n\n---\n${errorText}`
+        : errorText;
       const finalMessage: CollaborationRoomMessage = {
         ...pendingMessage,
         content: fallbackVisibleContent,

@@ -6,23 +6,6 @@ import {
 } from '@/lib/agent/conversations';
 
 describe('session directory helpers', () => {
-  test('treat workflow creation sidebar hints as workflow sessions', () => {
-    const session = {
-      workflowBinding: undefined,
-      creationSession: undefined,
-      sessionWorkbenchState: {
-        homeSidebar: {
-          type: 'home_sidebar' as const,
-          activeTab: 'workflow' as const,
-          intent: 'create-workflow' as const,
-        },
-      },
-    };
-
-    expect(isWorkflowDirectorySession(session)).toBe(true);
-    expect(getSessionDirectoryKind(session)).toBe('conversation');
-  });
-
   test('treat workflow run sidebar hints as workflow sessions even on commander tab', () => {
     const session = {
       workflowBinding: undefined,

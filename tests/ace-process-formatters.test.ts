@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { extractAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
-import { formatAceToolCall, formatAceToolResult, getAceToolTitle, resolveAceToolName } from '@/lib/chat/ace-process-formatters';
+import { formatAceRuntimeToolEvent, formatAceToolCall, formatAceToolResult, getAceToolTitle, resolveAceToolName } from '@/lib/chat/ace-process-formatters';
 
 describe('ace process tool formatters', () => {
   test('recognizes context compression tool payloads', () => {
@@ -76,5 +76,27 @@ describe('ace process tool formatters', () => {
     expect(raw).toContain('speclang.yaml');
     expect(raw).toContain('call_write_file');
     expect(raw).not.toContain('feature_context');
+  });
+
+  test('serializes runtime tool lifecycle events for complete agent transcripts', () => {
+    const started = formatAceRuntimeToolEvent({
+      id: 'tool-read-1',
+      toolName: 'read',
+      title: '读取文件',
+      status: 'running',
+      input: { filePath: 'README.md' },
+    });
+    const completed = formatAceRuntimeToolEvent({
+      id: 'tool-read-1',
+      toolName: 'read',
+      title: '读取文件',
+      status: 'completed',
+      result: { filePath: 'README.md', output: 'ignored file body' },
+    });
+    const parsed = extractAceProcessBlocks(`${started}\n${completed}`);
+
+    expect(parsed.blocks.map((block) => block.kind)).toEqual(['tool-call', 'tool-result']);
+    expect(`${started}\n${completed}`).toContain('tool-read-1');
+    expect(`${started}\n${completed}`).not.toContain('ignored file body');
   });
 });

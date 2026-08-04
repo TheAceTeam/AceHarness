@@ -15,6 +15,7 @@ import {
   documentsMetadataCollection,
   deriveRunHistoryRows,
   deriveWorkflowConfigRows,
+  getDocumentMetadataId,
   getDocumentMetadataSnapshot,
   getAgentConfigsSnapshot,
   getLocalSkillsSnapshot,
@@ -139,7 +140,7 @@ describe('TanStack Virtual, DB and AI client adapters', () => {
   test('DB helpers derive filtered and sorted config and run-history rows', () => {
     const configs = deriveWorkflowConfigRows([
       { id: 'b.yaml', filename: 'b.yaml', name: 'Beta', mode: 'state-machine', createdAt: '2026-01-02' },
-      { id: 'a.yaml', filename: 'a.yaml', name: 'Alpha', mode: 'phase-based', createdAt: '2026-01-01' },
+      { id: 'a.yaml', filename: 'a.yaml', name: 'Alpha', mode: 'state-machine', createdAt: '2026-01-01' },
     ], {
       keyword: 'a',
       mode: 'all',
@@ -443,8 +444,8 @@ describe('TanStack Virtual, DB and AI client adapters', () => {
       filename: 'optimistic-delete-test.yaml',
       name: 'Optimistic Delete Test',
       description: 'rollback coverage',
-      mode: 'phase-based' as const,
-      phaseCount: 1,
+      mode: 'state-machine' as const,
+      stateCount: 1,
       stepCount: 2,
       agentCount: 1,
       createdAt: '2026-01-03T00:00:00Z',
@@ -470,26 +471,45 @@ describe('TanStack Virtual, DB and AI client adapters', () => {
     syncDocumentsMetadataToDb('run-doc-optimistic', [{
       filename: 'summary.md',
       baseName: 'summary.md',
+      documentSource: 'runtime-output',
+      sourceRunId: 'run-doc-optimistic',
       size: 10,
       modifiedTime: '2026-01-01T00:00:00.000Z',
     }, {
       filename: 'detail.md',
       baseName: 'detail.md',
+      documentSource: 'runtime-output',
+      sourceRunId: 'run-doc-optimistic',
       size: 20,
       modifiedTime: '2026-01-01T00:00:01.000Z',
+    }, {
+      filename: 'summary.md',
+      baseName: 'summary.md',
+      documentSource: 'tasklist',
+      sourceRunId: 'run-doc-optimistic',
+      size: 30,
+      modifiedTime: '2026-01-01T00:00:02.000Z',
     }]);
     const snapshot = getDocumentMetadataSnapshot('run-doc-optimistic');
+    const runtimeSummary = { source: 'runtime-output' as const, sourceRunId: 'run-doc-optimistic', file: 'summary.md' };
+    const tasklistSummary = { source: 'tasklist' as const, sourceRunId: 'run-doc-optimistic', file: 'summary.md' };
+    const runtimeDetail = { source: 'runtime-output' as const, sourceRunId: 'run-doc-optimistic', file: 'detail.md' };
 
-    optimisticRenameDocumentMetadata('run-doc-optimistic', 'summary.md', 'renamed.md');
-    expect(documentsMetadataCollection.get('run-doc-optimistic:summary.md')).toBeUndefined();
-    expect(documentsMetadataCollection.get('run-doc-optimistic:renamed.md')?.filename).toBe('renamed.md');
+    optimisticRenameDocumentMetadata('run-doc-optimistic', runtimeSummary, 'renamed.md');
+    expect(documentsMetadataCollection.get(getDocumentMetadataId('run-doc-optimistic', runtimeSummary))).toBeUndefined();
+    expect(documentsMetadataCollection.get(getDocumentMetadataId('run-doc-optimistic', {
+      ...runtimeSummary,
+      file: 'renamed.md',
+    }))?.filename).toBe('renamed.md');
+    expect(documentsMetadataCollection.get(getDocumentMetadataId('run-doc-optimistic', tasklistSummary))?.filename).toBe('summary.md');
 
-    optimisticDeleteDocumentMetadata('run-doc-optimistic', ['detail.md']);
-    expect(documentsMetadataCollection.get('run-doc-optimistic:detail.md')).toBeUndefined();
+    optimisticDeleteDocumentMetadata('run-doc-optimistic', [runtimeDetail]);
+    expect(documentsMetadataCollection.get(getDocumentMetadataId('run-doc-optimistic', runtimeDetail))).toBeUndefined();
 
     restoreDocumentMetadataSnapshot('run-doc-optimistic', snapshot);
-    expect(documentsMetadataCollection.get('run-doc-optimistic:summary.md')?.filename).toBe('summary.md');
-    expect(documentsMetadataCollection.get('run-doc-optimistic:detail.md')?.filename).toBe('detail.md');
+    expect(documentsMetadataCollection.get(getDocumentMetadataId('run-doc-optimistic', runtimeSummary))?.filename).toBe('summary.md');
+    expect(documentsMetadataCollection.get(getDocumentMetadataId('run-doc-optimistic', tasklistSummary))?.filename).toBe('summary.md');
+    expect(documentsMetadataCollection.get(getDocumentMetadataId('run-doc-optimistic', runtimeDetail))?.filename).toBe('detail.md');
   });
 
   test('DB optimistic list snapshots rollback agent skill model and RAG rows', () => {
@@ -675,6 +695,23 @@ describe('TanStack Virtual, DB and AI client adapters', () => {
       status: 'streaming',
     });
     expect(agentMessagesCollection.get(row.id)?.diagnostics?.provider).toBe('workflow-runtime');
+  });
+
+  test('AI adapter does not turn workflow status or event type into transcript text', () => {
+    const row = storeWorkflowSseEventAsAgentMessage({
+      type: 'status',
+      data: {
+        runId: 'run-status-only',
+        stepKey: 'implement',
+        status: 'running',
+      },
+    });
+
+    expect(row).toMatchObject({
+      id: 'workflow:run-status-only:implement:status',
+      content: '',
+      chunks: [],
+    });
   });
 
   test('AI adapter stores chat stream SSE events without duplicating final output', () => {

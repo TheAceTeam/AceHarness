@@ -6,7 +6,7 @@
 - Feature ID: `MEM-V2`
 - Status: draft
 - Scope type: iteration
-- Target user: 使用首页聊天、Agent Chat、阶段式工作流和状态机工作流的用户。
+- Target user: 使用首页聊天、Agent Chat、轻量任务清单工作流和状态机工作流的用户。
 - Problem to solve: 现有聊天记忆、Agent 记忆、工作流经验、步骤输出和频道摘要各自独立，后续 Agent 常常需要重新读取全文或根本拿不到前序结论。
 - Why this matters: 用户希望 AI 能自主沉淀有价值的信息，同时让后续步骤只读到必要摘要，并在需要时再读取具体详情。
 - In scope:

@@ -3,7 +3,6 @@ import type { ChatSession } from '@/contexts/ChatContext';
 import type { HomeConversationMode } from '@/lib/chat/conversation-mode';
 import type { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
-import WorkflowRuntimeRightRail from '@/components/chat/WorkflowRuntimeRightRail';
 
 export type ConversationRightRailDataSource =
   | 'chat-stream'
@@ -58,36 +57,11 @@ export function ConversationRightRailEmptyState({ text }: { text: string }) {
 export function createBuiltInConversationRightRailPlugins(fallbackPanel?: ReactNode): ConversationRightRailPlugin[] {
   const plugins: ConversationRightRailPlugin[] = [
     {
-      id: 'workflow-monitor',
-      title: '工作流',
-      icon: 'account_tree',
-      priority: 100,
-      modes: ['plain', 'agent-chat', 'workflow-drafting', 'workflow-running', 'workflow-completed'],
-      permissions: ['read-workflow', 'answer-human-question', 'control-workflow'],
-      subscribe: () => ['workflow-status', 'workflow-events', 'human-questions', 'chat-stream'],
-      shouldActivate: ({ session, mode }) => {
-        const binding = session?.workflowBinding;
-        const embeddedWorkflow = session?.sessionWorkbenchState?.embeddedWorkflow;
-        const hasRunContext = Boolean(
-          (binding?.configFile && binding?.runId)
-          || (embeddedWorkflow?.configFile && embeddedWorkflow?.runId)
-        );
-        return hasRunContext || mode === 'workflow-running' || mode === 'workflow-completed';
-      },
-      render: ({ session, live }) => {
-        const binding = session?.workflowBinding;
-        const embeddedWorkflow = session?.sessionWorkbenchState?.embeddedWorkflow;
-        const configFile = binding?.configFile || embeddedWorkflow?.configFile || '';
-        const runId = binding?.runId || embeddedWorkflow?.runId || '';
-        return <WorkflowRuntimeRightRail key={`${configFile}:${runId}`} session={session} live={live} />;
-      },
-    },
-    {
       id: 'changes-monitor',
       title: '变更',
       icon: 'difference',
       priority: 20,
-      modes: ['workflow-drafting', 'workflow-running', 'workflow-completed'],
+      modes: ['workflow-running', 'workflow-completed'],
       permissions: ['read-workspace'],
       subscribe: () => ['workspace-changes'],
       shouldActivate: ({ session }) => Boolean(session?.sessionWorkbenchState?.chatWorkspace?.workingDirectory),
@@ -106,7 +80,7 @@ export function createBuiltInConversationRightRailPlugins(fallbackPanel?: ReactN
       title: '工具',
       icon: 'right_panel_open',
       priority: 80,
-      modes: ['plain', 'agent-chat', 'workflow-drafting', 'workflow-running', 'workflow-completed'],
+      modes: ['plain', 'agent-chat', 'workflow-running', 'workflow-completed'],
       permissions: ['read-chat', 'read-workflow', 'read-workspace'],
       shouldActivate: () => true,
       render: () => fallbackPanel,

@@ -4,6 +4,7 @@ import {
   hasWorkflowDesignDraftChanges,
   normalizeWorkflowAgentOverridesForSave,
 } from '@/lib/workflow/design-config-draft';
+import { resolveWorkflowPolicyAgentNames } from '@/lib/workflow/lightweight';
 
 const stateMachineConfig = {
   workflow: {
@@ -37,6 +38,38 @@ const stateMachineConfig = {
     },
     skills: ['spec-reader'],
     mcpServers: ['local-mcp'],
+  },
+};
+
+const lightweightConfig = {
+  workflow: {
+    name: 'lightweight-demo',
+    mode: 'state-machine',
+    profile: 'lightweight',
+    supervisor: {
+      enabled: true,
+      agent: 'default-supervisor',
+    },
+    states: [
+      {
+        name: 'execute',
+        isInitial: true,
+        isFinal: true,
+        steps: [{
+          name: 'run',
+          agent: 'developer',
+          task: 'run tasklist',
+          skills: ['aceharness-tasklist'],
+        }],
+        transitions: [],
+      },
+    ],
+  },
+  context: {
+    projectRoot: '/repo/demo',
+    workspaceMode: 'in-place',
+    requirements: 'run tasklist',
+    timeoutMinutes: 300,
   },
 };
 
@@ -97,5 +130,89 @@ describe('workflow design config draft helpers', () => {
     const draft = buildWorkflowDesignConfigForSave(nextConfig, changedDraftState);
 
     expect(hasWorkflowDesignDraftChanges(persisted, draft)).toBe(true);
+  });
+
+  test('removes historical supervisor from lightweight design save payloads', () => {
+    const normalized = buildWorkflowDesignConfigForSave({
+      ...lightweightConfig,
+      context: {
+        ...lightweightConfig.context,
+        executionPolicy: {
+          defaultModel: 'gpt-5',
+          agentOverrides: {
+            'default-supervisor': {
+              enabled: true,
+              model: 'gpt-5-supervisor',
+            },
+            developer: {
+              enabled: true,
+              model: 'gpt-5-dev',
+            },
+          },
+        },
+      },
+    }, {
+      ...persistedDraftState,
+      requirements: 'run tasklist',
+      timeoutMinutes: 300,
+      workflowAgentOverrides: {
+        'default-supervisor': {
+          enabled: true,
+          model: 'gpt-5-supervisor',
+        },
+        developer: {
+          enabled: true,
+          model: 'gpt-5-dev',
+        },
+      },
+    });
+
+    expect(normalized.workflow.supervisor).toBeUndefined();
+    expect(normalized.workflow.profile).toBe('lightweight');
+    expect(normalized.context.executionPolicy.agentOverrides).toEqual({
+      developer: {
+        enabled: true,
+        model: 'gpt-5-dev',
+      },
+    });
+  });
+
+  test('keeps supervisor unchanged for state-machine design save payloads', () => {
+    const config = {
+      ...stateMachineConfig,
+      workflow: {
+        ...stateMachineConfig.workflow,
+        supervisor: {
+          enabled: true,
+          agent: 'review-supervisor',
+        },
+      },
+    };
+    const normalized = buildWorkflowDesignConfigForSave(config, persistedDraftState);
+
+    expect(normalized.workflow.supervisor).toEqual({
+      enabled: true,
+      agent: 'review-supervisor',
+    });
+  });
+
+  test('omits supervisor from lightweight policy agent list', () => {
+    expect(resolveWorkflowPolicyAgentNames({
+      workflow: lightweightConfig.workflow,
+      agentConfigs: [
+        { name: 'default-supervisor', roleType: 'supervisor' },
+        { name: 'developer', roleType: 'normal' },
+      ],
+    })).toEqual(['developer']);
+  });
+
+  test('includes supervisor fallback in state-machine policy agent list', () => {
+    expect(resolveWorkflowPolicyAgentNames({
+      workflow: stateMachineConfig.workflow,
+      agentConfigs: [
+        { name: 'default-supervisor', roleType: 'supervisor' },
+        { name: 'judge-agent', roleType: 'normal' },
+      ],
+    })).toEqual(['judge-agent', 'default-supervisor']);
   });
 });

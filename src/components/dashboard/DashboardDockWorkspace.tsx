@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from '@/lib/navigation/dynamic';
-import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import {
   DockviewReact,
   type DockviewApi,
@@ -9,7 +9,7 @@ import {
   type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from 'dockview-react';
-import type { AddPanelPositionOptions, Direction, IDockviewPanel } from 'dockview';
+import type { Direction, IDockviewPanel } from 'dockview';
 import { X } from 'lucide-react';
 import { KeepAlive } from 'keepalive-for-react';
 
@@ -38,6 +38,21 @@ import {
   type DockviewTabPolicy,
   type DockviewTabPolicyInput,
 } from '@/lib/navigation/dockview-tab-policy';
+import {
+  DashboardDockWorkspaceContext,
+  useDashboardDockWorkspace,
+  type DashboardDockOpenOptions,
+  type DashboardDockTab,
+  type DashboardDockWorkspaceContextValue,
+  type DashboardDockWorkspaceHandle,
+} from './dashboard-dock-workspace-context';
+
+export { useDashboardDockWorkspace } from './dashboard-dock-workspace-context';
+export type {
+  DashboardDockOpenOptions,
+  DashboardDockTab,
+  DashboardDockWorkspaceHandle,
+} from './dashboard-dock-workspace-context';
 
 export const DASHBOARD_DOCK_DRAG_MIME = 'application/x-aceharness-dashboard-tab';
 const CHAT_SECONDARY_SIDEBAR_WIDTH_STORAGE_KEY = 'aceharness:dashboard-chat-secondary-sidebar-width';
@@ -70,36 +85,6 @@ const AccountContent = dynamic(() => import('@/client/pages/AccountPage').then((
 const UsersContent = dynamic(() => import('@/client/pages/UsersPage').then((m) => m.UsersContent), { ssr: false });
 const WorkbenchClient = dynamic(() => import('@/client/pages/workbench/WorkbenchClient'), { ssr: false });
 
-export type DashboardDockTab =
-  | { id: 'chat'; title: string; kind: 'chat' }
-  | { id: 'overview'; title: string; kind: 'overview' }
-  | { id: 'agents'; title: string; kind: 'agents' }
-  | { id: 'skills'; title: string; kind: 'skills' }
-  | { id: 'settings'; title: string; kind: 'settings' }
-  | { id: 'channels'; title: string; kind: 'channels' }
-  | { id: 'users'; title: string; kind: 'users' }
-  | { id: 'workflows'; title: string; kind: 'workflows' }
-  | { id: 'models'; title: string; kind: 'models' }
-  | { id: 'engines'; title: string; kind: 'engines' }
-  | { id: 'schedules'; title: string; kind: 'schedules' }
-  | { id: 'run-history'; title: string; kind: 'run-history'; search?: string }
-  | { id: 'knowledge'; title: string; kind: 'knowledge' }
-  | { id: 'knowledge-library'; title: string; kind: 'knowledge-library' }
-  | { id: 'api-docs'; title: string; kind: 'api-docs' }
-  | { id: 'office'; title: string; kind: 'office' }
-  | { id: string; title: string; kind: 'notebook'; search?: string }
-  | { id: string; title: string; kind: 'account'; search?: string }
-  | { id: string; title: string; kind: 'workbench'; config: string; mode?: string; runId?: string | null; search?: string };
-
-export type DashboardDockWorkspaceHandle = {
-  openTab: (tab: DashboardDockTab, options?: DashboardDockOpenOptions) => void;
-  refreshActiveTab: () => void;
-};
-
-export type DashboardDockOpenOptions = {
-  position?: AddPanelPositionOptions;
-};
-
 type DashboardDockWorkspaceProps = {
   className?: string;
   renderOverview: () => ReactNode;
@@ -112,19 +97,6 @@ type DashboardDockWorkspaceProps = {
   renderChatSecondarySidebar?: () => ReactNode;
   singlePanelMode?: boolean;
 };
-
-type DashboardDockWorkspaceContextValue = {
-  openTab: (tab: DashboardDockTab, options?: DashboardDockOpenOptions) => void;
-  updateActiveWorkbenchSearch: (config: string, search: string) => void;
-  updateActiveRunHistorySearch: (search: string) => void;
-  updateActiveNotebookSearch: (search: string) => void;
-};
-
-const DashboardDockWorkspaceContext = createContext<DashboardDockWorkspaceContextValue | null>(null);
-
-export function useDashboardDockWorkspace() {
-  return useContext(DashboardDockWorkspaceContext);
-}
 
 type WorkspacePanelParams = DashboardDockTab & {
   renderOverview: () => ReactNode;

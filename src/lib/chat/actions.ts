@@ -4,7 +4,7 @@
 
 import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from '@/lib/core/api';
 import { extractJsonObject as extractResultJsonObject } from '@/lib/ai/result-channel';
-import { type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
+import { normalizeHomeSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { extractAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
 
 // Action 类型枚举
@@ -482,64 +482,11 @@ export function getStreamingResultDisplay(markdown: string): { text: string; com
   };
 }
 
-function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
-  if (!obj || typeof obj !== 'object') return false;
-  if (obj.type !== undefined && obj.type !== 'home_sidebar') return false;
-  if (obj.kind !== undefined && obj.kind !== 'home_sidebar') return false;
-  const validTabs = ['commander', 'workflow', 'agent'];
-  const tabsValid = !obj.tabs || (Array.isArray(obj.tabs) && obj.tabs.every((tab: unknown) => typeof tab === 'string' && validTabs.includes(tab)));
-  const activeValid = !obj.activeTab || validTabs.includes(obj.activeTab);
-  const modeValid = !obj.mode || ['active', 'peek', 'hidden'].includes(obj.mode);
-  const intentValid = !obj.intent || ['general', 'create-workflow', 'create-agent', 'workflow-run', 'workflow-review', 'supervisor-chat'].includes(obj.intent);
-  const stageValid = !obj.stage || ['idle', 'clarifying', 'spec-draft', 'spec-review', 'workflow-draft', 'agent-draft', 'preflight', 'running', 'review'].includes(obj.stage);
-  const workflowDraftValid = !obj.workflowDraft || (
-    typeof obj.workflowDraft === 'object' &&
-    ['name', 'requirements', 'description', 'referenceWorkflow', 'workingDirectory'].every((key) => obj.workflowDraft[key] === undefined || typeof obj.workflowDraft[key] === 'string') &&
-    (obj.workflowDraft.workspaceMode === undefined || obj.workflowDraft.workspaceMode === 'isolated-copy' || obj.workflowDraft.workspaceMode === 'in-place')
-  );
-  const agentDraftValid = !obj.agentDraft || (
-    typeof obj.agentDraft === 'object' &&
-    ['displayName', 'team', 'mission', 'style', 'specialties', 'workingDirectory'].every((key) => obj.agentDraft[key] === undefined || typeof obj.agentDraft[key] === 'string')
-  );
-  const summaryValid = obj.summary === undefined || typeof obj.summary === 'string';
-  const listOfStringsValid = (value: unknown) => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
-  const nextActionValid = obj.recommendedNextAction === undefined || typeof obj.recommendedNextAction === 'string';
-  const shouldOpenModalValid = obj.shouldOpenModal === undefined || typeof obj.shouldOpenModal === 'boolean';
-  return tabsValid
-    && activeValid
-    && modeValid
-    && intentValid
-    && stageValid
-    && workflowDraftValid
-    && agentDraftValid
-    && summaryValid
-    && listOfStringsValid(obj.knownFacts)
-    && listOfStringsValid(obj.missingFields)
-    && listOfStringsValid(obj.questions)
-    && nextActionValid
-    && shouldOpenModalValid;
-}
-
 const MACHINE_RESULT_KINDS = new Set([
   'card',
   'home_sidebar',
-  'clarification_form',
   'plan_draft',
-  'workflow_draft',
-  'workflow_patch',
-  'workflow_clarification_summary',
-  'workflow_clarification_facts',
-  'workflow_clarification_gaps',
-  'workflow_clarification_question',
-  'spec_coding_meta',
-  'spec_requirement',
-  'spec_design',
-  'spec_decision',
-  'spec_task',
-  'workflow_state_outline',
-  'workflow_state_steps',
   'workflow_patch_item',
-  'spec_revision_item',
   'spec_coding_revision',
   'spec-coding-revision',
 ]);
@@ -573,11 +520,8 @@ function collectMachinePayload(
   }
 
   if (kind === 'home_sidebar') {
-    if (isHomeSidebarHintLike(parsed.payload)) {
-      sidebarHints.push(parsed.payload);
-    } else if (isHomeSidebarHintLike(parsed)) {
-      sidebarHints.push(parsed);
-    }
+    const sidebarHint = normalizeHomeSidebarHint(parsed.payload) || normalizeHomeSidebarHint(parsed);
+    if (sidebarHint) sidebarHints.push(sidebarHint);
     return true;
   }
 
@@ -595,8 +539,9 @@ function collectMachinePayload(
       cards.push(validateCard(parsed));
       return true;
     }
-    if (isHomeSidebarHintLike(parsed)) {
-      sidebarHints.push(parsed);
+    const sidebarHint = normalizeHomeSidebarHint(parsed);
+    if (sidebarHint) {
+      sidebarHints.push(sidebarHint);
       return true;
     }
   }

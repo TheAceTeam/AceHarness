@@ -32,9 +32,10 @@ describe('TanStack Start rendering performance gates', () => {
       filename: `workflow-${index}.yaml`,
       name: `Workflow ${index}`,
       description: `Workflow ${index} description`,
-      mode: index % 2 === 0 ? 'state-machine' : 'phase-based',
+      mode: 'state-machine',
       createdAt: `2026-01-${String((index % 28) + 1).padStart(2, '0')}T00:00:00.000Z`,
       stepCount: 8,
+      stateCount: 8,
       agentCount: 3,
     }));
     const firstPage = configs.slice(0, 500);

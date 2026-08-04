@@ -4,7 +4,10 @@ import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow/regi
 import { findRunningRuns, loadRunState } from '@/lib/run/state-persistence';
 import { createBindingFromDefault, findChannelBinding, getChannelIntegration, saveChannelBinding, type ChannelIntegration, type ChannelSessionBinding } from '@/lib/channel/store';
 import { appendChatSessionMessage } from '@/lib/chat/persistence';
-import { appendWorkflowAgoraMessage } from '@/lib/agora/workflow-topic';
+import {
+  appendWorkflowRuntimeTranscript,
+  toWorkflowRuntimeTranscriptLiveEvent,
+} from '@/lib/workflow/runtime-transcript';
 
 export interface NormalizedChannelMessage {
   integrationId: string;
@@ -280,7 +283,7 @@ function buildWorkflowContext(binding: ChannelSessionBinding, status: any) {
   };
 }
 
-async function resolveWorkflowAgoraSessionId(binding: ChannelSessionBinding, status: any): Promise<string | null> {
+async function resolveWorkflowFrontendSessionId(binding: ChannelSessionBinding, status: any): Promise<string | null> {
   const direct = binding.frontendSessionId || status?.workflowFrontendSessionId;
   if (direct) return direct;
   const runId = binding.runId || status?.runId;
@@ -289,14 +292,14 @@ async function resolveWorkflowAgoraSessionId(binding: ChannelSessionBinding, sta
   return persistedRun?.workflowFrontendSessionId || null;
 }
 
-async function attachWorkflowAgoraSessionToBinding(
+async function attachWorkflowFrontendSessionToBinding(
   binding: ChannelSessionBinding,
-  workflowAgoraSessionId: string | null,
+  workflowFrontendSessionId: string | null,
 ): Promise<ChannelSessionBinding> {
-  if (!workflowAgoraSessionId || binding.frontendSessionId === workflowAgoraSessionId) return binding;
+  if (!workflowFrontendSessionId || binding.frontendSessionId === workflowFrontendSessionId) return binding;
   return saveChannelBinding({
     ...binding,
-    frontendSessionId: workflowAgoraSessionId,
+    frontendSessionId: workflowFrontendSessionId,
   });
 }
 
@@ -366,11 +369,14 @@ async function handleWorkflowMessage(binding: ChannelSessionBinding, integration
     return { ok: false, binding, replies: ['当前 workflow 未在运行，无法处理实时消息。'] };
   }
   if (binding.workflowMode === 'feedback-only' || !lower.startsWith('/')) {
-    const workflowAgoraSessionId = await resolveWorkflowAgoraSessionId(binding, status);
-    if (workflowAgoraSessionId) {
-      binding = await attachWorkflowAgoraSessionToBinding(binding, workflowAgoraSessionId);
-      await appendWorkflowAgoraMessage({
-        sessionId: workflowAgoraSessionId,
+    const workflowFrontendSessionId = await resolveWorkflowFrontendSessionId(binding, status);
+    if (workflowFrontendSessionId) {
+      binding = await attachWorkflowFrontendSessionToBinding(binding, workflowFrontendSessionId);
+    }
+    const runId = String(binding.runId || status?.runId || '').trim();
+    if (runId) {
+      const transcript = await appendWorkflowRuntimeTranscript({
+        runId,
         type: 'channel-feedback',
         title: '渠道反馈',
         body: text,
@@ -379,7 +385,10 @@ async function handleWorkflowMessage(binding: ChannelSessionBinding, integration
         dedupeKey: message.externalMessageId
           ? `channel-feedback-${message.externalMessageId}`
           : `channel-feedback-${binding.id}-${Date.now()}`,
-      }).catch(() => {});
+      }).catch(() => null);
+      if (transcript && typeof manager.emit === 'function') {
+        manager.emit('runtime-transcript', toWorkflowRuntimeTranscriptLiveEvent(transcript));
+      }
     }
     manager.injectLiveFeedback(guardedText);
     return { ok: true, binding, replies: ['反馈已注入当前运行。'], replyMessages: textReplies(['反馈已注入当前运行。']) };

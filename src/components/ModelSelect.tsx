@@ -34,7 +34,7 @@ export function ModelSelect({
 }: ModelSelectProps) {
   const queryClient = useQueryClient();
   const modelsQuery = useModelsQuery();
-  const engineConfigQuery = useEngineConfigQuery();
+  const engineConfigQuery = useEngineConfigQuery({ enabled: allowGlobal });
   const allModels = modelsQuery.data?.models || [];
   const loading = modelsQuery.isLoading || (allowGlobal && engineConfigQuery.isLoading);
   const globalDefaultModel = typeof engineConfigQuery.data?.defaultModel === 'string' ? engineConfigQuery.data.defaultModel : '';

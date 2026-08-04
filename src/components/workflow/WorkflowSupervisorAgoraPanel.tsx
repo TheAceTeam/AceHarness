@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, type ReactNode } from 'react';
 import { ClipboardCheck, UsersRound, Vote } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
 import { AgoraShell } from '@/components/collaboration/AgoraShell';
@@ -102,7 +102,6 @@ export default function WorkflowSupervisorAgoraPanel({
   supervisorAgent,
   supervisorSessionId,
   workingDirectory,
-  workflowStatus,
   initialGuests = [],
   agentSessionIds,
   pendingHumanQuestion,
@@ -116,22 +115,20 @@ export default function WorkflowSupervisorAgoraPanel({
   const {
     activeSessionId,
     activeSession,
-    createSession,
+    sessions,
+    sessionsLoading,
     setActiveSessionId,
     setSessionWorkbenchState,
     appendSessionMessage,
   } = useChat();
-  const [fallbackSessionId, setFallbackSessionId] = useState<string | null>(null);
-
   useEffect(() => {
     if (!sessionId) return;
-    if (fallbackSessionId) return;
     if (activeSessionId !== sessionId) {
       setActiveSessionId(sessionId);
     }
-  }, [activeSessionId, fallbackSessionId, sessionId, setActiveSessionId]);
+  }, [activeSessionId, sessionId, setActiveSessionId]);
 
-  const targetSessionId = fallbackSessionId || sessionId || null;
+  const targetSessionId = sessionId || null;
   const loaded = Boolean(targetSessionId && activeSession?.id === targetSessionId);
   const roster = useMemo(() => buildWorkflowRoster(initialGuests), [initialGuests]);
   const sessionMap = useMemo(() => normalizeSessionMap({
@@ -141,18 +138,6 @@ export default function WorkflowSupervisorAgoraPanel({
   const rosterKey = useMemo(() => roster.map(getRosterRuntimeKey).join('|'), [roster]);
   const sessionMapKey = useMemo(() => JSON.stringify(sessionMap), [sessionMap]);
   const topic = title?.trim() || '工作流协作议题';
-
-  useEffect(() => {
-    if (!sessionId || loaded || fallbackSessionId) return;
-    const timer = window.setTimeout(() => {
-      const nextSessionId = createSession({
-        title: topic,
-        sessionWorkbenchState: {},
-      });
-      setFallbackSessionId(nextSessionId);
-    }, 800);
-    return () => window.clearTimeout(timer);
-  }, [createSession, fallbackSessionId, loaded, sessionId, topic]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -317,9 +302,10 @@ export default function WorkflowSupervisorAgoraPanel({
   }
 
   if (!loaded) {
+    const sessionMissing = !sessionsLoading && !sessions.some((session) => session.id === targetSessionId);
     return (
       <div className="flex h-full items-center justify-center rounded-2xl border bg-background/70 p-6 text-sm text-muted-foreground">
-        正在载入工作流协作议题...
+        {sessionMissing ? '当前运行绑定的协作议题不可用。' : '正在载入工作流协作议题...'}
       </div>
     );
   }

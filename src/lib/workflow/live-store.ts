@@ -174,11 +174,19 @@ function applyWorkflowEventLogRecord(record: { runId: string; type: string; seq:
   }
 }
 
+// `/api/workflow/events` is primarily a control/status channel. Persisting
+// its status snapshots as transcript rows makes values such as "running"
+// look like streamed model output when the workbench restores its cache.
+const WORKFLOW_BODY_EVENT_TYPES = new Set([
+  'workflow.step-output',
+  'workflow-step-output',
+  'workflow-step-delta',
+  // Kept for the legacy producer that labels actual output this way.
+  'workflow-event',
+]);
+
 export function shouldStoreWorkflowLiveEventAsAgentMessage(type: string): boolean {
-  return type !== 'chat-stream-state'
-    && type !== 'chat-stream-removed'
-    && type !== 'chat-session-updated'
-    && type !== 'chat-session-removed';
+  return WORKFLOW_BODY_EVENT_TYPES.has(String(type || '').trim());
 }
 
 function hydrateEventLog(runId: string) {

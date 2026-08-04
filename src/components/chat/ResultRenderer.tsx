@@ -92,7 +92,7 @@ function resultToCard(type: string, result: any): CardSchema | null {
               id: String(c.filename || c.name || Math.random()),
               cells: {
                 name: c.name || c.filename || '未命名配置',
-                mode: c.mode || 'phase-based',
+                mode: c.kind === 'lightweight' ? 'lightweight' : 'state-machine',
                 steps: c.stepCount !== undefined ? String(c.stepCount) : '—',
                 agents: c.agentCount !== undefined ? String(c.agentCount) : '—',
               },
@@ -380,10 +380,9 @@ function resultToCard(type: string, result: any): CardSchema | null {
   if (type === 'config.get' && result.config) {
     const cfg = result.config;
     const wf = cfg.workflow || {};
-    const mode = wf.mode || 'phase-based';
-    const phases = wf.phases || [];
+    const mode = 'state-machine';
     const states = wf.states || [];
-    const items = mode === 'state-machine' ? states : phases;
+    const items = states;
     return {
       header: { icon: 'description', title: wf.name || '工作流配置', subtitle: wf.description, gradient: 'from-blue-500 to-cyan-500', badges: [{ text: mode, color: 'blue' }] },
       blocks: [

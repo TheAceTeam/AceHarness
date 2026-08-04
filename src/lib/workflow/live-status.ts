@@ -1,3 +1,5 @@
+import { formatWorkflowFailureReasonWithStepLogs } from '@/lib/workflow/error-summary';
+
 const DEFAULT_TEXT_LIMIT = 4000;
 const EVENT_OUTPUT_LIMIT = 12000;
 const FLOW_LIMIT = 200;
@@ -131,6 +133,9 @@ function compactStepLog(log: any) {
     stepName: log.stepName,
     agent: log.agent,
     status: log.status,
+    superseded: log.superseded === true || undefined,
+    supersededAt: log.supersededAt,
+    supersededByStep: log.supersededByStep,
     output: truncateLiveText(log.output || '', 4000),
     outputRef: log.outputRef,
     outputBytes: log.outputBytes,
@@ -221,7 +226,10 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
   const specPayload = compactSpecCodingSummary(status.runSpecCoding, 'run') || {};
   return {
     status: status.status || '',
-    statusReason: truncateLiveText(status.statusReason || null, 2000),
+    statusReason: truncateLiveText(
+      formatWorkflowFailureReasonWithStepLogs(status.statusReason, status.failedSteps, status.stepLogs, 1800) || null,
+      2000,
+    ),
     runId: status.runId || null,
     currentConfigFile: status.currentConfigFile || configFile || null,
     workflowFrontendSessionId: status.workflowFrontendSessionId || null,
@@ -284,7 +292,10 @@ export function compactWorkflowStatusDeltaForLive(status: any, configFile?: stri
   const terminalStatus = isTerminalWorkflowStatus(status.status);
   return {
     status: status.status || '',
-    statusReason: truncateLiveText(status.statusReason || null, 1000),
+    statusReason: truncateLiveText(
+      formatWorkflowFailureReasonWithStepLogs(status.statusReason, status.failedSteps, status.stepLogs, 900) || null,
+      1000,
+    ),
     runId: status.runId || null,
     currentConfigFile: status.currentConfigFile || configFile || null,
     workflowFrontendSessionId: status.workflowFrontendSessionId || null,

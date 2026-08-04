@@ -6,7 +6,7 @@ Updated: 2026-07-25
 - Task 1 implementation has passed static Contract Gate A, but its canonical-path rejection, v3-to-v4 retrying migration, SQLite foreign-key rebuild, FTS lifecycle cleanup, participant/channel denial, and detail/manifest budgets have not been executed at runtime. This remains an explicit gap because build and test commands are out of scope for this workstream.
 - The SQLite index/detail split, lifecycle anchor semantics, participant/channel authorization snapshots, handoff batch/receipt persistence, artifact references, and archive-registry contract are implemented but remain unproven at runtime. Tasks 1 through 4 must add focused coverage.
 - The retention/scope/handoff/read-condition contract is statically implemented, but has no executed positive or negative coverage for short vs long lifecycle, anchor mismatch, run-wide cross-Agent short memory, each delivery mode, target selection, expected revision/fingerprint conflicts, index totals, or required-read acknowledgement/failure.
-- AI native-tool and structured-result fallback parity is unproven. Static evidence covers Agent Chat and workflow protocol execution; native callback providers, real `search -> read -> terminal proposal` continuation, terminal read/search rejection, stream cancellation, and phase/state-machine runtime behavior still need runtime proof.
+- AI native-tool and structured-result fallback parity is unproven. Static evidence covers Agent Chat and active workflow protocol execution; native callback providers, real `search -> read -> terminal proposal` continuation, terminal read/search rejection, stream cancellation, and lightweight tasklist/state-machine runtime behavior still need runtime proof.
 - Same-state serial handoff, persisted channel membership, child handoffs, no-op, retries, cancellations, receipt failures, and resume are unproven. Static review confirms same-event proposal enforcement, atomic emission, and retry receipt reissue, but cannot prove their runtime behavior.
 - Atomic handoff emission/replay and retry-target receipt reissue are statically accepted. SQLite transaction rollback, concurrent emit/retry races, frozen channel authorization, and migration behavior remain unproven.
 - Chat compaction/recovery continuity across runtime session replacement is unproven. The runtime suite must cover persisted frontend-session creation, recovery, and owner mismatch paths.
@@ -18,7 +18,7 @@ Updated: 2026-07-25
 ## Must-Run Verification
 
 - Focused SQLite fresh-start and Memory Service unit tests, including index/detail query separation, anchor isolation, participant/channel denial, atomic handoff/receipt writes, artifact path validation, legacy archive hashes, and zero legacy-content access.
-- Focused Agent Chat, homepage chat, phase workflow, and state-machine handoff tests.
+- Focused Agent Chat, homepage chat, lightweight tasklist workflow, and state-machine handoff tests.
 - Resume/retry/cancel/channel/subworkflow/required-read-failure integration tests.
 - TypeScript validation and repository lint/test commands selected by the implementation tasks.
 - Manual review of Agent management without memory CRUD, system governance/audit controls, workflow handoff panel, and permission-denied states.

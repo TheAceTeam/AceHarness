@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'fs';
 import { loadOwnerBoundChatSession } from '@/lib/memory-v2-cutover/chat-session-identity';
 import { getRuntimeAgentConfigPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { resolveAgentSelection } from '@/lib/agent/engine-selection';
-import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
+import { getEngineConfigPath } from '@/lib/core/app-paths';
 import type { RoleConfig } from '@/lib/core/schemas';
 import {
   executeChatRuntimeWithContextRecovery,
@@ -51,7 +51,6 @@ import {
   stripSpecCodingRevisionCommand,
   type SpecCodingRevisionCommand,
 } from '@/lib/spec/coding-revision-protocol';
-import { getRuntimeSkillPath } from '@/lib/run/runtime-skills';
 import { extractStructuredResult as extractResultChannelStructuredResult } from '@/lib/ai/result-channel';
 import {
   ensureEngineRuntimeSkillsAvailable,
@@ -119,7 +118,6 @@ export interface PreparedAgentChat {
   prompt: string;
   sessionReuseKey: string;
   userId: string;
-  isTemporaryWerewolf: boolean;
   isTemporaryAgora: boolean;
   agoraExpectedResultType?: 'speech' | 'summary' | 'vote';
   memoryV2: MemoryV2ConsumerManifestResult;
@@ -292,18 +290,6 @@ async function createAgentChatMemoryV2Plan(input: {
   }
 }
 
-function isTemporaryWerewolfChat(input: {
-  roleConfig?: RoleConfig | null;
-  workflowContext?: Record<string, any> | null;
-}): boolean {
-  return input.workflowContext?.temporaryLab === 'werewolf'
-    || input.roleConfig?.category === 'werewolf-lab'
-    || (
-      input.workflowContext?.temporaryLab !== 'agora'
-      && Boolean(input.roleConfig?.tags?.includes('werewolf-lab'))
-    );
-}
-
 function isTemporaryAgoraChat(workflowContext?: Record<string, any> | null): boolean {
   return workflowContext?.temporaryLab === 'agora';
 }
@@ -361,25 +347,6 @@ function stripToolNarrationBlocks(text: string): string {
     .trim();
 }
 
-function extractAnyWerewolfResult(rawOutput: string): Record<string, any> | null {
-  return extractResultChannelStructuredResult<Record<string, any>>(
-    rawOutput,
-    (value: any): value is Record<string, any> => Boolean(value && typeof value === 'object' && !Array.isArray(value)),
-  );
-}
-
-function hasWerewolfResult(rawOutput: string): boolean {
-  return Boolean(extractAnyWerewolfResult(rawOutput));
-}
-
-function buildVisibleWerewolfOutput(rawOutput: string): string {
-  const resultPayload = extractAnyWerewolfResult(rawOutput);
-  if (typeof resultPayload?.display === 'string' && resultPayload.display.trim().length > 0) {
-    return stripHtmlTags(resultPayload.display);
-  }
-  return '';
-}
-
 function extractAnyAgoraResult(rawOutput: string): { kind: 'agora_result'; payload: Record<string, any> } | null {
   return extractResultChannelStructuredResult<{ kind: 'agora_result'; payload: Record<string, any> }>(
     rawOutput,
@@ -422,59 +389,6 @@ function buildAgoraResultRetryPrompt(expectedType: 'speech' | 'summary' | 'vote'
     `唯一允许输出的格式是：<result>${schema}</result>`,
     '如果需要给人看的最终发言，只能放进 payload.content；输出 </result> 后不要再追加任何文字。',
   ].join('\n');
-}
-
-async function executeWerewolfTurnWithResultEnforcement(input: {
-  prepared: PreparedAgentChat;
-  prompt: string;
-}): Promise<{
-  success: boolean;
-  output: string;
-  error?: string;
-  sessionId?: string;
-}> {
-  const maxAttempts = 3;
-  let latestSessionId = input.prepared.resumeSessionId || undefined;
-  let lastResult: {
-    success: boolean;
-    output: string;
-    error?: string;
-    sessionId?: string;
-  } | null = null;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const isRetry = attempt > 0;
-    const result = await executeChatRuntimeWithContextRecovery(input.prepared.engine, {
-      agent: input.prepared.roleConfig.name,
-      step: isRetry ? `${input.prepared.mode}-result-retry-${attempt}` : input.prepared.mode,
-      prompt: isRetry
-        ? [
-            '你上一条回复不合规：缺少 `<result>JSON</result>` 结果块。',
-            '不要重复过程说明，不要展示任何工具、规则、草稿或解释。',
-            '现在仅基于同一回合补发一个合规的 `<result>JSON</result>`。',
-            '如果需要给人看的内容，把它放进 `display` 字段；如果这是机器决策回合，也把 action / target / save / poisonTarget / reason 等字段一起放进同一个 JSON。',
-          ].join('\n')
-        : input.prompt,
-      systemPrompt: input.prepared.roleConfig.systemPrompt || `你是 ${input.prepared.roleConfig.name}。`,
-      model: input.prepared.model,
-      workingDirectory: input.prepared.workingDirectory,
-      allowedTools: input.prepared.roleConfig.allowedTools,
-      sessionId: latestSessionId,
-      appendSystemPrompt: false,
-      mcpServers: input.prepared.roleConfig.mcpServers,
-      userId: input.prepared.userId,
-    }, {
-      buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(input.prepared, input.prompt),
-      onContextReset: () => {
-        latestSessionId = undefined;
-      },
-    });
-    lastResult = result;
-    latestSessionId = resolveRecoveredRuntimeSessionId(result, latestSessionId) || undefined;
-    if (hasWerewolfResult(result.output || '')) return result;
-  }
-
-  return lastResult || { success: false, output: '', error: 'missing werewolf result', sessionId: latestSessionId };
 }
 
 async function executeAgoraTurnWithResultEnforcement(input: {
@@ -549,11 +463,9 @@ export async function finalizeAgentChatExecution(input: {
   const cleanedOutput = specCodingRevisionCommand
     ? stripSpecCodingRevisionCommand(input.rawOutput || '')
     : (input.rawOutput || '');
-  const visibleOutput = prepared.isTemporaryWerewolf
-    ? buildVisibleWerewolfOutput(cleanedOutput)
-    : prepared.isTemporaryAgora
-      ? buildVisibleAgoraOutput(cleanedOutput)
-      : cleanedOutput;
+  const visibleOutput = prepared.isTemporaryAgora
+    ? buildVisibleAgoraOutput(cleanedOutput)
+    : cleanedOutput;
 
   prepared.releaseMemoryV2();
   return {
@@ -694,16 +606,11 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
   const prepared = await prepareAgentChat(input);
 
   try {
-  const result = prepared.isTemporaryWerewolf
-    ? await executeWerewolfTurnWithResultEnforcement({
+  const result = prepared.isTemporaryAgora
+    ? await executeAgoraTurnWithResultEnforcement({
         prepared,
         prompt: prepared.prompt,
       })
-    : prepared.isTemporaryAgora
-      ? await executeAgoraTurnWithResultEnforcement({
-          prepared,
-          prompt: prepared.prompt,
-        })
     : await executeChatRuntimeWithContextRecovery(prepared.engine, {
         agent: prepared.roleConfig.name,
         step: prepared.mode,
@@ -766,42 +673,23 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
   if (!roleConfig?.name) {
     throw new Error('Agent 配置无效');
   }
-  const isTemporaryWerewolf = isTemporaryWerewolfChat({ roleConfig, workflowContext });
   const isTemporaryAgora = isTemporaryAgoraChat(workflowContext);
   const agoraExpectedResultType = isTemporaryAgora ? getAgoraExpectedResultType(workflowContext) : undefined;
-  const workingDirectory = isTemporaryWerewolf
-    ? getWorkspaceRoot()
-    : (typeof input.workingDirectory === 'string' && input.workingDirectory.trim()
-      ? input.workingDirectory.trim()
-      : input.userContext.personalDir);
-  const werewolfSkillPath = isTemporaryWerewolf
-    ? await getRuntimeSkillPath('werewolf-tabletalk', 'SKILL.md').catch(() => '')
-    : '';
-  const isWerewolfInit = isTemporaryWerewolf && !resumeSessionId;
-  const effectiveRoleConfig = isTemporaryWerewolf
+  const workingDirectory = typeof input.workingDirectory === 'string' && input.workingDirectory.trim()
+    ? input.workingDirectory.trim()
+    : input.userContext.personalDir;
+  const effectiveRoleConfig = isTemporaryAgora
     ? {
         ...roleConfig,
         systemPrompt: [
           roleConfig.systemPrompt || '',
-          isWerewolfInit
-            ? (werewolfSkillPath
-              ? `狼人杀专用技能文件绝对路径：\`${werewolfSkillPath}\`。这次是会话初始化阶段，只在现在静默读取并内化这个文件一次即可。读取后，后续所有轮次直接按已内化的规则、术语和固定发言格式执行，不要再次读取，不要提到自己读过规则，也不要展示读取过程、查找路径过程或工具执行过程。若需要结构化输出，只使用一个 <result>JSON</result> 结果块；给人看的最终发言放进 JSON 的 display 字段，并且 display 只能写纯文本或 Markdown，不要输出任何 HTML 标签。如果当前回合还要求机器决策，就把 action/target/reason 等字段和 display 一起放进同一个 result JSON，系统只认 result 做结算。`
-              : '这次是狼人杀会话初始化阶段，只在现在静默读取并内化 runtime 目录下的 werewolf-tabletalk skill 一次即可。读取后，后续所有轮次直接按已内化的规则、术语和固定发言格式执行，不要再次读取，不要提到自己读过规则，也不要展示读取过程和工具执行过程。若需要结构化输出，只使用一个 <result>JSON</result> 结果块；给人看的最终发言放进 JSON 的 display 字段，并且 display 只能写纯文本或 Markdown，不要输出任何 HTML 标签。如果当前回合还要求机器决策，就把 action/target/reason 等字段和 display 一起放进同一个 result JSON。')
-            : '狼人杀规则已经在初始化阶段内化。当前回合直接按既定规则、术语和固定发言格式执行，不要再次读取任何 skill 文件，不要提到自己在查规则，也不要展示工具执行过程。若需要结构化输出，只使用一个 <result>JSON</result> 结果块；给人看的最终发言放进 JSON 的 display 字段，并且 display 只能写纯文本或 Markdown，不要输出任何 HTML 标签。如果当前回合还要求机器决策，就把 action/target/reason 等字段和 display 一起放进同一个 result JSON。',
+          '你正在参加议场群聊。当前回合的最终提交必须严格遵守用户消息里给出的 `<result>...</result>` JSON 协议。',
+          `本轮期望的 payload.type 是 "${agoraExpectedResultType || 'speech'}"。如果缺少 <result>、kind 不为 "agora_result"、payload.type 不匹配，或 payload.content 为空，本轮会被判失败并要求你重发。`,
+          '这个协议只约束最终结果块，不要求你用汇报腔；正常像群聊一样说话就行。',
+          '如需中间过程，可先输出普通正文；但最终展示给群里的那段话必须完整写进 payload.content。',
+          '输出 </result> 后不要再追加任何文字。',
         ].filter(Boolean).join('\n'),
       } as RoleConfig
-    : isTemporaryAgora
-      ? {
-          ...roleConfig,
-          systemPrompt: [
-            roleConfig.systemPrompt || '',
-            '你正在参加议场群聊。当前回合的最终提交必须严格遵守用户消息里给出的 `<result>...</result>` JSON 协议。',
-            `本轮期望的 payload.type 是 "${agoraExpectedResultType || 'speech'}"。如果缺少 <result>、kind 不为 "agora_result"、payload.type 不匹配，或 payload.content 为空，本轮会被判失败并要求你重发。`,
-            '这个协议只约束最终结果块，不要求你用汇报腔；正常像群聊一样说话就行。',
-            '如需中间过程，可先输出普通正文；但最终展示给群里的那段话必须完整写进 payload.content。',
-            '输出 </result> 后不要再追加任何文字。',
-          ].filter(Boolean).join('\n'),
-        } as RoleConfig
     : roleConfig;
   const requestedMcpServers = input.requestedMcpServers !== undefined
     ? await resolveChatRequestedMcpServers({
@@ -909,7 +797,6 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
     prompt,
     sessionReuseKey,
     userId: input.userContext.id,
-    isTemporaryWerewolf,
     isTemporaryAgora,
     agoraExpectedResultType,
     memoryV2: preparedMemoryV2.memoryV2,

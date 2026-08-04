@@ -12,7 +12,7 @@ describe('agora opening copy', () => {
       name: '代码评审',
       sourceType: 'preset' as const,
       presetId: 'code-reviewer',
-      sourceAgent: 'code-auditor',
+      sourceAgent: 'code-hunter',
       createdAt: Date.now(),
     };
 
@@ -26,7 +26,7 @@ describe('agora opening copy', () => {
       name: '代码评审',
       sourceType: 'preset',
       presetId: 'code-reviewer',
-      sourceAgent: 'code-auditor',
+      sourceAgent: 'code-hunter',
       createdAt: Date.now(),
     });
 

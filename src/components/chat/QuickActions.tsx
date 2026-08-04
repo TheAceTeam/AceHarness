@@ -18,6 +18,7 @@ import {
   type HomePluginQuickAction,
 } from '@/lib/sidebar-plugins';
 import { Suggestions, Suggestion } from '@/components/ai-elements/suggestion';
+import { CODESPEC_WORKFLOW_CREATOR_ACTION, isAiWorkflowCreatorAction } from '@/lib/chat/workflow-creator-entry';
 
 type SlashCommandLike = {
   id: string;
@@ -71,7 +72,7 @@ function buildCodespecQuickActions(slashCommands?: SlashCommandLike[]): HomePlug
     label: '根据 Codespec 创建工作流',
     icon: 'account_tree',
     color: 'from-indigo-600 to-sky-600',
-    prompt: '根据仓库下codespec文档需求创建工作流',
+    prompt: CODESPEC_WORKFLOW_CREATOR_ACTION,
     pinned: false,
     category: 'codespec',
     order: 30,
@@ -211,10 +212,10 @@ const ACTION_GUIDES: Record<string, {
   '创建工作流': {
     title: '先描述目标，再创建工作流',
     description: '这类操作依赖当前对话上下文。先把目标、工作目录和约束告诉 AI，再让它生成右侧表单预填信息会更稳定。',
-    samplePrompt: '我想围绕【目标】创建一个工作流，工作目录是【路径】，请先帮我梳理需求、阶段、候选 Agent 和任务拆分。',
+    samplePrompt: '我想围绕【目标】创建一个工作流，工作目录是【路径】，请先帮我梳理需求、节点、候选 Agent 和任务拆分。',
     assistantSteps: [
       '先确认你的目标、输入、工作目录和约束。',
-      '整理出阶段、候选 Agent、工作流结构和关键风险。',
+      '整理出节点、候选 Agent、工作流结构和关键风险。',
       '把这些信息同步到右侧工作流表单，再进入创建。',
     ],
   },
@@ -262,11 +263,11 @@ const ACTION_GUIDES: Record<string, {
 
 export default function QuickActions({ onAction, skillSettings, slashCommands }: QuickActionsProps) {
   const [guideAction, setGuideAction] = useState<HomePluginQuickAction | null>(null);
-  const guide = guideAction ? ACTION_GUIDES[guideAction.label] : null;
+  const guide = guideAction ? ACTION_GUIDES[guideAction.label] || guideAction.guide || null : null;
   const actionsGrouped = mergeGroupedActions(getActionsGrouped(), buildCodespecQuickActions(slashCommands));
 
   const handleActionClick = (action: HomePluginQuickAction) => {
-    if (ACTION_GUIDES[action.label]) {
+    if (ACTION_GUIDES[action.label] || action.guide) {
       setGuideAction(action);
       return;
     }
@@ -280,6 +281,13 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
   const handleInsertGuidePrompt = () => {
     if (!guide) return;
     onAction(`${guide.samplePrompt}\n`);
+    setGuideAction(null);
+  };
+
+  const handleOpenWorkflowCreator = () => {
+    const action = guideAction;
+    if (!action || !isAiWorkflowCreatorAction(action.prompt)) return;
+    onAction(action.prompt);
     setGuideAction(null);
   };
 
@@ -383,6 +391,11 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
             <Button variant="outline" onClick={() => setGuideAction(null)}>
               稍后再说
             </Button>
+            {isAiWorkflowCreatorAction(guideAction?.prompt) ? (
+              <Button variant="secondary" onClick={handleOpenWorkflowCreator}>
+                打开 AI 引导创建
+              </Button>
+            ) : null}
             <Button onClick={handleInsertGuidePrompt}>
               把示例消息放入输入框
             </Button>

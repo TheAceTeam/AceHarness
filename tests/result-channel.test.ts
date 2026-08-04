@@ -4,9 +4,9 @@ import { wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 
 describe('result-channel', () => {
   test('parses bare json payload', () => {
-    expect(extractJsonObject('{"kind":"home_sidebar","payload":{"activeTab":"workflow"}}')).toEqual({
+    expect(extractJsonObject('{"kind":"home_sidebar","payload":{"activeTab":"agent"}}')).toEqual({
       kind: 'home_sidebar',
-      payload: { activeTab: 'workflow' },
+      payload: { activeTab: 'agent' },
     });
   });
 
@@ -18,9 +18,9 @@ describe('result-channel', () => {
   });
 
   test('repairs lightly malformed json payloads', () => {
-    expect(extractJsonObject('{kind: "home_sidebar", payload: {activeTab: workflow}}')).toEqual({
+    expect(extractJsonObject('{kind: "home_sidebar", payload: {activeTab: agent}}')).toEqual({
       kind: 'home_sidebar',
-      payload: { activeTab: 'workflow' },
+      payload: { activeTab: 'agent' },
     });
   });
 
@@ -35,19 +35,21 @@ describe('result-channel', () => {
     });
   });
 
-  test('extracts structured result from result channel', () => {
+  test('extracts workflow patch item from result channel', () => {
     const markdown = [
       '说明文字',
       '<result>',
-      '{"kind":"workflow_state_outline","data":{"states":[{"name":"实现"},{"name":"完成","isFinal":true}]}}',
+      '{"kind":"workflow_patch_item","data":{"scope":"state","workflowMode":"state-machine","patch":{"state":{"name":"实现"}}}}',
       '</result>',
     ].join('\n');
 
-    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'workflow_state_outline');
+    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'workflow_patch_item');
     expect(parsed).toEqual({
-      kind: 'workflow_state_outline',
+      kind: 'workflow_patch_item',
       data: {
-        states: [{ name: '实现' }, { name: '完成', isFinal: true }],
+        scope: 'state',
+        workflowMode: 'state-machine',
+        patch: { state: { name: '实现' } },
       },
     });
   });
@@ -55,27 +57,27 @@ describe('result-channel', () => {
   test('recovers a result section when the closing tag is replaced by tool-call markup', () => {
     const markdown = [
       '长上下文输出了一段说明。',
-      '<result>{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"首期目标是什么？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}</arg_value></tool_call>',
+      '<result>{"kind":"workflow_patch_item","data":{"scope":"step","workflowMode":"state-machine","patch":{"step":{"name":"实现"}}}}</arg_value></tool_call>',
     ].join('\n');
 
     expect(getResultSections(markdown).map((section) => section.content.trim())).toEqual([
-      '{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"首期目标是什么？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}',
+      '{"kind":"workflow_patch_item","data":{"scope":"step","workflowMode":"state-machine","patch":{"step":{"name":"实现"}}}}',
     ]);
-    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'workflow_clarification_question');
-    expect(parsed?.data?.id).toBe('target_outcome');
+    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'workflow_patch_item');
+    expect(parsed?.data?.scope).toBe('step');
   });
 
   test('does not recover unclosed result examples inside fenced code blocks', () => {
     const markdown = [
       '示例：',
       '```xml',
-      '<result>{"kind":"workflow_clarification_question","data":{"id":"example"}}',
+      '<result>{"kind":"workflow_patch_item","data":{"scope":"workflow","workflowMode":"state-machine","patch":{"workflow":{"name":"example"}}}}',
       '```',
-      '<result>{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"目标？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}</result>',
+      '<result>{"kind":"workflow_patch_item","data":{"scope":"workflow","workflowMode":"state-machine","patch":{"workflow":{"name":"target"}}}}</result>',
     ].join('\n');
 
     expect(getResultSections(markdown).map((section) => section.content.trim())).toEqual([
-      '{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"目标？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}',
+      '{"kind":"workflow_patch_item","data":{"scope":"workflow","workflowMode":"state-machine","patch":{"workflow":{"name":"target"}}}}',
     ]);
   });
 
@@ -125,22 +127,22 @@ describe('result-channel', () => {
   test('extracts first matching structured result when multiple result sections exist', () => {
     const markdown = [
       '<result>{"kind":"card","payload":{"blocks":[{"type":"text","content":"first"}]}}</result>',
-      '<result>{"kind":"workflow_state_steps","data":{"stateName":"实现","steps":[{"name":"编码","agent":"developer","task":"实现"}]}}</result>',
-      '<result>{"kind":"workflow_state_steps","data":{"stateName":"测试","steps":[{"name":"测试","agent":"tester","task":"验证"}]}}</result>',
+      '<result>{"kind":"workflow_patch_item","data":{"scope":"step","workflowMode":"state-machine","patch":{"step":{"name":"编码"}}}}</result>',
+      '<result>{"kind":"workflow_patch_item","data":{"scope":"state","workflowMode":"state-machine","patch":{"state":{"name":"测试"}}}}</result>',
     ].join('\n');
 
-    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'workflow_state_steps');
-    expect(parsed?.data?.stateName).toBe('实现');
+    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'workflow_patch_item');
+    expect(parsed?.data?.scope).toBe('step');
   });
 
   test('supports same-line preRuntime fenced result payloads', () => {
-    expect(extractJsonObject('```json {"type":"home_sidebar","activeTab":"workflow"} ```')).toEqual({
+    expect(extractJsonObject('```json {"type":"home_sidebar","activeTab":"agent"} ```')).toEqual({
       type: 'home_sidebar',
-      activeTab: 'workflow',
+      activeTab: 'agent',
     });
   });
 
   test('returns null for incomplete json payloads', () => {
-    expect(extractJsonObject('{"kind":"home_sidebar","payload":{"activeTab":"workflow"')).toBeNull();
+    expect(extractJsonObject('{"kind":"home_sidebar","payload":{"activeTab":"agent"')).toBeNull();
   });
 });

@@ -1,21 +1,5 @@
 import { describe, expect, test, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/workflow/manager', () => ({
-  WorkflowManager: class MockWorkflowManager {
-    private listeners = new Map<string, (data: any) => void>();
-    getStatus() {
-      return { status: 'idle' };
-    }
-    on(event: string, handler: (data: any) => void) {
-      this.listeners.set(event, handler);
-    }
-    emitForTest(event: string, data: any) {
-      this.listeners.get(event)?.(data);
-    }
-    removeAllListeners() {}
-  },
-}));
-
 vi.mock('@/lib/state-machine/workflow-manager', () => ({
   StateMachineWorkflowManager: class MockStateMachineWorkflowManager {
     private listeners = new Map<string, (data: any) => void>();
@@ -108,12 +92,10 @@ describe('workflow registry', () => {
     const first = await workflowRegistry.getManagerForRun({
       configFile: 'demo.yaml',
       managerKey: 'child:parent-a:step-1',
-      isStateMachine: true,
     });
     const second = await workflowRegistry.getManagerForRun({
       configFile: 'demo.yaml',
       managerKey: 'child:parent-b:step-1',
-      isStateMachine: true,
     });
 
     expect(first).not.toBe(second);
@@ -127,7 +109,6 @@ describe('workflow registry', () => {
     const manager = await workflowRegistry.getManagerForRun({
       configFile: 'demo.yaml',
       managerKey: 'child:parent-a:step-2',
-      isStateMachine: true,
     });
 
     (manager as any).emitForTest('status', {

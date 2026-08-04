@@ -14,8 +14,8 @@ import coreOptimize from './manifests/core-optimize.json';
 
 // Import TypeScript plugin definitions
 import supervisorPlugin from '@/plugins/supervisor';
-import createWorkflowPlugin from '@/plugins/create-workflow';
 import createAgentPlugin from '@/plugins/create-agent';
+import aiWorkflowCreatorPlugin from '@/plugins/ai-workflow-creator';
 import codespecPlugin from '@/plugins/codespec';
 
 // ─── Dual registry: JSON manifests (actions-only) + full plugins ───
@@ -27,8 +27,8 @@ const jsonManifests: HomePluginManifest[] = [
 
 const defaultFullPlugins: HomePlugin[] = [
   supervisorPlugin,
-  createWorkflowPlugin,
   createAgentPlugin,
+  aiWorkflowCreatorPlugin,
   codespecPlugin,
 ];
 

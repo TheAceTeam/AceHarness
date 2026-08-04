@@ -35,7 +35,6 @@ export type AgentDraftRecommendation = {
     description?: string;
     projectRoot?: string;
     agents: string[];
-    phases: string[];
     states: string[];
   };
 };
@@ -370,14 +369,8 @@ function normalizeConfigFilename(filename: string): string {
 
 function collectWorkflowAgents(referenceConfig: any): string[] {
   const names = new Set<string>();
-  const phases = Array.isArray(referenceConfig?.workflow?.phases) ? referenceConfig.workflow.phases : [];
   const states = Array.isArray(referenceConfig?.workflow?.states) ? referenceConfig.workflow.states : [];
 
-  for (const phase of phases) {
-    for (const step of phase?.steps || []) {
-      if (typeof step?.agent === 'string' && step.agent.trim()) names.add(step.agent.trim());
-    }
-  }
   for (const state of states) {
     for (const step of state?.steps || []) {
       if (typeof step?.agent === 'string' && step.agent.trim()) names.add(step.agent.trim());
@@ -395,7 +388,6 @@ function buildReferenceWorkflowPromptBlock(input: {
   const workflow = input.referenceConfig.workflow || {};
   const context = input.referenceConfig.context || {};
   const agentNames = collectWorkflowAgents(input.referenceConfig);
-  const phaseNames = Array.isArray(workflow.phases) ? workflow.phases.map((phase: any) => phase?.name).filter(Boolean) : [];
   const stateNames = Array.isArray(workflow.states) ? workflow.states.map((state: any) => state?.name).filter(Boolean) : [];
 
   return [
@@ -404,7 +396,6 @@ function buildReferenceWorkflowPromptBlock(input: {
     workflow.name ? `- 名称: ${workflow.name}` : '',
     workflow.description ? `- 描述: ${workflow.description}` : '',
     context.projectRoot ? `- 工程目录: ${context.projectRoot}` : '',
-    phaseNames.length ? `- 阶段: ${phaseNames.slice(0, 6).join('、')}` : '',
     stateNames.length ? `- 状态: ${stateNames.slice(0, 6).join('、')}` : '',
     agentNames.length ? `- 已有角色: ${agentNames.slice(0, 10).join('、')}` : '',
     '- 要求: 如果当前要创建的 Agent 与参考工作流中的角色职责接近，请复用其分工风格、命名粒度和能力边界；如果是补位角色，请避免与现有角色重复。',
@@ -425,9 +416,6 @@ function buildDraftRecommendations(input: {
       description: typeof workflow.description === 'string' ? workflow.description : undefined,
       projectRoot: typeof context.projectRoot === 'string' ? context.projectRoot : undefined,
       agents: collectWorkflowAgents(input.referenceConfig).slice(0, 10),
-      phases: Array.isArray(workflow.phases)
-        ? workflow.phases.map((phase: any) => phase?.name).filter((value: unknown): value is string => typeof value === 'string').slice(0, 8)
-        : [],
       states: Array.isArray(workflow.states)
         ? workflow.states.map((state: any) => state?.name).filter((value: unknown): value is string => typeof value === 'string').slice(0, 8)
         : [],

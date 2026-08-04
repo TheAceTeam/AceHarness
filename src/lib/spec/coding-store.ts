@@ -10,7 +10,7 @@ import {
   type SpecCodingPhase,
   type SpecCodingProgressStatus,
   type SpecCodingTask,
-  type WorkflowConfig,
+  type StateMachineWorkflowConfig,
 } from '@/lib/core/schemas';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { readMasterSpec, getSpecRootDir, hasPersistedSpec } from '@/lib/spec/persistence';
@@ -103,6 +103,7 @@ function parseTaskComment(line: string): { id?: string; status?: SpecCodingProgr
   const meta = comment[2] || '';
   const status = meta.match(/\bstatus:(pending|in-progress|completed|blocked)\b/)?.[1] as SpecCodingProgressStatus | undefined;
   const phaseId = meta.match(/\bphase:([^\s>]+)\b/)?.[1];
+
   return {
     id: comment[1],
     status,
@@ -709,25 +710,17 @@ function buildRequirementLines(requirements?: string, description?: string) {
   }));
 }
 
-function deriveSpecCodingStructure(config: WorkflowConfig | Record<string, any>) {
+function deriveSpecCodingStructure(config: StateMachineWorkflowConfig | Record<string, any>) {
   const workflow = (config as any)?.workflow || {};
-  const phases = Array.isArray(workflow.phases)
-    ? workflow.phases.map((phase: any, index: number) => ({
-      id: `phase-${index + 1}`,
-      title: phase.name || `阶段 ${index + 1}`,
-      objective: phase.steps?.map((step: any) => step.task).filter(Boolean).join('；') || '',
-      ownerAgents: [...new Set((phase.steps || []).map((step: any) => step.agent).filter(Boolean))],
+  const phases = Array.isArray(workflow.states)
+    ? workflow.states.map((state: any, index: number) => ({
+      id: `state-${index + 1}`,
+      title: state.name || `状态 ${index + 1}`,
+      objective: state.description || state.steps?.map((step: any) => step.task).filter(Boolean).join('；') || '',
+      ownerAgents: [...new Set((state.steps || []).map((step: any) => step.agent).filter(Boolean))],
       status: 'pending' as const,
     }))
-    : Array.isArray(workflow.states)
-      ? workflow.states.map((state: any, index: number) => ({
-        id: `state-${index + 1}`,
-        title: state.name || `状态 ${index + 1}`,
-        objective: state.description || state.steps?.map((step: any) => step.task).filter(Boolean).join('；') || '',
-        ownerAgents: [...new Set((state.steps || []).map((step: any) => step.agent).filter(Boolean))],
-        status: 'pending' as const,
-      }))
-      : [];
+    : [];
 
   const agentNames = [...new Set(phases.flatMap((phase: { ownerAgents: string[] }) => phase.ownerAgents))] as string[];
   const assignments = agentNames.map((agent: string) => ({
@@ -738,16 +731,7 @@ function deriveSpecCodingStructure(config: WorkflowConfig | Record<string, any>)
       .map((phase: { id: string }) => phase.id),
   }));
 
-  const checkpoints = Array.isArray(workflow.phases)
-    ? workflow.phases
-      .map((phase: any, index: number) => phase?.checkpoint ? {
-        id: `checkpoint-${index + 1}`,
-        title: phase.checkpoint.name || `检查点 ${index + 1}`,
-        phaseId: phases[index]?.id,
-        status: 'pending' as const,
-      } : null)
-      .filter(Boolean)
-    : [];
+  const checkpoints: Array<{ id: string; title: string; phaseId?: string; status: 'pending' }> = [];
 
   return { phases, assignments, checkpoints };
 }
@@ -758,12 +742,11 @@ function buildSpecCodingArtifacts(input: {
   requirements?: string;
   workingDirectory: string;
   workspaceMode: 'isolated-copy' | 'in-place';
-  config: WorkflowConfig | Record<string, any>;
+  config: StateMachineWorkflowConfig | Record<string, any>;
   phases: Array<{ id: string; title: string; objective?: string; ownerAgents: string[] }>;
   assignments: Array<{ agent: string; responsibility: string; phaseIds: string[] }>;
 }) {
   const workflow = (input.config as any)?.workflow || {};
-  const mode = workflow.mode === 'state-machine' ? 'state-machine' : 'phase-based';
   const normalizedRequirements = (input.requirements || '').trim();
   const normalizedDescription = (input.description || '').trim();
   const goalSummary = normalizedRequirements || normalizedDescription || `${input.workflowName} 的需求澄清`;
@@ -786,12 +769,12 @@ function buildSpecCodingArtifacts(input: {
       '',
       `**能力边界：** ${objective}`,
       '',
-      `**证据来源：** workflow config 中的阶段 ${phase.title}${phase.ownerAgents.length ? `，负责人 ${phase.ownerAgents.join('、')}` : ''}；具体代码文件需在执行任务中继续勘探。`,
+      `**证据来源：** workflow config 中的状态 ${phase.title}${phase.ownerAgents.length ? `，负责人 ${phase.ownerAgents.join('、')}` : ''}；具体代码文件需在执行任务中继续勘探。`,
       '',
       `**用户故事：** 作为${ownerText}，我希望${phase.title}有明确输入、执行动作、交付物和验收方式，以便后续 workflow 能按同一基线执行。`,
       '',
       '#### 验收标准',
-      `1. WHEN ${phase.title}启动 THEN 系统向负责 Agent 提供本阶段目标、依赖、需求追踪和可验证交付物。`,
+      `1. WHEN ${phase.title}对应状态启动 THEN 系统向负责 Agent 提供当前目标、依赖、需求追踪和可验证交付物。`,
       `2. WHEN ${phase.title}执行中出现范围、依赖或验收冲突 THEN Agent 必须记录阻塞原因并请求修订，不得扩大范围自行处理。`,
       `3. WHEN ${phase.title}完成 THEN 对应 tasks.md 任务有验证证据，并能追溯到 ${reqId}。`,
     ].join('\n');
@@ -814,7 +797,7 @@ function buildSpecCodingArtifacts(input: {
     '',
     '| 证据 | 文件/函数/接口 | 说明 | 影响的需求 |',
     '| --- | --- | --- | --- |',
-    `| E1 | workflow config: ${input.workflowName} | 当前 workflow 定义了 ${plannedPhases.length} 个阶段，是能力拆分和任务边界的主要来源。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
+    `| E1 | workflow config: ${input.workflowName} | 当前 workflow 定义了 ${plannedPhases.length} 个状态，是能力拆分和任务边界的主要来源。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
     `| E2 | workingDirectory: ${input.workingDirectory} | 后续代码勘探、实现和验证必须在该工作目录上下文中执行。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
     '| E3 | 待勘探: 相关源码、测试、配置入口 | 具体实现前必须定位真实文件/函数/测试，不能只按抽象阶段执行。 | R1 |',
     '',
@@ -825,7 +808,7 @@ function buildSpecCodingArtifacts(input: {
     '## 术语表',
     `- **工作目录**: ${input.workingDirectory}`,
     `- **工作区模式**: ${input.workspaceMode === 'isolated-copy' ? '隔离副本' : '原地执行'}`,
-    `- **执行模式**: ${mode === 'state-machine' ? '状态机' : '阶段式'}`,
+    '- **执行模式**: 状态机',
     '- **SpecCoding 制品**: requirements.md、design.md、tasks.md 三份互相追踪的计划制品。',
     '- **验证证据**: 能证明任务完成且符合验收标准的测试、构建、审查记录或人工确认。',
     '',
@@ -876,13 +859,13 @@ function buildSpecCodingArtifacts(input: {
     `# 设计文档：${input.workflowName}`,
     '',
     '## 概述',
-    `使用 ${mode === 'state-machine' ? '状态机' : '阶段式'} workflow 作为执行载体，requirements.md 定义行为边界，design.md 定义实现组织方式，tasks.md 提供可执行任务和验证闭环。`,
+    '使用状态机 workflow 作为执行载体，requirements.md 定义行为边界，design.md 定义实现组织方式，tasks.md 提供可执行任务和验证闭环。',
     '',
     '## 当前实现分析',
     '',
     '| 路径/模块 | 当前行为 | 目标行为 | 差异/风险 | 关联需求 |',
     '| --- | --- | --- | --- | --- |',
-    `| workflow config: ${input.workflowName} | 已有 ${plannedPhases.length} 个阶段配置。 | 转化为可追踪的 R/D/T 执行基线。 | 阶段说明可能不足以直接执行，需要在任务中补代码勘探。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
+    `| workflow config: ${input.workflowName} | 已有 ${plannedPhases.length} 个状态配置。 | 转化为可追踪的 R/D/T 执行基线。 | 状态说明可能不足以直接执行，需要在任务中补代码勘探。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
     `| workingDirectory: ${input.workingDirectory} | 是后续代码勘探和验证的执行上下文。 | 所有实现任务必须绑定真实文件/函数/测试或明确待勘探目标。 | 若跳过代码勘探，任务会退化为泛泛描述。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
     '',
     '## 架构',
@@ -968,7 +951,7 @@ function buildSpecCodingArtifacts(input: {
     '',
     '| 编号 | 决策 | 选择 | 理由 | 替代方案 |',
     '| --- | --- | --- | --- | --- |',
-    `| D1 | 执行模式 | ${mode === 'state-machine' ? '状态机' : '阶段式'} | 当前需求更适合通过${mode === 'state-machine' ? '状态流转与 verdict 驱动' : '显式阶段拆分'}来组织执行 | 不直接用自由对话执行，避免缺少任务追踪 |`,
+    '| D1 | 执行模式 | 状态机 | 当前需求适合通过状态流转与 verdict 驱动来组织执行 | 不直接用自由对话执行，避免缺少任务追踪 |',
     '| D2 | 规划优先 | 先确认阶段目标、需求追踪和验证方式 | 降低后续协作偏差并支持回归审查 | 不先写代码，避免需求漂移 |',
     '| D3 | 任务绑定 | tasks.md 任务作为 workflow step 的主要执行边界 | 让 Agent 输出能回写到 SpecCoding 状态 | 不用纯文本说明替代结构化任务 |',
     '',
@@ -978,10 +961,6 @@ function buildSpecCodingArtifacts(input: {
     '- 集成测试：确认创建态 session 保存、修订、确认和 workflow 绑定校验正常。',
     '- 回归测试：确认 requirements/design/tasks 的编号、task comment 和 artifact snapshots 在修订后保留。',
     '- 人工验收：审查每个任务是否有明确动作、交付物和验证方式。',
-    '',
-    '## 兼容性与迁移',
-    '',
-    '保持现有 workflow 配置、creation session、artifact snapshot 和 spec-coding-task 注释兼容；修订时只更新必要制品，不删除仍有效的任务状态和绑定信息。',
     '',
     '## 风险与缓解',
     '',
@@ -1025,7 +1004,7 @@ export function buildSpecCodingFromWorkflowConfig(input: {
   filename: string;
   workspaceMode: 'isolated-copy' | 'in-place';
   workingDirectory: string;
-  config: WorkflowConfig | Record<string, any>;
+  config: StateMachineWorkflowConfig | Record<string, any>;
 }): SpecCodingDocument {
   const nowIso = new Date().toISOString();
   const { phases, assignments, checkpoints } = deriveSpecCodingStructure(input.config);
@@ -1092,7 +1071,7 @@ export function buildCreationSession(input: {
   specCodingStatus?: SpecCodingDocument['status'];
   filename: string;
   workflowName: string;
-  mode: 'phase-based' | 'state-machine' | 'ai-guided';
+  mode: 'state-machine' | 'lightweight';
   referenceWorkflow?: string;
   planningEngine?: string;
   planningModel?: string;
@@ -1100,10 +1079,15 @@ export function buildCreationSession(input: {
   workspaceMode: 'isolated-copy' | 'in-place';
   description?: string;
   requirements?: string;
+  lightweight?: {
+    agent?: string;
+    task?: string;
+    skills?: string[];
+  };
   clarification?: CreationSession['clarification'];
   stageSessions?: CreationSession['stageSessions'];
   uiState?: CreationSession['uiState'];
-  config: WorkflowConfig | Record<string, any>;
+  config: StateMachineWorkflowConfig | Record<string, any>;
   specCoding?: SpecCodingDocument;
   persistMode?: 'none' | 'repository';
   specRoot?: string;
@@ -1121,15 +1105,12 @@ export function buildCreationSession(input: {
     config: input.config,
   });
   const generatedConfigSummary: CreationSession['generatedConfigSummary'] = {
-    mode: workflow.mode === 'state-machine' ? 'state-machine' as const : 'phase-based' as const,
-    phaseCount: Array.isArray(workflow.phases) ? workflow.phases.length : 0,
+    mode: 'state-machine' as const,
     stateCount: Array.isArray(workflow.states) ? workflow.states.length : 0,
     agentNames: [...new Set(
-      (Array.isArray(workflow.phases)
-        ? workflow.phases.flatMap((phase: any) => (phase.steps || []).map((step: any) => step.agent))
-        : Array.isArray(workflow.states)
-          ? workflow.states.flatMap((state: any) => (state.steps || []).map((step: any) => step.agent))
-          : [])
+      (Array.isArray(workflow.states)
+        ? workflow.states.flatMap((state: any) => (state.steps || []).map((step: any) => step.agent))
+        : [])
         .filter(Boolean)
     )] as string[],
   };
@@ -1158,6 +1139,13 @@ export function buildCreationSession(input: {
     },
   };
 
+  const lightweight = input.mode === 'lightweight' && input.lightweight
+    ? {
+        ...input.lightweight,
+        skills: input.lightweight.skills || [],
+      }
+    : undefined;
+
   return {
     id: randomUUID(),
     chatSessionId: input.chatSessionId,
@@ -1174,6 +1162,7 @@ export function buildCreationSession(input: {
     workspaceMode: input.workspaceMode,
     description: input.description,
     requirements: input.requirements,
+    lightweight,
     clarification: input.clarification,
     stageSessions: input.stageSessions,
     uiState: input.uiState,
@@ -1311,7 +1300,7 @@ export function cloneCreationSessionForWorkflow(
     filename: string;
     workflowName?: string;
     createdBy?: string;
-    config?: WorkflowConfig | Record<string, any>;
+    config?: StateMachineWorkflowConfig | Record<string, any>;
   }
 ): CreationSession {
   const now = Date.now();
@@ -1326,15 +1315,12 @@ export function cloneCreationSessionForWorkflow(
   });
   const generatedConfigSummary = input.config
     ? {
-        mode: (input.config as any)?.workflow?.mode === 'state-machine' ? 'state-machine' as const : 'phase-based' as const,
-        phaseCount: Array.isArray((input.config as any)?.workflow?.phases) ? (input.config as any).workflow.phases.length : 0,
+        mode: 'state-machine' as const,
         stateCount: Array.isArray((input.config as any)?.workflow?.states) ? (input.config as any).workflow.states.length : 0,
         agentNames: [...new Set(
-          (Array.isArray((input.config as any)?.workflow?.phases)
-            ? (input.config as any).workflow.phases.flatMap((phase: any) => (phase.steps || []).map((step: any) => step.agent))
-            : Array.isArray((input.config as any)?.workflow?.states)
-              ? (input.config as any).workflow.states.flatMap((state: any) => (state.steps || []).map((step: any) => step.agent))
-              : [])
+          (Array.isArray((input.config as any)?.workflow?.states)
+            ? (input.config as any).workflow.states.flatMap((state: any) => (state.steps || []).map((step: any) => step.agent))
+            : [])
             .filter(Boolean)
         )] as string[],
       }
@@ -1389,9 +1375,21 @@ export async function updateCreationSession(id: string, patch: Partial<CreationS
             : existing.specCoding.artifacts,
         }
       : existing.specCoding;
+    const nextMode = patch.mode || existing.mode;
+    const incomingLightweight = patch.lightweight
+      ? { ...existing.lightweight, ...patch.lightweight }
+      : existing.lightweight;
+    const lightweight = nextMode === 'lightweight' && incomingLightweight
+      ? {
+          ...incomingLightweight,
+          skills: incomingLightweight.skills || [],
+        }
+      : undefined;
+
     const next = creationSessionSchema.parse({
       ...existing,
       ...patch,
+      lightweight,
       specCoding: mergedSpecCoding,
       id: existing.id,
       updatedAt: Date.now(),
@@ -1615,7 +1613,7 @@ export function rebuildSpecCodingPreservingArtifacts(input: {
   filename: string;
   workspaceMode: 'isolated-copy' | 'in-place';
   workingDirectory: string;
-  config: WorkflowConfig | Record<string, any>;
+  config: StateMachineWorkflowConfig | Record<string, any>;
   status?: SpecCodingDocument['status'];
 }): SpecCodingDocument {
   const rebuilt = buildSpecCodingFromWorkflowConfig({

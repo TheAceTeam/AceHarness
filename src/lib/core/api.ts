@@ -11,6 +11,7 @@ import type {
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
 import type { WorkflowTaskInput } from '@/lib/workflow/task-input';
+import type { RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import { parseSseJsonEventData } from '@/lib/core/sse-event-data';
 import { buildLoginHref, getCurrentAuthReturnTo } from '@/lib/navigation/return-target';
@@ -128,7 +129,7 @@ interface ConfigListOptions {
   pageSize?: number;
   keyword?: string;
   search?: string;
-  mode?: 'all' | 'phase-based' | 'state-machine' | string;
+  mode?: 'all' | 'lightweight' | 'state-machine' | string;
   sortKey?: ConfigSortKey;
   sortDirection?: SortDirection;
 }
@@ -139,8 +140,10 @@ interface ConfigListResponse {
     filename: string;
     name: string;
     description: string;
-    mode?: 'phase-based' | 'state-machine';
-    phaseCount: number;
+    mode: 'state-machine';
+    kind: 'lightweight' | 'state-machine';
+    profile?: 'lightweight';
+    stateCount: number;
     stepCount: number;
     agentCount: number;
     createdAt?: number;
@@ -173,38 +176,6 @@ interface ConfigResponse {
     sharedWithUserIds: string[];
     createdAt?: number;
     ownerName?: string;
-  };
-}
-
-interface WorkflowCreationRecommendationsResponse {
-  recommendations: {
-    experiences: Array<{
-      runId: string;
-      workflowName?: string;
-      configFile: string;
-      summary: string;
-      experience: string[];
-      nextFocus: string[];
-    }>;
-    referenceWorkflow: null | {
-      filename: string;
-      name?: string;
-      description?: string;
-      mode: 'phase-based' | 'state-machine';
-      agents: string[];
-      supervisorAgent?: string;
-      source?: 'manual' | 'recommended-experience';
-      autoApply?: boolean;
-    };
-    recommendedAgents: string[];
-    recommendedSupervisorAgent?: string;
-    relationshipHints: Array<{
-      agent: string;
-      counterpart: string;
-      synergyScore: number;
-      strengths: string[];
-      lastConfigFile?: string;
-    }>;
   };
 }
 
@@ -266,7 +237,20 @@ interface WorkflowStatusResponse {
   activeSubworkflowRunId?: string | null;
   workflowSnapshotRoot?: string | null;
   workflowSnapshotManifestHash?: string | null;
-  stepLogs?: { stepName: string; agent: string; status: string; output: string; error: string; costUsd: number; durationMs: number; timestamp: string }[];
+  stepLogs?: {
+    id?: string;
+    stepName: string;
+    agent: string;
+    status: string;
+    superseded?: boolean;
+    supersededAt?: string;
+    supersededByStep?: string;
+    output: string;
+    error: string;
+    costUsd: number;
+    durationMs: number;
+    timestamp: string;
+  }[];
   iterationStates: Record<string, any>;
   globalContext?: string;
   phaseContexts?: Record<string, string>;
@@ -384,7 +368,7 @@ interface WorkflowStatusResponse {
   runSpecCodingSummary?: WorkflowStatusResponse['specCodingSummary'] | null;
   runSpecCodingDetails?: WorkflowStatusResponse['specCodingDetails'] | null;
   sourceOfTruth?: {
-    mode: 'phase-based' | 'state-machine' | 'unknown';
+    mode: 'state-machine' | 'unknown';
     yamlSourceOfTruth: string[];
     derivedIntoSpecCoding: string[];
     runtimeSpecCodingSourceOfTruth: string[];
@@ -694,26 +678,6 @@ export const configApi = {
     return data;
   },
 
-  async getCreationRecommendations(input: {
-    workflowName?: string;
-    requirements?: string;
-    workingDirectory?: string;
-    referenceWorkflow?: string;
-    workflowMode?: 'phase-based' | 'state-machine' | 'ai-guided';
-    useHistoricalExperience?: boolean;
-  }): Promise<WorkflowCreationRecommendationsResponse> {
-    const response = await authFetch(`${API_BASE}/configs/recommendations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || '获取工作流编排推荐失败');
-    }
-    return data;
-  },
-
   async createConfig(input: {
     filename: string;
     workflowName: string;
@@ -721,7 +685,7 @@ export const configApi = {
     workingDirectory: string;
     workspaceMode?: 'isolated-copy' | 'in-place';
     description?: string;
-    mode?: 'phase-based' | 'state-machine' | 'ai-guided';
+    mode?: 'lightweight' | 'state-machine';
     requirements?: string;
     persistMode?: 'none' | 'repository';
     specRoot?: string;
@@ -729,6 +693,11 @@ export const configApi = {
     frontendSessionId?: string;
     creationSessionId?: string;
     configDraft?: any;
+    lightweight?: {
+      agent: string;
+      task: string;
+      skills?: string[];
+    };
   }): Promise<ApiResponse & { filename?: string; creationSession?: any; specCodingSkipped?: boolean }> {
     const response = await authFetch(`${API_BASE}/configs/create`, {
       method: 'POST',
@@ -1488,7 +1457,16 @@ export const agentApi = {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok || !data?.streamId) {
-      throw new Error(data?.error || 'Agent 流式对话失败');
+      const rawError = String(data?.error || data?.message || response.statusText || '接口未返回 streamId').trim();
+      const status = response.status ? `HTTP ${response.status}` : 'HTTP 状态未知';
+      throw new Error([
+        'Agent 对话启动失败',
+        '来源：ACEHarness Agent API',
+        '阶段：POST 创建流',
+        `接口：${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream`,
+        `状态：${status}`,
+        `原始错误：${rawError}`,
+      ].join('\n'));
     }
     const events = createSafeEventSource(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream?id=${encodeURIComponent(data.streamId)}`);
     return {
@@ -1660,6 +1638,58 @@ export const agoraApi = {
   },
 };
 
+export type RunDocumentSource = 'tasklist' | 'runtime-output';
+
+export interface RunDocumentFile {
+  filename: string;
+  relativePath: string;
+  documentKey: string;
+  documentSource: RunDocumentSource;
+  documentSourceLabel: string;
+  documentDirectory: string;
+  stepName: string;
+  baseName: string;
+  logicalName: string;
+  iteration: number | null;
+  agent: string;
+  phaseName: string;
+  role: string;
+  documentKind: 'conclusion' | 'detail';
+  groupKey: string;
+  groupLabel: string;
+  detailCount?: number;
+  size: number;
+  modifiedTime: string;
+  sourceRunId: string;
+  sourceConfigFile?: string;
+  sourceLabel?: string;
+  parentRunId?: string | null;
+  rootRunId?: string | null;
+}
+
+export interface RunDocumentReference {
+  source: RunDocumentSource;
+  sourceRunId?: string;
+  file: string;
+}
+
+export interface RunDocumentsResponse {
+  files: RunDocumentFile[];
+  documentRoots?: Partial<Record<RunDocumentSource, string>>;
+  documentDirectory?: string | null;
+  childRuns?: { runId: string; configFile?: string; status?: string }[];
+  pagination?: {
+    total: number;
+    totalPages: number;
+    page: number;
+    pageSize: number;
+    offset?: number;
+    limit?: number;
+    nextOffset?: number | null;
+  };
+  lazy?: { content: boolean; summaryOnly?: boolean; groupKey?: string | null; scope?: string };
+}
+
 export const runsApi = {
   async listAll(): Promise<{ runs: RunRecord[] }> {
     const response = await authFetch(`${API_BASE}/runs`);
@@ -1708,11 +1738,25 @@ export const runsApi = {
     return response.json();
   },
 
-  async listDocuments(id: string, options?: { includeChildren?: boolean; scope?: 'root' | 'children' | 'child'; childRunId?: string; groupKey?: string; documentKind?: 'conclusion' | 'detail'; summaryOnly?: boolean; page?: number; pageSize?: number; offset?: number; limit?: number; sortDirection?: 'asc' | 'desc' }): Promise<{ files: { filename: string; stepName: string; baseName: string; logicalName?: string; iteration: number | null; agent: string; phaseName: string; role: string; documentKind?: 'conclusion' | 'detail'; groupKey?: string; groupLabel?: string; detailCount?: number; size: number; modifiedTime: string; sourceRunId?: string; sourceConfigFile?: string; sourceLabel?: string; parentRunId?: string | null; rootRunId?: string | null }[]; documentDirectory?: string | null; childRuns?: { runId: string; configFile?: string; status?: string }[]; pagination?: { total: number; totalPages?: number; page?: number; pageSize?: number; offset?: number; limit?: number; nextOffset?: number | null }; lazy?: { content: boolean; summaryOnly?: boolean; groupKey?: string | null; scope?: string } }> {
+  async listDocuments(id: string, options?: {
+    includeChildren?: boolean;
+    scope?: 'root' | 'children' | 'child';
+    childRunId?: string;
+    source?: RunDocumentSource;
+    groupKey?: string;
+    documentKind?: 'conclusion' | 'detail';
+    summaryOnly?: boolean;
+    page?: number;
+    pageSize?: number;
+    offset?: number;
+    limit?: number;
+    sortDirection?: 'asc' | 'desc';
+  }): Promise<RunDocumentsResponse> {
     const search = new URLSearchParams();
     if (options?.includeChildren) search.set('includeChildren', '1');
     if (options?.scope) search.set('scope', options.scope);
     if (options?.childRunId) search.set('childRunId', options.childRunId);
+    if (options?.source) search.set('source', options.source);
     if (options?.groupKey) search.set('groupKey', options.groupKey);
     if (options?.documentKind) search.set('documentKind', options.documentKind);
     if (options?.summaryOnly) search.set('summaryOnly', '1');
@@ -1734,25 +1778,37 @@ export const runsApi = {
     return data;
   },
 
-  async getDocumentContent(id: string, filename: string, options?: { sourceRunId?: string }): Promise<{ file: string; content: string }> {
-    const params = new URLSearchParams({ file: filename });
-    if (options?.sourceRunId) params.set('sourceRunId', options.sourceRunId);
+  async getDocumentContent(
+    id: string,
+    reference: RunDocumentReference,
+  ): Promise<{ file: string; source: RunDocumentSource; sourceRunId: string; content: string }> {
+    const params = new URLSearchParams({
+      file: reference.file,
+      source: reference.source,
+    });
+    if (reference.sourceRunId) params.set('sourceRunId', reference.sourceRunId);
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents?${params.toString()}`);
     if (!response.ok) throw new Error('获取文档内容失败');
     return response.json();
   },
 
-  async renameDocument(id: string, file: string, newName: string): Promise<{ ok: boolean; newFilename: string }> {
+  async renameDocument(
+    id: string,
+    input: RunDocumentReference & { newName: string },
+  ): Promise<{ ok: boolean; newFilename: string; source: RunDocumentSource; sourceRunId: string }> {
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file, newName }),
+      body: JSON.stringify(input),
     });
     if (!response.ok) throw new Error('重命名失败');
     return response.json();
   },
 
-  async deleteDocuments(id: string, files: string[]): Promise<{ ok: boolean; deleted: string[] }> {
+  async deleteDocuments(
+    id: string,
+    files: RunDocumentReference[],
+  ): Promise<{ ok: boolean; deleted: string[] }> {
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -1936,11 +1992,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async resume(runId: string, action?: 'approve' | 'iterate' | 'force-transition', feedback?: string, targetState?: string, instruction?: string): Promise<ApiResponse> {
+  async resume(runId: string, action?: 'approve' | 'iterate', feedback?: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/resume`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId, action, feedback, targetState, instruction }),
+      body: JSON.stringify({ runId, action, feedback }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -2341,11 +2397,18 @@ export const processApi = {
 };
 
 export const streamApi = {
-  async getStreamContent(runId: string, stepName: string): Promise<string> {
+  async getStream(runId: string, stepName: string): Promise<{ content: string; toolEvents: RuntimeToolEvent[] }> {
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(runId)}/stream?step=${encodeURIComponent(stepName)}`);
-    if (!response.ok) return '';
+    if (!response.ok) return { content: '', toolEvents: [] };
     const data = await response.json();
-    return data.content || '';
+    return {
+      content: typeof data.content === 'string' ? data.content : '',
+      toolEvents: Array.isArray(data.toolEvents) ? data.toolEvents as RuntimeToolEvent[] : [],
+    };
+  },
+
+  async getStreamContent(runId: string, stepName: string): Promise<string> {
+    return (await streamApi.getStream(runId, stepName)).content;
   },
 
   /**
@@ -2357,12 +2420,23 @@ export const streamApi = {
     stepName: string,
     onDelta: (content: string) => void,
     onDone?: (status: string) => void,
+    onTool?: (tool: RuntimeToolEvent) => void,
+    onSnapshot?: (content: string) => void,
   ): EventSource {
     const url = `${API_BASE}/runs/${encodeURIComponent(runId)}/stream?step=${encodeURIComponent(stepName)}&live=1`;
     const es = createSafeEventSource(url);
+    es.addEventListener('snapshot', (e: MessageEvent) => {
+      const data = parseSseJsonEventData(e.data);
+      onSnapshot?.(typeof data.content === 'string' ? data.content : '');
+    });
     es.addEventListener('delta', (e: MessageEvent) => {
       const data = parseSseJsonEventData(e.data);
       if (data.content) onDelta(String(data.content));
+    });
+    es.addEventListener('tool', (e: MessageEvent) => {
+      const data = parseSseJsonEventData(e.data);
+      const tool = data.tool;
+      if (tool && typeof tool === 'object') onTool?.(tool as RuntimeToolEvent);
     });
     es.addEventListener('done', (e: MessageEvent) => {
       const data = parseSseJsonEventData(e.data);

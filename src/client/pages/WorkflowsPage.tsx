@@ -38,8 +38,9 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { MultiCombobox } from '@/components/ui/combobox';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
-import { Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown, History, Copy, Globe, Lock, Share2, Upload, Download, RefreshCw, LayoutTemplate, PackagePlus } from 'lucide-react';
+import { Plus, Sparkles, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown, History, Copy, Globe, Lock, Share2, Upload, Download, RefreshCw, LayoutTemplate, PackagePlus } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
+import type { WorkflowCreationMode } from '@/components/WorkflowModeSelector';
 import SaveWorkflowTemplateDialog from '@/components/workflow-templates/SaveWorkflowTemplateDialog';
 import WorkflowTemplatesPanel from '@/components/workflow-templates/WorkflowTemplatesPanel';
 import { useToast } from '@/components/ui/toast';
@@ -65,12 +66,19 @@ import { useSyncWorkflowConfigsToDb, useWorkflowConfigRows } from '@/client/db/c
 import { buildDashboardWorkbenchPath, buildWorkbenchPath, buildWorkbenchSearch } from '@/client/navigation/workbench-links';
 import type { WorkflowsSearch } from '@/routes/workflows';
 import type { RunRecord } from '@/lib/run/store';
+import {
+  DEFAULT_AI_WORKFLOW_DESCRIPTION,
+  DEFAULT_AI_WORKFLOW_REQUIREMENTS,
+} from '@/lib/chat/workflow-creator-entry';
 
 interface WorkflowConfig {
   filename: string;
   name: string;
   description?: string;
-  mode?: 'phase-based' | 'state-machine';
+  mode?: 'lightweight' | 'state-machine';
+  kind?: 'lightweight' | 'state-machine';
+  profile?: 'lightweight';
+  stateCount?: number;
   phaseCount?: number;
   stepCount?: number;
   agentCount?: number;
@@ -91,20 +99,21 @@ interface ShareableUser {
 
 type WorkflowSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
-type WorkflowModeFilter = 'all' | 'state-machine' | 'phase-based';
+type PersistedWorkflowMode = Exclude<WorkflowCreationMode, 'ai-guided'>;
+type WorkflowModeFilter = 'all' | PersistedWorkflowMode;
 type WorkflowsPageTab = 'workflows' | 'templates' | 'drafts';
 type DraftViewMode = 'gallery' | 'table';
 type DraftSortDirection = 'desc' | 'asc';
 type StatusTone = 'neutral' | 'success' | 'warning' | 'info' | 'danger' | 'accent';
 type NewWorkflowModalPreset = {
-  initialMode?: 'phase-based' | 'state-machine' | 'ai-guided';
+  aiGuidedEntry?: boolean;
+  initialMode?: WorkflowCreationMode;
   initialWorkflowName?: string;
   initialReferenceWorkflow?: string;
   initialRequirements?: string;
   initialDescription?: string;
   initialWorkingDirectory?: string;
   initialWorkspaceMode?: 'isolated-copy' | 'in-place';
-  hideAiGuided?: boolean;
   focusRequirementsOnOpen?: boolean;
 };
 
@@ -149,7 +158,9 @@ type CreationDraftSession = {
   filename?: string;
   workflowName?: string;
   status: string;
-  mode?: 'phase-based' | 'state-machine' | 'ai-guided';
+  mode?: WorkflowCreationMode;
+  kind?: WorkflowCreationMode;
+  profile?: 'lightweight';
   planningEngine?: string;
   planningModel?: string;
   createdAt?: number | string;
@@ -159,6 +170,14 @@ type CreationDraftSession = {
     planningStage?: string;
   };
 };
+
+function getWorkflowKind(workflow: Pick<WorkflowConfig, 'kind' | 'mode' | 'profile'> | CreationDraftSession): PersistedWorkflowMode {
+  return workflow.kind === 'lightweight'
+    || workflow.profile === 'lightweight'
+    || workflow.mode === 'lightweight'
+    ? 'lightweight'
+    : 'state-machine';
+}
 
 type ImportAuditItem = {
   filename: string;
@@ -218,7 +237,7 @@ function normalizeWorkflowsSearch(input: WorkflowsSearch | URLSearchParams): Req
   const page = Number(read('page') || 1);
   return {
     keyword: String(read('keyword') || ''),
-    mode: mode === 'state-machine' || mode === 'phase-based' ? mode : 'all',
+    mode: mode === 'state-machine' || mode === 'lightweight' ? mode : 'all',
     sortKey: sortKey === 'name' ? 'name' : 'createdAt',
     sortDirection: sortDirection === 'asc' ? 'asc' : 'desc',
     page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
@@ -329,12 +348,17 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
     sortKey: 'name',
     sortDirection: 'asc',
   }) as WorkflowConfig[];
-  const filteredWorkflowRows = useWorkflowConfigRows({
+  const workflowRows = useWorkflowConfigRows({
     keyword: debouncedSearchQuery,
-    mode: selectedMode,
+    mode: 'all',
     sortKey,
     sortDirection,
   }) as WorkflowConfig[];
+  const filteredWorkflowRows = useMemo(() => (
+    selectedMode === 'all'
+      ? workflowRows
+      : workflowRows.filter((workflow) => getWorkflowKind(workflow) === selectedMode)
+  ), [selectedMode, workflowRows]);
   const totalPages = Math.max(1, Math.ceil(filteredWorkflowRows.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const workflows = filteredWorkflowRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -495,6 +519,17 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
     setShowNewModal(true);
   }, []);
 
+  const openAiWorkflowCreator = useCallback(() => {
+    openNewWorkflowModal({
+      aiGuidedEntry: true,
+      initialMode: 'ai-guided',
+      initialWorkflowName: 'AI 引导工作流',
+      initialRequirements: DEFAULT_AI_WORKFLOW_REQUIREMENTS,
+      initialDescription: DEFAULT_AI_WORKFLOW_DESCRIPTION,
+      initialWorkspaceMode: 'in-place',
+    });
+  }, [openNewWorkflowModal]);
+
   const resumeCreationDraft = useCallback((sessionId: string) => {
     setNewWorkflowModalPreset(null);
     setResumeCreationDraftId(sessionId);
@@ -514,18 +549,6 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
     void loadShareableUsers();
   }, [loadShareableUsers]);
 
-  const openAiCopyWorkflow = useCallback((workflow: WorkflowConfig) => {
-    openNewWorkflowModal({
-      initialMode: 'ai-guided',
-      initialWorkflowName: `${workflow.name} AI 副本`,
-      initialReferenceWorkflow: workflow.filename,
-      initialRequirements: '',
-      initialDescription: workflow.description || '',
-      hideAiGuided: false,
-      focusRequirementsOnOpen: true,
-    });
-  }, [openNewWorkflowModal]);
-
   const openShareDialog = useCallback((workflow: WorkflowConfig) => {
     setActiveWorkflow(workflow);
     setSharingVisibility((workflow.visibility as 'private' | 'shared' | 'public') || 'private');
@@ -533,14 +556,6 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
     setShareDialogOpen(true);
     void loadShareableUsers();
   }, [loadShareableUsers]);
-
-  const handleAICreate = () => {
-    openNewWorkflowModal({
-      initialMode: 'ai-guided',
-      hideAiGuided: false,
-      focusRequirementsOnOpen: true,
-    });
-  };
 
   const handleDelete = (workflow: WorkflowConfig) => {
     setDeleteWorkflowTarget(workflow);
@@ -798,8 +813,12 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
     && displayedWorkflows.every((workflow) => selectedWorkflows.has(workflow.filename));
   const hasPartialDisplayedWorkflowSelection = displayedWorkflows.some((workflow) => selectedWorkflows.has(workflow.filename))
     && !allDisplayedWorkflowsSelected;
-  const modeLabel = (mode?: string) => mode === 'state-machine' ? '状态机' : '阶段模式';
-  const modePillTone = (mode?: string): StatusTone => mode === 'state-machine' ? 'info' : 'warning';
+  const modeLabel = (workflow: WorkflowConfig | CreationDraftSession) => (
+    getWorkflowKind(workflow) === 'lightweight' ? '轻量工作流' : '状态机'
+  );
+  const modePillTone = (workflow: WorkflowConfig | CreationDraftSession): StatusTone => (
+    getWorkflowKind(workflow) === 'lightweight' ? 'accent' : 'info'
+  );
   const visibilityLabel = (workflow: WorkflowConfig) => {
     if (workflow.visibility === 'public') return '公开';
     if (workflow.visibility === 'shared') return `共享 ${workflow.sharedWithUserIds?.length || 0}`;
@@ -839,12 +858,6 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
           onSelect: () => openCopyDialog(workflow),
         },
         {
-          id: 'ai-copy',
-          label: 'AI 复制',
-          icon: <span className="material-symbols-outlined text-[16px]">auto_awesome</span>,
-          onSelect: () => openAiCopyWorkflow(workflow),
-        },
-        {
           id: 'save-template',
           label: '另存为模板',
           icon: <PackagePlus className="h-4 w-4" />,
@@ -868,7 +881,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
   ];
   const renderCopyMenu = (workflow: WorkflowConfig) => (
     <ActionMenu
-      actions={[{ actions: getWorkflowActions(workflow)[1].actions.filter((action) => action.id === 'copy' || action.id === 'ai-copy') }]}
+      actions={[{ actions: getWorkflowActions(workflow)[1].actions.filter((action) => action.id === 'copy') }]}
       triggerLabel="复制工作流"
       trigger={(
         <Button size="sm" variant="outline" title="复制工作流" onClick={(event) => event.stopPropagation()}>
@@ -904,15 +917,15 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
       header: '模式',
       priority: 2,
       render: (workflow) => (
-        <StatusPill tone={modePillTone(workflow.mode)} className="min-w-[72px] justify-center whitespace-nowrap">
-          {modeLabel(workflow.mode)}
+        <StatusPill tone={modePillTone(workflow)} className="min-w-[72px] justify-center whitespace-nowrap">
+          {modeLabel(workflow)}
         </StatusPill>
       ),
     },
     {
       id: 'phaseCount',
-      header: '阶段/状态',
-      accessor: (workflow) => workflow.phaseCount ?? 0,
+      header: '状态',
+      accessor: (workflow) => workflow.stateCount ?? workflow.phaseCount ?? 0,
       priority: 3,
     },
     {
@@ -1033,7 +1046,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
       }}
       emptyState={{
         title: emptyTitle,
-        description: '创建草稿会在新建工作流和 AI 生成流程中自动保存。',
+        description: '创建草稿会在新建工作流的 Spec 计划过程中自动保存。',
       }}
     />
   );
@@ -1078,8 +1091,8 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
           {session.status === 'config-generated' || session.status === 'run-bound' ? '已完成创建工作流' : '未完成创建'}
         </StatusPill>
         {session.mode ? (
-          <StatusPill tone={session.mode === 'state-machine' ? 'info' : session.mode === 'ai-guided' ? 'accent' : 'warning'}>
-            {session.mode === 'state-machine' ? '状态机' : session.mode === 'ai-guided' ? 'AI 引导' : '阶段模式'}
+          <StatusPill tone={modePillTone(session)}>
+            {modeLabel(session)}
           </StatusPill>
         ) : null}
       </DataCardMeta>
@@ -1123,6 +1136,15 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
   );
   const headerSecondaryActions = (
     <>
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={openAiWorkflowCreator}
+        title="AI 引导创建工作流"
+      >
+        <Sparkles className="mr-2 h-4 w-4" />
+        AI 引导创建工作流
+      </Button>
       {activeTab === 'workflows' ? (
         <>
           <Button
@@ -1147,14 +1169,10 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
           </Button>
         </>
       ) : null}
-      <Button size="sm" variant="outline" onClick={handleAICreate}>
-        <span className="material-symbols-outlined mr-1 text-sm">auto_awesome</span>
-        AI 创建
-      </Button>
     </>
   );
   const headerPrimaryAction = (
-    <Button size="sm" onClick={() => openNewWorkflowModal({ hideAiGuided: true })}>
+    <Button size="sm" onClick={() => openNewWorkflowModal()}>
       <Plus className="mr-2 h-4 w-4" />
       新建工作流
     </Button>
@@ -1323,7 +1341,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
               <SelectContent>
                 <SelectItem value="all">全部模式</SelectItem>
                 <SelectItem value="state-machine">状态机</SelectItem>
-                <SelectItem value="phase-based">阶段模式</SelectItem>
+                <SelectItem value="lightweight">轻量工作流</SelectItem>
               </SelectContent>
             </Select>
           )}
@@ -1392,13 +1410,13 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
                 </p>
                 {pagination.unfilteredTotal === 0 && (
                   <div className="flex items-center gap-3">
-                    <Button size="sm" variant="outline" onClick={handleAICreate}>
-                      <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
-                      AI 创建
-                    </Button>
-                    <Button onClick={() => openNewWorkflowModal({ hideAiGuided: true })}>
+                    <Button onClick={() => openNewWorkflowModal()}>
                       <Plus className="w-4 h-4 mr-2" />
                       新建工作流
+                    </Button>
+                    <Button variant="secondary" onClick={openAiWorkflowCreator}>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      AI 引导创建工作流
                     </Button>
                   </div>
                 )}
@@ -1433,17 +1451,18 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
               />
             ) : (
               <>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 lg:grid-cols-3">
             {displayedWorkflows.map((workflow, index) => (
               <motion.div
                 key={workflow.filename}
+                className="h-full"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: Math.min(index, 12) * 0.03 }}
               >
                 <DataCard
                   selected={selectedWorkflows.has(workflow.filename)}
-                  className="relative cursor-pointer"
+                  className="relative flex h-full flex-col cursor-pointer"
                   onClick={() => setDrawerWorkflow(workflow)}
                 >
                   <div className="absolute left-3 top-3 z-10" onClick={(event) => event.stopPropagation()}>
@@ -1453,14 +1472,14 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
                     />
                   </div>
 
-                <div className="pl-6">
+                <div className="flex min-h-0 flex-1 flex-col pl-6">
                   <DataCardHeader className="mb-3">
                     <div className="min-w-0 flex-1">
                       <DataCardTitle>{workflow.name}</DataCardTitle>
                       <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{workflow.filename}</p>
                     </div>
-                    <StatusPill tone={modePillTone(workflow.mode)} className="ml-2 shrink-0">
-                      {modeLabel(workflow.mode)}
+                    <StatusPill tone={modePillTone(workflow)} className="ml-2 shrink-0">
+                      {modeLabel(workflow)}
                     </StatusPill>
                   </DataCardHeader>
 
@@ -1469,7 +1488,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
                   )}
 
                   <div className="flex items-center gap-4 text-xs text-muted-foreground mb-4">
-                    <span>{workflow.phaseCount ?? 0} 个{workflow.mode === 'state-machine' ? '状态' : '阶段'}</span>
+                    <span>{workflow.stateCount ?? workflow.phaseCount ?? 0} 个状态</span>
                     <span>{workflow.stepCount ?? 0} 个步骤</span>
                   </div>
 
@@ -1478,25 +1497,29 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
                     {workflow.ownerName ? <span className="text-xs text-muted-foreground">所有者：{workflow.ownerName}</span> : null}
                   </div>
 
-                  <DataCardActions className="justify-start" onClick={(event) => event.stopPropagation()}>
-                    <Button size="sm" variant="outline" onClick={() => openWorkbench(workflow.filename)}>
-                        <LogIn className="w-3 h-3 mr-1" />
-                        打开运行工作台
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => openWorkbench(workflow.filename, 'design')}>
-                        <Edit className="w-3 h-3 mr-1" />
-                        打开设计工作台
-                    </Button>
-                    {renderCopyMenu(workflow)}
-                    <Button size="sm" variant="outline" title="另存为模板" onClick={() => setSaveTemplateWorkflow(workflow)}>
-                      <PackagePlus className="h-3 w-3" />
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => openShareDialog(workflow)}>
-                      <Share2 className="w-3 h-3" />
-                    </Button>
-                    <Button size="sm" variant="destructive" aria-label={`删除工作流 ${workflow.name || workflow.filename}`} onClick={() => handleDelete(workflow)}>
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
+                  <DataCardActions className="mt-auto w-full flex-col items-stretch gap-2 pt-2" onClick={(event) => event.stopPropagation()}>
+                    <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Button size="sm" variant="outline" className="min-w-0 w-full justify-center whitespace-nowrap" onClick={() => openWorkbench(workflow.filename)}>
+                        <LogIn className="mr-1 h-3 w-3 shrink-0" />
+                        运行工作台
+                      </Button>
+                      <Button size="sm" variant="outline" className="min-w-0 w-full justify-center whitespace-nowrap" onClick={() => openWorkbench(workflow.filename, 'design')}>
+                        <Edit className="mr-1 h-3 w-3 shrink-0" />
+                        设计工作台
+                      </Button>
+                    </div>
+                    <div className="flex w-full flex-wrap items-center justify-end gap-2">
+                      {renderCopyMenu(workflow)}
+                      <Button size="sm" variant="outline" title="另存为模板" aria-label="另存为模板" onClick={() => setSaveTemplateWorkflow(workflow)}>
+                        <PackagePlus className="h-3 w-3" />
+                      </Button>
+                      <Button size="sm" variant="outline" title="分享" aria-label="分享" onClick={() => openShareDialog(workflow)}>
+                        <Share2 className="h-3 w-3" />
+                      </Button>
+                      <Button size="sm" variant="destructive" aria-label={`删除工作流 ${workflow.name || workflow.filename}`} onClick={() => handleDelete(workflow)}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </DataCardActions>
                 </div>
                 </DataCard>
@@ -1616,6 +1639,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
             openWorkbench(filename, 'design');
           }}
           resumeCreationSessionId={resumeCreationDraftId}
+          aiGuidedEntry={newWorkflowModalPreset?.aiGuidedEntry}
           initialMode={newWorkflowModalPreset?.initialMode}
           initialWorkflowName={newWorkflowModalPreset?.initialWorkflowName}
           initialReferenceWorkflow={newWorkflowModalPreset?.initialReferenceWorkflow}
@@ -1623,7 +1647,6 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
           initialDescription={newWorkflowModalPreset?.initialDescription}
           initialWorkingDirectory={newWorkflowModalPreset?.initialWorkingDirectory}
           initialWorkspaceMode={newWorkflowModalPreset?.initialWorkspaceMode}
-          hideAiGuided={newWorkflowModalPreset?.hideAiGuided ?? true}
           focusRequirementsOnOpen={newWorkflowModalPreset?.focusRequirementsOnOpen}
         />
       )}
@@ -1855,7 +1878,7 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
           {drawerWorkflow ? (
             <DetailDrawerBody className="space-y-5">
               <div className="flex flex-wrap items-center gap-2">
-                <StatusPill tone={modePillTone(drawerWorkflow.mode)}>{modeLabel(drawerWorkflow.mode)}</StatusPill>
+                <StatusPill tone={modePillTone(drawerWorkflow)}>{modeLabel(drawerWorkflow)}</StatusPill>
                 <StatusPill tone={visibilityPillTone(drawerWorkflow)}>{visibilityLabel(drawerWorkflow)}</StatusPill>
               </div>
               {drawerWorkflow.description ? (
@@ -1866,8 +1889,8 @@ export default function WorkflowsPage({ routeSearch, onRouteSearchChange }: Work
               ) : null}
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-lg border border-border bg-card px-3 py-2">
-                  <div className="text-xs text-muted-foreground">{drawerWorkflow.mode === 'state-machine' ? '状态' : '阶段'}</div>
-                  <div className="mt-1 text-lg font-semibold">{drawerWorkflow.phaseCount ?? 0}</div>
+                  <div className="text-xs text-muted-foreground">状态</div>
+                  <div className="mt-1 text-lg font-semibold">{drawerWorkflow.stateCount ?? drawerWorkflow.phaseCount ?? 0}</div>
                 </div>
                 <div className="rounded-lg border border-border bg-card px-3 py-2">
                   <div className="text-xs text-muted-foreground">步骤</div>

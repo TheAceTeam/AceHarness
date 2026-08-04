@@ -1,5 +1,6 @@
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { MockEngine } from './helpers/mock-engine';
+import { resolve } from 'path';
 
 const registryMocks = vi.hoisted(() => ({
   getManagerForRun: vi.fn(),
@@ -18,9 +19,12 @@ vi.mock('@/lib/run/state-persistence', () => ({
   saveProcessOutput: vi.fn().mockResolvedValue(undefined),
   saveStreamContent: vi.fn().mockResolvedValue(undefined),
   appendStreamContent: vi.fn().mockResolvedValue(undefined),
+  appendStreamToolEvent: vi.fn().mockResolvedValue(undefined),
   appendFeedbackToStream: vi.fn().mockResolvedValue(undefined),
   loadRunState: vi.fn().mockResolvedValue(null),
   loadStepOutputs: vi.fn().mockResolvedValue({}),
+  findActiveRuns: vi.fn().mockResolvedValue([]),
+  isProcessAlive: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/workflow/registry', () => ({
@@ -45,6 +49,7 @@ vi.mock('@/lib/core/process-manager', () => ({
     setProcessOutput: vi.fn(),
     setProcessError: vi.fn(),
     appendStreamContent: vi.fn().mockReturnValue(''),
+    upsertToolEvent: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
     emit: vi.fn(),
@@ -66,9 +71,31 @@ vi.mock('@/lib/agent/agent-relationship-store', () => ({
   upsertRelationshipSignal: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/chat/chat-persistence', () => ({
+vi.mock('@/lib/chat/persistence', () => ({
+  listChatSessions: vi.fn().mockResolvedValue([]),
   updateChatSessionCreationBinding: vi.fn().mockResolvedValue(undefined),
-  updateChatSessionWorkflowBinding: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/workflow/runtime-session', () => ({
+  bindWorkflowRunToConversation: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@/lib/workflow/lightweight-runtime', () => ({
+  resolveLightweightTasklistDirectory: vi.fn(({ runId, workspaceRoot }) => ({
+    tasklistDirectory: 'tasklist',
+    workspaceRoot: resolve(workspaceRoot),
+    resolvedTasklistDirectory: resolve('/tmp/runs', runId, 'tasklist'),
+  })),
+}));
+
+vi.mock('@/lib/workflow/runtime-transcript', () => ({
+  appendWorkflowRuntimeTranscript: vi.fn().mockResolvedValue(null),
+  toWorkflowRuntimeTranscriptLiveEvent: vi.fn((event) => ({
+    runId: event.runId,
+    seq: event.seq,
+    timestamp: event.timestamp,
+    transcript: event.payload,
+  })),
 }));
 
 vi.mock('@/lib/core/default-supervisor', () => ({
@@ -130,9 +157,8 @@ vi.mock('@/lib/core/app-paths', () => ({
   getWorkspaceRunsDir: vi.fn().mockReturnValue('/tmp/runs'),
 }));
 
-vi.mock('@/lib/workflow/manager', () => ({
+vi.mock('@/lib/engines/workflow-engine-selection', () => ({
   resolveAgentEngineSelection: vi.fn().mockReturnValue({ engine: 'mock-engine', model: 'test-model' }),
-  resolveAgentModel: vi.fn().mockReturnValue('test-model'),
 }));
 
 vi.mock('@/lib/core/utils', () => ({
@@ -209,6 +235,41 @@ function makeConfig(overrides: Record<string, any> = {}) {
       { name: 'developer', systemPrompt: 'You are a developer' },
     ],
     ...rest,
+  } as any;
+}
+
+function makeLightweightConfig() {
+  return {
+    workflow: {
+      name: 'Lightweight Workflow',
+      mode: 'state-machine',
+      profile: 'lightweight',
+      lightweight: {},
+      states: [{
+        name: 'Execute',
+        isInitial: true,
+        isFinal: true,
+        steps: [{
+          name: 'Run tasklist',
+          agent: 'developer',
+          task: 'Execute the tasklist',
+          skills: ['aceharness-tasklist'],
+        }],
+        transitions: [],
+      }],
+    },
+    context: {
+      projectRoot: '/tmp/project',
+      prewarmAgents: false,
+    },
+    roles: [{
+      name: 'developer',
+      team: 'blue',
+      engineModels: {},
+      activeEngine: '',
+      capabilities: ['development'],
+      systemPrompt: 'You are a developer',
+    }],
   } as any;
 }
 
@@ -842,6 +903,7 @@ describe('subworkflow step dispatch', () => {
 
     expect((manager as any).subworkflowRuns[0].summary).toContain('摘要已截断');
     expect(Buffer.byteLength((manager as any).subworkflowRuns[0].summary, 'utf-8')).toBeLessThan(17 * 1024);
+    expect((manager as any).stepLogs[0].output).not.toContain('x'.repeat(1024));
   });
 
   test('collects structured child Spec delta summaries for parent final review', async () => {
@@ -1061,7 +1123,8 @@ describe('subworkflow step dispatch', () => {
       costUsd: 1.5,
       durationMs: 1000,
     });
-    expect((manager as any).stepLogs[0].output).toContain('child issue');
+    expect((manager as any).stepLogs[0].output).toContain('"issueCount":1');
+    expect((manager as any).stepLogs[0].output).not.toContain('child issue');
   });
 
   test('passes parent workflow skills to child manager according to skills strategy', async () => {
@@ -1333,6 +1396,73 @@ describe('engine-level failure detection', () => {
     expect(engine.calls).toHaveLength(1);
     expect(engine.calls.some((call) => call.options.prompt.includes('系统自动恢复'))).toBe(false);
   });
+
+  test('retains observed token usage in failed step logs and agent run state', async () => {
+    const { saveRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(saveRunState).mockClear();
+    const engine = new MockEngine({
+      success: false,
+      output: '',
+      error: 'invalid api key after provider reported tokens',
+      sessionId: 'failed-terminal-session',
+      metadata: {
+        usage: {
+          input_tokens: 101,
+          output_tokens: 103,
+          cache_creation_input_tokens: 107,
+          cache_read_input_tokens: 109,
+        },
+        cost_usd: 0.456,
+        duration_ms: 789,
+      },
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+    const state = config.workflow.states[0];
+    const step = state.steps[0];
+    (manager as any).currentState = state.name;
+    (manager as any).persistState = Object.getPrototypeOf(manager).persistState.bind(manager);
+
+    await expect((manager as any).executeStep(step, state, config, 'Build a feature'))
+      .rejects.toThrow('invalid api key after provider reported tokens');
+
+    expect((manager as any).stepLogs).toHaveLength(1);
+    expect((manager as any).stepLogs[0]).toMatchObject({
+      status: 'failed',
+      costUsd: 0.456,
+      durationMs: 789,
+      tokenUsage: {
+        inputTokens: 101,
+        outputTokens: 103,
+        cacheCreationInputTokens: 107,
+        cacheReadInputTokens: 109,
+      },
+      sessionId: 'failed-terminal-session',
+    });
+    expect(manager.getStatus().agents[0]).toMatchObject({
+      status: 'failed',
+      costUsd: 0.456,
+      sessionId: 'failed-terminal-session',
+      tokenUsage: {
+        inputTokens: 101,
+        outputTokens: 103,
+        cacheCreationInputTokens: 107,
+        cacheReadInputTokens: 109,
+      },
+    });
+    expect(vi.mocked(saveRunState).mock.calls.at(-1)?.[0]).toMatchObject({
+      agents: [expect.objectContaining({
+        costUsd: 0.456,
+        sessionId: 'failed-terminal-session',
+        tokenUsage: {
+          inputTokens: 101,
+          outputTokens: 103,
+          cacheCreationInputTokens: 107,
+          cacheReadInputTokens: 109,
+        },
+      })],
+    });
+  });
 });
 
 describe('human-help runtime output', () => {
@@ -1506,6 +1636,163 @@ describe('state machine live feedback', () => {
     expect(events.map((event) => event.status)).toEqual(['queued', 'interrupting']);
   });
 
+  test('builds a tasklist-owned full-goal prompt for lightweight workflows', async () => {
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeLightweightConfig();
+    (manager as any).lightweightRunMetadata = {
+      profile: 'lightweight',
+      tasklistDirectory: 'tasklist',
+      workspaceRoot: '/tmp/project',
+      resolvedTasklistDirectory: '/tmp/runs/run-prompt/tasklist',
+      stateName: 'Execute',
+      stepName: 'Run tasklist',
+      effectiveStepSkills: ['aceharness-tasklist'],
+    };
+
+    const context = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Implement the complete user goal and verify it.',
+    );
+
+    expect(context).toContain('# 完整目标');
+    expect(context).toContain('Implement the complete user goal and verify it.');
+    expect(context).toContain('请使用 aceharness-tasklist。');
+    expect(context).toMatch(/aceharness-tasklist[\\\\/]SKILL\.md/);
+    expect(context).toContain('约十条边界清晰、依赖明确、可独立验证的任务');
+    expect(context).toContain('当前 Agent 完成任务清单中的全部实施、验证与记录');
+    expect(context).toContain('持续推进全部任务');
+    expect(context).toContain('/tmp/runs/run-prompt/tasklist');
+    expect(context).not.toContain('# 最终裁决格式');
+    expect(context).toContain('# 步骤结束协议');
+    expect(context).toContain('<step-conclusion>');
+  });
+
+  test('lightweight step confirms completion and repairs its conclusion in the original session', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      expect(options.timeoutMs).toBe(5 * 60 * 60 * 1000);
+      if (engine.calls.length === 1) {
+        return {
+          success: true,
+          sessionId: 'lightweight-session-1',
+          output: '任务清单已完成，正在整理步骤结论。',
+        };
+      }
+
+      expect(options.sessionId).toBe('lightweight-session-1');
+      expect(options.appendSystemPrompt).toBe(true);
+      expect(options.prompt).toContain('确认步骤结束状态');
+      expect(options.prompt).toContain('当前步骤已经结束时');
+      return {
+        success: true,
+        sessionId: 'lightweight-session-1',
+        output: '<step-conclusion>\n## 结果 / 裁决\n- 当前步骤结束，交付物和风险已归档。\n</step-conclusion>',
+      };
+    };
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    const output = await (manager as any).executeStep(
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Complete the tasklist.',
+    );
+
+    expect(engine.calls).toHaveLength(2);
+    expect(output).toContain('<step-conclusion>');
+    expect((manager as any).completedSteps).toContain('Execute-Run tasklist');
+    expect((manager as any).failedSteps).not.toContain('Execute-Run tasklist');
+  });
+
+  test('lightweight step remains failed when the completion check has no conclusion', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async () => ({
+      success: true,
+      sessionId: 'lightweight-session-2',
+      output: '```json\n{"verdict":"fail","remaining_issues":1,"summary":"work remains"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    await expect((manager as any).executeStep(
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Complete the tasklist.',
+    )).rejects.toThrow('确认结束状态后仍缺少 <step-conclusion>');
+
+    expect(engine.calls).toHaveLength(2);
+    expect((manager as any).completedSteps).not.toContain('Execute-Run tasklist');
+    expect((manager as any).failedSteps).toContain('Execute-Run tasklist');
+  });
+
+  test('lightweight state completes from a step conclusion without a final verdict JSON', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '<step-conclusion>\n## 结果 / 裁决\n- 任务清单的实施和验证已完成。\n</step-conclusion>',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    const result = await (manager as any).executeState(
+      config.workflow.states[0],
+      config,
+      'Complete the tasklist.',
+    );
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls).toHaveLength(1);
+  });
+
+  test('retries a model-capacity response reported as a completed runtime turn before failing the step', async () => {
+    vi.useFakeTimers();
+    const capacityMessage = 'Selected model is at capacity. Please try a different model.';
+    const engine = new MockEngine();
+    engine.executeImpl = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: capacityMessage, sessionId: 'capacity-session' })
+      .mockResolvedValueOnce({ success: true, output: capacityMessage, sessionId: 'capacity-session' })
+      .mockResolvedValueOnce({ success: true, output: capacityMessage, sessionId: 'capacity-session' });
+    const manager = await createManagerForTest(engine);
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentState = 'Execute';
+
+    try {
+      const execution = (manager as any).executeStep(
+        config.workflow.states[0].steps[0],
+        config.workflow.states[0],
+        config,
+        'Complete the tasklist.',
+      );
+      const failure = execution.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      const error = await failure;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/model is at capacity/i);
+      expect(engine.calls).toHaveLength(3);
+      expect(engine.calls.some((call) => call.options.prompt.includes('确认步骤结束状态'))).toBe(false);
+      expect((manager as any).completedSteps).not.toContain('Execute-Run tasklist');
+      expect((manager as any).failedSteps).toContain('Execute-Run tasklist');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('injects the global workflow route into each step context', async () => {
     const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
     const manager = await createManagerForTest(new MockEngine());
@@ -1625,7 +1912,7 @@ describe('state machine live feedback', () => {
 });
 
 describe('state machine resume', () => {
-  test('restores workflow agora session id before emitting resume status', async () => {
+  test('restores workflow frontend session id before emitting resume status', async () => {
     const { loadRunState } = await import('@/lib/run/state-persistence');
     const { parse } = await import('yaml');
     vi.mocked(loadRunState).mockResolvedValueOnce({
@@ -1644,7 +1931,7 @@ describe('state machine resume', () => {
       iterationStates: {},
       processes: [],
       requirements: 'Build a feature',
-      workflowFrontendSessionId: 'workflow-agora-session-1',
+      workflowFrontendSessionId: 'workflow-frontend-session-1',
       supervisorAgent: 'default-supervisor',
       supervisorSessionId: null,
       attachedAgentSessions: {},
@@ -1656,7 +1943,18 @@ describe('state machine resume', () => {
       workingDirectory: '/tmp/project',
       qualityChecks: [],
     } as any);
-    vi.mocked(parse).mockReturnValue(makeConfig());
+    vi.mocked(parse).mockReturnValue(makeConfig({
+      roles: [
+        {
+          name: 'developer',
+          team: 'blue',
+          engineModels: {},
+          activeEngine: '',
+          capabilities: ['development'],
+          systemPrompt: 'You are a developer',
+        },
+      ],
+    }));
 
     const manager = await createManagerForTest(new MockEngine());
     (manager as any).status = 'idle';
@@ -1671,12 +1969,12 @@ describe('state machine resume', () => {
 
     await (manager as any).resume('run-resume-001');
 
-    expect((manager as any)._frontendSessionId).toBe('workflow-agora-session-1');
+    expect((manager as any)._frontendSessionId).toBe('workflow-frontend-session-1');
     expect(statusEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({
         status: 'running',
         runId: 'run-resume-001',
-        workflowFrontendSessionId: 'workflow-agora-session-1',
+        workflowFrontendSessionId: 'workflow-frontend-session-1',
       }),
     ]));
   });
@@ -1691,8 +1989,8 @@ describe('state machine resume', () => {
             name: '设计',
             isInitial: true,
             steps: [
-              { name: 'first-step', agent: 'developer', task: 'Already completed', role: 'executor' },
-              { name: 'retry-step', agent: 'developer', task: 'Retry this step', role: 'executor' },
+              { name: 'first-step', agent: 'developer', task: 'Already completed', role: 'defender' },
+              { name: 'retry-step', agent: 'developer', task: 'Retry this step', role: 'defender' },
               { name: 'final-step', agent: 'developer', task: 'Continue after retry', role: 'judge' },
             ],
             transitions: [
@@ -1707,6 +2005,16 @@ describe('state machine resume', () => {
           },
         ],
       },
+      roles: [
+        {
+          name: 'developer',
+          team: 'blue',
+          engineModels: {},
+          activeEngine: '',
+          capabilities: ['development'],
+          systemPrompt: 'You are a developer',
+        },
+      ],
     });
     vi.mocked(parse).mockReturnValue(config);
     vi.mocked(loadRunState).mockResolvedValueOnce({
@@ -1720,7 +2028,7 @@ describe('state machine resume', () => {
       currentPhase: '设计',
       currentStep: null,
       completedSteps: ['设计-first-step'],
-      failedSteps: [],
+      failedSteps: ['设计-retry-step'],
       stepLogs: [
         {
           id: 'step-1',
@@ -1749,7 +2057,7 @@ describe('state machine resume', () => {
       iterationStates: {},
       processes: [],
       requirements: 'Build a feature',
-      workflowFrontendSessionId: 'workflow-agora-session-2',
+      workflowFrontendSessionId: 'workflow-frontend-session-2',
       supervisorAgent: 'default-supervisor',
       supervisorSessionId: null,
       attachedAgentSessions: {},
@@ -1788,10 +2096,235 @@ describe('state machine resume', () => {
     ]));
   });
 
+  test('reruns from a persisted step key while retaining superseded attempts outside the current result', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', task: 'Keep this result', role: 'judge' },
+              { name: 'review-step', agent: 'developer', task: 'Replay from here', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+      roles: [
+        {
+          name: 'developer',
+          team: 'blue',
+          engineModels: {},
+          activeEngine: '',
+          capabilities: ['development'],
+          systemPrompt: 'You are a developer',
+        },
+      ],
+    });
+    vi.mocked(parse).mockReturnValue(config);
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-rerun-step-key',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'failed',
+      currentState: '设计',
+      completedSteps: ['设计-design-step'],
+      failedSteps: ['设计-review-step'],
+      activeSteps: [],
+      currentStep: '设计-review-step',
+      stepLogs: [
+        { id: 'completed', stepName: '设计-design-step', status: 'completed', output: 'done' },
+        { id: 'review-completed', stepName: '设计-review-step', status: 'completed', output: 'old review result' },
+        { id: 'failed', stepName: '设计-review-step', status: 'failed', error: 'retry me' },
+      ],
+      agents: [],
+      requirements: 'Build a feature',
+      stateHistory: [],
+      transitionCount: 0,
+      issueTracker: [],
+      phaseContexts: {},
+      qualityChecks: [],
+    } as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    const restoreRunStateForContinuation = vi.fn().mockImplementation(async (state: any) => {
+      (manager as any).currentRunId = state.runId;
+      (manager as any).currentConfigFile = state.configFile;
+      (manager as any).currentState = '设计';
+      (manager as any).completedSteps = state.completedSteps;
+      (manager as any).failedSteps = state.failedSteps;
+      (manager as any).stepLogs = state.stepLogs;
+      (manager as any).subworkflowRuns = [];
+      (manager as any).runStartTime = null;
+      (manager as any).runEndTime = null;
+      (manager as any).shouldStop = false;
+      (manager as any).status = 'running';
+    });
+    (manager as any).restoreRunStateForContinuation = restoreRunStateForContinuation;
+    (manager as any).persistState = vi.fn().mockResolvedValue(undefined);
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureSupervisorAgentExists = vi.fn();
+    (manager as any).initializeAgents = vi.fn();
+    (manager as any).initializeMemoryV2 = vi.fn().mockResolvedValue(undefined);
+    (manager as any).startWorkflowAgentPrewarm = vi.fn();
+    (manager as any).executeStateMachine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).finalizeRun = vi.fn().mockResolvedValue(undefined);
+
+    await (manager as any).rerunFromStep('run-rerun-step-key', '设计-review-step');
+
+    expect(restoreRunStateForContinuation).toHaveBeenCalledWith(expect.objectContaining({
+      completedSteps: ['设计-design-step'],
+      failedSteps: [],
+      stepLogs: expect.arrayContaining([
+        expect.objectContaining({ id: 'completed', stepName: '设计-design-step', status: 'completed' }),
+        expect.objectContaining({
+          id: 'review-completed',
+          stepName: '设计-review-step',
+          status: 'completed',
+          output: 'old review result',
+          superseded: true,
+          supersededAt: expect.any(String),
+          supersededByStep: '设计-review-step',
+        }),
+        expect.objectContaining({
+          id: 'failed',
+          stepName: '设计-review-step',
+          status: 'failed',
+          error: 'retry me',
+          superseded: true,
+          supersededAt: expect.any(String),
+          supersededByStep: '设计-review-step',
+        }),
+      ]),
+    }), '设计');
+    expect((manager as any).stepLogs).toHaveLength(3);
+    expect((manager as any).getLatestStepLog('设计-review-step')).toBeNull();
+    expect((manager as any).deriveFailedStepKeys((manager as any).stepLogs)).toEqual([]);
+    expect((manager as any).getResumeStepKeyForRun({
+      currentState: '设计',
+      failedSteps: [],
+      activeSteps: [],
+      currentStep: null,
+      stepLogs: (manager as any).stepLogs,
+    }, config)).toBeNull();
+    expect((manager as any).resumeStateName).toBe('设计');
+    expect((manager as any).resumeStepKey).toBe('设计-review-step');
+    expect((manager as any).executeStateMachine).toHaveBeenCalledWith(config, 'Build a feature');
+  });
+
+  test('rerun reloads a disabled Git baseline gate and clears stale persisted Git state', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    const config = makeConfig({
+      context: { gitBaselineEnabled: false },
+      roles: [{
+        name: 'developer',
+        team: 'blue',
+        engineModels: {},
+        activeEngine: '',
+        capabilities: ['development'],
+        systemPrompt: 'You are a developer',
+      }],
+      workflow: {
+        states: [{
+          name: '设计',
+          isInitial: true,
+          steps: [{ name: 'review-step', agent: 'developer', task: 'Retry review', role: 'judge' }],
+          transitions: [],
+        }],
+      },
+    });
+    vi.mocked(parse).mockReturnValue(config);
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-rerun-git-disabled',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'failed',
+      currentState: '设计',
+      currentStep: '设计-review-step',
+      completedSteps: [],
+      failedSteps: ['设计-review-step'],
+      activeSteps: [],
+      stepLogs: [{ id: 'failed', stepName: '设计-review-step', status: 'failed', error: 'retry me' }],
+      agents: [],
+      requirements: 'Build a feature',
+      stateHistory: [],
+      transitionCount: 0,
+      issueTracker: [],
+      phaseContexts: {},
+      qualityChecks: [],
+      workingDirectory: '/tmp/aceharness-runtime/run-rerun-git-disabled',
+      workspaceGit: {
+        enabled: true,
+        runId: 'run-rerun-git-disabled',
+        workspacePath: '/tmp/aceharness-runtime/run-rerun-git-disabled',
+        repoRoot: '/tmp/aceharness-runtime/run-rerun-git-disabled',
+        wasGitRepository: false,
+        initializedRepository: true,
+        snapshots: [{ id: 'stale-baseline' }],
+        stepDiffs: [],
+      },
+    } as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    (manager as any).restoreRunStateForContinuation = vi.fn().mockImplementation(async (state: any) => {
+      (manager as any).currentRunId = state.runId;
+      (manager as any).currentConfigFile = state.configFile;
+      (manager as any).currentState = state.currentState;
+      (manager as any).completedSteps = state.completedSteps;
+      (manager as any).failedSteps = state.failedSteps;
+      (manager as any).stepLogs = state.stepLogs;
+      (manager as any).subworkflowRuns = [];
+      (manager as any).workflowGit = state.workspaceGit;
+      (manager as any).isolatedDir = state.workingDirectory;
+      (manager as any).currentProjectRoot = state.workingDirectory;
+      (manager as any).status = 'running';
+      (manager as any).shouldStop = false;
+    });
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureSupervisorAgentExists = vi.fn();
+    (manager as any).initializeAgents = vi.fn();
+    (manager as any).initializeMemoryV2 = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeEngine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).startWorkflowAgentPrewarm = vi.fn();
+    (manager as any).executeStateMachine = vi.fn().mockResolvedValue(undefined);
+
+    await (manager as any).rerunFromStep('run-rerun-git-disabled', '设计-review-step');
+
+    expect((manager as any).workflowGitBaselineEnabled).toBe(false);
+    expect((manager as any).ensureWorkflowGitBaseline).not.toHaveBeenCalled();
+    expect((manager as any).workflowGit).toMatchObject({
+      enabled: false,
+      runId: 'run-rerun-git-disabled',
+      workspacePath: '/tmp/aceharness-runtime/run-rerun-git-disabled',
+      snapshots: [],
+      stepDiffs: [],
+    });
+  });
+
   test('force jumps a completed run to a target state and resumes execution', async () => {
     const { loadRunState } = await import('@/lib/run/state-persistence');
     const { parse } = await import('yaml');
-    const config = makeConfig();
+    const config = makeConfig({
+      roles: [
+        {
+          name: 'developer',
+          team: 'blue',
+          engineModels: {},
+          activeEngine: '',
+          capabilities: ['development'],
+          systemPrompt: 'You are a developer',
+        },
+      ],
+    });
     vi.mocked(parse).mockReturnValue(config);
     vi.mocked(loadRunState).mockResolvedValueOnce({
       runId: 'run-completed-force-jump',
@@ -1804,13 +2337,13 @@ describe('state machine resume', () => {
       currentPhase: '完成',
       currentStep: null,
       completedSteps: ['设计-design-step', '实施-impl-step'],
-      failedSteps: [],
+      failedSteps: ['设计-design-step'],
       stepLogs: [],
       agents: [{ name: 'developer', sessionId: 'agent-session-existing' }],
       iterationStates: {},
       processes: [],
       requirements: 'Build a feature',
-      workflowFrontendSessionId: 'workflow-agora-session-completed',
+      workflowFrontendSessionId: 'workflow-frontend-session-completed',
       supervisorAgent: 'default-supervisor',
       supervisorSessionId: null,
       attachedAgentSessions: {},
@@ -1856,6 +2389,112 @@ describe('state machine resume', () => {
     expect((manager as any).currentRunId).toBe('run-completed-force-jump');
     expect((manager as any).currentState).toBe('完成');
     expect((manager as any).runEndTime).toBeNull();
+    expect((manager as any).failedSteps).toEqual([]);
+  });
+
+});
+
+describe('Git baseline workspace isolation', () => {
+  test.each([
+    { gitBaselineEnabled: false, excludeGitMetadata: true },
+    { gitBaselineEnabled: true, excludeGitMetadata: false },
+  ])('passes the Git metadata copy gate through the isolated-copy startup path when gitBaselineEnabled=$gitBaselineEnabled', async ({ gitBaselineEnabled, excludeGitMetadata }) => {
+    const { parse } = await import('yaml');
+    const { existsSync } = await import('fs');
+    vi.mocked(parse).mockReturnValue(makeConfig({
+      context: {
+        projectRoot: '/tmp/source-workspace',
+        workspaceMode: 'isolated-copy',
+        gitBaselineEnabled,
+      },
+    }));
+    vi.mocked(existsSync).mockReturnValue(true);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    (manager as any)._userPersonalDir = '/tmp/aceharness-runtime';
+    (manager as any).readWorkflowConfigContent = vi.fn().mockResolvedValue('workflow: {}');
+    (manager as any).assertRequiredVerdictTransitions = vi.fn();
+    (manager as any).copyDirectoryWithProgress = vi.fn().mockImplementation(async () => {
+      (manager as any).shouldStop = true;
+    });
+
+    await (manager as any).start('test.yaml', 'Build a feature', [], undefined, 'run-isolated-copy-git-gate');
+
+    const copyCall = (manager as any).copyDirectoryWithProgress.mock.calls[0];
+    expect(copyCall[0]).toBe('/tmp/project');
+    expect(String(copyCall[1]).replace(/\\/g, '/')).toMatch(/\/tmp\/aceharness-runtime\/run-isolated-copy-git-gate$/);
+    expect(copyCall[2]).toBe('run-isolated-copy-git-gate');
+    expect(copyCall[3]).toEqual(expect.any(Function));
+    expect(copyCall[4]).toEqual({ excludeGitMetadata });
+  });
+
+  test('skips .git metadata while copying an isolated workspace when Git baseline is disabled', async () => {
+    const { readdir, stat, copyFile } = await import('fs/promises');
+    vi.mocked(readdir).mockImplementation(async (path: any) => {
+      const portablePath = String(path).replace(/\\/g, '/');
+      if (portablePath === '/tmp/source-workspace') {
+        return [
+          { name: '.git', isDirectory: () => true },
+          { name: 'src', isDirectory: () => true },
+          { name: 'README.md', isDirectory: () => false },
+        ] as any;
+      }
+      if (portablePath === '/tmp/source-workspace/src') {
+        return [{ name: 'index.ts', isDirectory: () => false }] as any;
+      }
+      throw new Error(`Unexpected directory scan: ${portablePath}`);
+    });
+    vi.mocked(stat).mockResolvedValue({ size: 10 } as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).shouldStop = false;
+    await (manager as any).copyDirectoryWithProgress(
+      '/tmp/source-workspace',
+      '/tmp/aceharness-runtime/run-copy',
+      'run-copy',
+      vi.fn().mockResolvedValue(undefined),
+      { excludeGitMetadata: true },
+    );
+
+    const copiedPaths = vi.mocked(copyFile).mock.calls.map(([src, dst]) => [
+      String(src).replace(/\\/g, '/'),
+      String(dst).replace(/\\/g, '/'),
+    ]);
+    expect(copiedPaths).toEqual(expect.arrayContaining([
+      ['/tmp/source-workspace/README.md', '/tmp/aceharness-runtime/run-copy/README.md'],
+      ['/tmp/source-workspace/src/index.ts', '/tmp/aceharness-runtime/run-copy/src/index.ts'],
+    ]));
+    expect(vi.mocked(readdir).mock.calls.map(([path]) => String(path).replace(/\\/g, '/')))
+      .not.toContain('/tmp/source-workspace/.git');
+    expect(copiedPaths.flat().some((path) => path.includes('/.git/'))).toBe(false);
+  });
+
+  test('retains .git metadata in the baseline-enabled isolated workspace copy', async () => {
+    const { readdir, stat, copyFile } = await import('fs/promises');
+    vi.mocked(readdir).mockImplementation(async (path: any) => {
+      const portablePath = String(path).replace(/\\/g, '/');
+      if (portablePath === '/tmp/source-workspace') {
+        return [{ name: '.git', isDirectory: () => true }] as any;
+      }
+      if (portablePath === '/tmp/source-workspace/.git') {
+        return [{ name: 'HEAD', isDirectory: () => false }] as any;
+      }
+      throw new Error(`Unexpected directory scan: ${portablePath}`);
+    });
+    vi.mocked(stat).mockResolvedValue({ size: 10 } as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).shouldStop = false;
+    await (manager as any).copyDirectoryWithProgress(
+      '/tmp/source-workspace',
+      '/tmp/aceharness-runtime/run-copy',
+      'run-copy',
+      vi.fn().mockResolvedValue(undefined),
+    );
+
+    expect(vi.mocked(copyFile).mock.calls.map(([src]) => String(src).replace(/\\/g, '/')))
+      .toContain('/tmp/source-workspace/.git/HEAD');
   });
 });
 
@@ -1865,6 +2504,68 @@ describe('state machine resume', () => {
 describe('state machine execution flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  test('halts at a real step exception before evaluating downstream transitions', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig();
+    const evaluateTransitions = vi.spyOn(manager as any, 'evaluateTransitions');
+    (manager as any).executeWorkflowStepDispatch = vi.fn().mockRejectedValue(new Error('agent step execution failed'));
+
+    await expect((manager as any).executeStateMachine(config, 'Build a feature'))
+      .rejects.toThrow(/必须先从失败断点恢复并重试/);
+
+    expect(evaluateTransitions).not.toHaveBeenCalled();
+    expect((manager as any).currentState).toBe('设计');
+    expect((manager as any).failedSteps).toContain('设计-design-step');
+    expect((manager as any).stateHistory).toEqual([]);
+  });
+
+  test('registers agent queries under the active workflow run', async () => {
+    const engine = new MockEngine({ success: true, output: 'query answer' });
+    const manager = await createManagerForTest(engine);
+    const { processManager } = await import('@/lib/core/process-manager');
+
+    await expect((manager as any).queryAgent('developer', 'What changed?', makeConfig()))
+      .resolves.toBe('query answer');
+
+    expect(processManager.registerExternalProcess).toHaveBeenCalledWith(
+      expect.stringMatching(/^query-developer-/),
+      'developer',
+      'query',
+      'test-run-001',
+      undefined,
+    );
+  });
+
+  test.each(['opencode', 'acpx'])('does not capture Git snapshots for %s when the run-level baseline gate is disabled', async (engineType) => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).engineType = engineType;
+    (manager as any).workflowGitBaselineEnabled = false;
+    (manager as any).workflowGit = {
+      enabled: true,
+      runId: 'stale-run',
+      workspacePath: '/runtime/aceharness/stale-run',
+      repoRoot: '/runtime/aceharness/stale-run',
+      wasGitRepository: false,
+      initializedRepository: true,
+      snapshots: [],
+      stepDiffs: [],
+    };
+
+    await expect((manager as any).recordStepGitBefore({
+      stepLogId: 'step-1',
+      stepName: 'build',
+      agent: 'developer',
+    })).resolves.toBeUndefined();
+    await expect((manager as any).recordStepGitAfter({
+      stepLogId: 'step-1',
+      stepName: 'build',
+      agent: 'developer',
+      status: 'completed',
+    })).resolves.toBeUndefined();
+    await expect((manager as any).recordFinalGitSnapshot('completed')).resolves.toBeUndefined();
+    expect((manager as any).workflowGit.snapshots).toEqual([]);
   });
 
   test('step execution produces output from engine', async () => {
@@ -1894,6 +2595,108 @@ describe('state machine execution flow', () => {
 
     expect(result.verdict).toBe('pass');
     expect(result.stepOutputs[0]).toContain('streamed pass');
+  });
+
+  test('keeps thought and tool events in the complete runtime transcript', async () => {
+    const engine = new MockEngine({ success: true, output: '' });
+    engine.executeImpl = async () => {
+      engine.emitThought('先核对仓库状态。');
+      (engine as any).emit('stream', {
+        type: 'tool',
+        tool: {
+          id: 'tool-read-1',
+          toolName: 'read',
+          title: '读取文件',
+          status: 'running',
+          input: { filePath: 'README.md' },
+        },
+      });
+      engine.emitStream('最终答复');
+      return { success: true, output: '' };
+    };
+    const manager = await createManagerForTest(engine);
+
+    const result = await (manager as any).executeWithEngine(
+      'process-transcript',
+      'developer',
+      'design-step',
+      'Build a feature',
+      'You are a developer',
+      'test-model',
+      { engineType: 'mock-engine', runId: 'test-run-001' },
+    );
+
+    expect(result.result).toBe('最终答复');
+    expect(result.rawOutput).toContain('先核对仓库状态。');
+    expect(result.rawOutput).toContain('tool-read-1');
+    expect(result.rawOutput).toContain('最终答复');
+  });
+
+  test('persists each streamed delta only once while observing the running process', async () => {
+    const { appendStreamContent } = await import('@/lib/run/state-persistence');
+    const { processManager } = await import('@/lib/core/process-manager');
+    const streamListeners = new Set<(event: any) => void>();
+    const proc: any = {
+      status: 'running',
+      sessionId: null,
+      streamContent: '',
+    };
+
+    vi.mocked(appendStreamContent).mockClear();
+    vi.mocked(processManager.registerExternalProcess).mockImplementation(() => proc);
+    vi.mocked(processManager.getProcess).mockImplementation(() => proc);
+    vi.mocked(processManager.getProcessRaw).mockImplementation(() => proc);
+    vi.mocked(processManager.appendStreamContent).mockImplementation((_id, chunk) => {
+      proc.streamContent += chunk;
+      return proc.streamContent;
+    });
+    vi.mocked(processManager.on).mockImplementation((event, listener) => {
+      if (event === 'stream') streamListeners.add(listener as (payload: any) => void);
+      return processManager as any;
+    });
+    vi.mocked(processManager.off).mockImplementation((event, listener) => {
+      if (event === 'stream') streamListeners.delete(listener as (payload: any) => void);
+      return processManager as any;
+    });
+    vi.mocked(processManager.emit).mockImplementation((event, ...args) => {
+      if (event === 'stream') {
+        for (const listener of streamListeners) listener(args[0]);
+      }
+      return true;
+    });
+
+    try {
+      const engine = new MockEngine({ success: true, output: '' });
+      engine.executeImpl = async () => {
+        engine.emitStream('single streamed delta');
+        return { success: true, output: '' };
+      };
+      const manager = await createManagerForTest(engine);
+      const config = makeConfig();
+      const step = config.workflow.states[0].steps[0];
+      (manager as any).currentState = '设计';
+
+      await (manager as any).runAgentStep(step, 'Build a feature', config, 'stream-once-test');
+
+      expect(appendStreamContent).toHaveBeenCalledTimes(1);
+      expect(appendStreamContent).toHaveBeenCalledWith(
+        'test-run-001',
+        '设计-design-step',
+        'single streamed delta',
+      );
+    } finally {
+      vi.mocked(processManager.registerExternalProcess).mockReset().mockReturnValue({
+        status: 'running',
+        sessionId: null,
+        streamContent: '',
+      } as any);
+      vi.mocked(processManager.getProcess).mockReset().mockReturnValue(undefined);
+      vi.mocked(processManager.getProcessRaw).mockReset().mockReturnValue(undefined);
+      vi.mocked(processManager.appendStreamContent).mockReset().mockReturnValue('');
+      vi.mocked(processManager.on).mockReset();
+      vi.mocked(processManager.off).mockReset();
+      vi.mocked(processManager.emit).mockReset();
+    }
   });
 
   test('non-final defender and judge steps execute without requiring verdict JSON', async () => {
@@ -1942,6 +2745,28 @@ describe('state machine execution flow', () => {
     expect(result.stepOutputs[0]).toContain('Defense implementation completed');
     expect(result.stepOutputs[1]).toContain('不输出 verdict JSON');
     expect(result.verdict).toBe('pass');
+  });
+
+  test('does not write a first-turn timestamp marker before the runtime emits output', async () => {
+    const { appendStreamContent } = await import('@/lib/run/state-persistence');
+    const engine = new MockEngine();
+    engine.executeImpl = async () => {
+      expect(appendStreamContent).not.toHaveBeenCalled();
+      return { success: true, output: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"done"}\n```' };
+    };
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+    (manager as any).currentState = '设计';
+    vi.mocked(appendStreamContent).mockClear();
+
+    await (manager as any).executeStep(
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Build a feature',
+    );
+
+    expect(engine.calls).toHaveLength(1);
   });
 
   test('step context requires conclusions for every step but verdict JSON only for final decision step', async () => {
@@ -2239,6 +3064,51 @@ describe('state machine execution flow', () => {
     expect((manager as any).activeConcurrencyGroups.at(-1).status).toBe('completed');
   });
 
+  test('marks a rejected parallel agent branch as a failed execution even when any join passes', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).executeWorkflowStepDispatch = vi.fn().mockImplementation(async (step: any) => {
+      if (step.name === 'branch-b') {
+        throw new Error('branch agent process failed');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return '```json\n{"verdict":"pass","summary":"branch a passed"}\n```';
+    });
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              {
+                name: 'branch-a',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch A',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-a', joinPolicy: { mode: 'any' } },
+              },
+              {
+                name: 'branch-b',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch B',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-b', joinPolicy: { mode: 'any' } },
+              },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.executionFailed).toBe(true);
+    expect((manager as any).failedSteps).toContain('设计-branch-b');
+  });
+
   test('parallel quorum join requires the configured successful branch count', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async (options) => ({
@@ -2507,6 +3377,133 @@ describe('state machine execution flow', () => {
       'default-supervisor',
       'developer',
     ]);
+  });
+
+  test('lightweight runtime roster and prewarm targets exclude default-supervisor', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeLightweightConfig();
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentSupervisorAgent = '';
+
+    (manager as any).initializeAgents(config);
+
+    expect((manager as any).agents.map((agent: any) => agent.name)).toEqual(['developer']);
+    expect((manager as any).collectWorkflowAgentPrewarmTargets(config).map((target: any) => target.runtimeAgentName))
+      .toEqual(['developer']);
+    expect(manager.getStatus().supervisorAgent).toBeUndefined();
+  });
+
+  test('lightweight formal start persists no supervisor identity and resume keeps it absent', async () => {
+    const { loadRunState, saveRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    const config = makeLightweightConfig();
+    const runState = {
+      runId: 'run-lightweight-resume',
+      configFile: 'lightweight.yaml',
+      mode: 'state-machine',
+      status: 'stopped',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: null,
+      currentState: 'Execute',
+      currentPhase: 'Execute',
+      currentStep: null,
+      completedSteps: [],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [{ name: 'developer', sessionId: null }],
+      iterationStates: {},
+      processes: [],
+      requirements: 'Run the tasklist',
+      workflowFrontendSessionId: null,
+      attachedAgentSessions: {},
+      stateHistory: [],
+      issueTracker: [],
+      transitionCount: 0,
+      globalContext: '',
+      phaseContexts: {},
+      workingDirectory: '/tmp/project',
+      qualityChecks: [],
+      runSpecCoding: {
+        id: 'legacy-lightweight-spec',
+        workflowName: 'Lightweight Workflow',
+        version: 1,
+        status: 'confirmed',
+        requirements: [],
+        phases: [],
+        assignments: [],
+        checkpoints: [],
+        tasks: [],
+        artifacts: {},
+        progress: { overallStatus: 'pending', completedPhaseIds: [], summary: '' },
+        revisions: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+      bindingValidation: { ok: true, bindings: [], errors: [], warnings: [] },
+      stepTaskBindingsSnapshot: [{ stepKey: 'state:Execute#1:Run tasklist', taskIds: ['T1.1'] }],
+      lightweight: {
+        profile: 'lightweight',
+        tasklistDirectory: 'tasklist',
+        workspaceRoot: '/tmp/project',
+        resolvedTasklistDirectory: resolve('/tmp/runs', 'run-lightweight-resume', 'tasklist'),
+        stateName: 'Execute',
+        stepName: 'Run tasklist',
+        effectiveStepSkills: ['aceharness-tasklist'],
+      },
+    } as any;
+    vi.mocked(parse).mockReturnValue(config);
+    vi.mocked(loadRunState).mockReset().mockResolvedValueOnce(null).mockResolvedValueOnce(runState);
+    vi.mocked(saveRunState).mockClear();
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeEngine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeMemoryV2 = vi.fn().mockResolvedValue(undefined);
+    (manager as any).executeStateMachine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).disableWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).readWorkflowConfigContent = vi.fn().mockResolvedValue('lightweight config');
+    (manager as any).assertRequiredVerdictTransitions = vi.fn();
+    (manager as any).syncSkillsToWorkspace = vi.fn().mockResolvedValue(undefined);
+    delete (manager as any).persistState;
+
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).currentSupervisorAgent = '';
+    await (manager as any).start('lightweight.yaml', undefined, [], undefined, 'run-lightweight-formal');
+
+    const formalPersistedStates = vi.mocked(saveRunState).mock.calls.map(([state]) => state as any);
+    expect(formalPersistedStates.length).toBeGreaterThan(0);
+    expect(formalPersistedStates.every((state) => !('supervisorAgent' in state))).toBe(true);
+    expect(formalPersistedStates.every((state) => state.supervisorSessionId == null)).toBe(true);
+    const { mkdir } = await import('fs/promises');
+    expect(mkdir).toHaveBeenCalledWith(resolve('/tmp/runs', 'run-lightweight-formal', 'tasklist'), { recursive: true });
+
+    await (manager as any).resume('run-lightweight-resume');
+
+    expect((manager as any).currentSupervisorAgent).toBe('');
+    expect((manager as any).agents.map((agent: any) => agent.name)).toEqual(['developer']);
+    expect(manager.getStatus().supervisorAgent).toBeUndefined();
+    expect((manager as any).currentRunSpecCoding).toBeNull();
+    expect((manager as any).stepTaskBindingsSnapshot).toEqual([]);
+  });
+
+  test('lightweight resume rejects legacy workspace tasklist metadata', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    await expect((manager as any).restoreLightweightRunMetadata({
+      runId: 'run-legacy-tasklist',
+      workingDirectory: '/tmp/project',
+      lightweight: {
+        profile: 'lightweight',
+        tasklistDirectory: 'docs/tasklists/legacy',
+        workspaceRoot: '/tmp/project',
+        resolvedTasklistDirectory: resolve('/tmp/project', 'docs/tasklists/legacy'),
+        stateName: 'Execute',
+        stepName: 'Run tasklist',
+        effectiveStepSkills: ['aceharness-tasklist'],
+      },
+    })).rejects.toThrow(/legacy|inconsistent/i);
   });
 
   test('run spec coding is not marked completed before workflow reaches a final state', async () => {
@@ -2781,6 +3778,32 @@ describe('state machine execution flow', () => {
     ).rejects.toThrow(/引擎异常/);
   });
 
+  test('failed step recovery error includes the latest step error', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).stepLogs = [
+      {
+        id: 'failed-1',
+        stepName: '设计-design-step',
+        status: 'failed',
+        error: '旧的引擎错误',
+      },
+      {
+        id: 'failed-2',
+        stepName: '设计-design-step',
+        status: 'failed',
+        error: '步骤执行超时：已超过配置上限 30 分钟。',
+      },
+    ];
+
+    const error = (manager as any).createFailedStepRecoveryRequiredError(
+      '设计',
+      ['设计-design-step'],
+    );
+
+    expect(error.message).toContain('步骤执行超时：已超过配置上限 30 分钟。');
+    expect(error.message).not.toContain('旧的引擎错误');
+  });
+
   test('self-transition circuit breaker triggers after maxSelfTransitions', async () => {
     let callCount = 0;
     const engine = new MockEngine();
@@ -2788,22 +3811,31 @@ describe('state machine execution flow', () => {
       callCount++;
       return {
         success: true,
-        output: '```json\n{"verdict": "conditional_pass"}\n```',
+        output: callCount <= 3
+          ? '```json\n{"verdict": "conditional_pass"}\n```'
+          : '```json\n{"verdict": "pass"}\n```',
       };
     };
     const manager = await createManagerForTest(engine);
 
     const config = makeConfig();
     config.workflow.states[0].maxSelfTransitions = 2;
-    config.workflow.states[0].transitions.push({
-      condition: { verdict: 'conditional_pass' },
-      to: '实施',
-      priority: 3,
-    });
+    config.workflow.states[0].transitions = [
+      {
+        condition: { verdict: 'conditional_pass' },
+        to: '设计',
+        priority: 1,
+      },
+      {
+        condition: { verdict: 'conditional_pass' },
+        to: '实施',
+        priority: 2,
+      },
+    ];
 
     await (manager as any).executeStateMachine(config, 'Build a feature');
 
-    expect(callCount).toBeGreaterThanOrEqual(2);
+    expect(callCount).toBeGreaterThanOrEqual(4);
   });
 
   test('final state executes steps and completes', async () => {
@@ -2899,6 +3931,105 @@ describe('force transition', () => {
     (manager as any).status = 'idle';
 
     expect(() => (manager as any).forceTransition('实施')).toThrow('工作流未在运行中');
+  });
+
+  test('forceTransition explicitly clears a failed checkpoint for operator recovery', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).failedSteps = ['设计-design-step'];
+
+    (manager as any).forceTransition('实施');
+
+    expect((manager as any).failedSteps).toEqual([]);
+    expect((manager as any).pendingForceTransition).toBe('实施');
+  });
+
+  test('an explicit force transition wins a race with an already failed state result', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig();
+    const originalExecuteState = (manager as any).executeState.bind(manager);
+    (manager as any).executeWorkflowStepDispatch = vi.fn().mockRejectedValue(new Error('agent step execution failed'));
+    (manager as any).executeState = async function (...args: any[]) {
+      const result = await originalExecuteState(...args);
+      if (args[0].name === '设计') {
+        // The step has failed and recorded its breakpoint before the operator
+        // explicitly selects a recovery target.
+        (manager as any).forceTransition('完成', 'operator override after failure');
+      }
+      return result;
+    };
+
+    await (manager as any).executeStateMachine(config, 'Build a feature');
+
+    expect((manager as any).currentState).toBe('完成');
+    expect((manager as any).failedSteps).toEqual([]);
+    expect((manager as any).stateHistory).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: '设计', to: '完成' }),
+    ]));
+  });
+
+  test('an explicit force transition from a failing final-state step reaches its target', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '完成',
+            isInitial: true,
+            isFinal: true,
+            steps: [{ name: 'final-check', agent: 'developer', task: 'Verify release', role: 'judge' }],
+            transitions: [],
+          },
+          {
+            name: '人工恢复终态',
+            isFinal: true,
+            steps: [],
+            transitions: [],
+          },
+        ],
+      },
+    });
+    const originalExecuteState = (manager as any).executeState.bind(manager);
+    (manager as any).executeWorkflowStepDispatch = vi.fn().mockRejectedValue(new Error('final check failed'));
+    (manager as any).executeState = async function (...args: any[]) {
+      const result = await originalExecuteState(...args);
+      if (args[0].name === '完成') {
+        (manager as any).forceTransition('人工恢复终态', 'operator recovery after final failure');
+      }
+      return result;
+    };
+
+    await (manager as any).executeStateMachine(config, 'Build a feature');
+
+    expect((manager as any).currentState).toBe('人工恢复终态');
+    expect((manager as any).stateHistory).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: '完成', to: '人工恢复终态' }),
+    ]));
+    expect((manager as any).pendingForceTransition).toBeNull();
+  });
+
+  test('an unforced failing final-state step remains blocked at its checkpoint', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '完成',
+            isInitial: true,
+            isFinal: true,
+            steps: [{ name: 'final-check', agent: 'developer', task: 'Verify release', role: 'judge' }],
+            transitions: [],
+          },
+        ],
+      },
+    });
+    (manager as any).executeWorkflowStepDispatch = vi.fn().mockRejectedValue(new Error('final check failed'));
+
+    await expect((manager as any).executeStateMachine(config, 'Build a feature'))
+      .rejects.toThrow(/必须先从失败断点恢复并重试/);
+
+    expect((manager as any).currentState).toBe('完成');
+    expect((manager as any).stateHistory).toEqual([]);
+    expect((manager as any).failedSteps).toContain('完成-final-check');
   });
 
   test('forced transition skips human approval check', async () => {
@@ -3065,7 +4196,7 @@ describe('circuit breaker with supervisor review', () => {
     vi.clearAllMocks();
   });
 
-  test('emits circuit-breaker event when self-transition limit exceeded', async () => {
+  test('uses a matching circuit-breaker route and preserves the transition source', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async () => ({
       success: true,
@@ -3073,8 +4204,8 @@ describe('circuit breaker with supervisor review', () => {
     });
     const manager = await createManagerForTest(engine);
 
-    // Use a simple 2-state config: 设计 → 完成 (final)
-    // conditional_pass causes self-transition on 设计, circuit breaker escapes to 完成
+    // The first conditional_pass route iterates, while the second is an explicit
+    // circuit-breaker escape for the same verdict.
     const config = makeConfig({
       workflow: {
         states: [
@@ -3086,8 +4217,8 @@ describe('circuit breaker with supervisor review', () => {
             ],
             maxSelfTransitions: 2,
             transitions: [
-              { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
-              // No conditional_pass rule → self-transition → circuit breaker
+              { condition: { verdict: 'conditional_pass' }, to: '设计', priority: 1 },
+              { condition: { verdict: 'conditional_pass' }, to: '完成', priority: 2 },
             ],
           },
           {
@@ -3101,7 +4232,9 @@ describe('circuit breaker with supervisor review', () => {
     });
 
     const circuitBreakerEvents: any[] = [];
+    const transitionEvents: any[] = [];
     manager.on('circuit-breaker', (data: any) => circuitBreakerEvents.push(data));
+    manager.on('transition', (data: any) => transitionEvents.push(data));
 
     await (manager as any).executeStateMachine(config, 'Build a feature');
 
@@ -3110,9 +4243,12 @@ describe('circuit breaker with supervisor review', () => {
     expect(circuitBreakerEvents[0]).toHaveProperty('selfTransitionCount');
     expect(circuitBreakerEvents[0]).toHaveProperty('maxSelfTransitions', 2);
     expect(circuitBreakerEvents[0].message).toContain('自我转换次数超过限制');
+    expect(transitionEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: '设计', to: '完成', circuitBreaker: true }),
+    ]));
   });
 
-  test('circuit breaker forces transition to alternative state', async () => {
+  test('does not fall through to an unrelated verdict route when the circuit breaker trips', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async () => ({
       success: true,
@@ -3122,16 +4258,14 @@ describe('circuit breaker with supervisor review', () => {
 
     const config = makeConfig();
     config.workflow.states[0].maxSelfTransitions = 1;
-    config.workflow.states[0].transitions.push({
-      condition: { verdict: 'conditional_pass' },
-      to: '实施',
-      priority: 3,
-    });
 
-    await (manager as any).executeStateMachine(config, 'Build a feature');
+    await expect((manager as any).executeStateMachine(config, 'Build a feature'))
+      .rejects.toThrow(/无匹配的其他转移路径/);
 
-    // Should have broken out of 设计 and eventually reached 完成
-    expect((manager as any).currentState).toBe('完成');
+    expect((manager as any).currentState).toBe('设计');
+    expect((manager as any).stateHistory).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: '设计', to: '实施' }),
+    ]));
   });
 
   test('circuit breaker throws when no alternative transition exists', async () => {
@@ -3483,7 +4617,7 @@ describe('escalation on unmatched verdict', () => {
     vi.clearAllMocks();
   });
 
-  test('conditional_pass without matching rule triggers self-transition escalation', async () => {
+  test('conditional_pass without a matching route stops at the circuit breaker instead of falling through', async () => {
     const engine = new MockEngine({
       success: true,
       output: '```json\n{"verdict": "conditional_pass"}\n```',
@@ -3500,19 +4634,15 @@ describe('escalation on unmatched verdict', () => {
     ];
     // Set low maxSelfTransitions to avoid long test
     config.workflow.states[0].maxSelfTransitions = 1;
-    // Add conditional_pass escape route so it doesn't throw
-    config.workflow.states[0].transitions.push({
-      condition: { verdict: 'conditional_pass' },
-      to: '实施',
-      priority: 2,
-    });
 
-    await (manager as any).executeStateMachine(config, 'Build a feature');
+    await expect((manager as any).executeStateMachine(config, 'Build a feature'))
+      .rejects.toThrow(/无匹配的其他转移路径/);
 
-    // Should have emitted escalation for conditional_pass self-transition
+    // conditional_pass still emits its escalation, but must not reuse the pass route.
     expect(escalationEvents.length).toBeGreaterThanOrEqual(1);
     expect(escalationEvents[0].reason).toContain('conditional_pass');
     expect(escalationEvents[0].reason).toContain('继续迭代');
+    expect((manager as any).currentState).toBe('设计');
   });
 
   test('no matching transition for non-conditional verdict triggers human fallback', async () => {

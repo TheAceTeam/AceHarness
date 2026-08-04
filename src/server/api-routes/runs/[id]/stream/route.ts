@@ -1,6 +1,7 @@
 import { jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
-import { loadStreamContent, loadRunState } from '@/lib/run/state-persistence';
+import { loadStreamContent, loadStreamToolEvents, loadRunState } from '@/lib/run/state-persistence';
 import { processManager } from '@/lib/core/process-manager';
+import type { RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,8 +19,11 @@ export async function GET(
 
   // Legacy non-SSE mode: return persisted content as JSON
   if (!live) {
-    const content = await loadStreamContent(id, step);
-    return jsonOk({ step, content: content || '' });
+    const [content, toolEvents] = await Promise.all([
+      loadStreamContent(id, step),
+      loadStreamToolEvents(id, step),
+    ]);
+    return jsonOk({ step, content: content || '', toolEvents });
   }
 
   // SSE mode: stream real-time content from processManager
@@ -30,10 +34,13 @@ export async function GET(
       let closed = false;
       /** Bytes already sent to client from the persisted stream file. */
       let lastFileSentLen = 0;
+      let initialSnapshotLoaded = false;
       let filePoll: ReturnType<typeof setInterval> | null = null;
       let checkDone: ReturnType<typeof setInterval> | null = null;
       let heartbeat: ReturnType<typeof setInterval> | null = null;
       let onStream: ((evt: any) => void) | null = null;
+      const pendingLiveEvents: any[] = [];
+      const sentTools = new Map<string, string>();
 
       const cleanup = () => {
         if (closed) return;
@@ -65,30 +72,97 @@ export async function GET(
         lastFileSentLen = c.length;
       };
 
-      // Initial snapshot from disk. The persisted stream is authoritative because it
-      // contains workflow chunk boundaries, human feedback markers, and resumed output
-      // in the correct order.
-      void flushPersistedStream();
+      const sendTool = (tool: RuntimeToolEvent) => {
+        if (!tool?.id) return;
+        const signature = JSON.stringify(tool);
+        if (sentTools.get(tool.id) === signature) return;
+        sentTools.set(tool.id, signature);
+        send('tool', { tool });
+      };
 
-      // Poll persisted stream file — SDK Plan / engines that only use saveStreamContent
+      const flushPersistedTools = async () => {
+        const tools = await loadStreamToolEvents(id, step);
+        for (const tool of tools) sendTool(tool);
+      };
+
+      const flushPersistedUpdates = async () => {
+        await flushPersistedStream();
+        await flushPersistedTools();
+      };
+
+      // The first replay is a complete persisted transcript, not an append.
+      // A client may have stale IndexedDB data, so it must be able to replace
+      // that cache before it receives any incremental deltas.
+      const sendInitialSnapshot = async () => {
+        const [content, tools] = await Promise.all([
+          loadStreamContent(id, step),
+          loadStreamToolEvents(id, step),
+        ]);
+        const snapshotContent = content || '';
+        lastFileSentLen = snapshotContent.length;
+        send('snapshot', { content: snapshotContent });
+        for (const tool of tools) sendTool(tool);
+        return snapshotContent;
+      };
+
+      const handleLiveEvent = (evt: any) => {
+        if (evt.thinking) {
+          send('thinking', { content: evt.thinking });
+          return;
+        }
+        if (typeof evt.delta === 'string' && evt.delta) {
+          // The workflow manager persists this exact delta. Advance the file
+          // cursor as well so the poller does not replay it a second time.
+          lastFileSentLen += evt.delta.length;
+          send('delta', { content: evt.delta });
+          return;
+        }
+        if (evt.tool && typeof evt.tool === 'object') {
+          sendTool(evt.tool as RuntimeToolEvent);
+        }
+      };
+
+      // Poll the persisted transcript for reconnects and for engine paths that
+      // do not have a process-local stream. Tool updates are replayed separately.
       filePoll = setInterval(() => {
-        void flushPersistedStream();
+        void flushPersistedUpdates();
       }, 800);
 
-      // Listen for live stream events. Text deltas are persisted by the workflow
-      // manager and then emitted by file polling so offsets never mix process-local
-      // stream length with the full persisted stream length.
       onStream = (evt: any) => {
         if (closed) return;
         const proc = processManager.getProcessRaw?.(evt.id);
         if (proc?.runId !== id || proc.step !== step) return;
-        if (evt.thinking) {
-          send('thinking', { content: evt.thinking });
+        if (!initialSnapshotLoaded) {
+          pendingLiveEvents.push(evt);
+          return;
         }
+        handleLiveEvent(evt);
       };
 
       processManager.on('stream', onStream);
       heartbeat = setInterval(() => send('heartbeat', { timestamp: new Date().toISOString() }), 15000);
+
+      void (async () => {
+        const snapshotContent = await sendInitialSnapshot();
+        initialSnapshotLoaded = true;
+        const pending = pendingLiveEvents.splice(0);
+        // appendStreamContent is asynchronous, so a queued process event may
+        // already be represented in the snapshot. `total` is the process's
+        // cumulative stream at that event; if the snapshot ends with it, all
+        // preceding text events are already included.
+        const lastSnapshotIncludedEvent = pending.reduce((last, evt, index) => (
+          typeof evt?.delta === 'string'
+          && typeof evt?.total === 'string'
+          && evt.total
+          && snapshotContent.endsWith(evt.total)
+            ? index
+            : last
+        ), -1);
+        pending.forEach((evt, index) => {
+          if (index <= lastSnapshotIncludedEvent && typeof evt?.delta === 'string') return;
+          handleLiveEvent(evt);
+        });
+      })();
 
       // Done when: no running proc AND run state no longer running, OR a finished proc exists for this run
       checkDone = setInterval(() => {
@@ -105,7 +179,7 @@ export async function GET(
           }
           if (hasRunningProc || runStillActive) return;
 
-          await flushPersistedStream();
+          await flushPersistedUpdates();
 
           const finished = procs.find(
             (p: any) =>

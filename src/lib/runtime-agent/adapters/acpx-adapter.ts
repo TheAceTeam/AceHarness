@@ -85,15 +85,19 @@ const EVENT_TYPE_ALIASES: Record<string, RuntimeEventType> = {
 const NATIVE_ID_KEYS = new Set([
   'acpxRecordId',
   'acpxSessionId',
+  'acpSessionId',
+  'agentSessionId',
+  'sessionId',
   'backendSessionId',
   'externalRecordId',
   'externalSessionId',
   'nativeId',
+  'nativeSessionId',
   'providerConversationId',
   'providerMessageId',
   'providerSessionId',
   'recordId',
-]);
+].map(normalizeNativeIdKey));
 
 export interface AcpxCommandResolution {
   command: string;
@@ -224,14 +228,14 @@ function buildAcpxCommandAttemptParts(
 ): Array<{ source: string; parts: string[] }> {
   if (options.agentId === 'codeagent') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const codeagent = resolveWindowsCmdShim('codeagent', searchPaths) || (!isWindows() ? findCommand('codeagent', searchPaths) : null);
+    const codeagent = resolveAcpxCommandPath('codeagent', searchPaths);
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
     return [{ source: 'codeagent', parts: wrapWindowsCmdShellParts(codeagent || 'codeagent', args) }];
   }
   if (options.agentId === 'nga' || (!options.agentId && (command.command === 'ngagent' || command.command === 'nga'))) {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const ngagent = resolveWindowsCmdShim('ngagent', searchPaths) || (!isWindows() ? findCommand('ngagent', searchPaths) : null);
+    const ngagent = resolveAcpxCommandPath('ngagent', searchPaths);
     const args = ['--disable-update', 'acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
     return [{ source: 'ngagent', parts: wrapWindowsCmdShellParts(ngagent || 'ngagent', args) }];
@@ -240,8 +244,8 @@ function buildAcpxCommandAttemptParts(
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
     const explicit = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
     const resolvedCommand = explicit
-      || resolveWindowsCmdShim('codegenie', searchPaths)
-      || (!isWindows() ? findCommand('codegenie', searchPaths) : null)
+      ? (findCommand(explicit, searchPaths) || explicit)
+      : resolveAcpxCommandPath('codegenie', searchPaths)
       || command.command;
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
@@ -266,6 +270,10 @@ function resolveWindowsCmdShim(command: string, searchPaths: string[]): string |
     if (existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+function resolveAcpxCommandPath(command: string, searchPaths: string[]): string | null {
+  return resolveWindowsCmdShim(command, searchPaths) || findCommand(command, searchPaths);
 }
 
 function wrapWindowsCmdShellParts(command: string, args: string[]): string[] {
@@ -309,7 +317,11 @@ export function missingCostUsage(): CostUsage {
 }
 
 export function normalizeAcpxRuntimeEvent(nativeEvent: unknown): AdapterRuntimeEvent {
-  const event = asRecord(nativeEvent);
+  const initialEvent = asRecord(nativeEvent);
+  const initialType = normalizeEventType(initialEvent.type ?? initialEvent.event, initialEvent);
+  const event = initialType.startsWith('tool.')
+    ? asRecord(compactAcpxToolEvent(initialEvent))
+    : initialEvent;
   const type = normalizeEventType(event.type ?? event.event, event);
   const fallback = fallbackPayload(type, event);
   const explicitPayload = event.payload ?? event.data;
@@ -330,7 +342,7 @@ export function normalizeAcpxRuntimeEvent(nativeEvent: unknown): AdapterRuntimeE
     cost,
     error: normalizeError(event.error ?? (type === 'turn.failed' ? event : undefined)),
     redacted: true,
-    raw: nativeEvent,
+    raw: stripNativeIds(event),
     createdAt: asString(event.createdAt),
   };
 }
@@ -346,12 +358,16 @@ export function stripNativeIds(value: unknown): unknown {
 
   const sanitized: Record<string, unknown> = {};
   for (const [key, childValue] of Object.entries(value)) {
-    if (NATIVE_ID_KEYS.has(key)) {
+    if (NATIVE_ID_KEYS.has(normalizeNativeIdKey(key))) {
       continue;
     }
     sanitized[key] = stripNativeIds(childValue);
   }
   return sanitized;
+}
+
+function normalizeNativeIdKey(key: string): string {
+  return key.replace(/[_-]/g, '').toLowerCase();
 }
 
 export class AcpxAdapter implements RuntimeAdapter {
@@ -368,60 +384,94 @@ export class AcpxAdapter implements RuntimeAdapter {
         command,
       })) ?? (await this.ensureNativeSession(input, command));
 
+    const handle = nativeBinding?.handle
+      ?? extractAcpRuntimeHandleValue(nativeBinding?.raw)
+      ?? extractAcpRuntimeHandle(input.existingBinding);
+    const raw = nativeBinding?.raw ?? input.existingBinding?.raw ?? { agentId: input.agentId, command };
+
     return {
       id: input.existingBinding?.id ?? `${input.runtimeSessionId}:acpx:${input.agentId}:1`,
       runtimeSessionId: input.runtimeSessionId,
       runtime: 'acpx',
       role: input.existingBinding?.role ?? 'primary',
       generation: input.existingBinding?.generation ?? 1,
-      externalIds: nativeBinding?.externalIds ?? input.existingBinding?.externalIds ?? {},
-      raw: nativeBinding?.raw ?? input.existingBinding?.raw ?? { agentId: input.agentId, command },
+      externalIds: nativeBinding?.externalIds
+        ?? (handle ? extractExternalIds(handle) : undefined)
+        ?? input.existingBinding?.externalIds
+        ?? {},
+      raw: handle && isPlainRecord(raw) ? { ...raw, handle } : handle ? { agentId: input.agentId, command, handle } : raw,
       createdAt: input.existingBinding?.createdAt ?? now,
       updatedAt: now,
     };
   }
 
   async *runTurn(binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<AdapterRuntimeEvent> {
-    yield {
-      type: 'turn.started',
-      payload: { turnId: input.turnId },
-      usage: missingTokenUsage(),
-      cost: missingCostUsage(),
-      redacted: true,
-    };
+    let nativeStreamCompleted = false;
+    let terminalEventSeen = false;
+    try {
+      yield {
+        type: 'turn.started',
+        payload: { turnId: input.turnId },
+        usage: missingTokenUsage(),
+        cost: missingCostUsage(),
+        redacted: true,
+      };
 
-    const nativeEvents = await this.startNativeTurn(binding, input);
-    if (!nativeEvents) {
-      yield createAdapterUnavailableEvent('acpx', input.turnId);
-      return;
-    }
+      const nativeEvents = await this.startNativeTurn(binding, input);
+      if (!nativeEvents) {
+        yield createAdapterUnavailableEvent('acpx', input.turnId);
+        nativeStreamCompleted = true;
+        return;
+      }
 
-    for await (const event of nativeEvents) {
-      writeAcpxDebugTrace({
-        stage: 'acpx.raw_event',
-        context: {
-          runtimeSessionId: binding.runtimeSessionId,
-          turnId: input.turnId,
-          requestId: input.requestId,
-          traceId: input.traceId,
-          runtime: binding.runtime,
-        },
-        payload: event,
-      });
-      const normalized = normalizeAcpxRuntimeEvent(event);
-      writeAcpxDebugTrace({
-        stage: 'adapter.normalized_event',
-        context: {
-          runtimeSessionId: binding.runtimeSessionId,
-          turnId: input.turnId,
-          requestId: input.requestId,
-          traceId: input.traceId,
-          runtime: binding.runtime,
-        },
-        payload: normalized,
-      });
-      yield normalized;
+      for await (const event of nativeEvents) {
+        writeAcpxDebugTrace({
+          stage: 'acpx.raw_event',
+          context: {
+            runtimeSessionId: binding.runtimeSessionId,
+            turnId: input.turnId,
+            requestId: input.requestId,
+            traceId: input.traceId,
+            runtime: binding.runtime,
+          },
+          payload: compactAcpxToolEvent(event),
+        });
+        const normalized = normalizeAcpxRuntimeEvent(event);
+        terminalEventSeen = terminalEventSeen || isTerminalRuntimeEvent(normalized.type);
+        writeAcpxDebugTrace({
+          stage: 'adapter.normalized_event',
+          context: {
+            runtimeSessionId: binding.runtimeSessionId,
+            turnId: input.turnId,
+            requestId: input.requestId,
+            traceId: input.traceId,
+            runtime: binding.runtime,
+          },
+          payload: normalized,
+        });
+        yield normalized;
+      }
+      if (!terminalEventSeen) {
+        yield {
+          type: 'turn.completed',
+          payload: { turnId: input.turnId, reason: 'native-stream-completed' },
+          usage: missingTokenUsage(),
+          cost: missingCostUsage(),
+          redacted: true,
+        };
+      }
+      nativeStreamCompleted = true;
+    } finally {
+      // A consumer can disconnect while the native event stream is suspended. In that case the
+      // orchestrator may never see a terminal event, so release the ACP transport here as well.
+      if (!nativeStreamCompleted) {
+        await this.close(binding).catch(() => {});
+      }
     }
+  }
+
+  async reconnectSession(input: AdapterSessionInput): Promise<RuntimeBinding> {
+    return this.createOrLoadSession(input);
   }
 
   async cancel(binding: RuntimeBinding, input: AdapterCancelInput): Promise<void> {
@@ -527,6 +577,87 @@ function mergeToolPayload(fallback: unknown, explicitPayload: unknown): unknown 
   };
 }
 
+type AcpxCompactFileChange = {
+  filePath: string;
+  kind?: string;
+  changedLines?: number;
+  addedLines?: number;
+  removedLines?: number;
+};
+
+function compactAcpxToolEvent(value: unknown): unknown {
+  const event = asRecord(value);
+  const compactInput = compactAcpxFileMutationInput(event.content)
+    ?? compactAcpxFileMutationInput(event.rawInput)
+    ?? compactAcpxFileMutationInput(event.input);
+  if (!compactInput) return value;
+
+  const compacted: Record<string, unknown> = {
+    ...event,
+    rawInput: compactInput,
+  };
+  delete compacted.content;
+  return compacted;
+}
+
+function compactAcpxFileMutationInput(value: unknown): Record<string, unknown> | undefined {
+  const changes = extractAcpxCompactFileChanges(value);
+  if (changes.length === 0) return undefined;
+  return {
+    filePath: changes[0].filePath,
+    changes,
+  };
+}
+
+function extractAcpxCompactFileChanges(value: unknown): AcpxCompactFileChange[] {
+  const source = asRecord(value);
+  const candidates = Array.isArray(value)
+    ? value
+    : Array.isArray(source.changes)
+      ? source.changes
+      : Array.isArray(source.content)
+        ? source.content
+        : [value];
+  return candidates
+    .map((candidate) => compactAcpxFileChange(candidate))
+    .filter((change): change is AcpxCompactFileChange => Boolean(change));
+}
+
+function compactAcpxFileChange(value: unknown): AcpxCompactFileChange | null {
+  const source = asRecord(value);
+  const filePath = asString(source.filePath ?? source.file_path ?? source.filepath ?? source.path ?? source.file);
+  if (!filePath) return null;
+
+  const oldText = asString(source.oldText ?? source.old_text ?? source.oldString ?? source.old_string ?? source.before) ?? '';
+  const newText = asString(source.newText ?? source.new_text ?? source.newString ?? source.new_string ?? source.after) ?? '';
+  const content = asString(source.content) ?? '';
+  const metadata = asRecord(source._meta);
+  const kind = asString(source.kind ?? source.action ?? metadata.kind);
+  const isDiff = source.type === 'diff' || Boolean(oldText || newText || content || kind);
+  if (!isDiff) return null;
+
+  const explicitChanged = finiteNonNegativeNumber(source.changedLines ?? source.changed_lines);
+  const explicitAdded = finiteNonNegativeNumber(source.addedLines ?? source.added_lines);
+  const explicitRemoved = finiteNonNegativeNumber(source.removedLines ?? source.removed_lines);
+  const before = acpxLineCount(oldText);
+  const after = acpxLineCount(newText || content);
+  return {
+    filePath,
+    ...(kind ? { kind } : {}),
+    ...(explicitChanged !== undefined ? { changedLines: explicitChanged } : Math.min(before, after) > 0 ? { changedLines: Math.min(before, after) } : {}),
+    ...(explicitAdded !== undefined ? { addedLines: explicitAdded } : after > before ? { addedLines: after - before } : {}),
+    ...(explicitRemoved !== undefined ? { removedLines: explicitRemoved } : before > after ? { removedLines: before - after } : {}),
+  };
+}
+
+function acpxLineCount(value: string): number {
+  return value ? value.split(/\r?\n/).length : 0;
+}
+
+function finiteNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function createAdapterUnavailableEvent(runtime: 'acpx' | 'magic', turnId: string): AdapterRuntimeEvent {
   return {
     type: 'turn.failed',
@@ -554,6 +685,7 @@ export function createAdapterUnavailableError(runtime: 'acpx' | 'magic', operati
 function normalizeAcpxStatus(value: unknown): AdapterRuntimeStatus {
   const status = asRecord(value);
   const nativeStatus = asString(status.status);
+  const details = isPlainRecord(status.details) ? status.details : undefined;
   const normalizedStatus: AdapterRuntimeStatus['status'] =
     nativeStatus === 'idle' ||
     nativeStatus === 'running' ||
@@ -561,27 +693,44 @@ function normalizeAcpxStatus(value: unknown): AdapterRuntimeStatus {
     nativeStatus === 'closed' ||
     nativeStatus === 'failed'
       ? nativeStatus
-      : 'unknown';
+      : details?.closed === true
+        ? 'closed'
+        : asString(status.activeTurnId)
+          ? 'running'
+          : 'idle';
+
+  const metadata: Record<string, unknown> = {
+    ...(isPlainRecord(status.metadata) ? stripNativeIds(status.metadata) as Record<string, unknown> : {}),
+    ...(isPlainRecord(status.models) ? { models: stripNativeIds(status.models) } : {}),
+    ...(Array.isArray(status.availableCommands) ? { availableCommands: stripNativeIds(status.availableCommands) } : {}),
+    ...(isPlainRecord(status.usage) ? { usage: stripNativeIds(status.usage) } : {}),
+    ...(details ? { details: stripNativeIds(details) } : {}),
+  };
 
   return {
     runtime: 'acpx' as const,
     status: normalizedStatus,
     activeTurnId: asString(status.activeTurnId),
-    lastEventAt: asString(status.lastEventAt),
+    lastEventAt: asString(status.lastEventAt) ?? asString(details?.lastUsedAt),
     error: normalizeError(status.error),
-    metadata: isPlainRecord(status.metadata) ? status.metadata : undefined,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
   };
 }
 
 function extractAcpRuntimeHandle(binding?: RuntimeBinding): AcpRuntimeHandle | undefined {
-  if (!binding) {
-    return undefined;
-  }
+  return extractAcpRuntimeHandleValue(binding?.raw);
+}
 
-  if (isPlainRecord(binding.raw) && isPlainRecord(binding.raw.handle)) {
-    return binding.raw.handle as unknown as AcpRuntimeHandle;
+function extractAcpRuntimeHandleValue(value: unknown): AcpRuntimeHandle | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  if (isPlainRecord(value.handle)) return value.handle as unknown as AcpRuntimeHandle;
+  if (
+    typeof value.sessionKey === 'string'
+    && typeof value.backend === 'string'
+    && typeof value.runtimeSessionName === 'string'
+  ) {
+    return value as unknown as AcpRuntimeHandle;
   }
-
   return undefined;
 }
 
@@ -638,8 +787,12 @@ function fallbackPayload(type: RuntimeEventType, event: Record<string, unknown>)
       'rawOutput',
       'content',
       'output',
+      'result',
+      'formatted_output',
+      'formattedOutput',
       'stdout',
       'stderr',
+      'error',
       'exitCode',
       'exit_code',
       'aggregated_output',
@@ -731,13 +884,13 @@ function normalizeError(value: unknown): AdapterRuntimeEvent['error'] {
 
   return {
     code: 'ADAPTER_FAILED',
-    message: asString(value.message) ?? 'Adapter event reported an error.',
+    message: redactNativeIdText(asString(value.message) ?? 'Adapter event reported an error.'),
     retryable: Boolean(value.retryable),
     redacted: true,
     cause: asString(value.code)
       ? {
-          code: asString(value.code),
-          message: asString(value.message) ?? 'Native adapter error',
+          code: redactNativeIdText(asString(value.code) ?? 'ADAPTER_FAILED'),
+          message: redactNativeIdText(asString(value.message) ?? 'Native adapter error'),
         }
       : undefined,
   };
@@ -757,4 +910,14 @@ function asString(value: unknown): string | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isTerminalRuntimeEvent(type: RuntimeEventType): boolean {
+  return type === 'turn.completed' || type === 'turn.failed' || type === 'turn.cancelled';
+}
+
+function redactNativeIdText(value: string): string {
+  return value
+    .replace(/\b(?:acpx|provider|external|native|record|session)-[A-Za-z0-9_.:-]+\b/gi, '[redacted]')
+    .replace(/\b(?:provider|external|native|record|session)_(?:[A-Za-z0-9_.:-]+)\b/gi, '[redacted]');
 }

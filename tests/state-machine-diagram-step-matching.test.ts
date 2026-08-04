@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { stateDiagramStepKeyMatches } from '@/components/StateMachineDiagram';
+import { getStateDiagramRerunStepKey, stateDiagramStepKeyMatches } from '@/components/StateMachineDiagram';
 
 describe('stateDiagramStepKeyMatches', () => {
   test.each([
@@ -16,5 +16,9 @@ describe('stateDiagramStepKeyMatches', () => {
 
   test('does not match unrelated steps', () => {
     expect(stateDiagramStepKeyMatches('设计-测试验证', '设计', '实现功能')).toBe(false);
+  });
+
+  test('builds the canonical state-machine rerun step key', () => {
+    expect(getStateDiagramRerunStepKey('设计', '实现功能')).toBe('设计-实现功能');
   });
 });

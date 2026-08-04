@@ -43,7 +43,7 @@ describe('office team planning', () => {
         capabilities: ['需求分析', '用户价值'],
       });
       await writeAgent(agentsDir, {
-        name: 'fix-developer',
+        name: 'developer',
         category: '开发',
         capabilities: ['代码实现'],
       });
@@ -64,7 +64,7 @@ describe('office team planning', () => {
 
       expect(plan.availableAgentCount).toBe(4);
       expect(plan.members.map((member) => member.agentName)).toEqual(
-        expect.arrayContaining(['ceo_founder', 'product-manager', 'fix-developer', 'code-judge'])
+        expect.arrayContaining(['ceo_founder', 'product-manager', 'developer', 'code-judge'])
       );
       expect(plan.members.map((member) => member.zone)).toEqual(
         expect.arrayContaining(['core', 'product', 'engineering', 'decision'])

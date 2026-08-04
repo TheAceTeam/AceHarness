@@ -88,9 +88,7 @@ function uniqueSorted(values: unknown[]): string[] {
 
 function getWorkflowNodes(workflow: Record<string, any>): Array<Record<string, any>> {
   const workflowConfig = workflow.workflow || {};
-  if (Array.isArray(workflowConfig.states)) return workflowConfig.states;
-  if (Array.isArray(workflowConfig.phases)) return workflowConfig.phases;
-  return [];
+  return Array.isArray(workflowConfig.states) ? workflowConfig.states : [];
 }
 
 function countPreCommands(workflow: Record<string, any>): number {
@@ -124,7 +122,6 @@ function summarizePackage(pkg: LoadedTemplatePackage, versions: string[]): Workf
     createdAt: pkg.localMeta?.createdAt,
     ownerId: pkg.localMeta?.createdBy,
     stateCount: Array.isArray(workflowConfig?.states) ? workflowConfig.states.length : 0,
-    phaseCount: Array.isArray(workflowConfig?.phases) ? workflowConfig.phases.length : 0,
     stepCount: nodes.reduce((total, node) => total + (Array.isArray(node.steps) ? node.steps.length : 0), 0),
     parameterCount: pkg.manifest.spec.parameters.length,
     preCommandCount: countPreCommands(pkg.workflow),
@@ -210,9 +207,8 @@ async function readPackage(
   if (!workflowValidation.ok || !workflowValidation.normalized) {
     throw new Error(workflowValidation.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '));
   }
-  const detectedMode = workflowValidation.normalized.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based';
-  if (detectedMode !== manifestResult.data.spec.mode) {
-    throw new Error(`manifest 模式 ${manifestResult.data.spec.mode} 与 workflow.yaml 模式 ${detectedMode} 不一致`);
+  if (workflowValidation.normalized.workflow?.mode !== manifestResult.data.spec.mode) {
+    throw new Error(`manifest 模式 ${manifestResult.data.spec.mode} 与 workflow.yaml 模式不一致`);
   }
   return {
     source,

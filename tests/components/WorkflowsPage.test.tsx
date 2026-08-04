@@ -20,6 +20,24 @@ vi.mock('@/lib/core/api', () => ({
   },
 }));
 
+vi.mock('@/components/NewConfigModal', () => ({
+  default: ({
+    isOpen,
+    initialMode,
+    initialRequirements,
+    aiGuidedEntry,
+  }: {
+    isOpen: boolean;
+    initialMode?: string;
+    initialRequirements?: string;
+    aiGuidedEntry?: boolean;
+  }) => isOpen ? (
+    <div data-testid="new-config-modal" data-mode={initialMode} data-ai-guided-entry={String(Boolean(aiGuidedEntry))}>
+      {initialRequirements}
+    </div>
+  ) : null,
+}));
+
 describe('WorkflowsPage Start client entry', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -54,13 +72,27 @@ describe('WorkflowsPage Start client entry', () => {
     );
   });
 
+  test('AI guided creation opens the explicit AI planning entry', async () => {
+    renderWithQuery(<WorkflowsPage />);
+
+    const buttons = await screen.findAllByRole('button', { name: /AI 引导创建/ });
+    expect(buttons.length).toBeGreaterThan(0);
+    fireEvent.click(buttons[0]);
+
+    expect(screen.getByTestId('new-config-modal')).toHaveAttribute('data-mode', 'ai-guided');
+    expect(screen.getByTestId('new-config-modal')).toHaveAttribute('data-ai-guided-entry', 'true');
+    expect(screen.getByTestId('new-config-modal')).toHaveTextContent('我想围绕【目标】创建一个工作流');
+  });
+
   test('consumes typed route search for workflow filters and emits typed sort updates', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
       configs: [
         {
           filename: 'alpha.yaml',
           name: 'Alpha Flow',
-          mode: 'phase-based',
+          mode: 'state-machine',
+          kind: 'lightweight',
+          profile: 'lightweight',
           createdAt: '2026-01-01T00:00:00.000Z',
         },
         {
@@ -109,6 +141,109 @@ describe('WorkflowsPage Start client entry', () => {
       page: 1,
       pageSize: 20,
     }));
+  });
+
+  test('shows lightweight workflows as a distinct kind and filters them without phase modes', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      configs: [
+        {
+          filename: 'tasklist.yaml',
+          name: 'Tasklist Flow',
+          mode: 'state-machine',
+          kind: 'lightweight',
+          profile: 'lightweight',
+          stateCount: 1,
+          stepCount: 1,
+          createdAt: '2026-01-03T00:00:00.000Z',
+        },
+        {
+          filename: 'orchestration.yaml',
+          name: 'Orchestration',
+          mode: 'state-machine',
+          kind: 'state-machine',
+          stateCount: 3,
+          stepCount: 5,
+          createdAt: '2026-01-04T00:00:00.000Z',
+        },
+      ],
+      pagination: {
+        total: 2,
+        totalPages: 1,
+        page: 1,
+        pageSize: 20,
+        unfilteredTotal: 2,
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }) as any);
+
+    renderWithQuery(
+      <WorkflowsPage
+        routeSearch={{
+          keyword: '',
+          mode: 'lightweight',
+          sortKey: 'createdAt',
+          sortDirection: 'desc',
+          page: 1,
+          pageSize: 20,
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('Tasklist Flow')).toBeInTheDocument();
+    expect(screen.getAllByText('轻量工作流').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Orchestration')).not.toBeInTheDocument();
+    expect(screen.queryByText('阶段模式')).not.toBeInTheDocument();
+  });
+
+  test('normalizes an ai-guided route filter to all persisted workflow modes', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      configs: [
+        {
+          filename: 'tasklist.yaml',
+          name: 'Tasklist Flow',
+          mode: 'state-machine',
+          kind: 'lightweight',
+          profile: 'lightweight',
+          createdAt: '2026-01-03T00:00:00.000Z',
+        },
+        {
+          filename: 'state-machine.yaml',
+          name: 'State Machine Flow',
+          mode: 'state-machine',
+          kind: 'state-machine',
+          createdAt: '2026-01-04T00:00:00.000Z',
+        },
+      ],
+      pagination: {
+        total: 2,
+        totalPages: 1,
+        page: 1,
+        pageSize: 20,
+        unfilteredTotal: 2,
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }) as any);
+
+    renderWithQuery(
+      <WorkflowsPage
+        routeSearch={{
+          keyword: '',
+          mode: 'ai-guided' as never,
+          sortKey: 'createdAt',
+          sortDirection: 'desc',
+          page: 1,
+          pageSize: 20,
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('Tasklist Flow')).toBeInTheDocument();
+    expect(screen.getByText('State Machine Flow')).toBeInTheDocument();
+    expect(screen.getAllByRole('combobox')[0]).toHaveTextContent('全部模式');
   });
 });
 

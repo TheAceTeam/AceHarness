@@ -39,9 +39,9 @@ export async function POST(request: Request) {
     }
     await appendWorkflowAuditEvent({
       action: 'force-complete',
-      runId: status.runId,
-      rootRunId: status.rootRunId,
-      childRunId: target === 'child-current-step' ? status.activeSubworkflowRunId : undefined,
+      runId: status.runId || undefined,
+      rootRunId: (status as any).rootRunId || status.runId || undefined,
+      childRunId: target === 'child-current-step' ? status.activeSubworkflowRunId || undefined : undefined,
       configFile: status.currentConfigFile || configFile,
       actorId: auth.id,
       actorName: auth.username,

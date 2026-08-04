@@ -84,7 +84,6 @@ import { Route as ApiWorkflowContextRouteImport } from './routes/api.workflow.co
 import { Route as ApiWorkflowAuditLogRouteImport } from './routes/api.workflow.audit-log'
 import { Route as ApiWorkflowApproveRouteImport } from './routes/api.workflow.approve'
 import { Route as ApiWorkflowTemplatesInstantiateRouteImport } from './routes/api.workflow-templates.instantiate'
-import { Route as ApiWerewolfHistoryRouteImport } from './routes/api.werewolf.history'
 import { Route as ApiUsersShareableRouteImport } from './routes/api.users.shareable'
 import { Route as ApiUsersIdRouteImport } from './routes/api.users.$id'
 import { Route as ApiUploadsImageRouteImport } from './routes/api.uploads.image'
@@ -121,11 +120,9 @@ import { Route as ApiEngineCommandsRouteImport } from './routes/api.engine.comma
 import { Route as ApiEngineAvailabilityRouteImport } from './routes/api.engine.availability'
 import { Route as ApiConfigsValidateRouteImport } from './routes/api.configs.validate'
 import { Route as ApiConfigsReferencesRouteImport } from './routes/api.configs.references'
-import { Route as ApiConfigsRecommendationsRouteImport } from './routes/api.configs.recommendations'
 import { Route as ApiConfigsCreateRouteImport } from './routes/api.configs.create'
 import { Route as ApiConfigsBatchDeleteRouteImport } from './routes/api.configs.batch-delete'
 import { Route as ApiConfigsArchiveRouteImport } from './routes/api.configs.archive'
-import { Route as ApiConfigsAiGenerateRouteImport } from './routes/api.configs.ai-generate'
 import { Route as ApiConfigsFilenameRouteImport } from './routes/api.configs.$filename'
 import { Route as ApiCollaborationRoomsRouteImport } from './routes/api.collaboration.rooms'
 import { Route as ApiCollaborationMembersRouteImport } from './routes/api.collaboration.members'
@@ -617,11 +614,6 @@ const ApiWorkflowTemplatesInstantiateRoute =
     path: '/instantiate',
     getParentRoute: () => ApiWorkflowTemplatesRoute,
   } as any)
-const ApiWerewolfHistoryRoute = ApiWerewolfHistoryRouteImport.update({
-  id: '/api/werewolf/history',
-  path: '/api/werewolf/history',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiUsersShareableRoute = ApiUsersShareableRouteImport.update({
   id: '/shareable',
   path: '/shareable',
@@ -805,12 +797,6 @@ const ApiConfigsReferencesRoute = ApiConfigsReferencesRouteImport.update({
   path: '/references',
   getParentRoute: () => ApiConfigsRoute,
 } as any)
-const ApiConfigsRecommendationsRoute =
-  ApiConfigsRecommendationsRouteImport.update({
-    id: '/recommendations',
-    path: '/recommendations',
-    getParentRoute: () => ApiConfigsRoute,
-  } as any)
 const ApiConfigsCreateRoute = ApiConfigsCreateRouteImport.update({
   id: '/create',
   path: '/create',
@@ -824,11 +810,6 @@ const ApiConfigsBatchDeleteRoute = ApiConfigsBatchDeleteRouteImport.update({
 const ApiConfigsArchiveRoute = ApiConfigsArchiveRouteImport.update({
   id: '/archive',
   path: '/archive',
-  getParentRoute: () => ApiConfigsRoute,
-} as any)
-const ApiConfigsAiGenerateRoute = ApiConfigsAiGenerateRouteImport.update({
-  id: '/ai-generate',
-  path: '/ai-generate',
   getParentRoute: () => ApiConfigsRoute,
 } as any)
 const ApiConfigsFilenameRoute = ApiConfigsFilenameRouteImport.update({
@@ -1474,11 +1455,9 @@ export interface FileRoutesByFullPath {
   '/api/collaboration/members': typeof ApiCollaborationMembersRoute
   '/api/collaboration/rooms': typeof ApiCollaborationRoomsRouteWithChildren
   '/api/configs/$filename': typeof ApiConfigsFilenameRouteWithChildren
-  '/api/configs/ai-generate': typeof ApiConfigsAiGenerateRoute
   '/api/configs/archive': typeof ApiConfigsArchiveRoute
   '/api/configs/batch-delete': typeof ApiConfigsBatchDeleteRoute
   '/api/configs/create': typeof ApiConfigsCreateRoute
-  '/api/configs/recommendations': typeof ApiConfigsRecommendationsRoute
   '/api/configs/references': typeof ApiConfigsReferencesRoute
   '/api/configs/validate': typeof ApiConfigsValidateRoute
   '/api/engine/availability': typeof ApiEngineAvailabilityRoute
@@ -1515,7 +1494,6 @@ export interface FileRoutesByFullPath {
   '/api/uploads/image': typeof ApiUploadsImageRoute
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
-  '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
   '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
@@ -1699,11 +1677,9 @@ export interface FileRoutesByTo {
   '/api/collaboration/members': typeof ApiCollaborationMembersRoute
   '/api/collaboration/rooms': typeof ApiCollaborationRoomsRouteWithChildren
   '/api/configs/$filename': typeof ApiConfigsFilenameRouteWithChildren
-  '/api/configs/ai-generate': typeof ApiConfigsAiGenerateRoute
   '/api/configs/archive': typeof ApiConfigsArchiveRoute
   '/api/configs/batch-delete': typeof ApiConfigsBatchDeleteRoute
   '/api/configs/create': typeof ApiConfigsCreateRoute
-  '/api/configs/recommendations': typeof ApiConfigsRecommendationsRoute
   '/api/configs/references': typeof ApiConfigsReferencesRoute
   '/api/configs/validate': typeof ApiConfigsValidateRoute
   '/api/engine/availability': typeof ApiEngineAvailabilityRoute
@@ -1740,7 +1716,6 @@ export interface FileRoutesByTo {
   '/api/uploads/image': typeof ApiUploadsImageRoute
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
-  '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
   '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
@@ -1925,11 +1900,9 @@ export interface FileRoutesById {
   '/api/collaboration/members': typeof ApiCollaborationMembersRoute
   '/api/collaboration/rooms': typeof ApiCollaborationRoomsRouteWithChildren
   '/api/configs/$filename': typeof ApiConfigsFilenameRouteWithChildren
-  '/api/configs/ai-generate': typeof ApiConfigsAiGenerateRoute
   '/api/configs/archive': typeof ApiConfigsArchiveRoute
   '/api/configs/batch-delete': typeof ApiConfigsBatchDeleteRoute
   '/api/configs/create': typeof ApiConfigsCreateRoute
-  '/api/configs/recommendations': typeof ApiConfigsRecommendationsRoute
   '/api/configs/references': typeof ApiConfigsReferencesRoute
   '/api/configs/validate': typeof ApiConfigsValidateRoute
   '/api/engine/availability': typeof ApiEngineAvailabilityRoute
@@ -1966,7 +1939,6 @@ export interface FileRoutesById {
   '/api/uploads/image': typeof ApiUploadsImageRoute
   '/api/users/$id': typeof ApiUsersIdRoute
   '/api/users/shareable': typeof ApiUsersShareableRoute
-  '/api/werewolf/history': typeof ApiWerewolfHistoryRoute
   '/api/workflow-templates/instantiate': typeof ApiWorkflowTemplatesInstantiateRoute
   '/api/workflow/approve': typeof ApiWorkflowApproveRoute
   '/api/workflow/audit-log': typeof ApiWorkflowAuditLogRoute
@@ -2152,11 +2124,9 @@ export interface FileRouteTypes {
     | '/api/collaboration/members'
     | '/api/collaboration/rooms'
     | '/api/configs/$filename'
-    | '/api/configs/ai-generate'
     | '/api/configs/archive'
     | '/api/configs/batch-delete'
     | '/api/configs/create'
-    | '/api/configs/recommendations'
     | '/api/configs/references'
     | '/api/configs/validate'
     | '/api/engine/availability'
@@ -2193,7 +2163,6 @@ export interface FileRouteTypes {
     | '/api/uploads/image'
     | '/api/users/$id'
     | '/api/users/shareable'
-    | '/api/werewolf/history'
     | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
@@ -2377,11 +2346,9 @@ export interface FileRouteTypes {
     | '/api/collaboration/members'
     | '/api/collaboration/rooms'
     | '/api/configs/$filename'
-    | '/api/configs/ai-generate'
     | '/api/configs/archive'
     | '/api/configs/batch-delete'
     | '/api/configs/create'
-    | '/api/configs/recommendations'
     | '/api/configs/references'
     | '/api/configs/validate'
     | '/api/engine/availability'
@@ -2418,7 +2385,6 @@ export interface FileRouteTypes {
     | '/api/uploads/image'
     | '/api/users/$id'
     | '/api/users/shareable'
-    | '/api/werewolf/history'
     | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
@@ -2602,11 +2568,9 @@ export interface FileRouteTypes {
     | '/api/collaboration/members'
     | '/api/collaboration/rooms'
     | '/api/configs/$filename'
-    | '/api/configs/ai-generate'
     | '/api/configs/archive'
     | '/api/configs/batch-delete'
     | '/api/configs/create'
-    | '/api/configs/recommendations'
     | '/api/configs/references'
     | '/api/configs/validate'
     | '/api/engine/availability'
@@ -2643,7 +2607,6 @@ export interface FileRouteTypes {
     | '/api/uploads/image'
     | '/api/users/$id'
     | '/api/users/shareable'
-    | '/api/werewolf/history'
     | '/api/workflow-templates/instantiate'
     | '/api/workflow/approve'
     | '/api/workflow/audit-log'
@@ -2835,7 +2798,6 @@ export interface RootRouteChildren {
   ApiSpecCodingSessionsRoute: typeof ApiSpecCodingSessionsRouteWithChildren
   ApiSpecCodingValidatePersistedRootRoute: typeof ApiSpecCodingValidatePersistedRootRoute
   ApiUploadsImageRoute: typeof ApiUploadsImageRoute
-  ApiWerewolfHistoryRoute: typeof ApiWerewolfHistoryRoute
   ApiWorkflowApproveRoute: typeof ApiWorkflowApproveRoute
   ApiWorkflowAuditLogRoute: typeof ApiWorkflowAuditLogRoute
   ApiWorkflowContextRoute: typeof ApiWorkflowContextRoute
@@ -3417,13 +3379,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiWorkflowTemplatesInstantiateRouteImport
       parentRoute: typeof ApiWorkflowTemplatesRoute
     }
-    '/api/werewolf/history': {
-      id: '/api/werewolf/history'
-      path: '/api/werewolf/history'
-      fullPath: '/api/werewolf/history'
-      preLoaderRoute: typeof ApiWerewolfHistoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/users/shareable': {
       id: '/api/users/shareable'
       path: '/shareable'
@@ -3676,13 +3631,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiConfigsReferencesRouteImport
       parentRoute: typeof ApiConfigsRoute
     }
-    '/api/configs/recommendations': {
-      id: '/api/configs/recommendations'
-      path: '/recommendations'
-      fullPath: '/api/configs/recommendations'
-      preLoaderRoute: typeof ApiConfigsRecommendationsRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
     '/api/configs/create': {
       id: '/api/configs/create'
       path: '/create'
@@ -3702,13 +3650,6 @@ declare module '@tanstack/react-router' {
       path: '/archive'
       fullPath: '/api/configs/archive'
       preLoaderRoute: typeof ApiConfigsArchiveRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
-    '/api/configs/ai-generate': {
-      id: '/api/configs/ai-generate'
-      path: '/ai-generate'
-      fullPath: '/api/configs/ai-generate'
-      preLoaderRoute: typeof ApiConfigsAiGenerateRouteImport
       parentRoute: typeof ApiConfigsRoute
     }
     '/api/configs/$filename': {
@@ -4600,22 +4541,18 @@ const ApiConfigsFilenameRouteWithChildren =
 
 interface ApiConfigsRouteChildren {
   ApiConfigsFilenameRoute: typeof ApiConfigsFilenameRouteWithChildren
-  ApiConfigsAiGenerateRoute: typeof ApiConfigsAiGenerateRoute
   ApiConfigsArchiveRoute: typeof ApiConfigsArchiveRoute
   ApiConfigsBatchDeleteRoute: typeof ApiConfigsBatchDeleteRoute
   ApiConfigsCreateRoute: typeof ApiConfigsCreateRoute
-  ApiConfigsRecommendationsRoute: typeof ApiConfigsRecommendationsRoute
   ApiConfigsReferencesRoute: typeof ApiConfigsReferencesRoute
   ApiConfigsValidateRoute: typeof ApiConfigsValidateRoute
 }
 
 const ApiConfigsRouteChildren: ApiConfigsRouteChildren = {
   ApiConfigsFilenameRoute: ApiConfigsFilenameRouteWithChildren,
-  ApiConfigsAiGenerateRoute: ApiConfigsAiGenerateRoute,
   ApiConfigsArchiveRoute: ApiConfigsArchiveRoute,
   ApiConfigsBatchDeleteRoute: ApiConfigsBatchDeleteRoute,
   ApiConfigsCreateRoute: ApiConfigsCreateRoute,
-  ApiConfigsRecommendationsRoute: ApiConfigsRecommendationsRoute,
   ApiConfigsReferencesRoute: ApiConfigsReferencesRoute,
   ApiConfigsValidateRoute: ApiConfigsValidateRoute,
 }
@@ -5169,7 +5106,6 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSpecCodingValidatePersistedRootRoute:
     ApiSpecCodingValidatePersistedRootRoute,
   ApiUploadsImageRoute: ApiUploadsImageRoute,
-  ApiWerewolfHistoryRoute: ApiWerewolfHistoryRoute,
   ApiWorkflowApproveRoute: ApiWorkflowApproveRoute,
   ApiWorkflowAuditLogRoute: ApiWorkflowAuditLogRoute,
   ApiWorkflowContextRoute: ApiWorkflowContextRoute,

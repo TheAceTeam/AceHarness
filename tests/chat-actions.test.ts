@@ -105,9 +105,9 @@ describe('parseActions', () => {
 
   test('extracts plain home sidebar JSON from result sections', () => {
     const markdown = [
-      '我会打开工作流创建面板。',
+      '我会打开 Agent 创建面板。',
       '<result>',
-      '{"type":"home_sidebar","mode":"active","tabs":["workflow"],"activeTab":"workflow","intent":"create-workflow","stage":"spec-draft","summary":"创建工作流","shouldOpenModal":true}',
+      '{"type":"home_sidebar","mode":"active","tabs":["agent"],"activeTab":"agent","intent":"create-agent","stage":"agent-draft","summary":"创建 Agent","shouldOpenModal":true}',
       '</result>',
     ].join('\n');
 
@@ -115,15 +115,15 @@ describe('parseActions', () => {
 
     expect(result.sidebarHints).toHaveLength(1);
     expect(result.sidebarHints[0].shouldOpenModal).toBe(true);
-    expect(result.text).toBe('我会打开工作流创建面板。');
+    expect(result.text).toBe('我会打开 Agent 创建面板。');
     expect(result.text).not.toContain('home_sidebar');
   });
 
   test('extracts kind=home_sidebar payload from result sections', () => {
     const markdown = [
-      '我会打开工作流创建面板。',
+      '我会打开 Agent 创建面板。',
       '<result>',
-      '{"kind":"home_sidebar","payload":{"mode":"active","tabs":["workflow"],"activeTab":"workflow","intent":"create-workflow","stage":"spec-draft","summary":"创建工作流","shouldOpenModal":true}}',
+      '{"kind":"home_sidebar","payload":{"mode":"active","tabs":["agent"],"activeTab":"agent","intent":"create-agent","stage":"agent-draft","summary":"创建 Agent","shouldOpenModal":true}}',
       '</result>',
     ].join('\n');
 
@@ -131,16 +131,16 @@ describe('parseActions', () => {
 
     expect(result.sidebarHints).toHaveLength(1);
     expect(result.sidebarHints[0]).toMatchObject({
-      activeTab: 'workflow',
+      activeTab: 'agent',
       shouldOpenModal: true,
-      summary: '创建工作流',
+      summary: '创建 Agent',
     });
-    expect(result.text).toBe('我会打开工作流创建面板。');
+    expect(result.text).toBe('我会打开 Agent 创建面板。');
   });
 
   test('hides dangling result sections while streaming', () => {
     const markdown = [
-      '我会打开工作流创建面板。',
+      '我会打开 Agent 创建面板。',
       '<result>',
       '{"type":"home_sidebar","shouldOpenModal":true,"summary":"partial","missingFields"',
     ].join('\n');
@@ -148,7 +148,7 @@ describe('parseActions', () => {
     const result = parseActions(markdown);
 
     expect(result.sidebarHints).toHaveLength(0);
-    expect(result.text).toBe('我会打开工作流创建面板。');
+    expect(result.text).toBe('我会打开 Agent 创建面板。');
     expect(result.text).not.toContain('<result>');
     expect(result.text).not.toContain('home_sidebar');
   });
@@ -161,7 +161,7 @@ describe('parseActions', () => {
       '',
       '<result>',
       '```json',
-      '{"type":"home_sidebar","mode":"active","tabs":["workflow"],"activeTab":"workflow","intent":"create-workflow","stage":"spec-draft","shouldOpenModal":true}',
+      '{"type":"home_sidebar","mode":"active","tabs":["agent"],"activeTab":"agent","intent":"create-agent","stage":"agent-draft","shouldOpenModal":true}',
       '```',
       '</result>',
       '   ```',
@@ -178,13 +178,13 @@ describe('parseActions', () => {
   test('extracts home sidebar JSON from single-line fenced result blocks', () => {
     const markdown = [
       '我会直接打开创建面板。',
-      '<result>```json {"type":"home_sidebar","mode":"active","tabs":["workflow"],"activeTab":"workflow","intent":"create-workflow","stage":"workflow-draft","summary":"创建工作流","shouldOpenModal":true} ```</result>',
+      '<result>```json {"type":"home_sidebar","mode":"active","tabs":["agent"],"activeTab":"agent","intent":"create-agent","stage":"agent-draft","summary":"创建 Agent","shouldOpenModal":true} ```</result>',
     ].join('\n');
 
     const result = parseActions(markdown);
 
     expect(result.sidebarHints).toHaveLength(1);
-    expect(result.sidebarHints[0].activeTab).toBe('workflow');
+    expect(result.sidebarHints[0].activeTab).toBe('agent');
     expect(result.sidebarHints[0].shouldOpenModal).toBe(true);
     expect(result.text).toBe('我会直接打开创建面板。');
     expect(result.resultPlainTexts).toEqual([]);
@@ -193,7 +193,7 @@ describe('parseActions', () => {
   test('parses multiple result sections with mixed card and sidebar payloads', () => {
     const markdown = [
       '先说明。',
-      '<result>{"kind":"home_sidebar","payload":{"mode":"active","tabs":["workflow"],"activeTab":"workflow","intent":"create-workflow","stage":"spec-draft"}}</result>',
+      '<result>{"kind":"home_sidebar","payload":{"mode":"active","tabs":["agent"],"activeTab":"agent","intent":"create-agent","stage":"agent-draft"}}</result>',
       '再补充。',
       '<result>{"kind":"card","payload":{"header":{"title":"预览"},"blocks":[{"type":"text","content":"内容"}]}}</result>',
     ].join('\n');
@@ -261,7 +261,7 @@ describe('parseActions', () => {
       '```action',
       '{"type":"navigate","params":{"url":"/run-history"},"description":"Open history"}',
       '```',
-      '<result>{"kind":"home_sidebar","payload":{"mode":"peek","tabs":["workflow"],"activeTab":"workflow"}}</result>',
+      '<result>{"kind":"home_sidebar","payload":{"mode":"peek","tabs":["agent"],"activeTab":"agent"}}</result>',
       '收尾说明。',
     ].join('\n');
 
@@ -294,7 +294,7 @@ describe('parseActions', () => {
   test('hides multiple dangling result sections while streaming', () => {
     const markdown = [
       '继续处理中。',
-      '<result>{"kind":"home_sidebar","payload":{"activeTab":"workflow"',
+      '<result>{"kind":"home_sidebar","payload":{"activeTab":"agent"',
       '中间文本',
       '<result>{"kind":"card","payload":{"blocks":[{"type":"text","content":"partial"',
     ].join('\n');
@@ -310,7 +310,7 @@ describe('parseActions', () => {
     const markdown = [
       '示例代码：',
       '```xml',
-      '<result>{"kind":"home_sidebar","payload":{"activeTab":"workflow"}}</result>',
+      '<result>{"kind":"home_sidebar","payload":{"activeTab":"agent"}}</result>',
       '```',
       '正文结尾。',
     ].join('\n');
@@ -447,7 +447,7 @@ describe('normalizeAssistantDisplay', () => {
     const raw = [
       '先给用户解释。',
       '<result>',
-      '{"kind":"home_sidebar","payload":{"activeTab":"workflow"',
+      '{"kind":"home_sidebar","payload":{"activeTab":"agent"',
     ].join('\n');
 
     expect(normalizeAssistantDisplay(raw, true)).toEqual({
@@ -461,7 +461,7 @@ describe('normalizeAssistantDisplay', () => {
     const raw = [
       '先给用户解释。',
       '<result>',
-      '{"kind":"home_sidebar","payload":{"activeTab":"workflow","shouldOpenModal":true}}',
+      '{"kind":"home_sidebar","payload":{"activeTab":"agent","shouldOpenModal":true}}',
       '</result>',
     ].join('\n');
 
@@ -476,7 +476,7 @@ describe('normalizeAssistantDisplay', () => {
     const raw = [
       '先给用户解释。',
       '<result>',
-      '{"kind":"home_sidebar","payload":{"activeTab":"workflow","shouldOpenModal":true}}',
+      '{"kind":"home_sidebar","payload":{"activeTab":"agent","shouldOpenModal":true}}',
       '</result>',
     ].join('\n');
 
@@ -495,7 +495,7 @@ describe('normalizeAssistantDisplay', () => {
       '```',
       '<result>{"kind":"card","payload":{"blocks":[{"type":"text"',
     ].join('\n');
-    const stage2 = `${stage1}\n中间说明\n<result>{"kind":"home_sidebar","payload":{"activeTab":"workflow"`;
+    const stage2 = `${stage1}\n中间说明\n<result>{"kind":"home_sidebar","payload":{"activeTab":"agent"`;
     const stage3 = [
       '先展示命令：',
       '```ts',
@@ -503,7 +503,7 @@ describe('normalizeAssistantDisplay', () => {
       '```',
       '中间说明',
       '<result>{"kind":"card","payload":{"blocks":[{"type":"text","content":"done"}]}}</result>',
-      '<result>{"kind":"home_sidebar","payload":{"activeTab":"workflow"}}</result>',
+      '<result>{"kind":"home_sidebar","payload":{"activeTab":"agent"}}</result>',
     ].join('\n');
 
     expect(normalizeAssistantDisplay(stage1, true).visibleText).toContain('const ok = true;');
@@ -566,7 +566,7 @@ describe('normalizeAssistantDisplay', () => {
       '先说明。',
       '```ts',
       'const x = 1;',
-      '<result>{"kind":"home_sidebar","payload":{"activeTab":"workflow"}}</result>',
+      '<result>{"kind":"home_sidebar","payload":{"activeTab":"agent"}}</result>',
     ].join('\n');
 
     expect(normalizeAssistantDisplay(raw, true)).toEqual({

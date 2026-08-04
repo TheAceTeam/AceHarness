@@ -1,5 +1,7 @@
 # ACEHarness 数据库能力 Skills 设计文档
 
+> **状态说明（2026-07-28）：** 本文是数据库能力设计记录。涉及工作流运行时的内容遵循 state-machine-only 契约；阶段式 workflow executor 已移除，不再是接入目标。
+
 本文档描述如何把 ACEHarness 当前已有的 RAG 向量数据库能力和 SQLite 本地数据库能力，以官方内置 Skills 的形式开放给工作流、Agent 和其他 Skills 使用。
 
 设计目标是：对 AI 来说能力表现为普通 Skill；对系统来说能力仍由 ACEHarness 运行时服务统一授权、审计和隔离，避免 Agent 或第三方 Skill 直接读写系统内部数据库文件。
@@ -795,7 +797,7 @@ path: /tmp/global.sqlite
 
 ## 13. 工作流运行时接入点
 
-阶段式 workflow manager 和状态机 workflow manager 都需要接入。
+状态机 workflow manager 需要接入。
 
 ### 13.1 准备阶段
 
@@ -809,12 +811,6 @@ path: /tmp/global.sqlite
 6. 在 workspace 中准备 SQLite 父目录，但不一定立即创建数据库文件。
 
 ### 13.2 Prompt 构建阶段
-
-阶段式：
-
-- 在 `buildStepPrompt` 或现有技能 prompt section 附近注入数据库能力说明。
-
-状态机：
 
 - 在 `buildStepContext` 或现有 `# 必须使用的 Skills` section 附近注入数据库能力说明。
 
@@ -1033,7 +1029,7 @@ Skill 依赖：
 
 ### 19.2 集成测试
 
-- 阶段式 workflow 开启 RAG，Agent prompt 包含 `aceharness-rag` 和可用 KB。
+- 状态机 workflow 开启 RAG，Agent prompt 包含 `aceharness-rag` 和可用 KB。
 - 状态机 workflow 开启 SQLite，Agent prompt 包含可用数据库。
 - Python 脚本使用 runtime token 成功调用 RAG。
 - Python 脚本使用 runtime token 成功创建 SQLite、建表、插入、查询、删除。

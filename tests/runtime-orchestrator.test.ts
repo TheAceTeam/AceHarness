@@ -133,6 +133,87 @@ describe('runtime orchestrator', () => {
     }
   });
 
+  test('refreshes an existing adapter binding before a resumed turn and persists the new binding', async () => {
+    const adapter = new ReconnectingRuntimeAdapter();
+    const { db, orchestrator } = makeHarness(adapter);
+    try {
+      const session = await orchestrator.openSession({
+        agentId: 'codex',
+        kind: 'chat',
+        cwd: process.cwd(),
+        ownerUserId: 'user-env-owner',
+      });
+
+      await collect(orchestrator.runTurn({
+        runtimeSessionId: session.runtimeSessionId,
+        requestId: 'request-resume-env',
+        input: 'resume',
+      }));
+
+      expect(adapter.reconnectInputs).toHaveLength(1);
+      expect(adapter.reconnectInputs[0]?.profileSnapshot.ownerUserId).toBe('user-env-owner');
+      expect(adapter.reconnectInputs[0]?.existingBinding).toBeDefined();
+      expect(db.prepare('SELECT provider_session_id FROM runtime_bindings WHERE session_id = ?').get(session.runtimeSessionId)).toMatchObject({
+        provider_session_id: 'provider-session-refreshed',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('defers native binding creation until the first turn when requested', async () => {
+    const adapter = new ReconnectingRuntimeAdapter();
+    const { db, orchestrator } = makeHarness(adapter);
+    try {
+      const session = await orchestrator.openSession({
+        agentId: 'codex',
+        kind: 'workflow-agent',
+        cwd: process.cwd(),
+        deferAdapterSessionInitialization: true,
+      });
+
+      expect(adapter.createSessionInputs).toHaveLength(0);
+      expect(db.prepare('SELECT COUNT(*) AS count FROM runtime_bindings WHERE session_id = ?').get(session.runtimeSessionId))
+        .toMatchObject({ count: 0 });
+
+      await collect(orchestrator.runTurn({
+        runtimeSessionId: session.runtimeSessionId,
+        requestId: 'request-first-turn',
+        input: 'start',
+      }));
+
+      expect(adapter.createSessionInputs).toHaveLength(1);
+      expect(adapter.reconnectInputs).toHaveLength(0);
+      expect(db.prepare('SELECT COUNT(*) AS count FROM runtime_bindings WHERE session_id = ?').get(session.runtimeSessionId))
+        .toMatchObject({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('replaces a legacy empty workflow binding instead of reconnecting it', async () => {
+    const adapter = new ReconnectingRuntimeAdapter();
+    const { db, orchestrator } = makeHarness(adapter);
+    try {
+      const session = await orchestrator.openSession({
+        agentId: 'codex',
+        kind: 'workflow-agent',
+        cwd: process.cwd(),
+      });
+
+      await collect(orchestrator.runTurn({
+        runtimeSessionId: session.runtimeSessionId,
+        requestId: 'request-legacy-empty-workflow-binding',
+        input: 'start',
+      }));
+
+      expect(adapter.createSessionInputs).toHaveLength(2);
+      expect(adapter.reconnectInputs).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
   test('runTurn claims the requested turn, persists normalized events, and completes the turn', async () => {
     const { db, orchestrator } = makeHarness();
     try {
@@ -163,7 +244,7 @@ describe('runtime orchestrator', () => {
         status: 'completed',
         usage_json: JSON.stringify({ inputTokens: 1, outputTokens: 2, missing: false, sourceStatus: 'reported' }),
       });
-      expect(db.prepare('SELECT COUNT(*) AS count FROM runtime_traces').get()).toMatchObject({ count: 4 });
+      expect(db.prepare('SELECT COUNT(*) AS count FROM runtime_traces').get()).toMatchObject({ count: 5 });
     } finally {
       db.close();
     }
@@ -538,6 +619,41 @@ describe('runtime orchestrator', () => {
     }
   });
 
+  test('cancelSession cancels a turn before the adapter emits its first event', async () => {
+    const adapter = new SilentBlockingRuntimeAdapter();
+    const { db, orchestrator } = makeHarness(adapter);
+    try {
+      const session = await orchestrator.openSession({
+        agentId: 'codex',
+        kind: 'chat',
+        cwd: process.cwd(),
+      });
+
+      const run = collect(orchestrator.runTurn({
+        runtimeSessionId: session.runtimeSessionId,
+        requestId: 'request-session-cancel-before-event',
+        input: 'wait',
+      }));
+      const turnId = await adapter.started;
+
+      await orchestrator.cancelSession({
+        runtimeSessionId: session.runtimeSessionId,
+        requestId: 'cancel-session-before-event',
+        reason: 'timeout',
+      });
+
+      expect(adapter.cancelledTurnId).toBe(turnId);
+      adapter.finish();
+      await run;
+      expect(db.prepare('SELECT status, cancel_reason FROM runtime_turns WHERE id = ?').get(turnId)).toMatchObject({
+        status: 'cancelled',
+        cancel_reason: 'timeout',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test('browser disconnect stops reading without cancelling the adapter turn', async () => {
     const adapter = new BlockingRuntimeAdapter();
     const { db, orchestrator } = makeHarness(adapter);
@@ -558,6 +674,7 @@ describe('runtime orchestrator', () => {
       await iterator.return?.();
 
       expect(adapter.cancelledTurnIds).toEqual([]);
+      expect(adapter.closeCalls).toEqual([session.runtimeSessionId]);
       expect(db.prepare('SELECT status FROM runtime_turns WHERE id = ?').get(first.value.turnId)).toMatchObject({
         status: 'running',
       });
@@ -718,6 +835,7 @@ describe('runtime orchestrator', () => {
 class FakeRuntimeAdapter implements RuntimeAdapter {
   readonly createSessionInputs: AdapterSessionInput[] = [];
   readonly runTurnInputs: AdapterTurnInput[] = [];
+  readonly closeCalls: string[] = [];
 
   async createOrLoadSession(input: AdapterSessionInput): Promise<RuntimeBinding> {
     this.createSessionInputs.push(input);
@@ -765,7 +883,9 @@ class FakeRuntimeAdapter implements RuntimeAdapter {
   }
 
   async cancel(_binding: RuntimeBinding, _input: Parameters<RuntimeAdapter['cancel']>[1]): Promise<void> {}
-  async close(): Promise<void> {}
+  async close(binding: RuntimeBinding): Promise<void> {
+    this.closeCalls.push(binding.runtimeSessionId);
+  }
   async getCapabilities(): Promise<RuntimeCapabilities> {
     return createCapabilities();
   }
@@ -836,6 +956,62 @@ class BlockingRuntimeAdapter extends FakeRuntimeAdapter {
 
   private flushStartWaiters(): void {
     for (const waiter of this.startWaiters.splice(0)) waiter(this.startedTurnIds);
+  }
+}
+
+class SilentBlockingRuntimeAdapter extends FakeRuntimeAdapter {
+  readonly started: Promise<string>;
+  cancelledTurnId?: string;
+  private resolveStarted!: (turnId: string) => void;
+  private resolveFinish!: () => void;
+  private readonly finished: Promise<void>;
+
+  constructor() {
+    super();
+    this.started = new Promise((resolve) => {
+      this.resolveStarted = resolve;
+    });
+    this.finished = new Promise((resolve) => {
+      this.resolveFinish = resolve;
+    });
+  }
+
+  override async *runTurn(_binding: RuntimeBinding, input: AdapterTurnInput): AsyncIterable<AdapterRuntimeEvent> {
+    this.runTurnInputs.push(input);
+    this.resolveStarted(input.turnId);
+    await this.finished;
+    yield {
+      type: 'turn.completed',
+      payload: { ok: true },
+      usage: missingUsage(),
+      cost: missingCost(),
+      redacted: true,
+    };
+  }
+
+  override async cancel(_binding: RuntimeBinding, input: Parameters<RuntimeAdapter['cancel']>[1]): Promise<void> {
+    this.cancelledTurnId = input.turnId;
+  }
+
+  finish(): void {
+    this.resolveFinish();
+  }
+}
+
+class ReconnectingRuntimeAdapter extends FakeRuntimeAdapter {
+  readonly reconnectInputs: AdapterSessionInput[] = [];
+
+  async reconnectSession(input: AdapterSessionInput): Promise<RuntimeBinding> {
+    this.reconnectInputs.push(input);
+    const existing = input.existingBinding!;
+    return {
+      ...existing,
+      externalIds: {
+        ...existing.externalIds,
+        providerSessionId: 'provider-session-refreshed',
+      },
+      updatedAt: new Date().toISOString(),
+    };
   }
 }
 

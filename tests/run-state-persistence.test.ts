@@ -85,13 +85,13 @@ describe('run-state-persistence', () => {
     });
   });
 
-  test('saveRunState stores workflow agora session bindings in the event snapshot', async () => {
+  test('saveRunState stores workflow conversation session bindings in the event snapshot', async () => {
     await withIsolatedAceHome(async () => {
       const { saveRunState } = await loadPersistence();
       const { getWorkflowEventStore } = await import('@/lib/workflow/event-store');
 
       const state = minimalRunState({
-        runId: 'run-agora-bindings-snapshot',
+        runId: 'run-conversation-bindings-snapshot',
         supervisorAgent: 'default-supervisor',
         supervisorSessionId: 'supervisor-session-1',
         attachedAgentSessions: {
@@ -363,6 +363,9 @@ describe('run-state-persistence', () => {
           stepName: 'Implementation/Step',
           agent: 'developer',
           status: 'completed',
+          superseded: true,
+          supersededAt: '2026-07-30T08:00:00.000Z',
+          supersededByStep: 'Implementation/Step',
           output: largeOutput,
           error: '',
           costUsd: 0.25,
@@ -382,11 +385,21 @@ describe('run-state-persistence', () => {
       const loaded = await loadRunState(state.runId);
       expect(loaded?.stepLogs[0].output).toBe(largeOutput);
       expect(loaded?.stepLogs[0].outputRef).toContain('outputs/step-logs/');
+      expect(loaded?.stepLogs[0]).toMatchObject({
+        superseded: true,
+        supersededAt: '2026-07-30T08:00:00.000Z',
+        supersededByStep: 'Implementation/Step',
+      });
 
       const compactLoaded = await loadRunState(state.runId, { hydrateLargeOutputs: false });
       expect(compactLoaded?.stepLogs[0].output).toBe('');
       expect(compactLoaded?.stepLogs[0].outputRef).toContain('outputs/step-logs/');
       expect(compactLoaded?.stepLogs[0].outputBytes).toBe(Buffer.byteLength(largeOutput, 'utf-8'));
+      expect(compactLoaded?.stepLogs[0]).toMatchObject({
+        superseded: true,
+        supersededAt: '2026-07-30T08:00:00.000Z',
+        supersededByStep: 'Implementation/Step',
+      });
 
       await saveProcessOutput(state.runId, 'Visible Output', 'visible');
       const files = await listOutputFiles(state.runId);
@@ -528,6 +541,8 @@ describe('run-state-persistence', () => {
       expect(loaded).toContain('\nsecond');
       expect(loaded!.indexOf('first')).toBeLessThan(loaded!.indexOf('please continue'));
       expect(loaded!.indexOf('please continue')).toBeLessThan(loaded!.indexOf('\nsecond'));
+      expect(loaded!).toContain('<!-- /human-feedback -->');
+      expect(loaded!.indexOf('<!-- /human-feedback -->')).toBeLessThan(loaded!.indexOf('\nsecond'));
 
       const chunkPath = resolve(aceHome, 'runs', state.runId, 'streams', 'Build_Step.chunks.jsonl');
       const chunks = (await readFile(chunkPath, 'utf-8')).trim().split(/\r?\n/).map((line) => JSON.parse(line));
@@ -628,6 +643,7 @@ describe('run-state-persistence', () => {
       expect(content!).toContain(STREAM_CHUNK_SEPARATOR);
       expect(content!).toContain('<!-- human-feedback:');
       expect(content!).toContain('Please focus on edge cases');
+      expect(content!).toContain('<!-- /human-feedback -->');
     });
   });
 

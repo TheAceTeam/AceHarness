@@ -82,6 +82,7 @@ function makeStateMachineManager(overrides: Record<string, any> = {}) {
     forceTransition: vi.fn(),
     answerHumanQuestion: vi.fn(),
     resumeInBackground: vi.fn().mockResolvedValue(undefined),
+    rerunFromStepInBackground: vi.fn().mockResolvedValue(undefined),
     forceJumpToStateInBackground: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -136,6 +137,22 @@ describe('workflow recovery routes', () => {
     expect(manager.resumeInBackground).toHaveBeenCalledWith('run-recovery-1');
   });
 
+  test('preserves the legacy asynchronous resume fallback for non-state-machine managers', async () => {
+    const phaseManager = {
+      getStatus: vi.fn(() => ({ status: 'stopped', runId: 'run-recovery-1' })),
+      setQueuedApprovalAction: vi.fn(),
+      setIterationFeedback: vi.fn(),
+      resume: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.getManagerByRunId.mockResolvedValue(phaseManager);
+
+    const { POST } = await import('@/server/api-routes/workflow/resume/route');
+    const response = await POST(postRequest('/api/workflow/resume', { runId: 'run-recovery-1' }));
+
+    expect(response.status).toBe(200);
+    expect(phaseManager.resume).toHaveBeenCalledWith('run-recovery-1');
+  });
+
   test('returns conflict when a concurrent resume wins the startup race', async () => {
     const manager = makeStateMachineManager({
       resumeInBackground: vi.fn().mockRejectedValue(new Error('已有工作流正在运行')),
@@ -174,5 +191,90 @@ describe('workflow recovery routes', () => {
       undefined,
       { id: 'user-1', name: 'Tester' },
     );
+  });
+
+  test('allows an explicit force jump while the target run has unresolved failed steps', async () => {
+    const manager = makeStateMachineManager();
+    mocks.getManagerByRunId.mockResolvedValue(manager);
+    mocks.loadRunState.mockResolvedValue({
+      ...makeStoppedRun(),
+      failedSteps: ['implementation-build'],
+    });
+
+    const { POST } = await import('@/server/api-routes/workflow/force-transition/route');
+    const response = await POST(postRequest('/api/workflow/force-transition', {
+      runId: 'run-recovery-1',
+      targetState: 'implementation',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(manager.forceJumpToStateInBackground).toHaveBeenCalledWith(
+      'run-recovery-1',
+      'implementation',
+      undefined,
+      { id: 'user-1', name: 'Tester' },
+    );
+  });
+
+  test('keeps normal resume separate from the explicit force-transition endpoint', async () => {
+    const manager = makeStateMachineManager();
+    mocks.getManagerByRunId.mockResolvedValue(manager);
+    mocks.loadRunState.mockResolvedValue({
+      ...makeStoppedRun(),
+      failedSteps: ['implementation-build'],
+    });
+
+    const { POST } = await import('@/server/api-routes/workflow/resume/route');
+    const response = await POST(postRequest('/api/workflow/resume', {
+      runId: 'run-recovery-1',
+      action: 'force-transition',
+      targetState: 'implementation',
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: '强制跳转请使用专用接口',
+    });
+    expect(manager.resumeInBackground).not.toHaveBeenCalled();
+    expect(manager.forceTransition).not.toHaveBeenCalled();
+  });
+
+  test('returns startup failures from rerun-from-step instead of acknowledging a dropped background error', async () => {
+    const manager = makeStateMachineManager({
+      rerunFromStepInBackground: vi.fn().mockRejectedValue(new Error('步骤不存在')),
+    });
+    mocks.getManager.mockResolvedValue(manager);
+
+    const { POST } = await import('@/server/api-routes/workflow/rerun-from-step/route');
+    const response = await POST(postRequest('/api/workflow/rerun-from-step', {
+      runId: 'run-recovery-1',
+      stepName: 'implementation-build',
+    }));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: '重新运行失败',
+      message: '步骤不存在',
+    });
+    expect(mocks.appendWorkflowAuditEvent).not.toHaveBeenCalled();
+  });
+
+  test('acknowledges rerun only after its background startup is ready', async () => {
+    const manager = makeStateMachineManager();
+    mocks.getManager.mockResolvedValue(manager);
+
+    const { POST } = await import('@/server/api-routes/workflow/rerun-from-step/route');
+    const response = await POST(postRequest('/api/workflow/rerun-from-step', {
+      runId: 'run-recovery-1',
+      stepName: 'implementation-build',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(manager.rerunFromStepInBackground).toHaveBeenCalledWith(
+      'run-recovery-1',
+      'implementation-build',
+      { id: 'user-1', name: 'Tester' },
+    );
+    expect(mocks.appendWorkflowAuditEvent).toHaveBeenCalledTimes(1);
   });
 });

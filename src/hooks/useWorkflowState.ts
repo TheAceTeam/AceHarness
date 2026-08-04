@@ -70,8 +70,6 @@ export interface WorkflowState {
   mcpServers: string[];
   ragKnowledgeBases: string[];
   showProcessPanel: boolean;
-  showEditNodeModal: boolean;
-  editingNode: { type: 'phase' | 'step'; phaseIndex: number; stepIndex?: number } | null;
   iterationStates: Record<string, IterationStateInfo>;
   globalContext: string;
   phaseContexts: Record<string, string>;
@@ -113,8 +111,6 @@ type WorkflowAction =
   | { type: 'SET_MCP_SERVERS'; payload: string[] }
   | { type: 'SET_RAG_KNOWLEDGE_BASES'; payload: string[] }
   | { type: 'SET_SHOW_PROCESS_PANEL'; payload: boolean }
-  | { type: 'SET_SHOW_EDIT_NODE_MODAL'; payload: boolean }
-  | { type: 'SET_EDITING_NODE'; payload: WorkflowState['editingNode'] }
   | { type: 'SET_AGENTS_CONFIG'; payload: any[] }
   | { type: 'SET_ITERATION_STATE'; payload: { phase: string; state: IterationStateInfo } }
   | { type: 'UPDATE_AGENT_TOKEN_USAGE'; payload: { agent: string; usage: { inputTokens: number; outputTokens: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number } } }
@@ -156,8 +152,6 @@ function createInitialState(initialViewMode: ViewMode = 'run'): WorkflowState {
     mcpServers: [],
     ragKnowledgeBases: [],
     showProcessPanel: false,
-    showEditNodeModal: false,
-    editingNode: null,
     iterationStates: {},
     globalContext: '',
     phaseContexts: {},
@@ -230,8 +224,6 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'SET_MCP_SERVERS': return { ...state, mcpServers: action.payload };
     case 'SET_RAG_KNOWLEDGE_BASES': return { ...state, ragKnowledgeBases: action.payload };
     case 'SET_SHOW_PROCESS_PANEL': return { ...state, showProcessPanel: action.payload };
-    case 'SET_SHOW_EDIT_NODE_MODAL': return { ...state, showEditNodeModal: action.payload };
-    case 'SET_EDITING_NODE': return { ...state, editingNode: action.payload };
     case 'SET_AGENTS_CONFIG': return { ...state, agentConfigs: action.payload };
     case 'SET_ITERATION_STATE':
       return { ...state, iterationStates: { ...state.iterationStates, [action.payload.phase]: action.payload.state } };

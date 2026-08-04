@@ -1,4 +1,14 @@
-type SafeEventSourceOptions = EventSourceInit & {
+export type SafeEventSourceFailureKind = 'open-timeout' | 'idle-timeout';
+
+export type SafeEventSourceErrorDetail = {
+  source: 'safe-event-source';
+  kind: SafeEventSourceFailureKind;
+  message: string;
+  url: string;
+  timeoutMs: number;
+};
+
+export type SafeEventSourceOptions = EventSourceInit & {
   openTimeoutMs?: number;
   idleTimeoutMs?: number;
 };
@@ -6,12 +16,36 @@ type SafeEventSourceOptions = EventSourceInit & {
 const DEFAULT_OPEN_TIMEOUT_MS = 8_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 180_000;
 
-function dispatchSyntheticError(eventSource: EventSource) {
+function dispatchSyntheticError(eventSource: EventSource, detail: SafeEventSourceErrorDetail) {
   try {
-    eventSource.dispatchEvent(new Event('error'));
+    eventSource.dispatchEvent(new CustomEvent('error', { detail }));
   } catch {
     // Some older browser-like runtimes may reject synthetic dispatches.
   }
+}
+
+/**
+ * Native EventSource errors do not expose the HTTP response or network cause.
+ * SafeEventSource timeout errors do expose a structured detail payload; for a
+ * native error we state exactly what the browser observed and keep the
+ * connection-layer classification separate from engine errors.
+ */
+export function describeEventSourceError(event: Event, source?: EventSource): string {
+  const detail = (event as Event & { detail?: Partial<SafeEventSourceErrorDetail> }).detail;
+  if (detail?.message) return String(detail.message);
+
+  const errorMessage = (event as ErrorEvent & { message?: string }).message;
+  if (errorMessage) return String(errorMessage);
+
+  const target = source || (event.target as EventSource | null | undefined);
+  const state = target?.readyState;
+  const stateLabel = state === EventSource.CONNECTING
+    ? '浏览器网络/SSE 连接层；阶段：建立或重新建立连接；状态：CONNECTING'
+    : state === EventSource.CLOSED
+      ? '浏览器网络/SSE 连接层；阶段：连接已关闭；状态：CLOSED'
+      : '浏览器网络/SSE 连接层；阶段：连接状态异常';
+  const url = target?.url ? `：${target.url}` : '';
+  return `Agent 对话连接层错误；来源：${stateLabel}${url}`;
 }
 
 export function createSafeEventSource(url: string | URL, options: SafeEventSourceOptions = {}): EventSource {
@@ -37,16 +71,23 @@ export function createSafeEventSource(url: string | URL, options: SafeEventSourc
     idleTimer = null;
   };
 
-  const fail = () => {
+  const fail = (kind: SafeEventSourceFailureKind, timeoutMs: number) => {
     if (closed) return;
-    dispatchSyntheticError(eventSource);
+    const timeoutLabel = kind === 'open-timeout' ? '建立连接' : '接收数据';
+    dispatchSyntheticError(eventSource, {
+      source: 'safe-event-source',
+      kind,
+      timeoutMs,
+      url: String(url),
+      message: `Agent 对话连接层错误；来源：ACEHarness SSE 连接层；阶段：${timeoutLabel}；超时：${timeoutMs}ms；接口：${String(url)}`,
+    });
     eventSource.close();
   };
 
   const resetIdleTimer = () => {
     if (closed || idleTimeoutMs <= 0) return;
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(fail, idleTimeoutMs);
+    idleTimer = setTimeout(() => fail('idle-timeout', idleTimeoutMs), idleTimeoutMs);
   };
 
   const markActivity = () => {
@@ -115,7 +156,7 @@ export function createSafeEventSource(url: string | URL, options: SafeEventSourc
   });
 
   if (openTimeoutMs > 0) {
-    openTimer = setTimeout(fail, openTimeoutMs);
+    openTimer = setTimeout(() => fail('open-timeout', openTimeoutMs), openTimeoutMs);
   }
   resetIdleTimer();
 

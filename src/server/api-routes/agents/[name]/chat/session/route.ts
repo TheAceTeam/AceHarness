@@ -1,15 +1,41 @@
 import { requireAuth } from '@/lib/auth/middleware';
 import { prepareAgentChat } from '@/lib/agent/chat-service';
 import type { RoleConfig } from '@/lib/core/schemas';
+import type { RequestedMcpServersInput } from '@/lib/chat/request-options';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
-function parseTemporaryRoleConfig(body: any): RoleConfig | null {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  );
+}
+
+function readStringList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  const strings = value.filter((item): item is string => typeof item === 'string');
+  return strings.length > 0 ? strings : fallback;
+}
+
+function readRequestedMcpServers(value: unknown): RequestedMcpServersInput {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+  if (!isRecord(value)) return undefined;
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+  );
+}
+
+function parseTemporaryRoleConfig(body: Record<string, unknown>): RoleConfig | null {
   const raw = body?.temporaryRoleConfig;
-  if (!raw || typeof raw !== 'object') return null;
+  if (!isRecord(raw)) return null;
   const name = typeof raw.name === 'string' ? raw.name.trim() : '';
   const systemPrompt = typeof raw.systemPrompt === 'string' ? raw.systemPrompt.trim() : '';
   if (!name || !systemPrompt) return null;
-  return {
+  const roleConfig: RoleConfig = {
     name,
     team: raw.team === 'red' || raw.team === 'blue' || raw.team === 'judge' || raw.team === 'black-gold' ? raw.team : 'judge',
     roleType: raw.roleType === 'supervisor' ? 'supervisor' : 'normal',
@@ -17,18 +43,20 @@ function parseTemporaryRoleConfig(body: any): RoleConfig | null {
     persona: typeof raw.persona === 'string' ? raw.persona : undefined,
     greeting: typeof raw.greeting === 'string' ? raw.greeting : undefined,
     rarity: 'common',
-    engineModels: raw.engineModels && typeof raw.engineModels === 'object' ? raw.engineModels : {},
+    engineModels: readStringRecord(raw.engineModels),
     activeEngine: typeof raw.activeEngine === 'string' ? raw.activeEngine : '',
-    capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.filter((item: unknown): item is string => typeof item === 'string') : ['multi-agent-chat'],
+    capabilities: readStringList(raw.capabilities, ['multi-agent-chat']),
     systemPrompt,
-    constraints: Array.isArray(raw.constraints) ? raw.constraints.filter((item: unknown): item is string => typeof item === 'string') : ['不调用工具', '不修改文件'],
+    constraints: readStringList(raw.constraints, ['不调用工具', '不修改文件']),
     allowedTools: [],
     category: typeof raw.category === 'string' ? raw.category : 'temporary-lab',
-    tags: Array.isArray(raw.tags)
-      ? raw.tags.filter((item: unknown): item is string => typeof item === 'string')
-      : ['temporary'],
+    tags: readStringList(raw.tags, ['temporary']),
+    expertPacks: [],
+    catalogVisibility: 'default',
+    taskModes: [],
     alwaysAvailableForChat: false,
-  } as RoleConfig;
+  };
+  return roleConfig;
 }
 
 export async function POST(
@@ -40,7 +68,7 @@ export async function POST(
 
   try {
     const { name } = await params;
-    const body = await readJsonBody<Record<string, any>>(request, {});
+    const body = await readJsonBody<Record<string, unknown>>(request, {});
     const result = await prepareAgentChat({
       agentName: name,
       message: '',
@@ -51,7 +79,7 @@ export async function POST(
         ? body.workflowContext as Record<string, any>
         : null,
       temporaryRoleConfig: parseTemporaryRoleConfig(body),
-      requestedMcpServers: body?.requestedMcpServers ?? body?.mcpServers,
+      requestedMcpServers: readRequestedMcpServers(body.requestedMcpServers ?? body.mcpServers),
       userContext: {
         id: user.id,
         username: user.username,

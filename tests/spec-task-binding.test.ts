@@ -90,7 +90,7 @@ describe('compileStepTaskBindings', () => {
     });
   });
 
-  test('fails AI-guided creation validation when a step omits explicit binding', () => {
+  test('fails explicit binding validation when a step omits a task binding', () => {
     const result = compileStepTaskBindings(
       workflowConfig({
         id: 'step-implement',

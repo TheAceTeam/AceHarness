@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateWorkflowRunTiming } from '@/lib/workflow/run-timing';
+import { calculateWorkflowRunTiming, resolveWorkflowOverviewTiming } from '@/lib/workflow/run-timing';
 
 describe('calculateWorkflowRunTiming', () => {
   it('separates completed wait time from execution time', () => {
@@ -50,6 +50,49 @@ describe('calculateWorkflowRunTiming', () => {
       executionRatio: 0,
       waitRatio: 0,
       isWaiting: false,
+    });
+  });
+
+  it('keeps a matching compact-status end time while the UI still reports the action as running', () => {
+    const timing = resolveWorkflowOverviewTiming({
+      actionRunId: 'run-1',
+      actionIsRunning: true,
+      runtimeRunId: 'run-1',
+      runtimeStartTime: '2026-07-16T00:00:00.000Z',
+      status: {
+        runId: 'run-1',
+        startTime: '2026-07-16T00:01:00.000Z',
+        endTime: '2026-07-16T00:31:00.000Z',
+      },
+    });
+
+    expect(timing).toEqual({
+      startTime: '2026-07-16T00:01:00.000Z',
+      endTime: '2026-07-16T00:31:00.000Z',
+    });
+    expect(calculateWorkflowRunTiming({
+      ...timing,
+      nowMs: new Date('2026-07-16T01:00:00.000Z').getTime(),
+    }).totalMs).toBe(30 * 60 * 1000);
+  });
+
+  it('backfills the selected run timestamps from matching history when compact status belongs elsewhere', () => {
+    expect(resolveWorkflowOverviewTiming({
+      actionRunId: 'run-history',
+      actionIsRunning: true,
+      status: {
+        runId: 'another-run',
+        startTime: '2026-07-16T00:00:00.000Z',
+        endTime: '2026-07-16T01:00:00.000Z',
+      },
+      historyRuns: [{
+        id: 'run-history',
+        startTime: '2026-07-16T02:00:00.000Z',
+        endTime: '2026-07-16T02:20:00.000Z',
+      }],
+    })).toEqual({
+      startTime: '2026-07-16T02:00:00.000Z',
+      endTime: '2026-07-16T02:20:00.000Z',
     });
   });
 });

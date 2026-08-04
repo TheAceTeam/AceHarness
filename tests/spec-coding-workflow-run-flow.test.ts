@@ -20,6 +20,10 @@ vi.mock('@/lib/workflow/runtime-facade', () => ({
   resolveRecoveredWorkflowRuntimeSessionId: vi.fn((result, fallback) => result.sessionId || fallback || null),
 }));
 
+vi.mock('@/lib/engines/workflow-engine-selection', () => ({
+  resolveAgentEngineSelection: vi.fn().mockReturnValue({ engine: 'mock-engine', model: 'mock-model' }),
+}));
+
 async function createAuthToken(): Promise<{ token: string; userId: string }> {
   const { createUser, storeToken } = await import('@/lib/core/user-store');
   const suffix = `flow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -37,7 +41,7 @@ async function createAuthToken(): Promise<{ token: string; userId: string }> {
   return { token, userId: user.id };
 }
 
-function oneStepStateMachineConfig(projectRoot: string, taskId?: string) {
+function oneStepStateMachineConfig(projectRoot: string, taskIds?: string[]) {
   return {
     workflow: {
       name: 'Mock Spec Run',
@@ -58,7 +62,7 @@ function oneStepStateMachineConfig(projectRoot: string, taskId?: string) {
               agent: 'developer',
               role: 'judge',
               task: 'Implement the requested change and report verdict.',
-              specTaskBinding: taskId ? { taskIds: [taskId] } : undefined,
+              specTaskBinding: taskIds ? { taskIds } : undefined,
             },
           ],
           transitions: [],
@@ -125,9 +129,12 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(sessionResponse.status).toBe(200);
         const sessionJson = await responseJson<any>(sessionResponse);
         const flatTasks = flattenTasks(sessionJson.session.specCoding.tasks);
-        const boundTaskId = flatTasks.find((task: any) => task.title.includes('Implement task'))?.id || flatTasks.at(-1)?.id;
-        expect(boundTaskId).toBeTruthy();
-        const boundConfigDraft = oneStepStateMachineConfig(workspace, boundTaskId);
+        expect(sessionJson.session.bindingValidation.ok).toBe(true);
+        const boundTaskId = sessionJson.session.bindingValidation.bindings[0]?.taskIds[0];
+        expect(flatTasks.some((task: any) => task.id === boundTaskId && task.children.length === 0)).toBe(true);
+        expect(sessionJson.session.bindingValidation.bindings[0].taskIds).toContain(boundTaskId);
+        const leafTaskIds = flatTasks.filter((task: any) => task.children.length === 0).map((task: any) => task.id);
+        const boundConfigDraft = oneStepStateMachineConfig(workspace, leafTaskIds);
 
         const createConfigRoute = await import('@/server/api-routes/configs/create/route');
         const createResponse = await createConfigRoute.POST(makeRequest('/api/configs/create', {
@@ -140,18 +147,28 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
             workspaceMode: 'in-place',
             description: 'Mocked run from workflow creation to SpecCoding execution',
             requirements: 'Ship the mocked end-to-end SpecCoding workflow.',
-            creationSessionId: sessionJson.session.id,
-            configDraft: boundConfigDraft,
           },
         }));
         const createJson = await responseJson<any>(createResponse);
         expect(createResponse.status, JSON.stringify(createJson)).toBe(200);
-        expect(createJson.creationSession.bindingValidation.ok).toBe(true);
-        expect(createJson.creationSession.bindingValidation.bindings[0].taskIds).toContain(boundTaskId);
+        expect(createJson.filename).toBe(filename);
+
+        const configRoute = await import('@/server/api-routes/configs/[filename]/route');
+        const saveResponse = await configRoute.POST(makeRequest(`/api/configs/${filename}`, {
+          token,
+          json: {
+            config: boundConfigDraft,
+            creationSessionId: sessionJson.session.id,
+          },
+        }), { params: Promise.resolve({ filename }) });
+        const saveJson = await responseJson<any>(saveResponse);
+        expect(saveResponse.status, JSON.stringify(saveJson)).toBe(200);
+        expect(saveJson.bindingValidation.ok).toBe(true);
+        expect(saveJson.bindingValidation.bindings[0].taskIds).toEqual(leafTaskIds);
 
         const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
         const manager = new StateMachineWorkflowManager();
-        (manager as any)._creationSessionId = createJson.creationSession.id;
+        (manager as any)._creationSessionId = sessionJson.session.id;
         (manager as any)._userPersonalDir = workspace;
 
         await manager.start(filename);
@@ -229,9 +246,12 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(sessionResponse.status, JSON.stringify(sessionJson)).toBe(200);
 
         const flatTasks = flattenTasks(sessionJson.session.specCoding.tasks);
-        const boundTaskId = flatTasks.find((task: any) => task.title.includes('Implement task'))?.id || flatTasks.at(-1)?.id;
-        expect(boundTaskId).toBeTruthy();
-        const boundConfigDraft = oneStepStateMachineConfig(workspace, boundTaskId);
+        expect(sessionJson.session.bindingValidation.ok).toBe(true);
+        const boundTaskId = sessionJson.session.bindingValidation.bindings[0]?.taskIds[0];
+        expect(flatTasks.some((task: any) => task.id === boundTaskId && task.children.length === 0)).toBe(true);
+        expect(sessionJson.session.bindingValidation.bindings[0].taskIds).toContain(boundTaskId);
+        const leafTaskIds = flatTasks.filter((task: any) => task.children.length === 0).map((task: any) => task.id);
+        const boundConfigDraft = oneStepStateMachineConfig(workspace, leafTaskIds);
 
         const createConfigRoute = await import('@/server/api-routes/configs/create/route');
         const createResponse = await createConfigRoute.POST(makeRequest('/api/configs/create', {
@@ -246,18 +266,29 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
             requirements: 'Ship persisted spec flow.',
             persistMode: 'repository',
             specRoot: '.spec',
-            creationSessionId: sessionJson.session.id,
-            configDraft: boundConfigDraft,
           },
         }));
         const createJson = await responseJson<any>(createResponse);
         expect(createResponse.status, JSON.stringify(createJson)).toBe(200);
-        expect(createJson.creationSession.bindingValidation.ok).toBe(true);
+        expect(createJson.filename).toBe(filename);
+
+        const configRoute = await import('@/server/api-routes/configs/[filename]/route');
+        const saveResponse = await configRoute.POST(makeRequest(`/api/configs/${filename}`, {
+          token,
+          json: {
+            config: boundConfigDraft,
+            creationSessionId: sessionJson.session.id,
+          },
+        }), { params: Promise.resolve({ filename }) });
+        const saveJson = await responseJson<any>(saveResponse);
+        expect(saveResponse.status, JSON.stringify(saveJson)).toBe(200);
+        expect(saveJson.bindingValidation.ok).toBe(true);
+        expect(saveJson.bindingValidation.bindings[0].taskIds).toEqual(leafTaskIds);
 
         const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
         const { deltaDirName } = await import('@/lib/spec/persistence');
         const manager = new StateMachineWorkflowManager();
-        (manager as any)._creationSessionId = createJson.creationSession.id;
+        (manager as any)._creationSessionId = sessionJson.session.id;
         (manager as any)._userPersonalDir = workspace;
 
         await manager.start(filename);

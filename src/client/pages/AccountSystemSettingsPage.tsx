@@ -28,7 +28,7 @@ function SystemSettingsPageContent() {
           className="container mx-auto border-b-0 bg-card px-6"
           eyebrow="SYSTEM"
           title="系统设置"
-          subtitle="管理系统级运行环境、SDK、Token、安全通知和高级参数；个人资料与账号偏好不在此页配置。"
+          subtitle="集中管理系统运行环境、SDK、Token、安全通知和 CLI 配置。"
           status={<StatusPill tone="accent">Runtime</StatusPill>}
         />
       </div>

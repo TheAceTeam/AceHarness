@@ -28,7 +28,7 @@ spec:
         - { label: 隔离副本, value: isolated-copy }
     - { id: requirements, label: 问题描述, type: text, bind: /context/requirements, required: true, default: "" }
   dependencies:
-    agents: [default-supervisor, issue-reproducer, fix-hunter, fix-breaker, fix-judge, fix-developer, fix-reviewer, tester, stress-tester, documentation-writer]
+    agents: [default-supervisor, issue-reproducer, architect, code-hunter, code-judge, developer, tester, stress-tester, documentation-writer]
     skills: []
     mcpServers: []
     subworkflows: []

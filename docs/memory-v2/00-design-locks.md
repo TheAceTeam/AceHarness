@@ -23,7 +23,7 @@ Updated: 2026-07-24
 - `src/lib/state-machine/workflow-manager.ts` persists final review memories and YAML experiences, but its normal step context only reads the last two prior states' output tails.
 - Normal serial steps in a single state do not automatically receive the previous serial step output when the runtime Agent changes.
 - `channelOutputsById` is an in-memory Map; persist and restore paths do not serialize or rebuild it.
-- `src/lib/workflow/manager.ts` injects all completed phase outputs as 3,000-character tails, which differs from the state-machine behavior.
+- The active lightweight tasklist and state-machine runtimes use the V2 handoff contract; raw output tails are not the workflow context contract.
 
 ## SQLite Contract
 
@@ -85,7 +85,7 @@ All Memory V2 scopes and tiers use this SQLite index/detail split. There is no p
 - A required detail denial, timeout, unavailable artifact, stale revision, or unread final page enters `handoff-blocked`; the run must retry, escalate to Supervisor/manual handling, reclassify, or fail the step. It must never silently continue.
 - Channel messages are represented by short-term `run + channel` scope bindings validated against `run_channel_members`, not a process-local Map.
 - A resumed run queries SQLite handoff batches, deliveries, receipts, participant snapshots, and channels to reconstruct active context. It must not require a memory-resident manager instance.
-- Phase-based and state-machine workflows use the same handoff writer and manifest reader. Raw output files remain fallback evidence only.
+- Lightweight tasklist and state-machine workflows use the same handoff writer and manifest reader. Raw output files remain fallback evidence only.
 
 ## Fresh-Start Cutover
 

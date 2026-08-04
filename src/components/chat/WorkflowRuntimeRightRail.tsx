@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import dynamic from '@/lib/navigation/dynamic';
-import FlowDiagram from '@/components/FlowDiagram';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
+import LightweightWorkflowExecutionView from '@/components/workflow/LightweightWorkflowExecutionView';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import { configApi, processApi, streamApi, workflowApi } from '@/lib/core/api';
 import type { useWorkflowLiveState } from '@/lib/workflow/live-store';
@@ -11,6 +11,7 @@ import type { ChatSession } from '@/contexts/ChatContext';
 import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
 
 const DocumentsPanel = dynamic(() => import('@/components/DocumentsPanel'), {
   ssr: false,
@@ -22,21 +23,6 @@ const DocumentsPanel = dynamic(() => import('@/components/DocumentsPanel'), {
     </div>
   ),
 });
-
-function workflowStepKeyMatchesName(stepKey: string | null | undefined, stepName: string | null | undefined): boolean {
-  const key = String(stepKey || '').trim();
-  const name = String(stepName || '').trim();
-  if (!key || !name) return false;
-  const baseName = name.replace(/-迭代\d+$/, '');
-  return (
-    key === name
-    || key === baseName
-    || key.startsWith(`${name}-迭代`)
-    || key.startsWith(`${baseName}-迭代`)
-    || key.endsWith(`-${name}`)
-    || key.endsWith(`-${baseName}`)
-  );
-}
 
 interface WorkflowRuntimeRightRailProps {
   session: ChatSession | null;
@@ -158,15 +144,6 @@ function resolveLiveSourceStep(workflow: any, status: any, rawStepName?: string 
         || rawBase.endsWith(`-${stepBase}`)
       ) {
         return { stateName: state.name, stepName };
-      }
-    }
-  }
-  for (const phase of workflow?.phases || []) {
-    for (const step of phase.steps || []) {
-      const stepName = String(step?.name || '').trim();
-      const stepBase = stepName.replace(/-迭代\d+$/, '');
-      if (rawBase === stepName || rawBase === stepBase || rawBase.endsWith(`-${stepName}`) || rawBase.endsWith(`-${stepBase}`)) {
-        return { stateName: phase.name, stepName };
       }
     }
   }
@@ -365,11 +342,15 @@ function WorkflowLiveOutputPanel({
       selectedSource.runId,
       selectedSource.stepKey,
       (content) => {
-        const nextRaw = raw && content.startsWith(raw) ? content : raw + content;
-        applyContent(nextRaw);
+        applyContent(raw + content);
         setLoading(false);
       },
       () => setLoading(false),
+      undefined,
+      (content) => {
+        applyContent(content);
+        setLoading(false);
+      },
     );
     void refresh();
     timer = window.setInterval(refresh, isRunningStatus(status?.status) ? 2000 : 6000);
@@ -419,12 +400,38 @@ function WorkflowLiveOutputPanel({
   );
 }
 
+function WorkflowWorkspacePanel({ workspacePath }: { workspacePath: string }) {
+  const openWorkspace = () => {
+    if (!workspacePath || typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('ace:open-workspace-path', {
+      detail: { workspacePath },
+    }));
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto bg-background p-3">
+      <div className="rounded-lg border p-3 text-xs">
+        <div className="font-medium">运行工作区</div>
+        {workspacePath ? (
+          <code className="mt-2 block break-all font-mono text-[11px] text-muted-foreground">{workspacePath}</code>
+        ) : (
+          <div className="mt-2 text-muted-foreground">工作区正在准备，运行开始后会显示可打开的目录。</div>
+        )}
+      </div>
+      <Button type="button" variant="outline" size="sm" className="self-start" onClick={openWorkspace} disabled={!workspacePath}>
+        打开工作区
+      </Button>
+    </div>
+  );
+}
+
 export default function WorkflowRuntimeRightRail({ session, live }: WorkflowRuntimeRightRailProps) {
   const { configFile, runId } = selectRuntimeBinding(session);
   const [configState, setConfigState] = useState<{ config: any; agents: any[] } | null>(null);
   const [fallbackStatus, setFallbackStatus] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submittingQuestionId, setSubmittingQuestionId] = useState<string | null>(null);
+  const [activePanel, setActivePanel] = useState<'workflow' | 'documents' | 'live' | 'workspace'>('workflow');
 
   useEffect(() => {
     let cancelled = false;
@@ -460,6 +467,10 @@ export default function WorkflowRuntimeRightRail({ session, live }: WorkflowRunt
     };
   }, [configFile, runId]);
 
+  useEffect(() => {
+    setActivePanel('workflow');
+  }, [configFile, runId]);
+
   const liveStatus = configFile ? live.workflowStatusByConfig[configFile] : null;
   const status = useMemo(() => {
     return mergeRuntimeStatus(liveStatus, fallbackStatus, runId);
@@ -482,10 +493,15 @@ export default function WorkflowRuntimeRightRail({ session, live }: WorkflowRunt
   const agents = status?.agents?.length ? status.agents : configState?.agents || [];
   const completedSteps = Array.isArray(status?.completedSteps) ? status.completedSteps : [];
   const failedSteps = Array.isArray(status?.failedSteps) ? status.failedSteps : [];
-  const currentPhase = status?.currentPhase || status?.currentState || '';
   const currentStep = status?.currentStep || '';
   const activeSteps = resolveRuntimeActiveSteps(status);
   const terminal = ['completed', 'failed', 'stopped', 'crashed'].includes(String(status?.status || ''));
+  const isLightweightWorkflow = workflow?.profile === 'lightweight';
+  const workspacePath = String(
+    status?.workingDirectory
+    || session?.sessionWorkbenchState?.chatWorkspace?.workingDirectory
+    || '',
+  ).trim();
 
   const submitHumanQuestion = async (question: HumanQuestion, answer: HumanQuestionAnswer) => {
     setSubmittingQuestionId(question.id);
@@ -530,17 +546,33 @@ export default function WorkflowRuntimeRightRail({ session, live }: WorkflowRunt
           />
         </div>
       ) : null}
-      <Tabs defaultValue="workflow" className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-background">
+      <Tabs value={activePanel} onValueChange={(value) => setActivePanel(value as typeof activePanel)} className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-background">
         <div className="border-b px-2 pt-2">
-          <TabsList className="grid h-8 w-full grid-cols-3">
-            <TabsTrigger value="workflow" className="text-xs">工作流</TabsTrigger>
-            <TabsTrigger value="documents" className="text-xs">文档</TabsTrigger>
-            <TabsTrigger value="live" className="text-xs">实时输出</TabsTrigger>
+          <TabsList className="grid h-8 w-full grid-cols-4" aria-label="工作流运行面板">
+            <TabsTrigger value="workflow" className="text-xs">{isLightweightWorkflow ? '执行' : '工作流'}</TabsTrigger>
+            <TabsTrigger value="documents" className="text-xs">{isLightweightWorkflow ? '任务文档' : '文档'}</TabsTrigger>
+            <TabsTrigger value="live" className="text-xs">输出</TabsTrigger>
+            <TabsTrigger value="workspace" className="text-xs">工作区</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="workflow" className="m-0 h-[calc(100%-49px)] min-h-0 overflow-hidden">
           <div key={`${configFile}:${runId}:diagram`} className="h-full min-h-0 w-full overflow-hidden">
-            {workflow.mode === 'state-machine' || Array.isArray(workflow.states) ? (
+            {isLightweightWorkflow ? (
+              <LightweightWorkflowExecutionView
+                workflow={workflow}
+                runId={runId || status.runId || null}
+                status={String(status.status || '')}
+                currentState={resolveRuntimeStateName(status) || null}
+                currentStep={terminal ? null : currentStep || null}
+                activeSteps={activeSteps}
+                completedSteps={completedSteps}
+                failedSteps={failedSteps}
+                onOpenTaskDocuments={() => setActivePanel('documents')}
+                onOpenRuntimeOutput={() => setActivePanel('live')}
+                onOpenWorkspace={() => setActivePanel('workspace')}
+                workspaceAvailable={Boolean(workspacePath)}
+              />
+            ) : (
               <StateMachineExecutionView
                 states={workflow.states || []}
                 agents={agents}
@@ -572,18 +604,6 @@ export default function WorkflowRuntimeRightRail({ session, live }: WorkflowRunt
                 hasPendingHumanQuestion={Boolean(pendingQuestion)}
                 pendingHumanQuestion={pendingQuestion as any}
               />
-            ) : (
-              <FlowDiagram
-                workflow={workflow}
-                currentPhase={currentPhase}
-                currentStep={terminal ? '' : currentStep}
-                agents={agents}
-                completedSteps={completedSteps}
-                failedSteps={failedSteps}
-                iterationStates={status.iterationStates || {}}
-                pendingCheckpointPhase={status.pendingCheckpointPhase || undefined}
-                onSelectStep={() => {}}
-              />
             )}
           </div>
         </TabsContent>
@@ -598,6 +618,9 @@ export default function WorkflowRuntimeRightRail({ session, live }: WorkflowRunt
             currentStep={terminal ? null : currentStep || null}
             status={status}
           />
+        </TabsContent>
+        <TabsContent value="workspace" className="m-0 h-[calc(100%-49px)] min-h-0 overflow-hidden">
+          <WorkflowWorkspacePanel workspacePath={workspacePath} />
         </TabsContent>
       </Tabs>
     </div>

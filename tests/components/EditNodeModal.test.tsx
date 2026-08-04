@@ -1,33 +1,38 @@
 // @vitest-environment jsdom
 import { describe, expect, test, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 
-// Mock EditNodeModal since it depends on react-hook-form which has vite resolution issues
-const mockOnSave = vi.fn();
-const mockOnClose = vi.fn();
+// Keep the component test focused on the step-only modal contract.
+const mockOnAgentSkillsChange = vi.fn();
 
 vi.mock('@/components/EditNodeModal', () => {
   return {
-    default: function MockEditNodeModal({ isOpen, type, data, onSave, onClose }: any) {
+    default: function MockEditNodeModal({ isOpen, data, onSave, onClose }: any) {
       if (!isOpen) return null;
       return (
         <div data-testid="dialog">
-          <h2>{type === 'phase' ? '编辑阶段' : '编辑步骤'}</h2>
+          <h2>编辑步骤</h2>
           <input
             data-testid="name-input"
             defaultValue={data?.name || ''}
             onChange={(e) => { data.name = e.target.value; }}
           />
-          {type === 'step' && (
-            <input
-              data-testid="task-input"
-              defaultValue={data?.task || ''}
-              onChange={(e) => { data.task = e.target.value; }}
-            />
-          )}
-          <button onClick={() => onSave(data)} data-testid="save-btn">保存</button>
+          <input
+            data-testid="task-input"
+            defaultValue={data?.task || ''}
+            onChange={(e) => { data.task = e.target.value; }}
+          />
+          <button
+            onClick={() => onSave({
+              ...data,
+              skills: Array.from(new Set(Array.isArray(data?.skills) ? data.skills : [])),
+            })}
+            data-testid="save-btn"
+          >
+            保存
+          </button>
           <button onClick={onClose} data-testid="close-btn">取消</button>
         </div>
       );
@@ -41,11 +46,12 @@ describe('EditNodeModal', () => {
   const defaultProps = {
     isOpen: true,
     type: 'step' as const,
-    data: { name: 'test-step', agent: 'developer', task: 'Do something' },
+    data: { name: 'test-step', agent: 'developer', task: 'Do something', skills: ['review-skill', 'review-skill'] },
     roles: [
       { name: 'developer', team: 'blue' },
       { name: 'tester', team: 'red' },
     ],
+    onAgentSkillsChange: mockOnAgentSkillsChange,
     onClose: vi.fn(),
     onSave: vi.fn(),
   };
@@ -60,21 +66,7 @@ describe('EditNodeModal', () => {
     expect(screen.getByTestId('dialog')).toBeTruthy();
     expect(screen.getByTestId('name-input')).toBeTruthy();
     expect(screen.getByTestId('task-input')).toBeTruthy();
-  });
-
-  test('renders phase form when type is phase', () => {
-    render(
-      <EditNodeModal
-        {...defaultProps}
-        type="phase"
-        data={{ name: 'Design Phase' }}
-      />
-    );
-
-    expect(screen.getByText('编辑阶段')).toBeTruthy();
-    expect(screen.getByTestId('name-input')).toBeTruthy();
-    // Phase form should NOT have task input
-    expect(screen.queryByTestId('task-input')).toBeNull();
+    expect(screen.queryByText('编辑阶段')).toBeNull();
   });
 
   test('does not render when isOpen is false', () => {
@@ -91,7 +83,10 @@ describe('EditNodeModal', () => {
     const saveButton = screen.getByTestId('save-btn');
     await user.click(saveButton);
 
-    expect(onSave).toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      skills: ['review-skill'],
+    }));
+    expect(mockOnAgentSkillsChange).not.toHaveBeenCalled();
   });
 
   test('calls onClose when cancel button is clicked', async () => {

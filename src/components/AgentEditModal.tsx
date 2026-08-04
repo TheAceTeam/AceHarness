@@ -27,6 +27,7 @@ import {
 import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { useSkillsQuery } from '@/client/query/skills';
 import { useRagKnowledgeBasesQuery } from '@/client/query/rag';
+import { EXPERT_PACKS } from '@/lib/agent/catalog';
 
 interface SubAgent {
   description: string;
@@ -69,6 +70,10 @@ interface AgentConfig {
   avatar?: AgentAvatarConfig | string;
   category?: string;
   tags?: string[];
+  expertPacks?: string[];
+  catalogVisibility?: 'default' | 'optional' | 'system';
+  baseCapability?: string;
+  taskModes?: string[];
   engineModels: Record<string, string>;
   activeEngine: string;
   temperature?: number;
@@ -93,7 +98,20 @@ interface AgentEditModalProps {
   onClose: () => void;
 }
 
-const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
+const CATEGORIES = ['通用协作', '研究', '分析', '产品', '体验设计', '内容', '架构', '编码', '测试', '性能', '问题诊断', '审查', '文档', '系统协调', '其他'];
+const TASK_MODE_OPTIONS = [
+  ['analysis', '分析'],
+  ['planning', '规划'],
+  ['research', '研究'],
+  ['execution', '执行'],
+  ['design', '设计'],
+  ['feature', '功能开发'],
+  ['fix', '问题修复'],
+  ['review', '审查'],
+  ['validation', '验证'],
+  ['judgment', '裁决'],
+  ['documentation', '文档'],
+] as const;
 
 type ListField = 'capabilities' | 'constraints' | 'keywords';
 
@@ -173,6 +191,10 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     }),
     alwaysAvailableForChat: agent.alwaysAvailableForChat ?? false,
     skills: agent.skills || [],
+    expertPacks: agent.expertPacks || [],
+    catalogVisibility: agent.name === 'default-supervisor' ? 'system' : (agent.catalogVisibility || 'default'),
+    baseCapability: agent.baseCapability || '',
+    taskModes: agent.taskModes || [],
     mcpServers: (agent.mcpServers || []).map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean),
     ragKnowledgeBases: agent.ragKnowledgeBases || [],
     workspaceProfile: agent.workspaceProfile || {},
@@ -422,6 +444,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   };
 
   const isDirty = JSON.stringify(formData) !== initialFormSnapshot;
+  const isSystemSupervisor = formData.name === 'default-supervisor';
   const confirmDiscard = () => {
     if (!isDirty) return true;
     return window.confirm('放弃当前 Agent 编辑内容吗？');
@@ -462,12 +485,13 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                 <SingleCombobox
                   value={formData.team}
                   onValueChange={(v) => setFormData({ ...formData, team: v as any })}
-                  options={[
-                    { value: 'blue', label: '蓝队（攻击）' },
-                    { value: 'red', label: '红队（防守）' },
-                    { value: 'judge', label: '裁定席' },
-                    { value: 'black-gold', label: '黑金（指挥官）' },
-                  ]}
+                  options={isSystemSupervisor
+                    ? [{ value: 'black-gold', label: '黑金（系统协调）' }]
+                    : [
+                        { value: 'blue', label: '蓝队（挑战）' },
+                        { value: 'red', label: '红队（产出）' },
+                        { value: 'judge', label: '裁定席' },
+                      ]}
                   placeholder="选择团队"
                   searchable={false}
                 />
@@ -478,10 +502,9 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                 <SingleCombobox
                   value={formData.roleType || 'normal'}
                   onValueChange={(v) => setFormData({ ...formData, roleType: v as any })}
-                  options={[
-                    { value: 'normal', label: '普通 Agent' },
-                    { value: 'supervisor', label: 'Supervisor / 指挥官' },
-                  ]}
+                  options={isSystemSupervisor
+                    ? [{ value: 'supervisor', label: '系统 Supervisor' }]
+                    : [{ value: 'normal', label: '普通 Agent' }]}
                   placeholder="选择角色类型"
                   searchable={false}
                 />
@@ -497,6 +520,50 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                     ...CATEGORIES.map(cat => ({ value: cat, label: cat })),
                   ]}
                   placeholder="选择分类"
+                  searchable={false}
+                />
+              </div>
+
+              <div>
+                <Label>专家包</Label>
+                <MultiCombobox
+                  value={formData.expertPacks || []}
+                  onValueChange={(expertPacks) => setFormData({ ...formData, expertPacks })}
+                  options={EXPERT_PACKS.map((pack) => ({ value: pack.id, label: pack.label }))}
+                  placeholder="选择适用领域"
+                />
+              </div>
+
+              <div>
+                <Label>任务模式</Label>
+                <MultiCombobox
+                  value={formData.taskModes || []}
+                  onValueChange={(taskModes) => setFormData({ ...formData, taskModes })}
+                  options={TASK_MODE_OPTIONS.map(([value, label]) => ({ value, label }))}
+                  placeholder="选择常用任务"
+                />
+              </div>
+
+              <div>
+                <Label>核心能力</Label>
+                <Input
+                  value={formData.baseCapability || ''}
+                  onChange={(event) => setFormData({ ...formData, baseCapability: event.target.value })}
+                  placeholder="例如 implementation"
+                />
+              </div>
+
+              <div>
+                <Label>目录显示</Label>
+                <SingleCombobox
+                  value={formData.catalogVisibility || 'default'}
+                  onValueChange={(catalogVisibility) => setFormData({ ...formData, catalogVisibility: catalogVisibility as AgentConfig['catalogVisibility'] })}
+                  options={formData.name === 'default-supervisor'
+                    ? [{ value: 'system', label: '系统角色' }]
+                    : [
+                        { value: 'default', label: '默认显示' },
+                        { value: 'optional', label: '按需显示' },
+                      ]}
                   searchable={false}
                 />
               </div>
@@ -586,7 +653,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                   onValueChange={(v) => updateWorkspaceProfile({ officeRole: v || undefined })}
                   options={[
                     { value: '', label: '未设置' },
-                    { value: 'ceo-founder', label: 'CEO / Founder' },
+                    { value: 'supervisor', label: 'Supervisor' },
                     { value: 'product-lead', label: 'Product Lead' },
                     { value: 'design-lead', label: 'Design Lead' },
                     { value: 'engineering-lead', label: 'Engineering Lead' },
