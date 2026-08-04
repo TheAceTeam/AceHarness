@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, type ChangeEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
 import Link from '@/lib/navigation/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -100,7 +100,11 @@ export default function AgentsManager({
   const batchDeleteAgentsMutation = useBatchDeleteAgentsMutation();
   const importAgentZipMutation = useImportAgentZipMutation();
   const exportAgentsMutation = useExportAgentsMutation();
-  const agents = (agentsQuery.data?.agents || EMPTY_AGENTS).filter((agent) => !isRetiredCatalogAgent(agent));
+  const sourceAgents = agentsQuery.data?.agents || EMPTY_AGENTS;
+  const agents = useMemo(
+    () => sourceAgents.filter((agent) => !isRetiredCatalogAgent(agent)),
+    [sourceAgents],
+  );
   const normalizedHighlightedAgentName = highlightedAgentName?.trim() || '';
   useSyncAgentConfigsToDb(agents);
   const dbAgents = (useAgentConfigRows({

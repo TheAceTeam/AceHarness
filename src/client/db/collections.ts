@@ -1,6 +1,6 @@
 import { createCollection, localOnlyCollectionOptions } from '@tanstack/db';
 import { useLiveQuery } from '@tanstack/react-db';
-import { useEffect, useMemo } from 'react';
+import { startTransition, useEffect, useMemo } from 'react';
 import type { ConfigListParams, WorkflowConfigSummary } from '../query/configs';
 import type { AgentConfig } from '../query/agents';
 import type { LocalSkill } from '../query/skills';
@@ -587,6 +587,11 @@ function upsertAgentConfig(row: AgentConfigRow) {
   agentConfigsCollection.insert(row);
 }
 
+function hasSameAgentConfigPayload(existing: AgentConfigRow, incoming: AgentConfig) {
+  const { id: _id, updatedAt: _updatedAt, ...existingPayload } = existing;
+  return JSON.stringify(existingPayload) === JSON.stringify(incoming);
+}
+
 function upsertLocalSkill(row: LocalSkillRow) {
   if (localSkillsCollection.has(row.id)) {
     localSkillsCollection.update(row.id, (draft) => {
@@ -1046,6 +1051,8 @@ export function syncAgentConfigsToDb(agents: Array<AgentConfig>) {
   agents.forEach((agent) => {
     if (!agent.name) return;
     seen.add(agent.name);
+    const existing = agentConfigsCollection.get(agent.name);
+    if (existing && hasSameAgentConfigPayload(stripCollectionMetadata(existing), agent)) return;
     upsertAgentConfig({
       ...agent,
       id: agent.name,
@@ -1271,7 +1278,9 @@ export function useSyncWorkspaceTreeToDb(input: {
 
 export function useSyncAgentConfigsToDb(agents: Array<AgentConfig>) {
   useEffect(() => {
-    syncAgentConfigsToDb(agents);
+    startTransition(() => {
+      syncAgentConfigsToDb(agents);
+    });
   }, [agents]);
 }
 
