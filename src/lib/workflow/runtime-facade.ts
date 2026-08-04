@@ -52,6 +52,8 @@ export interface WorkflowRuntimeProjectionState {
 
 export interface WorkflowRuntimeJsonResult {
   result: string;
+  /** Complete agent transcript, including process blocks when available. */
+  rawOutput?: string;
   runtimeSessionId: string;
   stop_reason?: string;
   cost_usd: number;

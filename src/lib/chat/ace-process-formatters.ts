@@ -1,5 +1,6 @@
 import { rewriteFirstAceProcessBlockPayload, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
+import type { RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -162,6 +163,34 @@ function inputText(value: unknown, fallback = ''): string {
 
 export function formatAceReasoning(text: string): string {
   return wrapAceProcessBlock('reasoning', {}, text || '');
+}
+
+/** Serialize one runtime tool lifecycle event into the shared transcript format. */
+export function formatAceRuntimeToolEvent(tool: RuntimeToolEvent): string {
+  if (!tool || typeof tool !== 'object') return '';
+
+  const toolName = String(tool.toolName || 'tool').trim() || 'tool';
+  const title = String(tool.title || '').trim() || undefined;
+  const toolId = String(tool.id || '').trim() || undefined;
+  if (tool.status === 'running') {
+    return formatAceToolCall({
+      toolName,
+      title,
+      toolId,
+      rawInput: tool.input && typeof tool.input === 'object' ? { ...tool.input } : undefined,
+    });
+  }
+
+  if (tool.status === 'completed' || tool.status === 'failed') {
+    const rawOutput = tool.result && typeof tool.result === 'object'
+      ? tool.result
+      : tool.status === 'failed'
+        ? { error: '工具调用失败，运行时未返回详细结果。' }
+        : { completed: true, resultUnavailable: true };
+    return formatAceToolResult({ toolName, title, toolId, rawOutput });
+  }
+
+  return '';
 }
 
 export function formatAceSubtaskStart(params: {

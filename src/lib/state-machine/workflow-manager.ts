@@ -121,6 +121,7 @@ import {
   extractJsonObject as extractStructuredJsonObject,
   extractStructuredResult,
 } from '@/lib/ai/result-channel';
+import { formatAceReasoning, formatAceRuntimeToolEvent } from '@/lib/chat/ace-process-formatters';
 import {
   ensureWorkflowGitState,
   recordWorkflowGitSnapshot,
@@ -176,6 +177,7 @@ import {
 import {
   resolveLightweightTasklistDirectory,
 } from '@/lib/workflow/lightweight-runtime';
+import { formatWorkflowFailureReason } from '@/lib/workflow/error-summary';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -492,6 +494,11 @@ type SupervisorHumanHelpDecision = {
   placeholder?: string;
   fallbackInstruction?: string;
   rawOutput?: string;
+};
+
+type WorkflowAgentQueryResult = {
+  content: string;
+  rawContent: string;
 };
 
 type RuntimeJoinPolicy = {
@@ -2317,7 +2324,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     } catch (error: any) {
       if (!this.shouldStop) {
         this.status = 'failed';
-        this.statusReason = error.message || String(error);
+        this.statusReason = formatWorkflowFailureReason(error.message || String(error));
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
@@ -3254,8 +3261,19 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private createFailedStepRecoveryRequiredError(stateName?: string, failedSteps = this.failedSteps): FailedStepRecoveryRequiredError {
     const failedStepList = failedSteps.filter(Boolean).join(', ');
     const stateLabel = stateName || this.currentState || '当前状态';
+    const failureDetails = failedSteps
+      .filter(Boolean)
+      .map((stepKey) => {
+        const log = this.getLatestStepLog(stepKey, 'failed');
+        const error = formatWorkflowFailureReason(log?.error || '');
+        return error ? `${stepKey}: ${error}` : '';
+      })
+      .filter(Boolean);
+    const detailSuffix = failureDetails.length > 0
+      ? `\n失败步骤详情：\n${failureDetails.map((detail) => `- ${detail}`).join('\n')}`
+      : '';
     return new FailedStepRecoveryRequiredError(
-      `状态 "${stateLabel}" ${FAILED_STEP_RECOVERY_REQUIRED_ERROR}${failedStepList ? `：${failedStepList}` : ''}`
+      `状态 "${stateLabel}" ${FAILED_STEP_RECOVERY_REQUIRED_ERROR}${failedStepList ? `：${failedStepList}` : ''}${detailSuffix}`
     );
   }
 
@@ -4457,7 +4475,17 @@ try {
       };
 
       const memoryV2Execution = options.memoryV2Execution as WorkflowMemoryV2AiExecution | undefined;
-      let fullStreamContent = '';
+      let fullTranscript = '';
+      let streamedTextContent = '';
+
+      const appendTranscriptSegment = (content: string) => {
+        const segment = String(content || '');
+        if (!segment) return;
+        if (fullTranscript && !/^\s/.test(segment) && !/\s$/.test(fullTranscript)) {
+          fullTranscript += '\n\n';
+        }
+        fullTranscript += segment;
+      };
 
       const streamHandler = (event: WorkflowRuntimeStreamEvent) => {
         // The workflow runtime cannot register server-native memory tools. A
@@ -4467,6 +4495,7 @@ try {
         // 'thought' events are forwarded separately (matching Claude Code's { thinking } field),
         // not accumulated into streamContent.
         if (event.type === 'thought') {
+          appendTranscriptSegment(formatAceReasoning(event.content));
           processManager.emit('stream', {
             id: processId,
             step: displayStep,
@@ -4477,6 +4506,7 @@ try {
 
         if (event.type === 'tool') {
           const tool = event.tool;
+          appendTranscriptSegment(formatAceRuntimeToolEvent(tool));
           processManager.upsertToolEvent(processId, tool);
           if (options.runId) {
             void appendStreamToolEvent(options.runId, displayStep, tool).catch(() => {});
@@ -4491,7 +4521,8 @@ try {
 
         if (event.type !== 'text') return;
 
-        fullStreamContent += event.content;
+        streamedTextContent += event.content;
+        appendTranscriptSegment(event.content);
         const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
         if (options.runId) {
           void appendStreamContent(options.runId, displayStep, event.content).catch(() => {});
@@ -4531,7 +4562,7 @@ try {
           })
         );
         let result = await executeRuntime(prompt, options.resumeSessionId, options.appendSystemPrompt);
-        let visibleOutput = result.output || fullStreamContent || '';
+        let visibleOutput = result.output || streamedTextContent || '';
 
         // ACPX can surface a provider capacity rejection as turn.completed.
         // Preserve the provider text, but expose it as a failed runtime turn
@@ -4547,7 +4578,7 @@ try {
         if (memoryV2Execution) {
           visibleOutput = '';
           for (let round = 0; round < WORKFLOW_MEMORY_V2_MAX_FALLBACK_ROUNDS; round += 1) {
-            const rawOutput = result.output || (round === 0 ? fullStreamContent : '');
+            const rawOutput = result.output || (round === 0 ? streamedTextContent : '');
             if (!result.success) {
               visibleOutput = memoryV2Execution.stripStructuredFallback(rawOutput);
               break;
@@ -4600,6 +4631,7 @@ try {
 
         return {
           result: result.success ? visibleOutput : failureResult,
+          rawOutput: fullTranscript || result.output || visibleOutput || failureResult,
           runtimeSessionId: resolvedSessionId || '',
           stop_reason: result.stopReason,
           is_error: !result.success,
@@ -4917,7 +4949,8 @@ try {
         : '请输出：1. 是否建议人工放行 2. 若不建议放行，需重点检查的风险 3. 给操作者的简短建议',
     ].filter(Boolean).join('\n');
 
-    const response = await this.queryAgent(this.currentSupervisorAgent, prompt, config);
+    const query = await this.queryAgentWithTranscript(this.currentSupervisorAgent, prompt, config);
+    const response = query.content;
     if (isEngineLevelFailure(response)) {
       throw new Error(response.trim() || 'Supervisor 模型调用失败');
     }
@@ -4945,6 +4978,7 @@ try {
       stateName: state.name,
       reviewType: type,
       content: response,
+      rawContent: query.rawContent,
       supervisorAgent: this.currentSupervisorAgent || undefined,
       supervisorSessionId,
       timestamp,
@@ -9191,7 +9225,7 @@ try {
   ): Promise<void> {
     if (this.shouldStop) return;
 
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = formatWorkflowFailureReason(error instanceof Error ? error.message : String(error));
     if (reason === '已有工作流正在运行') return;
     const activeRunId = this.currentRunId === runId ? this.currentRunId : null;
     const endTime = new Date().toISOString();
@@ -10007,7 +10041,7 @@ try {
     } catch (error: any) {
       if (!this.shouldStop) {
         this.status = 'failed';
-        this.statusReason = error.message || String(error);
+        this.statusReason = formatWorkflowFailureReason(error.message || String(error));
         this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
@@ -10180,11 +10214,21 @@ try {
     question: string,
     config: StateMachineWorkflowConfig
   ): Promise<string> {
+    const result = await this.queryAgentWithTranscript(agentName, question, config);
+    return result.content;
+  }
+
+  private async queryAgentWithTranscript(
+    agentName: string,
+    question: string,
+    config: StateMachineWorkflowConfig
+  ): Promise<WorkflowAgentQueryResult> {
     const roleConfig = this.agentConfigs.find(r => r.name === agentName)
       || config.roles?.find(r => r.name === agentName);
 
     if (!roleConfig) {
-      return `[错误] 找不到 Agent 配置: ${agentName}`;
+      const content = `[错误] 找不到 Agent 配置: ${agentName}`;
+      return { content, rawContent: content };
     }
 
     const specCodingBlock = this.currentRunSpecCoding
@@ -10241,6 +10285,7 @@ try {
       if (result.is_error || isEngineLevelFailure(answer)) {
         throw new Error(answer.trim() || 'Agent 查询失败');
       }
+      const rawContent = String(result.rawOutput || answer).trim() || answer;
       replaceAgentStateSessionId(agentState, result.runtimeSessionId);
 
       const isSupervisorFinalReviewJson = agentName === this.currentSupervisorAgent
@@ -10260,13 +10305,14 @@ try {
         this.emit('agent-flow', { agentFlow: this.agentFlow });
       }
       
-      return answer;
+      return { content: answer, rawContent };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isEngineLevelFailure(message)) {
         throw error;
       }
-      return `[错误] 查询 Agent 失败: ${message}`;
+      const content = `[错误] 查询 Agent 失败: ${message}`;
+      return { content, rawContent: content };
     }
   }
 

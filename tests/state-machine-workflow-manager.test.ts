@@ -19,6 +19,7 @@ vi.mock('@/lib/run/state-persistence', () => ({
   saveProcessOutput: vi.fn().mockResolvedValue(undefined),
   saveStreamContent: vi.fn().mockResolvedValue(undefined),
   appendStreamContent: vi.fn().mockResolvedValue(undefined),
+  appendStreamToolEvent: vi.fn().mockResolvedValue(undefined),
   appendFeedbackToStream: vi.fn().mockResolvedValue(undefined),
   loadRunState: vi.fn().mockResolvedValue(null),
   loadStepOutputs: vi.fn().mockResolvedValue({}),
@@ -48,6 +49,7 @@ vi.mock('@/lib/core/process-manager', () => ({
     setProcessOutput: vi.fn(),
     setProcessError: vi.fn(),
     appendStreamContent: vi.fn().mockReturnValue(''),
+    upsertToolEvent: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
     emit: vi.fn(),
@@ -2595,6 +2597,41 @@ describe('state machine execution flow', () => {
     expect(result.stepOutputs[0]).toContain('streamed pass');
   });
 
+  test('keeps thought and tool events in the complete runtime transcript', async () => {
+    const engine = new MockEngine({ success: true, output: '' });
+    engine.executeImpl = async () => {
+      engine.emitThought('先核对仓库状态。');
+      (engine as any).emit('stream', {
+        type: 'tool',
+        tool: {
+          id: 'tool-read-1',
+          toolName: 'read',
+          title: '读取文件',
+          status: 'running',
+          input: { filePath: 'README.md' },
+        },
+      });
+      engine.emitStream('最终答复');
+      return { success: true, output: '' };
+    };
+    const manager = await createManagerForTest(engine);
+
+    const result = await (manager as any).executeWithEngine(
+      'process-transcript',
+      'developer',
+      'design-step',
+      'Build a feature',
+      'You are a developer',
+      'test-model',
+      { engineType: 'mock-engine', runId: 'test-run-001' },
+    );
+
+    expect(result.result).toBe('最终答复');
+    expect(result.rawOutput).toContain('先核对仓库状态。');
+    expect(result.rawOutput).toContain('tool-read-1');
+    expect(result.rawOutput).toContain('最终答复');
+  });
+
   test('persists each streamed delta only once while observing the running process', async () => {
     const { appendStreamContent } = await import('@/lib/run/state-persistence');
     const { processManager } = await import('@/lib/core/process-manager');
@@ -3739,6 +3776,32 @@ describe('state machine execution flow', () => {
     await expect(
       (manager as any).executeState(state, config, 'Build a feature')
     ).rejects.toThrow(/引擎异常/);
+  });
+
+  test('failed step recovery error includes the latest step error', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).stepLogs = [
+      {
+        id: 'failed-1',
+        stepName: '设计-design-step',
+        status: 'failed',
+        error: '旧的引擎错误',
+      },
+      {
+        id: 'failed-2',
+        stepName: '设计-design-step',
+        status: 'failed',
+        error: '步骤执行超时：已超过配置上限 30 分钟。',
+      },
+    ];
+
+    const error = (manager as any).createFailedStepRecoveryRequiredError(
+      '设计',
+      ['设计-design-step'],
+    );
+
+    expect(error.message).toContain('步骤执行超时：已超过配置上限 30 分钟。');
+    expect(error.message).not.toContain('旧的引擎错误');
   });
 
   test('self-transition circuit breaker triggers after maxSelfTransitions', async () => {

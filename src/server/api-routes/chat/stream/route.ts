@@ -32,7 +32,7 @@ import {
 } from '@/lib/chat/request-options';
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
-import { formatAceToolCall, formatAceToolResult } from '@/lib/chat/ace-process-formatters';
+import { formatAceRuntimeToolEvent } from '@/lib/chat/ace-process-formatters';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
 import { isCreationAssistantSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
@@ -56,33 +56,6 @@ function numberOrUndefined(value: unknown): number | undefined {
 
 function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function serializeRuntimeToolEvent(tool: any): string {
-  if (!tool || typeof tool !== 'object') return '';
-
-  const toolName = stringOrUndefined(tool.toolName) || 'tool';
-  const title = stringOrUndefined(tool.title);
-  const toolId = stringOrUndefined(tool.id);
-  if (tool.status === 'running') {
-    return formatAceToolCall({
-      toolName,
-      title,
-      toolId,
-      rawInput: tool.input && typeof tool.input === 'object' ? tool.input : undefined,
-    });
-  }
-
-  if (tool.status === 'completed' || tool.status === 'failed') {
-    const rawOutput = tool.result && typeof tool.result === 'object'
-      ? tool.result
-      : tool.status === 'failed'
-        ? { error: '工具调用失败，ACP 未返回详细结果。' }
-        : { completed: true, resultUnavailable: true };
-    return formatAceToolResult({ toolName, title, toolId, rawOutput });
-  }
-
-  return '';
 }
 
 function normalizeUsage(metadata?: ChatRuntimeResultMetadata): Partial<ChatRuntimeTokenUsage> | undefined {
@@ -473,7 +446,7 @@ export async function POST(request: Request) {
           }
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
         } else if (evt?.type === 'tool' && evt.tool) {
-          const toolContent = serializeRuntimeToolEvent(evt.tool);
+          const toolContent = formatAceRuntimeToolEvent(evt.tool);
           if (!toolContent) return;
 
           appendEngineStreamContent(chatId, toolContent);

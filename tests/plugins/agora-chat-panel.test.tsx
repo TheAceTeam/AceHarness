@@ -643,7 +643,7 @@ describe('built-in agora chat panel', () => {
           speakerType: 'agent',
           speakerName: 'Agent-Alpha',
           content: '只有最终发言',
-          rawContent: buildAgoraResultEnvelope({ type: 'speech', content: '只有最终发言', mentions: [] }),
+          rawContent: `<!-- timestamp: 2026-08-04T02:47:14.626Z -->\n${buildAgoraResultEnvelope({ type: 'speech', content: '只有最终发言', mentions: [] })}`,
           status: 'done',
         }]}
         draft=""
@@ -662,6 +662,83 @@ describe('built-in agora chat panel', () => {
     );
 
     expect(screen.queryByRole('button', { name: '查看完整内容' })).toBeNull();
+  });
+
+  test('workflow Agora keeps the extracted speech separate from its complete agent transcript', async () => {
+    const user = userEvent.setup();
+    const inputRef = React.createRef<HTMLTextAreaElement>();
+    const bottomRef = React.createRef<HTMLDivElement>();
+    const rawContent = [
+      '<!-- timestamp: 2026-08-04T02:47:14.626Z -->',
+      wrapAceProcessBlock('reasoning', {}, '先核对仓库状态和远端连接。'),
+      '<result>{"kind":"workflow_control","payload":{"status":"complete"}}</result>',
+    ].join('\n\n');
+
+    render(
+      <CollaborationRoomSurface
+        messages={[{
+          id: 'workflow-review-message',
+          createdAt: Date.now(),
+          speakerType: 'supervisor',
+          speakerName: 'developer',
+          content: '远端连接与模板内容已确认一致。',
+          rawContent,
+          status: 'done',
+        }]}
+        draft=""
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        submitLabel="发送"
+        placeholder="在议场发言"
+        mentionTargets={[]}
+        onInsertMention={() => {}}
+        inputRef={inputRef}
+        bottomRef={bottomRef}
+        getSpeakerAvatarSrc={() => ''}
+        getInitials={(name) => name.slice(0, 1)}
+        getMessageKindLabel={() => '议场发言'}
+      />
+    );
+
+    expect(screen.getByText('远端连接与模板内容已确认一致。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看完整内容' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '查看完整内容' }));
+    expect(document.querySelector('[data-testid="ace-reasoning"]')).toBeTruthy();
+  });
+
+  test('error messages render the diagnostic content instead of stale raw content', () => {
+    const inputRef = React.createRef<HTMLTextAreaElement>();
+    const bottomRef = React.createRef<HTMLDivElement>();
+
+    render(
+      <CollaborationRoomSurface
+        messages={[{
+          id: 'diagnostic-error-message',
+          createdAt: Date.now(),
+          speakerType: 'agent',
+          speakerName: 'Agent-Alpha',
+          content: '来源：API 提供商响应\n阶段：execution-finalize\n原始错误：HTTP 403 Forbidden',
+          rawContent: '旧的部分输出',
+          status: 'error',
+        }]}
+        draft=""
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        submitLabel="发送"
+        placeholder="在议场发言"
+        mentionTargets={[]}
+        onInsertMention={() => {}}
+        inputRef={inputRef}
+        bottomRef={bottomRef}
+        getSpeakerAvatarSrc={() => ''}
+        getInitials={(name) => name.slice(0, 1)}
+        getMessageKindLabel={() => '议场发言'}
+      />
+    );
+
+    expect(screen.getByText(/来源：API 提供商响应/)).toBeInTheDocument();
+    expect(screen.queryByText('旧的部分输出')).toBeNull();
   });
 
   test('agora panel uses the custom user avatar for older human messages matched by username alias', async () => {

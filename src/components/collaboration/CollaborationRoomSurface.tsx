@@ -16,6 +16,7 @@ import Markdown from '@/components/Markdown';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { useToast } from '@/components/ui/toast';
 import { getStreamingResultDisplay, stripMachineResultBlocks } from '@/lib/chat/actions';
+import { extractStructuredResult } from '@/lib/ai/result-channel';
 import { copyText } from '@/lib/core/clipboard';
 import { createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { workspaceApi, type NotebookScope } from '@/lib/core/api';
@@ -100,7 +101,9 @@ function CompletedStructuredProcessPanel({
 }) {
   const [expanded, setExpanded] = useState(false);
   const content = useMemo(
-    () => stripMachineResultBlocks(String(rawContent || '')).replace(/<!--\s*chunk-boundary\s*-->/gi, '').trim(),
+    () => stripMachineResultBlocks(String(rawContent || ''))
+      .replace(/<!--\s*(?:chunk-boundary|timestamp\s*:[\s\S]*?)\s*-->/gi, '')
+      .trim(),
     [rawContent]
   );
   if (!content) return null;
@@ -122,9 +125,23 @@ function CompletedStructuredProcessPanel({
   );
 }
 
+function hasCompletedAgoraResult(rawContent: string): boolean {
+  return Boolean(extractStructuredResult(rawContent, (value: any): value is { kind: 'agora_result'; payload: Record<string, unknown> } => (
+    value?.kind === 'agora_result'
+    && value.payload
+    && typeof value.payload === 'object'
+    && !Array.isArray(value.payload)
+  )));
+}
+
 function renderRoomMessageContent(message: CollaborationRoomMessage) {
   const rawContent = String(message.rawContent || message.content || '').trim();
   const finalContent = String(message.content || '').trim();
+  if (message.status === 'error') {
+    const errorContent = finalContent || rawContent;
+    if (!errorContent) return null;
+    return <WrapperProcessBlocks content={errorContent} isStreaming={false} />;
+  }
   if (message.status === 'pending') {
     if (rawContent && rawContent !== '发言中') {
       return (
@@ -143,7 +160,7 @@ function renderRoomMessageContent(message: CollaborationRoomMessage) {
       </div>
     );
   }
-  const shouldShowCompletedResult = rawContent.toLowerCase().includes('<result>');
+  const shouldShowCompletedResult = hasCompletedAgoraResult(rawContent);
   if (shouldShowCompletedResult) {
     return (
       <div className="space-y-2">
@@ -152,9 +169,18 @@ function renderRoomMessageContent(message: CollaborationRoomMessage) {
       </div>
     );
   }
-  const content = rawContent || finalContent;
+  const content = finalContent || rawContent;
   if (!content) return null;
-  return <WrapperProcessBlocks content={content} isStreaming={false} />;
+  const hasRawDetails = Boolean(rawContent && finalContent && rawContent !== finalContent);
+  if (!hasRawDetails) {
+    return <WrapperProcessBlocks content={content} isStreaming={false} />;
+  }
+  return (
+    <div className="space-y-2">
+      <CompletedStructuredResultContent content={content} />
+      <CompletedStructuredProcessPanel rawContent={rawContent} />
+    </div>
+  );
 }
 
 function getRoomMessageText(message: CollaborationRoomMessage) {

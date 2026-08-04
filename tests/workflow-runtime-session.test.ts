@@ -182,6 +182,7 @@ describe('workflow runtime conversation binding', () => {
       stateName: '实现',
       reviewType: 'state-review',
       content: '当前阶段已完成，进入测试。',
+      rawContent: '<ace-process>{"kind":"reasoning","body":"已核对执行记录。"}</ace-process>\n当前阶段已完成，进入测试。',
       supervisorAgent: 'default-supervisor',
       timestamp: '2026-07-30T12:00:00.000Z',
       dedupeKey: 'review-1',
@@ -196,6 +197,7 @@ describe('workflow runtime conversation binding', () => {
         speakerType: 'supervisor',
         speakerName: 'default-supervisor',
         content: '当前阶段已完成，进入测试。',
+        rawContent: '<ace-process>{"kind":"reasoning","body":"已核对执行记录。"}</ace-process>\n当前阶段已完成，进入测试。',
       })],
     });
 

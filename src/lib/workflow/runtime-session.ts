@@ -183,6 +183,7 @@ export async function appendWorkflowSupervisorReviewToAgora(input: {
   stateName: string;
   reviewType: 'state-review' | 'checkpoint-advice';
   content: string;
+  rawContent?: string | null;
   supervisorAgent?: string | null;
   supervisorSessionId?: string | null;
   timestamp?: string;
@@ -192,6 +193,7 @@ export async function appendWorkflowSupervisorReviewToAgora(input: {
   const runId = String(input.runId || '').trim();
   const content = String(input.content || '').trim();
   if (!sessionId || !runId || !content) return false;
+  const rawContent = String(input.rawContent || content).trim() || content;
 
   const session = await loadChatSession(sessionId).catch(() => null);
   if (!session || hasDifferentWorkflowRun(session, runId)) return false;
@@ -251,7 +253,7 @@ export async function appendWorkflowSupervisorReviewToAgora(input: {
     speakerType: 'supervisor',
     speakerName,
     content,
-    rawContent: content,
+    rawContent,
     createdAt: now,
     status: 'done',
     chatroom: {
