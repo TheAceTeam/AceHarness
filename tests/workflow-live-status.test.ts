@@ -68,4 +68,39 @@ describe('workflow live status normalization', () => {
       supersededByStep: '设计-review-step',
     })]);
   });
+
+  test('summarizes streamed engine errors before compacting status', () => {
+    const snapshot = compactWorkflowStatusForLive({
+      status: 'failed',
+      statusReason: [
+        '引擎异常，已停止工作流：',
+        '<!-- timestamp: 2026-08-04T02:47:14.626Z -->',
+        '前面的执行说明。',
+        '<!-- chunk-boundary -->',
+        '<!-- timestamp: 2026-08-04T02:54:07.458Z -->',
+        'unexpected status 403 Forbidden: {"code":"INSUFFICIENT_BALANCE"}',
+      ].join('\n'),
+    }, 'workflow.yaml') as any;
+
+    expect(snapshot.statusReason).toBe(
+      '引擎异常，已停止工作流：unexpected status 403 Forbidden: {"code":"INSUFFICIENT_BALANCE"}',
+    );
+  });
+
+  test('adds the latest failed step error to a recovery-gate status reason', () => {
+    const snapshot = compactWorkflowStatusForLive({
+      status: 'failed',
+      statusReason: '状态 "核心翻译" 存在失败步骤，必须先从失败断点恢复并重试：核心翻译-词法语法分析器',
+      failedSteps: ['核心翻译-词法语法分析器'],
+      stepLogs: [
+        {
+          stepName: '核心翻译-词法语法分析器',
+          status: 'failed',
+          error: '步骤执行超时：已超过配置上限 30 分钟。',
+        },
+      ],
+    }, 'workflow.yaml') as any;
+
+    expect(snapshot.statusReason).toContain('步骤执行超时：已超过配置上限 30 分钟。');
+  });
 });

@@ -91,7 +91,7 @@ import { buildForkSessionOptions, createForkedCollaborationWorkbenchState } from
 import { cn } from '@/lib/core/utils';
 import { fetchRuntimeCommandMetadataCompat } from '@/client/query/engines';
 import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
-import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { createSafeEventSource, describeEventSourceError } from '@/lib/core/safe-event-source';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { useAgentMessageRows } from '@/client/db/collections';
 import pkgJson from '../../../package.json';
@@ -108,6 +108,23 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
 const SIDEBAR_STORAGE_KEY = 'chat-sidebar-width';
 const HOME_SIDEBAR_WIDTH_STORAGE_KEY = 'home-command-sidebar-width';
 const SESSION_DIRECTORY_VIEW_STORAGE_KEY = 'aceharness:chat:session-directory-view';
+
+function formatAgentStreamFailure(data: Record<string, any> | null | undefined, fallback = 'Agent 发言失败'): string {
+  const message = String(data?.message || data?.error || fallback).trim() || fallback;
+  return [
+    data?.sourceLabel ? `来源：${String(data.sourceLabel)}` : '',
+    data?.stage ? `阶段：${String(data.stage)}` : '',
+    data?.code ? `错误代码：${String(data.code)}` : '',
+    data?.engine ? `引擎：${String(data.engine)}` : '',
+    data?.model ? `模型：${String(data.model)}` : '',
+    `原始错误：${message}`,
+  ].filter(Boolean).join('\n');
+}
+
+function appendAgentStreamFailure(partial: string, errorText: string): string {
+  const normalizedPartial = String(partial || '').trim();
+  return normalizedPartial ? `${normalizedPartial}\n\n---\n${errorText}` : errorText;
+}
 
 const COLLABORATION_MODE_OPTIONS: Array<{ value: CollaborationChatroomMode; label: string; title: string }> = [
   { value: 'mention-driven', label: '点名', title: '点名模式：只有被 @ 的 Agent 响应' },
@@ -1918,6 +1935,7 @@ export function ChatPageContent({
           resolveStoppedStream = resolve;
           let accumulated = '';
           let accumulatedRawStream = '';
+          let latestEngineError = '';
           let settled = false;
           let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
           const close = () => {
@@ -1978,9 +1996,23 @@ export function ChatPageContent({
             const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, resultText);
             const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
             const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            const terminalError = data?.isError
+              ? formatAgentStreamFailure({
+                ...data,
+                message: data?.error || latestEngineError || 'Agent 执行失败',
+                sourceLabel: data?.sourceLabel || 'ACEHarness Agent 执行终态',
+                stage: data?.stage || 'execution-finalize',
+                engine: data?.engine || participant?.engine,
+                model: data?.model || participant?.model,
+                streamId: stream.streamId,
+              })
+              : '';
+            const displayContent = data?.isError
+              ? appendAgentStreamFailure(cleanText || accumulated, terminalError)
+              : (cleanText || data?.output || data?.error || accumulated || '');
             void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
               role: data?.isError ? 'error' as const : 'assistant' as const,
-              content: cleanText || data?.output || data?.error || accumulated || '',
+              content: displayContent,
               rawContent: fullRawContent !== cleanText ? fullRawContent : undefined,
               cards: cards.length > 0 ? cards : [{
                 type: 'collaboration_speech',
@@ -2017,10 +2049,19 @@ export function ChatPageContent({
 
           stream.events.addEventListener('failed', ((event: MessageEvent) => {
             const data = parseAceSseEventData(event.data);
-            const messageText = String(data?.message || 'Agent 发言失败');
+            const messageText = formatAgentStreamFailure({
+              ...data,
+              message: data?.message || latestEngineError || 'Agent 发言失败',
+              sourceLabel: data?.sourceLabel || 'ACEHarness Agent 流式执行',
+              stage: data?.stage || 'stream-finalize',
+              engine: data?.engine || participant?.engine,
+              model: data?.model || participant?.model,
+              streamId: stream.streamId,
+            });
+            const errorContent = appendAgentStreamFailure(accumulated, messageText);
             void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
               role: 'error',
-              content: accumulated || messageText,
+              content: errorContent,
               rawContent: accumulatedRawStream || accumulated || messageText,
             });
             finish();
@@ -2028,24 +2069,37 @@ export function ChatPageContent({
 
           stream.events.addEventListener('engine_error', ((event: MessageEvent) => {
             const data = parseAceSseEventData(event.data);
-            const messageText = String(data?.message || 'Agent 发言失败');
-            void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
-              role: 'error',
-              content: accumulated || messageText,
-              rawContent: accumulatedRawStream || accumulated || messageText,
+            if (data?.recoverable) return;
+            latestEngineError = formatAgentStreamFailure({
+              ...data,
+              message: data?.message || data?.error || 'Agent 引擎返回错误',
+              sourceLabel: data?.sourceLabel || 'ACEHarness Agent 引擎',
+              stage: data?.stage || 'engine',
+              engine: data?.engine || participant?.engine,
+              model: data?.model || participant?.model,
+              streamId: stream.streamId,
             });
-            finish();
           }) as EventListener);
 
-          stream.events.onerror = () => {
+          stream.events.onerror = (event: Event) => {
             if (stoppedByUser) {
               finish();
               return;
             }
+            const errorText = latestEngineError || formatAgentStreamFailure({
+              message: describeEventSourceError(event, stream.events),
+              sourceLabel: '浏览器网络/SSE 连接层',
+              stage: 'connection',
+              code: 'AGENT_SSE_CONNECTION_ERROR',
+              engine: participant?.engine || runtimeName,
+              model: participant?.model,
+              streamId: stream.streamId,
+            });
+            const errorContent = appendAgentStreamFailure(accumulated, errorText);
             void updateSessionMessage(sessionIdForAgents!, assistantMessageId, {
               role: 'error',
-              content: accumulated || 'Agent 发言连接中断',
-              rawContent: accumulatedRawStream || accumulated || 'Agent 发言连接中断',
+              content: errorContent,
+              rawContent: accumulatedRawStream || accumulated || errorText,
             });
             finish();
           };

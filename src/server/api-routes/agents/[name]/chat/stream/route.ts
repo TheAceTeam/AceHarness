@@ -21,6 +21,9 @@ const activeAgentStreams = new Map<string, {
   settled: boolean;
   frontendSessionId?: string | null;
   agentName?: string;
+  diagnostics: {
+    engineErrors: AgentEngineErrorPayload[];
+  };
   cancel?: () => void;
 }>();
 
@@ -39,6 +42,68 @@ type StreamBody = {
   requestedMcpServers?: string[] | Record<string, boolean>;
   mcpServers?: string[] | Record<string, boolean>;
 };
+
+type AgentEngineErrorSource = 'api-provider' | 'aceharness-runtime' | 'unknown';
+
+function classifyAgentEngineError(message: string): {
+  source: AgentEngineErrorSource;
+  sourceLabel: string;
+} {
+  const normalized = String(message || '').toLowerCase();
+  if (/(insufficient_balance|insufficient balance|status(?:code)?\s*[=:]?\s*(?:401|402|403|408|409|429|5\d\d)|\b(?:401|402|403|408|409|429|5\d\d)\b|api provider|provider|upstream|rate limit|quota|billing|model.*capacity|capacity)/i.test(normalized)) {
+    return { source: 'api-provider', sourceLabel: 'API 提供商响应' };
+  }
+  if (/(runtime session|aceharness|runtime turn|memory v2|context window|stream not found)/i.test(normalized)) {
+    return { source: 'aceharness-runtime', sourceLabel: 'ACEHarness 运行时' };
+  }
+  return { source: 'unknown', sourceLabel: 'Agent 运行时事件' };
+}
+
+function buildAgentEngineErrorPayload(
+  message: string,
+  prepared: { engineType?: string; model?: string },
+  options: { recoverable?: boolean } = {},
+) {
+  const classification = classifyAgentEngineError(message);
+  return {
+    message,
+    source: classification.source,
+    sourceLabel: classification.sourceLabel,
+    stage: 'engine',
+    engine: prepared.engineType || undefined,
+    model: prepared.model || undefined,
+    recoverable: options.recoverable || undefined,
+  };
+}
+
+type AgentEngineErrorPayload = ReturnType<typeof buildAgentEngineErrorPayload>;
+
+function agentStreamFailureResponse(input: {
+  message: string;
+  code: string;
+  sourceLabel: string;
+  retryable?: boolean;
+}): Response {
+  const encoder = new TextEncoder();
+  const payload = {
+    message: input.message,
+    code: input.code,
+    source: 'aceharness-stream',
+    sourceLabel: input.sourceLabel,
+    retryable: input.retryable ?? true,
+  };
+  return new Response(
+    encoder.encode(`event: failed\ndata: ${JSON.stringify(payload)}\n\n`),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    },
+  );
+}
 
 function hasAgoraResult(rawOutput: string, expectedType: 'speech' | 'summary' | 'vote'): boolean {
   return Boolean(extractStructuredResult<{ kind: 'agora_result'; payload: Record<string, any> }>(
@@ -82,6 +147,7 @@ export async function POST(
     const { name } = await params;
     const body = await readJsonBody<StreamBody>(request, {});
     const streamId = `agent-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const streamDiagnostics: { engineErrors: AgentEngineErrorPayload[] } = { engineErrors: [] };
     const frontendSessionId = typeof body?.frontendSessionId === 'string' && body.frontendSessionId.trim()
       ? body.frontendSessionId.trim()
       : (typeof body?.workflowContext?.frontendSessionId === 'string' && body.workflowContext.frontendSessionId.trim()
@@ -120,7 +186,9 @@ export async function POST(
       } else if (evt?.type === 'thought' && evt.content) {
         agentStreamEvents.emit(streamId, { type: 'thinking', content: evt.content });
       } else if (evt?.type === 'error' && evt.content) {
-        agentStreamEvents.emit(streamId, { type: 'engine_error', content: evt.content });
+        const errorPayload = buildAgentEngineErrorPayload(String(evt.content), prepared);
+        streamDiagnostics.engineErrors.push(errorPayload);
+        agentStreamEvents.emit(streamId, { type: 'engine_error', ...errorPayload });
       }
     };
 
@@ -143,7 +211,13 @@ export async function POST(
         }, {
           buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(prepared, prepared.prompt),
           onContextReset: () => {
-            agentStreamEvents.emit(streamId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
+            const errorPayload = buildAgentEngineErrorPayload(
+              '上下文超限，已清空会话并自动接力继续。',
+              prepared,
+              { recoverable: true },
+            );
+            streamDiagnostics.engineErrors.push(errorPayload);
+            agentStreamEvents.emit(streamId, { type: 'engine_error', ...errorPayload });
           },
         });
       }
@@ -169,7 +243,13 @@ export async function POST(
           buildCompactSource: () => buildAgentChatMemoryV2RecoverySource(prepared, prepared.prompt),
           onContextReset: () => {
             latestSessionId = undefined;
-            agentStreamEvents.emit(streamId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
+            const errorPayload = buildAgentEngineErrorPayload(
+              '上下文超限，已清空会话并自动接力继续。',
+              prepared,
+              { recoverable: true },
+            );
+            streamDiagnostics.engineErrors.push(errorPayload);
+            agentStreamEvents.emit(streamId, { type: 'engine_error', ...errorPayload });
           },
         });
         lastResult = result;
@@ -200,6 +280,7 @@ export async function POST(
       settled: false,
       frontendSessionId,
       agentName: name,
+      diagnostics: streamDiagnostics,
       cancel: () => {
         prepared.engine.cancel();
         prepared.releaseMemoryV2();
@@ -229,7 +310,11 @@ export async function GET(request: Request) {
 
   const entry = activeAgentStreams.get(streamId);
   if (!entry) {
-    return jsonError('Stream not found', 404);
+    return agentStreamFailureResponse({
+      message: `ACEHarness 找不到 Agent 流：${streamId}。服务端流状态已过期、进程已重启或当前请求落在了没有该流的服务实例。`,
+      code: 'AGENT_STREAM_NOT_FOUND',
+      sourceLabel: 'ACEHarness 流状态管理',
+    });
   }
 
   const encoder = new TextEncoder();
@@ -261,19 +346,56 @@ export async function GET(request: Request) {
         } else if (evt.type === 'thinking') {
           send('thinking', { content: evt.content });
         } else if (evt.type === 'engine_error') {
-          send('engine_error', { message: evt.content || '执行失败' });
+          send('engine_error', {
+            message: evt.message || evt.content || 'Agent 引擎返回错误',
+            source: evt.source,
+            sourceLabel: evt.sourceLabel,
+            stage: evt.stage || 'engine',
+            engine: evt.engine,
+            model: evt.model,
+            recoverable: Boolean(evt.recoverable),
+          });
         }
       };
 
       agentStreamEvents.on(streamId, onAgentStream);
-      send('connected', { streamId });
+      send('connected', {
+        streamId,
+        source: 'aceharness-stream',
+        sourceLabel: 'ACEHarness Agent SSE 接口',
+        stage: 'connected',
+      });
+      for (const errorPayload of entry.diagnostics.engineErrors) {
+        send('engine_error', { ...errorPayload, replayed: true });
+      }
 
       entry.promise
         .then((result: any) => {
+          if (result?.isError) {
+            const message = String(result?.error || result?.output || 'Agent 执行失败');
+            const classification = classifyAgentEngineError(message);
+            send('done', {
+              ...result,
+              code: String(result?.code || 'AGENT_EXECUTION_FAILED'),
+              source: classification.source,
+              sourceLabel: classification.sourceLabel,
+              stage: 'execution-finalize',
+            });
+            return;
+          }
           send('done', result);
         })
         .catch((err: any) => {
-          send('failed', { message: err?.message || '执行失败' });
+          const message = String(err?.message || 'Agent 执行失败');
+          const classification = classifyAgentEngineError(message);
+          send('failed', {
+            message,
+            code: String(err?.code || 'AGENT_STREAM_FAILED'),
+            source: classification.source,
+            sourceLabel: classification.sourceLabel,
+            stage: 'stream-finalize',
+            streamId,
+          });
         })
         .finally(() => {
           cleanup();

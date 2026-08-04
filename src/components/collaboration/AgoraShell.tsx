@@ -34,6 +34,7 @@ import { ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
 import { detectOpeningRole, type OpeningRole } from '@/lib/agora/opening-copy';
 import { mergeFinalRawStreamContent } from '@/lib/chat/ai-process-blocks';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
+import { describeEventSourceError } from '@/lib/core/safe-event-source';
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then((m) => m.WorkspaceEditor), {
   ssr: false,
@@ -277,6 +278,27 @@ function replaceAgentSession(sessions: Record<string, string>, agentName: string
   if (nextSessionId) next[agentName] = nextSessionId;
   else delete next[agentName];
   return next;
+}
+
+function formatAgentStreamError(
+  data: Record<string, any> | null | undefined,
+  fallback = 'Agent 发言失败',
+): string {
+  const message = String(data?.message || data?.error || fallback).trim() || fallback;
+  return [
+    data?.sourceLabel ? `来源：${String(data.sourceLabel)}` : '',
+    data?.stage ? `阶段：${String(data.stage)}` : '',
+    data?.code ? `错误代码：${String(data.code)}` : '',
+    data?.streamId ? `流标识：${String(data.streamId)}` : '',
+    data?.engine ? `引擎：${String(data.engine)}` : '',
+    data?.model ? `模型：${String(data.model)}` : '',
+    `原始错误：${message}`,
+  ].filter(Boolean).join('\n');
+}
+
+function appendAgentStreamError(partial: string, errorText: string): string {
+  const normalizedPartial = String(partial || '').trim();
+  return normalizedPartial ? `${normalizedPartial}\n\n---\n${errorText}` : errorText;
 }
 
 function buildOpeningMessageId(sessionId: string, participant: CollaborationChatroomParticipant): string {
@@ -693,6 +715,7 @@ export function AgoraShell({
       let settled = false;
       let stoppedByUser = false;
       let partialContent = '';
+      let latestEngineError = '';
       let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
 
       const closeEvents = () => {
@@ -808,9 +831,19 @@ export function AgoraShell({
           String(data?.rawOutput || data?.output || data?.error || ''),
         );
         if (data?.isError) {
+          const errorText = formatAgentStreamError({
+            ...data,
+            sourceLabel: data?.sourceLabel || 'ACEHarness Agent 执行终态',
+            stage: data?.stage || 'execution-finalize',
+            engine: data?.engine || runtimeName,
+            streamId: stream.streamId,
+            content: undefined,
+            message: data?.error || latestEngineError || data?.message || finalContent,
+          });
+          const errorContent = appendAgentStreamError(partialContent, errorText);
           storeChatStreamSseEventAsAgentMessage('error', {
             ...data,
-            content: finalRawContent || finalContent,
+            content: errorContent,
             isError: true,
           }, {
             chatId: stream.streamId,
@@ -821,8 +854,9 @@ export function AgoraShell({
             frontendSessionId: activeSessionId || undefined,
             streamScope: 'agora-agent-chat',
           }, aiPrevious);
-          finishReject(Object.assign(new Error(data?.error || finalContent || 'Agent 发言失败'), {
-            partialContent: finalContent,
+          finishReject(Object.assign(new Error(errorText), {
+            code: data?.code,
+            partialContent,
             rawContent: finalRawContent,
             engine: data?.engine,
             model: data?.model,
@@ -853,10 +887,18 @@ export function AgoraShell({
 
       stream.events.addEventListener('failed', ((event: MessageEvent) => {
         const data = parseAceSseEventData(event.data);
-        const errorText = data?.message || 'Agent 发言失败';
+        const errorText = formatAgentStreamError({
+          ...data,
+          message: data?.message || latestEngineError || 'Agent 发言失败',
+          sourceLabel: data?.sourceLabel || 'ACEHarness Agent 流式执行',
+          stage: data?.stage || 'stream-finalize',
+          engine: data?.engine || runtimeName,
+          streamId: stream.streamId,
+        });
+        const errorContent = appendAgentStreamError(partialContent, errorText);
         storeChatStreamSseEventAsAgentMessage('error', {
           ...data,
-          content: partialContent || errorText,
+          content: errorContent,
           isError: true,
         }, {
           chatId: stream.streamId,
@@ -868,16 +910,38 @@ export function AgoraShell({
           streamScope: 'agora-agent-chat',
         }, aiPrevious);
         finishReject(Object.assign(new Error(errorText), {
-          partialContent: partialContent || errorText,
-          rawContent: partialContent || errorText,
+          code: data?.code,
+          partialContent,
+          rawContent: partialContent,
         }));
       }) as EventListener);
 
-      stream.events.onerror = () => {
+      stream.events.addEventListener('engine_error', ((event: MessageEvent) => {
+        const data = parseAceSseEventData(event.data);
+        if (data?.recoverable) return;
+        latestEngineError = formatAgentStreamError({
+          ...data,
+          message: data?.message || data?.error || 'Agent 引擎返回错误',
+          sourceLabel: data?.sourceLabel || 'ACEHarness Agent 引擎',
+          stage: data?.stage || 'engine',
+          engine: data?.engine || runtimeName,
+          streamId: stream.streamId,
+        });
+      }) as EventListener);
+
+      stream.events.onerror = (event: Event) => {
         if (stoppedByUser || settled) return;
-        const errorText = 'Agent 发言连接中断';
+        const errorText = latestEngineError || formatAgentStreamError({
+          message: describeEventSourceError(event, stream.events),
+          sourceLabel: '浏览器网络/SSE 连接层',
+          stage: 'connection',
+          code: 'AGENT_SSE_CONNECTION_ERROR',
+          engine: runtimeName,
+          streamId: stream.streamId,
+        });
+        const errorContent = appendAgentStreamError(partialContent, errorText);
         storeChatStreamSseEventAsAgentMessage('error', {
-          content: partialContent || errorText,
+          content: errorContent,
           isError: true,
         }, {
           chatId: stream.streamId,
@@ -887,8 +951,9 @@ export function AgoraShell({
           streamScope: 'agora-agent-chat',
         }, aiPrevious);
         finishReject(Object.assign(new Error(errorText), {
-          partialContent: partialContent || errorText,
-          rawContent: partialContent || errorText,
+          code: 'AGENT_SSE_CONNECTION_ERROR',
+          partialContent,
+          rawContent: partialContent,
         }));
       };
     });

@@ -41,10 +41,29 @@ import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { mergeFinalRawStreamContent } from '@/lib/chat/ai-process-blocks';
+import { describeEventSourceError } from '@/lib/core/safe-event-source';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { handleCollaborationMentionKeyDown } from '@/plugins/supervisor/collaboration-surface-adapters';
 
 type SidebarTab = HomeSidebarTab;
+
+function formatWorkflowAgentError(data: Record<string, any> | null | undefined, fallback = 'Agent 对话失败'): string {
+  const message = String(data?.message || data?.error || fallback).trim() || fallback;
+  return [
+    data?.sourceLabel ? `来源：${String(data.sourceLabel)}` : '',
+    data?.stage ? `阶段：${String(data.stage)}` : '',
+    data?.code ? `错误代码：${String(data.code)}` : '',
+    data?.streamId ? `流标识：${String(data.streamId)}` : '',
+    data?.engine ? `引擎：${String(data.engine)}` : '',
+    data?.model ? `模型：${String(data.model)}` : '',
+    `原始错误：${message}`,
+  ].filter(Boolean).join('\n');
+}
+
+function appendWorkflowAgentError(partial: string, errorText: string): string {
+  const normalizedPartial = String(partial || '').trim();
+  return normalizedPartial ? `${normalizedPartial}\n\n---\n${errorText}` : errorText;
+}
 
 type WorkflowSummary = {
   filename: string;
@@ -813,6 +832,7 @@ export default function HomeCommandSidebar({
 
     return await new Promise<string>((resolve, reject) => {
       let content = '';
+      let latestEngineError = '';
       let aiPrevious: Pick<AceStreamChunk, 'id' | 'content' | 'toolCalls'> | undefined;
       let settled = false;
       const finish = (callback: () => void) => {
@@ -847,6 +867,18 @@ export default function HomeCommandSidebar({
         const finalContent = data?.specCodingRevision?.applied
           ? `${data.output || content || data.error || '无输出'}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
           : (data?.output || content || data?.error || '无输出');
+        const errorText = data?.isError
+          ? formatWorkflowAgentError({
+            ...data,
+            message: data?.error || latestEngineError || 'Agent 执行失败',
+            sourceLabel: data?.sourceLabel || 'ACEHarness Agent 执行终态',
+            stage: data?.stage || 'execution-finalize',
+            streamId: stream.streamId,
+            engine: data?.engine,
+            model: data?.model,
+          })
+          : '';
+        const displayContent = data?.isError ? appendWorkflowAgentError(content, errorText) : finalContent;
         const row = storeChatStreamSseEventAsAgentMessage('done', { ...data, content: finalContent }, {
           chatId: stream.streamId,
           stepKey: agentName,
@@ -857,7 +889,7 @@ export default function HomeCommandSidebar({
           streamScope: 'workflow-agent-chat',
         }, aiPrevious);
         aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-        const finalMessage = { ...baseMessage, content: finalContent, rawContent: finalContent, status: data?.isError ? 'error' as const : 'done' as const, error: data?.error || null, engine: data?.engine, model: data?.model };
+        const finalMessage = { ...baseMessage, content: displayContent, rawContent: finalContent, status: data?.isError ? 'error' as const : 'done' as const, error: data?.error || errorText || null, engine: data?.engine, model: data?.model };
         updateCollaborationRoom((room) => ({
           ...room,
           agentSessions: data?.sessionId !== undefined && nextSessionId ? { ...(room.agentSessions || {}), [agentName]: nextSessionId } : room.agentSessions,
@@ -868,15 +900,40 @@ export default function HomeCommandSidebar({
       }) as EventListener);
       stream.events.addEventListener('failed', ((event: MessageEvent) => {
         const data = parseAceSseEventData(event.data);
-        const errorText = data?.message || 'Agent 对话失败';
-        const finalMessage = { ...baseMessage, content: content || errorText, rawContent: content || errorText, status: 'error' as const, error: errorText };
+        const errorText = formatWorkflowAgentError({
+          ...data,
+          message: data?.message || latestEngineError || 'Agent 对话失败',
+          sourceLabel: data?.sourceLabel || 'ACEHarness Agent 流式执行',
+          stage: data?.stage || 'stream-finalize',
+          streamId: stream.streamId,
+        });
+        const errorContent = appendWorkflowAgentError(content, errorText);
+        const finalMessage = { ...baseMessage, content: errorContent, rawContent: content || errorText, status: 'error' as const, error: errorText };
         updateCollaborationRoom((room) => ({ ...room, messages: (room.messages || []).map((item) => item.id === baseMessage.id ? finalMessage : item) }));
         updateStreamingCollaborationMessage(finalMessage);
         finish(() => reject(new Error(errorText)));
       }) as EventListener);
-      stream.events.onerror = () => {
-        const errorText = 'Agent 流式连接中断';
-        const finalMessage = { ...baseMessage, content: content || errorText, rawContent: content || errorText, status: 'error' as const, error: errorText };
+      stream.events.addEventListener('engine_error', ((event: MessageEvent) => {
+        const data = parseAceSseEventData(event.data);
+        if (data?.recoverable) return;
+        latestEngineError = formatWorkflowAgentError({
+          ...data,
+          message: data?.message || data?.error || 'Agent 引擎返回错误',
+          sourceLabel: data?.sourceLabel || 'ACEHarness Agent 引擎',
+          stage: data?.stage || 'engine',
+          streamId: stream.streamId,
+        });
+      }) as EventListener);
+      stream.events.onerror = (event: Event) => {
+        const errorText = latestEngineError || formatWorkflowAgentError({
+          message: describeEventSourceError(event, stream.events),
+          sourceLabel: '浏览器网络/SSE 连接层',
+          stage: 'connection',
+          code: 'AGENT_SSE_CONNECTION_ERROR',
+          streamId: stream.streamId,
+        });
+        const errorContent = appendWorkflowAgentError(content, errorText);
+        const finalMessage = { ...baseMessage, content: errorContent, rawContent: content || errorText, status: 'error' as const, error: errorText };
         updateCollaborationRoom((room) => ({ ...room, messages: (room.messages || []).map((item) => item.id === baseMessage.id ? finalMessage : item) }));
         updateStreamingCollaborationMessage(finalMessage);
         finish(() => reject(new Error(errorText)));

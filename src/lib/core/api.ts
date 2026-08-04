@@ -1457,7 +1457,16 @@ export const agentApi = {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok || !data?.streamId) {
-      throw new Error(data?.error || 'Agent 流式对话失败');
+      const rawError = String(data?.error || data?.message || response.statusText || '接口未返回 streamId').trim();
+      const status = response.status ? `HTTP ${response.status}` : 'HTTP 状态未知';
+      throw new Error([
+        'Agent 对话启动失败',
+        '来源：ACEHarness Agent API',
+        '阶段：POST 创建流',
+        `接口：${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream`,
+        `状态：${status}`,
+        `原始错误：${rawError}`,
+      ].join('\n'));
     }
     const events = createSafeEventSource(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream?id=${encodeURIComponent(data.streamId)}`);
     return {
