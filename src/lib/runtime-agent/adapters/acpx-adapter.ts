@@ -187,11 +187,13 @@ export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options:
   return getAcpxCommandAttemptsForRuntime(command, options)[0]?.command || '';
 }
 
-export function getAcpxAgentRegistryOverrides(): Record<string, string> {
+export function getAcpxAgentRegistryOverrides(): Record<string, string | string[]> {
+  // ACPX accepts argv arrays on Windows; passing a raw command string makes
+  // the runtime reject the launch before it can resolve a .cmd shim.
   return {
-    nga: 'ngagent --disable-update acp',
-    codeagent: 'codeagent acp',
-    codegenie: 'codegenie acp',
+    nga: getAcpxAgentRegistryOverride('nga'),
+    codeagent: getAcpxAgentRegistryOverride('codeagent'),
+    codegenie: getAcpxAgentRegistryOverride('codegenie'),
   };
 }
 
@@ -211,7 +213,7 @@ export function getAcpxCommandAttemptsForRuntime(
 ): AcpxRuntimeCommandAttempt[] {
   const attempts = buildAcpxCommandAttemptParts(command, options).map((attempt) => ({
     source: attempt.source,
-    command: formatCommandParts(attempt.parts),
+    command: formatCommandParts(wrapWindowsCmdShellParts(attempt.parts[0] || '', attempt.parts.slice(1))),
   })).filter((attempt) => attempt.command);
 
   const seen = new Set<string>();
@@ -231,14 +233,14 @@ function buildAcpxCommandAttemptParts(
     const codeagent = resolveAcpxCommandPath('codeagent', searchPaths);
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'codeagent', parts: wrapWindowsCmdShellParts(codeagent || 'codeagent', args) }];
+    return [{ source: 'codeagent', parts: [codeagent || 'codeagent', ...args] }];
   }
   if (options.agentId === 'nga' || (!options.agentId && (command.command === 'ngagent' || command.command === 'nga'))) {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
     const ngagent = resolveAcpxCommandPath('ngagent', searchPaths);
     const args = ['--disable-update', 'acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'ngagent', parts: wrapWindowsCmdShellParts(ngagent || 'ngagent', args) }];
+    return [{ source: 'ngagent', parts: [ngagent || 'ngagent', ...args] }];
   }
   if (options.agentId === 'codegenie' || command.command === 'codegenie') {
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
@@ -249,9 +251,15 @@ function buildAcpxCommandAttemptParts(
       || command.command;
     const args = ['acp'];
     if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'codegenie', parts: wrapWindowsCmdShellParts(resolvedCommand, args) }];
+    return [{ source: 'codegenie', parts: [resolvedCommand, ...args] }];
   }
   return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
+}
+
+function getAcpxAgentRegistryOverride(agentId: 'nga' | 'codeagent' | 'codegenie'): string[] {
+  const command = resolveAcpxCommand(agentId);
+  return buildAcpxCommandAttemptParts(command, { agentId })[0]?.parts
+    ?? [command.command, ...(command.args || [])];
 }
 
 function shouldUseAcpxRegistryAgent(command: AcpxCommandResolution, agentId?: string): boolean {

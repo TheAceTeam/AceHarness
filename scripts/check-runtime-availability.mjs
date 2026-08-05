@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getAcpxAgentRegistryOverrides } from './acpx-agent-overrides.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const AGENT_OVERRIDES = {
-  nga: 'ngagent --disable-update acp',
-  codeagent: 'codeagent acp',
-  codegenie: 'codegenie acp',
-};
+const AGENT_OVERRIDES = getAcpxAgentRegistryOverrides();
 const DEFAULT_AGENTS = [
   'codex',
   'claude',

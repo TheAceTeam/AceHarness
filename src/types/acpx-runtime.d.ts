@@ -12,7 +12,7 @@ declare module 'acpx/runtime' {
   }
 
   export interface AcpAgentRegistry {
-    resolve(agentName: string): string;
+    resolve(agentName: string): string | string[];
     list(): string[];
   }
 
@@ -123,7 +123,7 @@ declare module 'acpx/runtime' {
 
   export const AcpxRuntime: new (...args: any[]) => AcpRuntime;
   export function createAcpRuntime(options: AcpRuntimeOptions): AcpRuntime;
-  export function createAgentRegistry(input?: { overrides?: Record<string, string> }): AcpAgentRegistry;
+  export function createAgentRegistry(input?: { overrides?: Record<string, string | string[]> }): AcpAgentRegistry;
   export function createFileSessionStore(input: { stateDir: string }): AcpSessionStore;
   export function createRuntimeStore(input: { stateDir: string }): AcpSessionStore;
   export function encodeAcpxRuntimeHandleState(...args: any[]): unknown;

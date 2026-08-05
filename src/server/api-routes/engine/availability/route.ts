@@ -7,6 +7,12 @@ import {
 import { normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
 import { openRuntimeSqliteDatabase } from '@/lib/runtime-agent/sqlite/database';
 import { RuntimeSqliteStore } from '@/lib/runtime-agent/sqlite/runtime-store';
+import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import {
+  buildConfiguredProcessEnvSync,
+  getConfiguredCliSearchPaths,
+  getConfiguredEnvValueSync,
+} from '@/lib/core/configured-env';
 import { jsonError, jsonOk } from '@/server/api-route-runtime/request-utils';
 import { spawn } from 'node:child_process';
 
@@ -55,7 +61,7 @@ async function getRuntimeAgentAvailabilityReport(engine: string, options: { refr
       normalizeRuntimeEngineId(agent.definition.id) === normalizedEngine
     ));
     if (options.refresh && entry) {
-      const probe = await runAvailabilityProbe(entry.definition.availabilityProbe);
+      const probe = await runAvailabilityProbe(entry.definition.id, entry.definition.availabilityProbe);
       store.upsertAgentRuntimeState({
         agentId: entry.definition.id,
         availabilityStatus: probe.status,
@@ -90,7 +96,7 @@ async function getRuntimeAgentAvailabilityReport(engine: string, options: { refr
   }
 }
 
-async function runAvailabilityProbe(probe: AvailabilityProbeSpec) {
+async function runAvailabilityProbe(agentId: string, probe: AvailabilityProbeSpec) {
   const checkedAt = new Date().toISOString();
   const commands = uniqueStrings([
     probe.resolver.primaryCommand,
@@ -100,21 +106,22 @@ async function runAvailabilityProbe(probe: AvailabilityProbeSpec) {
   const failures: string[] = [];
 
   for (const command of commands) {
-    const result = await runCommand(command, probe.args);
+    const executable = resolveAvailabilityExecutable(agentId, command);
+    const result = await runCommand(executable, probe.args, buildConfiguredProcessEnvSync());
     if (result.ok) {
       return {
         status: 'available' as const,
         checkedAt,
-        message: firstOutputLine(result.output) || `${command} is available`,
+        message: firstOutputLine(result.output) || `${executable} is available`,
       };
     }
 
     if (result.missing) {
-      failures.push(`${command}: missing`);
+      failures.push(`${executable}: missing`);
       continue;
     }
 
-    failures.push(`${command}: ${result.output || `exited with code ${result.exitCode ?? 'unknown'}`}`);
+    failures.push(`${executable}: ${result.output || `exited with code ${result.exitCode ?? 'unknown'}`}`);
   }
 
   const hasOnlyMissing = failures.length > 0 && failures.every((failure) => failure.endsWith(': missing'));
@@ -125,7 +132,16 @@ async function runAvailabilityProbe(probe: AvailabilityProbeSpec) {
   };
 }
 
-function runCommand(command: string, args: string[]): Promise<{
+function resolveAvailabilityExecutable(agentId: string, command: string): string {
+  const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+  const explicit = agentId === 'codegenie'
+    ? getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim()
+    : undefined;
+  const candidate = explicit || command;
+  return findCommand(candidate, searchPaths) || candidate;
+}
+
+function runCommand(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<{
   ok: boolean;
   missing: boolean;
   output: string;
@@ -145,11 +161,7 @@ function runCommand(command: string, args: string[]): Promise<{
       clearTimeout(timeout);
       resolve(result);
     };
-    const child = spawn(command, args, {
-      shell: process.platform === 'win32',
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const child = spawnAvailabilityCommand(command, args, env);
     const chunks: Buffer[] = [];
     timeout = setTimeout(() => {
       child.kill();
@@ -181,6 +193,28 @@ function runCommand(command: string, args: string[]): Promise<{
       });
     });
   });
+}
+
+function spawnAvailabilityCommand(command: string, args: string[], env: NodeJS.ProcessEnv) {
+  if (process.platform !== 'win32') {
+    return spawn(command, args, {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
+
+  const line = [command, ...args].map(quoteWindowsCmdToken).join(' ');
+  return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', line], {
+    env,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function quoteWindowsCmdToken(token: string): string {
+  if (token === '') return '""';
+  if (!/[\s"]/u.test(token)) return token;
+  return `"${token.replace(/"/g, '""')}"`;
 }
 
 function isMissingCommandOutput(output: string) {

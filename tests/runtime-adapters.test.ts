@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, test, vi } from 'vitest';
 import { createRuntimeAdapterRegistry, resolveRuntimeForAgent } from '@/lib/runtime-agent/adapters/adapter-registry';
-import { AcpxAdapter, normalizeAcpxRuntimeEvent, resolveAcpxCommand } from '@/lib/runtime-agent/adapters/acpx-adapter';
+import {
+  AcpxAdapter,
+  getAcpxAgentRegistryOverrides,
+  normalizeAcpxRuntimeEvent,
+  resolveAcpxCommand,
+} from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { createAcpxRuntimeClient } from '@/lib/runtime-agent/adapters/acpx-runtime-client';
 import { getAcpxDebugTraceDirectory, writeAcpxDebugTrace } from '@/lib/runtime-agent/acpx-debug-trace';
 import { MagicAdapter, normalizeMagicRuntimeEvent } from '@/lib/runtime-agent/adapters/magic-adapter';
@@ -79,6 +84,15 @@ describe('runtime adapters', () => {
       command: 'opencode',
       args: ['acp'],
     });
+  });
+
+  test('uses argv overrides so Windows can launch CodeGenie command shims', () => {
+    const overrides = getAcpxAgentRegistryOverrides();
+
+    expect(overrides.nga).toEqual(['ngagent', '--disable-update', 'acp']);
+    expect(overrides.codeagent).toEqual(['codeagent', 'acp']);
+    expect(overrides.codegenie).toEqual(expect.arrayContaining(['acp']));
+    expect(Array.isArray(overrides.codegenie)).toBe(true);
   });
 
   test('normalizes acpx events without exposing provider or acpx native ids in payload', () => {
