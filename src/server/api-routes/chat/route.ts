@@ -10,6 +10,7 @@ import {
   executeChatRuntimeWithContextRecovery,
   resolveRecoveredRuntimeSessionId,
   resolveRequestedChatRuntimeEngineType,
+  resolveRequestedChatRuntimeModel,
   type ChatRuntimeResultMetadata,
   type ChatRuntimeTokenUsage,
 } from '@/lib/chat/chat-engine-runtime';
@@ -79,8 +80,8 @@ export async function POST(request: Request) {
       ? runtimeSessionId.trim()
       : (typeof requestedSessionId === 'string' ? requestedSessionId.trim() : '');
 
-    const useModel = model || '';
     const engineType = await resolveRequestedChatRuntimeEngineType(requestedEngine);
+    const useModel = resolveRequestedChatRuntimeModel(model);
     if (useModel && !resolveActiveChatModelRoute(engineType, useModel)) {
       return jsonError(chatModelRouteError(engineType, useModel), 422);
     }

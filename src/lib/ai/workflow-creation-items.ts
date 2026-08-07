@@ -5,11 +5,29 @@ import {
   LIGHTWEIGHT_WORKFLOW_DESCRIPTION,
   LIGHTWEIGHT_WORKFLOW_PROFILE,
 } from '@/lib/workflow/lightweight';
+import {
+  createDefaultStandardReviewPolicy,
+  createWorkflowStepProvenance,
+  normalizeWorkflowReviewAssessment,
+  normalizeWorkflowReviewPolicy,
+  validateWorkflowReviewAssessmentInput,
+  validateWorkflowReviewPolicyInput,
+  workflowReviewFingerprint,
+  type WorkflowCreationAdversarialIntent,
+  type WorkflowCreationJourney,
+  type WorkflowCreationReviewAssessment,
+  type WorkflowCreationReviewPolicy,
+  type WorkflowManagedStepRole,
+  type WorkflowReviewMode,
+  type WorkflowTargetKind,
+} from '@/lib/ai/workflow-creation-review-protocol';
+import { createReviewEntityId } from '@/lib/workflow/state-review-policy';
 
 export const WORKFLOW_CLARIFICATION_SUMMARY_KIND = 'workflow_clarification_summary';
 export const WORKFLOW_CLARIFICATION_FACTS_KIND = 'workflow_clarification_facts';
 export const WORKFLOW_CLARIFICATION_GAPS_KIND = 'workflow_clarification_gaps';
 export const WORKFLOW_CLARIFICATION_QUESTION_KIND = 'workflow_clarification_question';
+export const WORKFLOW_CLARIFICATION_BUNDLE_KIND = 'workflow_clarification_bundle';
 export const SPEC_CODING_META_KIND = 'spec_coding_meta';
 export const SPEC_REQUIREMENT_KIND = 'spec_requirement';
 export const SPEC_DESIGN_KIND = 'spec_design';
@@ -27,6 +45,7 @@ export type WorkflowCreationItemKind =
   | typeof WORKFLOW_CLARIFICATION_FACTS_KIND
   | typeof WORKFLOW_CLARIFICATION_GAPS_KIND
   | typeof WORKFLOW_CLARIFICATION_QUESTION_KIND
+  | typeof WORKFLOW_CLARIFICATION_BUNDLE_KIND
   | typeof SPEC_CODING_META_KIND
   | typeof SPEC_REQUIREMENT_KIND
   | typeof SPEC_DESIGN_KIND
@@ -50,6 +69,9 @@ export interface WorkflowCreationItemValidationContext {
   expectedStateName?: string;
   availableStepAgents?: string[];
   supervisorAgents?: string[];
+  creationJourney?: WorkflowCreationJourney;
+  targetWorkflowKind?: WorkflowTargetKind;
+  creationAdversarialIntent?: WorkflowCreationAdversarialIntent;
 }
 
 export interface SpecRequirementItem {
@@ -87,6 +109,7 @@ export interface WorkflowOutlineStateItem {
   isInitial?: boolean;
   isFinal?: boolean;
   transitions?: any[];
+  reviewPolicy?: WorkflowCreationReviewPolicy;
 }
 
 export interface WorkflowCreationState {
@@ -121,6 +144,8 @@ export interface WorkflowCreationState {
   };
   workflow: {
     mode: WorkflowCreationMode;
+    kindRationale: string;
+    reviewAssessment?: WorkflowCreationReviewAssessment;
     outline: WorkflowOutlineStateItem[];
     stateSteps: Record<string, any[]>;
     stateTransitions: Record<string, any[]>;
@@ -135,9 +160,11 @@ export interface WorkflowCreationAssemblyInput {
   workingDirectory: string;
   workspaceMode: 'isolated-copy' | 'in-place';
   recommendedAgents?: string[];
+  availableAgents?: string[];
   recommendedSupervisorAgent?: string;
   specCoding?: any;
   includeSpecTaskBindings?: boolean;
+  creationAdversarialIntent?: WorkflowCreationAdversarialIntent;
 }
 
 export const WORKFLOW_CREATION_ITEM_KINDS = new Set<string>([
@@ -145,6 +172,7 @@ export const WORKFLOW_CREATION_ITEM_KINDS = new Set<string>([
   WORKFLOW_CLARIFICATION_FACTS_KIND,
   WORKFLOW_CLARIFICATION_GAPS_KIND,
   WORKFLOW_CLARIFICATION_QUESTION_KIND,
+  WORKFLOW_CLARIFICATION_BUNDLE_KIND,
   SPEC_CODING_META_KIND,
   SPEC_REQUIREMENT_KIND,
   SPEC_DESIGN_KIND,
@@ -348,6 +376,20 @@ function normalizeQuestion(data: Record<string, any>, index: number): Clarificat
   };
 }
 
+function validateClarificationQuestionSource(source: Record<string, any>, path: string): string[] {
+  const errors: string[] = [];
+  if (!cleanString(source.question) && !cleanString(source.text)) {
+    errors.push(validationError(`${path}.question`, `澄清问题缺少 question 文本。当前字段状态：question=${describeValue(source.question)}；text=${describeValue(source.text)}。`, '写入具体问题，并说明这个答案会影响什么决策。'));
+  }
+  if (!Array.isArray(source.options) || source.options.length < 2) {
+    errors.push(validationError(`${path}.options`, `options 缺失、不是数组或少于 2 个选项。当前 options=${describeValue(source.options)}。`, '提供 2-4 个选项对象，每个选项包含 id、label、description。'));
+  }
+  if (Array.isArray(source.options) && source.options.length >= 2 && !source.options.some((option: any) => option?.recommended === true)) {
+    errors.push(validationError(`${path}.options`, `没有选项设置 recommended=true。当前 options=${previewValue(source.options, 500)}。`, '在最稳妥的默认选项上设置 "recommended":true。'));
+  }
+  return errors;
+}
+
 function normalizeRequirement(data: Record<string, any>, index: number): SpecRequirementItem | null {
   const source = data.requirement && typeof data.requirement === 'object' ? data.requirement : data;
   const title = cleanString(source.title) || cleanString(source.name);
@@ -442,22 +484,44 @@ function normalizeWorkflowOutline(states: WorkflowOutlineStateItem[]): WorkflowO
     deduped.push({ name: '完成', description: '工作流执行完成并沉淀结果。', isFinal: true });
   }
   const finalIndex = deduped.findIndex((state) => state.isFinal);
-  return deduped.map((state, index) => ({
-    ...state,
-    isInitial: index === 0,
-    isFinal: index === finalIndex,
-  }));
+  return deduped.map((state, index) => {
+    const isFinal = index === finalIndex;
+    const { reviewPolicy: rawPolicy, ...stateFields } = state;
+    return {
+      ...stateFields,
+      isInitial: index === 0,
+      isFinal,
+      ...(!isFinal && normalizeWorkflowReviewPolicy(rawPolicy)
+        ? { reviewPolicy: normalizeWorkflowReviewPolicy(rawPolicy)! }
+        : {}),
+    };
+  });
 }
 
 function normalizeOutlineStates(data: Record<string, any>): WorkflowOutlineStateItem[] {
   const rawStates = Array.isArray(data.states) ? data.states : [];
-  return normalizeWorkflowOutline(rawStates.map((state: any, index: number) => ({
+  const normalizedStates = rawStates.map((state: any, index: number) => ({
     name: cleanString(state?.name) || cleanString(state?.title) || `状态 ${index + 1}`,
     description: cleanString(state?.description) || cleanString(state?.purpose) || undefined,
     isInitial: state?.isInitial === true || index === 0,
     isFinal: state?.isFinal === true,
     transitions: extractWorkflowTransitionItems(state),
-  })));
+    reviewPolicy: normalizeWorkflowReviewPolicy(state?.reviewPolicy) || undefined,
+  }));
+  const workflowMode = cleanString(data.workflowKind || data.workflowMode);
+  if (workflowMode === 'lightweight') {
+    return normalizedStates.map((state, index) => {
+      const stateFields = { ...state };
+      delete stateFields.reviewPolicy;
+      return {
+        ...stateFields,
+        isInitial: index === 0,
+        isFinal: index === 0,
+        transitions: [],
+      };
+    });
+  }
+  return normalizeWorkflowOutline(normalizedStates);
 }
 
 function normalizeWorkflowVerdict(value: unknown): WorkflowTransitionVerdict | null {
@@ -545,6 +609,7 @@ export function createEmptyWorkflowCreationState(): WorkflowCreationState {
     },
     workflow: {
       mode: 'state-machine',
+      kindRationale: '',
       outline: [],
       stateSteps: {},
       stateTransitions: {},
@@ -595,6 +660,26 @@ export function validateWorkflowCreationItem(
   if (result.kind === WORKFLOW_CLARIFICATION_SUMMARY_KIND) {
     const error = requireStringField(data, ['summary', 'text'], 'data.summary', 'summary', '在 data.summary 填入 1-2 句当前理解摘要。');
     if (error) errors.push(error);
+  } else if (result.kind === WORKFLOW_CLARIFICATION_BUNDLE_KIND) {
+    const summaryError = requireStringField(data, ['summary', 'text'], 'data.summary', 'summary', '在 data.summary 填入 1-2 句当前理解摘要。');
+    const factsError = requireStringArrayField(data, ['facts', 'knownFacts'], 'data.facts', 'facts', '把已确认事实写成字符串数组，例如 "facts":["事实 1","事实 2"]。');
+    if (summaryError) errors.push(summaryError);
+    if (factsError) errors.push(factsError);
+    if (!Array.isArray(data.gaps)) {
+      errors.push(validationError('data.gaps', `gaps 缺失或不是数组。当前 gaps=${describeValue(data.gaps)}。`, '提供 gaps 字符串数组；若需求已充分明确，可以返回空数组。'));
+    }
+    if (!Array.isArray(data.questions) || data.questions.length < 1 || data.questions.length > 4) {
+      errors.push(validationError('data.questions', `questions 必须包含 1-4 个问题。当前 questions=${describeValue(data.questions)}。`, '只询问真正影响工作流类型、范围、异常处理或验收方式的 1-4 个问题。'));
+    } else {
+      data.questions.forEach((question: any, index: number) => {
+        const source = question?.question && typeof question.question === 'object' ? question.question : question;
+        if (!source || typeof source !== 'object' || Array.isArray(source)) {
+          errors.push(validationError(`data.questions[${index}]`, `问题不是对象。当前值=${describeValue(question)}。`, '提供包含 id、label、question、options 的问题对象。'));
+          return;
+        }
+        errors.push(...validateClarificationQuestionSource(source, `data.questions[${index}]`));
+      });
+    }
   } else if (result.kind === WORKFLOW_CLARIFICATION_FACTS_KIND) {
     const error = requireStringArrayField(data, ['facts', 'knownFacts'], 'data.facts', 'facts', '把已确认事实写成字符串数组，例如 "facts":["事实 1","事实 2"]。');
     if (error) errors.push(error);
@@ -603,15 +688,7 @@ export function validateWorkflowCreationItem(
     if (error) errors.push(error);
   } else if (result.kind === WORKFLOW_CLARIFICATION_QUESTION_KIND) {
     const source = data.question && typeof data.question === 'object' ? data.question : data;
-    if (!cleanString(source.question) && !cleanString(source.text)) {
-      errors.push(validationError('data.question', `澄清问题缺少 question 文本。当前字段状态：question=${describeValue(source.question)}；text=${describeValue(source.text)}。当前 data keys=${describeDataKeys(source)}。`, '在 data.question 写入具体问题，并说明这个答案会影响什么决策。'));
-    }
-    if (!Array.isArray(source.options) || source.options.length < 2) {
-      errors.push(validationError('data.options', `options 缺失、不是数组或少于 2 个选项。当前 options=${describeValue(source.options)}。`, '提供 2-4 个选项对象，每个选项包含 id、label、description。'));
-    }
-    if (Array.isArray(source.options) && source.options.length >= 2 && !source.options.some((option: any) => option?.recommended === true)) {
-      errors.push(validationError('data.options', `没有选项设置 recommended=true。当前 options=${previewValue(source.options, 500)}。`, '在最稳妥的默认选项上设置 "recommended":true。'));
-    }
+    errors.push(...validateClarificationQuestionSource(source, 'data'));
   } else if (result.kind === SPEC_CODING_META_KIND) {
     const error = requireStringField(data, ['summary'], 'data.summary', 'summary', '在 data.summary 写入计划摘要；goals、nonGoals、constraints 可用字符串数组补充。');
     if (error) errors.push(error);
@@ -638,17 +715,72 @@ export function validateWorkflowCreationItem(
     const error = requireStringField(source, ['title', 'name'], 'data.title', '任务标题', '补齐 id、title、requirementIds、actions、deliverables、validation。');
     if (error) errors.push(error);
   } else if (result.kind === WORKFLOW_STATE_OUTLINE_KIND) {
-    const workflowMode = cleanString(data.workflowMode);
+    const workflowMode = cleanString(data.workflowKind || data.workflowMode);
     if (!['lightweight', 'state-machine'].includes(workflowMode)) {
-      errors.push(validationError('data.workflowMode', 'workflowMode 缺失或不是 lightweight/state-machine。', '在 data.workflowMode 填写 lightweight 或 state-machine，让系统按选定模式装配工作流。'));
+      errors.push(validationError('data.workflowKind', 'workflowKind 缺失或不是 lightweight/state-machine。', '在 data.workflowKind 填写 lightweight 或 state-machine；ai-guided 不是最终产品类型。'));
+    }
+    if (context.creationJourney === 'ai-guided' && !cleanString(data.workflowKindRationale)) {
+      errors.push(validationError('data.workflowKindRationale', 'AI 引导首轮缺少最终产品类型理由。', '说明为什么任务适合 lightweight 或为什么需要 state-machine。'));
+    }
+    const directLightweightUpgrade = context.creationJourney === 'direct'
+      && context.targetWorkflowKind === 'lightweight'
+      && context.creationAdversarialIntent === 'on-demand'
+      && workflowMode === 'state-machine'
+      && normalizeWorkflowReviewAssessment(data.reviewAssessment)?.requiresAdversarial === true;
+    if (context.creationJourney === 'direct' && context.targetWorkflowKind && workflowMode && workflowMode !== context.targetWorkflowKind && !directLightweightUpgrade) {
+      errors.push(validationError('data.workflowKind', `直接创建目标是 ${context.targetWorkflowKind}，模型返回了 ${workflowMode}。`, `保持 workflowKind=${context.targetWorkflowKind}；若发现该类型无法满足对抗需求，明确返回矛盾并要求用户重新规划。`));
     }
     const states = normalizeOutlineStates(data);
     if (!Array.isArray(data.states)) {
-      errors.push(validationError('data.states', `states 缺失或不是数组。当前 states=${describeValue(data.states)}。当前 data keys=${describeDataKeys(data)}。`, '按主要执行顺序提供至少 2 个状态对象，并给最后一个状态设置 isFinal=true；需要非线性流转时可在状态上补 transitions。'));
+      errors.push(validationError('data.states', `states 缺失或不是数组。当前 states=${describeValue(data.states)}。当前 data keys=${describeDataKeys(data)}。`, 'lightweight 提供 1 个任务说明状态；state-machine 按主要执行顺序提供至少 2 个状态并标记终态。'));
     } else if (workflowMode === 'state-machine' && states.length < 2) {
       errors.push(validationError('data.states', `有效状态少于 2 个。当前 states.length=${data.states.length}，规范化后有效状态数=${states.length}，原始 states=${previewValue(data.states, 500)}。`, '提供至少 2 个状态对象，每个对象至少包含 name；最后一个状态设置 isFinal=true。'));
-    } else if (workflowMode === 'lightweight' && states.length < 1) {
-      errors.push(validationError('data.states', `有效状态少于 1 个。当前 states.length=${data.states.length}，规范化后有效状态数=${states.length}。`, '提供一个执行状态，并设置 isFinal=true。'));
+    } else if (workflowMode === 'lightweight' && states.length !== 1) {
+      errors.push(validationError('data.states', `lightweight 规划说明必须只有 1 个状态，当前有效状态数=${states.length}。`, '只保留一个执行目标说明；最终 initial/final 状态和固定步骤由本地装配。'));
+    }
+
+    const intent = context.creationAdversarialIntent || 'on-demand';
+    const rawStates = Array.isArray(data.states) ? data.states : [];
+    if (intent === 'on-demand') {
+      const assessmentIssues = validateWorkflowReviewAssessmentInput(data.reviewAssessment);
+      if (!data.reviewAssessment) {
+        errors.push(validationError('data.reviewAssessment', '按需开启时首轮缺少整体风险判断。', '提供 requiresAdversarial、rationale、riskSignals、confidence。'));
+      }
+      assessmentIssues.forEach((issue) => {
+        errors.push(validationError(`data.reviewAssessment.${issue.field}`, issue.problem, issue.fix));
+      });
+    }
+    const assessment = normalizeWorkflowReviewAssessment(data.reviewAssessment);
+    if (workflowMode === 'lightweight' && (assessment?.requiresAdversarial || assessment?.confidence === 'low')) {
+      errors.push(validationError('data.workflowKind', 'lightweight 与整体对抗需求或低置信度判断冲突。', '把当前规划局部修复为 workflowKind=state-machine，并提供至少 1 个可执行状态和 1 个终态。'));
+    }
+
+    rawStates.forEach((rawState: any, index: number) => {
+      const normalizedState = states.find((state) => state.name === cleanString(rawState?.name || rawState?.title));
+      const isFinal = normalizedState?.isFinal === true;
+      if (workflowMode === 'lightweight') {
+        if (rawState?.reviewPolicy !== undefined && rawState?.reviewPolicy !== null) {
+          errors.push(validationError(`data.states[${index}].reviewPolicy`, 'lightweight 固定状态不参与状态级模式配置。', '删除 reviewPolicy；需要对抗时改为 state-machine。'));
+        }
+        return;
+      }
+      if (isFinal) {
+        if (rawState?.reviewPolicy !== undefined && rawState?.reviewPolicy !== null) {
+          errors.push(validationError(`data.states[${index}].reviewPolicy`, `终态 "${normalizedState?.name || index}" 不参与模式判断。`, '删除终态 reviewPolicy；终态汇总步骤也不要标记为 judge。'));
+        }
+        return;
+      }
+      if (intent === 'disabled') return;
+      const policyIssues = validateWorkflowReviewPolicyInput(rawState?.reviewPolicy);
+      if (!rawState?.reviewPolicy) {
+        errors.push(validationError(`data.states[${index}].reviewPolicy`, `非终态 "${normalizedState?.name || index}" 缺少 reviewPolicy。`, '提供 mode、rationale、riskSignals、confidence；source 和 locked 由本地系统生成。'));
+      }
+      policyIssues.forEach((issue) => {
+        errors.push(validationError(`data.states[${index}].reviewPolicy.${issue.field}`, issue.problem, issue.fix));
+      });
+    });
+    if (intent === 'disabled' && assessment?.requiresAdversarial) {
+      errors.push(validationError('data.reviewAssessment.requiresAdversarial', '全局意愿为 disabled，模型不能要求对抗。', '删除 reviewAssessment；本地系统会强制普通状态机使用 standard。'));
     }
   } else if (result.kind === WORKFLOW_STATE_STEPS_KIND) {
     const stateName = cleanString(data.stateName);
@@ -658,11 +790,26 @@ export function validateWorkflowCreationItem(
     } else if (expectedStateName && stateName !== expectedStateName) {
       errors.push(validationError('data.stateName', `stateName 应为 "${expectedStateName}"，实际为 "${stateName}"。`, `只补发当前状态 "${expectedStateName}" 的步骤，并把 data.stateName 改为 "${expectedStateName}"。`));
     }
+    if (context.targetWorkflowKind === 'lightweight') {
+      errors.push(validationError('data.stateName', 'lightweight 不进入逐状态步骤调用。', '停止当前 state_steps 调用，交给本地 lightweight 装配器生成固定单步骤结构。'));
+    }
+    if ((context.creationAdversarialIntent || 'on-demand') !== 'disabled') {
+      const policyIssues = validateWorkflowReviewPolicyInput(data.reviewPolicy);
+      if (!data.reviewPolicy) {
+        errors.push(validationError('data.reviewPolicy', '非终态 workflow_state_steps 缺少最终 reviewPolicy。', '提供 mode、rationale、riskSignals、confidence；本次判断是最终结果。'));
+      }
+      policyIssues.forEach((issue) => {
+        errors.push(validationError(`data.reviewPolicy.${issue.field}`, issue.problem, issue.fix));
+      });
+    }
     if (!Array.isArray(data.steps) || data.steps.length === 0) {
       errors.push(validationError('data.steps', 'steps 缺失、不是数组或为空。', '提供 1-4 个步骤对象；并发只在同一 stateName 的 steps 内用相同 parallelGroup 表达。'));
     } else {
       const availableStepAgents = cleanStringSet(context.availableStepAgents);
       const supervisorAgents = cleanStringSet(context.supervisorAgents);
+      if (context.availableStepAgents !== undefined && availableStepAgents.size === 0) {
+        errors.push(validationError('data.steps', '当前没有可执行的普通 Agent，无法生成可运行步骤。', '先创建或启用至少一个普通执行 Agent；不要虚构 developer/architect/tester 等不存在的名称。'));
+      }
       data.steps.forEach((step: any, index: number) => {
         const agent = cleanString(step?.agent);
         if (!agent) {
@@ -689,11 +836,24 @@ export function validateWorkflowCreationItem(
   return { ok: errors.length === 0, errors };
 }
 
+function stripAiManagedWorkflowStepFields(step: any): any {
+  if (!step || typeof step !== 'object' || Array.isArray(step)) return step;
+  const {
+    id: _ignoredId,
+    agentInstanceId: _ignoredAgentInstanceId,
+    provenance: _ignoredProvenance,
+    baselineHash: _ignoredBaselineHash,
+    ...semanticFields
+  } = step;
+  return semanticFields;
+}
+
 export function applyWorkflowCreationItem(state: WorkflowCreationState, result: WorkflowCreationItemResult): WorkflowCreationState {
   const next: WorkflowCreationState = JSON.parse(JSON.stringify(state || createEmptyWorkflowCreationState()));
   const data = result.data || {};
-  if (!next.workflow) next.workflow = { mode: 'state-machine', outline: [], stateSteps: {}, stateTransitions: {} };
+  if (!next.workflow) next.workflow = { mode: 'state-machine', kindRationale: '', outline: [], stateSteps: {}, stateTransitions: {} };
   if (next.workflow.mode !== 'lightweight' && next.workflow.mode !== 'state-machine') next.workflow.mode = 'state-machine';
+  if (typeof next.workflow.kindRationale !== 'string') next.workflow.kindRationale = '';
   if (!next.workflow.stateSteps) next.workflow.stateSteps = {};
   if (!next.workflow.stateTransitions) next.workflow.stateTransitions = {};
 
@@ -701,6 +861,18 @@ export function applyWorkflowCreationItem(state: WorkflowCreationState, result: 
     case WORKFLOW_CLARIFICATION_SUMMARY_KIND:
       next.clarification.summary = cleanString(data.summary || data.text);
       break;
+    case WORKFLOW_CLARIFICATION_BUNDLE_KIND: {
+      next.clarification.summary = cleanString(data.summary || data.text);
+      next.clarification.knownFacts = uniqueStrings(stringArray(data.facts || data.knownFacts, 12));
+      next.clarification.missingFields = uniqueStrings(stringArray(data.gaps || data.missingFields, 12));
+      const normalizedQuestions = (Array.isArray(data.questions) ? data.questions : [])
+        .map((question: any, index: number) => normalizeQuestion(question, index))
+        .filter((question: ClarificationQuestionItem | null): question is ClarificationQuestionItem => Boolean(question));
+      next.clarification.questions = Array.from(
+        new Map(normalizedQuestions.map((question) => [question.id, question])).values(),
+      );
+      break;
+    }
     case WORKFLOW_CLARIFICATION_FACTS_KIND:
       next.clarification.knownFacts = uniqueStrings([...next.clarification.knownFacts, ...stringArray(data.facts || data.knownFacts, 12)]);
       break;
@@ -751,15 +923,32 @@ export function applyWorkflowCreationItem(state: WorkflowCreationState, result: 
       break;
     }
     case WORKFLOW_STATE_OUTLINE_KIND:
-      if (data.workflowMode === 'lightweight' || data.workflowMode === 'state-machine') {
+      if (data.workflowKind === 'lightweight' || data.workflowKind === 'state-machine') {
+        next.workflow.mode = data.workflowKind;
+      } else if (data.workflowMode === 'lightweight' || data.workflowMode === 'state-machine') {
         next.workflow.mode = data.workflowMode;
       }
+      next.workflow.kindRationale = cleanString(data.workflowKindRationale);
+      next.workflow.reviewAssessment = normalizeWorkflowReviewAssessment(data.reviewAssessment) || undefined;
       next.workflow.outline = normalizeOutlineStates(data);
+      if (next.workflow.mode === 'lightweight') {
+        next.workflow.outline = next.workflow.outline.map(({ reviewPolicy: _policy, ...outlineState }) => outlineState);
+      }
       break;
     case WORKFLOW_STATE_STEPS_KIND: {
       const stateName = cleanString(data.stateName);
       if (!stateName) break;
-      next.workflow.stateSteps[stateName] = Array.isArray(data.steps) ? data.steps : [];
+      next.workflow.stateSteps[stateName] = Array.isArray(data.steps)
+        ? data.steps.map(stripAiManagedWorkflowStepFields)
+        : [];
+      const finalPolicy = normalizeWorkflowReviewPolicy(data.reviewPolicy);
+      if (finalPolicy) {
+        next.workflow.outline = next.workflow.outline.map((outlineState) => (
+          outlineState.name === stateName && !outlineState.isFinal
+            ? { ...outlineState, reviewPolicy: finalPolicy }
+            : outlineState
+        ));
+      }
       const transitions = extractWorkflowTransitionItems(data);
       if (transitions.length > 0) next.workflow.stateTransitions[stateName] = transitions;
       else delete next.workflow.stateTransitions[stateName];
@@ -1063,6 +1252,7 @@ function flattenSpecTaskIds(specCoding: any): string[] {
 function normalizeWorkflowStep(input: any, fallback: {
   stateName: string;
   index: number;
+  id: string;
   agent: string;
   taskId: string;
   requirementId: string;
@@ -1076,13 +1266,23 @@ function normalizeWorkflowStep(input: any, fallback: {
     ...stringArray(input?.taskIds, 6),
   ]).filter(Boolean);
   const normalized: Record<string, any> = {
-    id: cleanString(input?.id) || `${slug(fallback.stateName, 'state')}-${fallback.index + 1}`,
+    id: fallback.id,
     name,
     agent: cleanString(input?.agent) || fallback.agent,
     role: ['attacker', 'defender', 'judge'].includes(input?.role) ? input.role : undefined,
     task: cleanString(input?.task) || cleanString(input?.prompt) || `${name}，并产出可审查结果。`,
     parallelGroup: cleanString(input?.parallelGroup || input?.groupId) || undefined,
   };
+  const constraints = stringArray(input?.constraints, 24);
+  const preCommands = stringArray(input?.preCommands, 24);
+  const channelIds = stringArray(input?.channelIds, 24);
+  if (constraints.length > 0) normalized.constraints = constraints;
+  if (preCommands.length > 0) normalized.preCommands = preCommands;
+  if (channelIds.length > 0) normalized.channelIds = channelIds;
+  if (input?.concurrency && typeof input.concurrency === 'object' && !Array.isArray(input.concurrency)) {
+    normalized.concurrency = JSON.parse(JSON.stringify(input.concurrency));
+  }
+  if (input?.enableReviewPanel === true) normalized.enableReviewPanel = true;
   if (fallback.includeSpecTaskBinding !== false) {
     normalized.specTaskBinding = {
       taskId: taskIds[0] || fallback.taskId,
@@ -1105,23 +1305,176 @@ function normalizeWorkflowStep(input: any, fallback: {
 }
 
 function pickWorkflowTaskAgent(agents: string[], index: number, supervisorAgent?: string): string {
-  const fallbackAgents = ['developer', 'architect', 'tester'];
-  const pool = [...agents, ...fallbackAgents]
+  const pool = agents
     .map((agent) => cleanString(agent))
     .filter((agent) => agent && agent !== cleanString(supervisorAgent) && agent !== 'default-supervisor');
-  return pool[index % Math.max(pool.length, 1)] || 'developer';
+  if (pool.length === 0) {
+    throw new Error('当前没有可执行的普通 Agent，无法装配工作流。请先创建或启用至少一个普通执行 Agent。');
+  }
+  return pool[index % pool.length];
 }
 
-function replaceSupervisorStepAgent(step: any, fallbackAgent: string, supervisorAgent?: string) {
+function resolveWorkflowTaskAgents(input: WorkflowCreationAssemblyInput): string[] {
+  const supervisorAgent = cleanString(input.recommendedSupervisorAgent) || 'default-supervisor';
+  const hasAuthoritativeAvailability = Array.isArray(input.availableAgents);
+  const availableAgents = uniqueStrings(input.availableAgents || [])
+    .filter((agent) => agent !== supervisorAgent && agent !== 'default-supervisor');
+  const availableAgentSet = new Set(availableAgents);
+  const recommendedAgents = uniqueStrings(input.recommendedAgents || [])
+    .filter((agent) => agent !== supervisorAgent && agent !== 'default-supervisor')
+    .filter((agent) => !hasAuthoritativeAvailability || availableAgentSet.has(agent));
+  return uniqueStrings([...recommendedAgents, ...availableAgents]);
+}
+
+function ensureAvailableStepAgent(
+  step: any,
+  fallbackAgent: string,
+  availableAgents: string[],
+  supervisorAgent?: string,
+) {
   const currentAgent = cleanString(step?.agent);
   const effectiveSupervisor = cleanString(supervisorAgent) || 'default-supervisor';
-  if (currentAgent && currentAgent !== effectiveSupervisor && currentAgent !== 'default-supervisor') {
+  const availableAgentSet = new Set(availableAgents.map((agent) => cleanString(agent)).filter(Boolean));
+  if (
+    currentAgent
+    && currentAgent !== effectiveSupervisor
+    && currentAgent !== 'default-supervisor'
+    && availableAgentSet.has(currentAgent)
+  ) {
     return step;
   }
   return {
     ...step,
     agent: fallbackAgent,
   };
+}
+
+type WorkflowModeStepDraft = {
+  step: Record<string, any>;
+  origin: 'ai-draft' | 'review-policy';
+  managedRole?: WorkflowManagedStepRole;
+};
+
+const STANDARD_VERDICT_INSTRUCTION = '在完成业务结果后，必须在同一次输出中给出严格 JSON 裁决，verdict 只能是 pass、conditional_pass 或 fail。';
+const ATTACKER_INSTRUCTION = '基于全部 defender 产出主动寻找反例、边界、遗漏和错误假设；不得仅复述 defender 结论，并输出可供 judge 核验的挑战证据。';
+const JUDGE_INSTRUCTION = '独立汇总 defender 与 attacker 的证据，并输出严格 JSON 裁决；verdict 只能是 pass、conditional_pass 或 fail。';
+
+function appendTaskInstruction(task: unknown, instruction: string): string {
+  const current = cleanString(task);
+  if (current.includes(instruction)) return current;
+  return `${current}${current ? '\n\n' : ''}${instruction}`;
+}
+
+function buildModeStepDrafts(input: {
+  mode: WorkflowReviewMode;
+  stateName: string;
+  candidateSteps: any[];
+  fallbackAgent: string;
+}): WorkflowModeStepDraft[] {
+  const businessSteps = input.candidateSteps
+    .filter((step) => step?.role !== 'attacker' && step?.role !== 'judge')
+    .map((step) => ({ ...stripAiManagedWorkflowStepFields(step) }));
+  if (businessSteps.length === 0) {
+    businessSteps.push({
+      name: `${input.stateName}执行`,
+      agent: input.fallbackAgent,
+      task: `完成 ${input.stateName} 对应任务，并产出可验证结果。`,
+    });
+  }
+
+  if (input.mode === 'standard') {
+    const drafts: WorkflowModeStepDraft[] = businessSteps.map((step) => ({
+      step: { ...step, role: undefined },
+      origin: 'ai-draft',
+    }));
+    const last = drafts[drafts.length - 1];
+    if (cleanString(last.step.parallelGroup)) {
+      drafts.push({
+        step: {
+          name: '汇总并裁决',
+          agent: input.fallbackAgent,
+          task: appendTaskInstruction(`汇总 ${input.stateName} 的并行执行结果。`, STANDARD_VERDICT_INSTRUCTION),
+          role: undefined,
+        },
+        origin: 'review-policy',
+        managedRole: 'standard-closer',
+      });
+    } else {
+      last.step.task = appendTaskInstruction(last.step.task, STANDARD_VERDICT_INSTRUCTION);
+    }
+    return drafts;
+  }
+
+  const attackerCandidate = input.candidateSteps.find((step) => step?.role === 'attacker');
+  const judgeCandidate = [...input.candidateSteps].reverse().find((step) => step?.role === 'judge');
+  const defenderDrafts: WorkflowModeStepDraft[] = businessSteps.map((step) => ({
+    step: { ...step, role: 'defender' },
+    origin: 'ai-draft',
+  }));
+  const attackerConstraints = uniqueStrings([
+    ...stringArray(attackerCandidate?.constraints, 24),
+    '主动寻找反例、边界、遗漏和错误假设，不得仅复述 defender 结论。',
+  ]);
+  const attacker: WorkflowModeStepDraft = {
+    step: {
+      ...(attackerCandidate ? stripAiManagedWorkflowStepFields(attackerCandidate) : {}),
+      name: cleanString(attackerCandidate?.name) || '对抗审查',
+      agent: cleanString(attackerCandidate?.agent) || input.fallbackAgent,
+      role: 'attacker',
+      task: appendTaskInstruction(attackerCandidate?.task || `挑战 ${input.stateName} 的交付物。`, ATTACKER_INSTRUCTION),
+      constraints: attackerConstraints,
+      parallelGroup: undefined,
+      concurrency: undefined,
+    },
+    origin: 'review-policy',
+    managedRole: 'attacker',
+  };
+  const judge: WorkflowModeStepDraft = {
+    step: {
+      ...(judgeCandidate ? stripAiManagedWorkflowStepFields(judgeCandidate) : {}),
+      name: cleanString(judgeCandidate?.name) || '独立裁决',
+      agent: cleanString(judgeCandidate?.agent) || input.fallbackAgent,
+      role: 'judge',
+      task: appendTaskInstruction(judgeCandidate?.task || `裁决 ${input.stateName} 是否满足流转条件。`, JUDGE_INSTRUCTION),
+      parallelGroup: undefined,
+      concurrency: undefined,
+    },
+    origin: 'review-policy',
+    managedRole: 'judge',
+  };
+  return [...defenderDrafts, attacker, judge];
+}
+
+function buildLocalStateId(): string {
+  return createReviewEntityId();
+}
+
+function buildLocalStepId(): string {
+  return createReviewEntityId();
+}
+
+function buildLocalAgentInstanceId(workflowName: string, stateName: string, role: string, stepId: string): string {
+  return `instance-${workflowReviewFingerprint({ workflowName, stateName, role, stepId }).slice(0, 16)}`;
+}
+
+function attachLocalStepManagement(input: {
+  step: Record<string, any>;
+  workflowName: string;
+  stateName: string;
+  origin: 'ai-draft' | 'review-policy';
+  managedRole?: WorkflowManagedStepRole;
+}): Record<string, any> {
+  const step = JSON.parse(JSON.stringify(input.step));
+  if (step.role === 'defender' || step.role === 'attacker' || step.role === 'judge' || input.managedRole === 'standard-closer') {
+    step.agentInstanceId = buildLocalAgentInstanceId(
+      input.workflowName,
+      input.stateName,
+      step.role || input.managedRole || 'step',
+      step.id,
+    );
+  }
+  step.provenance = createWorkflowStepProvenance(step, input.origin, input.managedRole);
+  return step;
 }
 
 function extractWorkflowTransitionVerdict(transition: any): WorkflowTransitionVerdict | null {
@@ -1274,6 +1627,12 @@ function normalizeWorkflowTransitions(input: {
 }
 
 function assembleLightweightWorkflowConfig(state: WorkflowCreationState, input: WorkflowCreationAssemblyInput): any {
+  if (input.creationAdversarialIntent === 'on-demand' && state.workflow.reviewAssessment?.requiresAdversarial) {
+    throw new Error('当前轻量草案需要对抗审查，必须先重新规划为 state-machine，不能把对抗步骤塞入 lightweight。');
+  }
+  if (input.creationAdversarialIntent === 'on-demand' && state.workflow.reviewAssessment?.confidence === 'low') {
+    throw new Error('当前轻量草案的整体风险判断置信度过低，必须先重新规划为 state-machine。');
+  }
   const outline = state.workflow.outline.length
     ? normalizeWorkflowOutline(state.workflow.outline)
     : [];
@@ -1283,11 +1642,12 @@ function assembleLightweightWorkflowConfig(state: WorkflowCreationState, input: 
       : []
   ));
   const candidate = candidateSteps.find((step) => cleanString(step?.task) || cleanString(step?.prompt)) || {};
-  const agents = input.recommendedAgents?.length ? input.recommendedAgents : ['developer'];
+  const agents = resolveWorkflowTaskAgents(input);
   const supervisorAgent = input.recommendedSupervisorAgent || 'default-supervisor';
-  const agent = replaceSupervisorStepAgent(
+  const agent = ensureAvailableStepAgent(
     candidate,
     pickWorkflowTaskAgent(agents, 0, supervisorAgent),
+    agents,
     supervisorAgent,
   ).agent;
   const task = cleanString(candidate.task)
@@ -1311,7 +1671,7 @@ function assembleLightweightWorkflowConfig(state: WorkflowCreationState, input: 
         steps: [{
           name: cleanString(candidate.name) || '执行任务',
           type: 'agent',
-          agent: cleanString(agent) || 'developer',
+          agent: cleanString(agent),
           task,
           skills: [LIGHTWEIGHT_TASKLIST_SKILL],
         }],
@@ -1343,17 +1703,20 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
   const taskIds = leafTaskIds.length ? leafTaskIds : fallbackTaskIds;
   const checkpointTaskId = taskIds.find((taskId) => plannedTasks.find((task) => task.id === taskId)?.title.includes('检查点')) || taskIds[taskIds.length - 1] || 'T1.1';
   const supervisorAgent = input.recommendedSupervisorAgent || 'default-supervisor';
-  const agents = input.recommendedAgents?.length ? input.recommendedAgents : ['developer', 'architect', 'tester'];
+  const agents = resolveWorkflowTaskAgents(input);
+  if (agents.length === 0) {
+    throw new Error('当前没有可执行的普通 Agent，无法装配工作流。请先创建或启用至少一个普通执行 Agent。');
+  }
   const requirementCount = Math.max(1, ensureSpecRequirements(state, input).length);
   let globalStepIndex = 0;
 
   const states = outline.map((outlineState, stateIndex) => {
+    const stateId = buildLocalStateId();
     if (outlineState.isFinal) {
-      const finalStep: Record<string, any> = {
-        id: `${slug(outlineState.name, 'final')}-summary`,
+      let finalStep: Record<string, any> = {
+        id: buildLocalStepId(),
         name: '汇总结果',
         agent: pickWorkflowTaskAgent(agents, globalStepIndex, supervisorAgent),
-        role: 'judge',
         task: '汇总本次工作流的执行结果、验证证据和剩余风险。',
       };
       if (includeSpecTaskBindings) {
@@ -1364,7 +1727,14 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
           artifactKeys: ['requirements', 'design', 'tasks'],
         };
       }
+      finalStep = attachLocalStepManagement({
+        step: finalStep,
+        workflowName: input.workflowName,
+        stateName: outlineState.name,
+        origin: 'ai-draft',
+      });
       return {
+        id: stateId,
         name: outlineState.name,
         description: outlineState.description || '工作流完成。',
         isInitial: stateIndex === 0,
@@ -1378,35 +1748,55 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
     const candidateSteps = Array.isArray(state.workflow.stateSteps?.[outlineState.name])
       ? state.workflow.stateSteps[outlineState.name]
       : [];
-    const normalizedSteps = (candidateSteps.length ? candidateSteps : [{
-      name: `${outlineState.name}执行`,
-      agent: pickWorkflowTaskAgent(agents, stateIndex, supervisorAgent),
-      task: `完成 ${outlineState.name} 对应任务，并产出可验证结果。`,
-    }]).map((step: any, stepIndex: number) => {
+    const reviewPolicy = input.creationAdversarialIntent === 'disabled'
+      ? {
+          ...createDefaultStandardReviewPolicy('用户创建工作流时选择不开启对抗，全部非终态强制使用标准模式。'),
+          source: 'user' as const,
+          locked: true as const,
+          confidence: 'high' as const,
+        }
+      : normalizeWorkflowReviewPolicy(outlineState.reviewPolicy)
+        || createDefaultStandardReviewPolicy('未提供有效模式判断，按兼容规则采用标准模式。');
+    const modeDrafts = buildModeStepDrafts({
+      mode: reviewPolicy.mode,
+      stateName: outlineState.name,
+      candidateSteps,
+      fallbackAgent: pickWorkflowTaskAgent(agents, stateIndex, supervisorAgent),
+    });
+    const normalizedSteps = modeDrafts.map((draft, stepIndex) => {
       const taskId = taskIds[Math.min(globalStepIndex, taskIds.length - 1)] || taskIds[0] || 'T1.1';
       const requirementId = `R${Math.min(globalStepIndex + 1, requirementCount)}`;
-      const fallbackAgent = pickWorkflowTaskAgent(agents, globalStepIndex + stepIndex, supervisorAgent);
-      const normalized = normalizeWorkflowStep(replaceSupervisorStepAgent(step, fallbackAgent, supervisorAgent), {
+      const fallbackAgent = pickWorkflowTaskAgent(agents, globalStepIndex, supervisorAgent);
+      const normalized = normalizeWorkflowStep(ensureAvailableStepAgent(draft.step, fallbackAgent, agents, supervisorAgent), {
         stateName: outlineState.name,
         index: stepIndex,
+        id: buildLocalStepId(),
         agent: fallbackAgent,
         taskId,
         requirementId,
         includeSpecTaskBinding: includeSpecTaskBindings,
       });
       globalStepIndex += 1;
-      return normalized;
+      return attachLocalStepManagement({
+        step: normalized,
+        workflowName: input.workflowName,
+        stateName: outlineState.name,
+        origin: draft.origin,
+        managedRole: draft.managedRole,
+      });
     });
     const explicitTransitions = [
       ...(Array.isArray(state.workflow.stateTransitions?.[outlineState.name]) ? state.workflow.stateTransitions[outlineState.name] : []),
       ...(Array.isArray(outlineState.transitions) ? outlineState.transitions : []),
     ];
     return {
+      id: stateId,
       name: outlineState.name,
       description: outlineState.description || `${outlineState.name}。`,
       isInitial: stateIndex === 0,
       isFinal: false,
-      maxSelfTransitions: 3,
+      maxSelfTransitions: reviewPolicy.mode === 'adversarial' ? 2 : 3,
+      reviewPolicy,
       steps: normalizedSteps,
       transitions: normalizeWorkflowTransitions({
         outline,
@@ -1443,6 +1833,10 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
 
 export function describeWorkflowCreationItem(result: WorkflowCreationItemResult): string {
   const data = result.data || {};
+  if (result.kind === WORKFLOW_CLARIFICATION_BUNDLE_KIND) {
+    const questionCount = Array.isArray(data.questions) ? data.questions.length : 0;
+    return `已确认澄清摘要与 ${questionCount} 个问题`;
+  }
   if (result.kind === WORKFLOW_CLARIFICATION_QUESTION_KIND) {
     const question = normalizeQuestion(data, 0);
     return question ? `已生成澄清问题：${question.label}` : '已生成澄清问题';
@@ -1467,6 +1861,7 @@ export function describeWorkflowCreationItem(result: WorkflowCreationItemResult)
     [WORKFLOW_CLARIFICATION_FACTS_KIND]: '已确认已知事实',
     [WORKFLOW_CLARIFICATION_GAPS_KIND]: '已确认待补信息',
     [WORKFLOW_CLARIFICATION_QUESTION_KIND]: '已确认澄清问题',
+    [WORKFLOW_CLARIFICATION_BUNDLE_KIND]: '已确认澄清摘要与问题',
     [SPEC_CODING_META_KIND]: '已确认计划摘要',
     [SPEC_REQUIREMENT_KIND]: '已确认需求',
     [SPEC_DESIGN_KIND]: '已确认设计概览',

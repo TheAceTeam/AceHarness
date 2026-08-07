@@ -36,6 +36,8 @@ import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import LightweightWorkflowExecutionView from '@/components/workflow/LightweightWorkflowExecutionView';
 import LightweightTaskBoard from '@/components/workflow/LightweightTaskBoard';
 import LightweightTaskExecutionGraph from '@/components/workflow/LightweightTaskExecutionGraph';
+import RuntimeStateStructurePanel from '@/components/workflow/RuntimeStateStructurePanel';
+import WorkflowFinalReviewOutputCard, { parseWorkflowFinalReviewOutput } from '@/components/workflow/WorkflowFinalReviewOutputCard';
 import AgentFormationDiagram from '@/components/AgentFormationDiagram';
 import AgentPanel from '@/components/AgentPanel';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
@@ -83,7 +85,7 @@ import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPick
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { DetailDrawer, DetailDrawerBody, DetailDrawerContent, DetailDrawerDescription, DetailDrawerHeader, DetailDrawerTitle } from '@/components/ui/detail-drawer';
-import { ChevronDown } from 'lucide-react';
+import { Check, ChevronDown, RotateCcw } from 'lucide-react';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -97,6 +99,12 @@ import { RobotLogo } from '@/components/brand/RobotLogo';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import { calculateWorkflowRunTiming, resolveWorkflowOverviewTiming } from '@/lib/workflow/run-timing';
+import type {
+  RunReviewOverride,
+  RunReviewPlan,
+  WorkflowAdversarialIntent,
+} from '@/lib/workflow/run-review-types';
+import { inferBaselineAdversarialIntent } from '@/lib/workflow/state-review-policy';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
 import { getStreamingAceProcessReadyContent, mergeAceProcessChunkItems, mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
@@ -270,6 +278,27 @@ export function upsertStartedRunInHistory(historyRuns: any[], startedRun: any) {
   return [startedRun, ...historyRuns.filter((run) => run?.id !== startedRun.id)];
 }
 
+export function resolveWorkbenchRuntimeWorkflowConfig(input: {
+  baseConfig: any;
+  activeRunId?: string | null;
+  runDetail?: any;
+  statusSnapshot?: any;
+}) {
+  const activeRunId = String(input.activeRunId || '').trim();
+  for (const candidate of [input.statusSnapshot, input.runDetail]) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const candidateRunId = String(candidate.runId || candidate.id || '').trim();
+    if (activeRunId && candidateRunId && candidateRunId !== activeRunId) continue;
+    const runtimeWorkflow = candidate.workflow;
+    if (!runtimeWorkflow || typeof runtimeWorkflow !== 'object' || !Array.isArray(runtimeWorkflow.states)) continue;
+    return {
+      ...(input.baseConfig || {}),
+      workflow: runtimeWorkflow,
+    };
+  }
+  return input.baseConfig;
+}
+
 export function buildWorkbenchPreviewDetailNavItems(input: {
   isLightweightWorkflow: boolean;
   runtimeSpecAvailable?: boolean;
@@ -286,6 +315,7 @@ export function buildWorkbenchPreviewDetailNavItems(input: {
 export function buildWorkbenchRunDetailNavItems(input: {
   isLightweightWorkflow: boolean;
   runtimeSpecAvailable?: boolean;
+  includeStructuredTasklist?: boolean;
 }): RunDetailNavItem[] {
   return [
     { id: 'overview', key: 'overview', label: '总览', icon: 'dashboard' },
@@ -293,11 +323,14 @@ export function buildWorkbenchRunDetailNavItems(input: {
     ...(!input.isLightweightWorkflow ? [{ id: 'agents', key: 'agents' as const, label: 'Agents', icon: 'groups' }] : []),
     { id: 'workspace', key: 'workspace', label: '工作区', icon: 'folder_open' },
     { id: 'changes', key: 'changes', label: '变更', icon: 'difference' },
-    ...(!input.isLightweightWorkflow
-      ? [{ id: 'documents', key: 'documents' as const, label: '步骤文档', icon: 'description', documentSource: 'runtime-output' as const }]
-      : []),
     ...(input.isLightweightWorkflow
       ? [{ id: 'tasklist', key: 'documents' as const, label: '任务清单', icon: 'checklist', documentSource: 'tasklist' as const }]
+      : []),
+    ...(!input.isLightweightWorkflow && input.includeStructuredTasklist
+      ? [{ id: 'tasklist', key: 'documents' as const, label: '任务清单', icon: 'checklist', documentSource: 'tasklist' as const }]
+      : []),
+    ...(!input.isLightweightWorkflow
+      ? [{ id: 'documents', key: 'documents' as const, label: '步骤文档', icon: 'description', documentSource: 'runtime-output' as const }]
       : []),
     ...(!input.isLightweightWorkflow ? [{ id: 'agora', key: 'agora' as const, label: '对话', icon: 'forum' }] : []),
     { id: 'live', key: 'live', label: '实时输出', icon: 'cell_tower' },
@@ -386,8 +419,8 @@ export function selectCurrentStepAttemptLogs<T extends { superseded?: boolean }>
 const USER_VISIBLE_STOP_PROGRESS_PHASES: ReadonlyArray<Pick<WorkbenchStopProgressStep, 'id' | 'label'>> = [
   { id: 'request', label: '发送停止请求' },
   { id: 'manager-stop', label: '停止运行实例' },
-  { id: 'process-cleanup', label: '清理运行资源' },
   { id: 'state-persist', label: '保存停止状态' },
+  { id: 'process-cleanup', label: '清理运行资源' },
   { id: 'refresh', label: '刷新运行状态' },
 ];
 const USER_VISIBLE_STOP_PROGRESS_PHASE_BY_ID = new Map(
@@ -444,10 +477,14 @@ function normalizeStopProgressStatus(value: unknown): StopProgressStatus | null 
     : null;
 }
 
-function createStopProgressSteps(): WorkbenchStopProgressStep[] {
+export function createStopProgressSteps(): WorkbenchStopProgressStep[] {
   return USER_VISIBLE_STOP_PROGRESS_PHASES.map((phase) => ({
     ...phase,
-    status: phase.id === 'request' ? 'running' : 'pending',
+    status: phase.id === 'request'
+      ? 'success'
+      : phase.id === 'manager-stop'
+        ? 'running'
+        : 'pending',
   }));
 }
 
@@ -490,6 +527,20 @@ export function mergeUserVisibleStopProgressSteps(
   return USER_VISIBLE_STOP_PROGRESS_PHASES.map((phase) => (
     stepsById.get(phase.id) || { ...phase, status: 'pending' }
   ));
+}
+
+export function markStopProgressStatePersisted(
+  steps: WorkbenchStopProgressStep[],
+): WorkbenchStopProgressStep[] {
+  return steps.map((step) => {
+    if (step.id === 'request' || step.id === 'manager-stop' || step.id === 'state-persist') {
+      return { ...step, status: 'success' as const };
+    }
+    if (step.id === 'process-cleanup' && step.status === 'pending') {
+      return { ...step, status: 'running' as const };
+    }
+    return step;
+  });
 }
 
 function completeStopProgressSteps(steps: WorkbenchStopProgressStep[]): WorkbenchStopProgressStep[] {
@@ -613,6 +664,15 @@ function normalizeWorkflowStatusCode(status: unknown): string {
   if (value === '等待中' || value === 'waiting') return 'waiting';
   if (value === '待处理' || value === 'pending') return 'pending';
   return value;
+}
+
+export function getWorkflowStatusDotClass(status: unknown, isRunning: boolean): string {
+  const value = normalizeWorkflowStatusCode(status);
+  if (isRunning || value === 'running') return 'bg-blue-500';
+  if (value === 'completed') return 'bg-emerald-500';
+  if (value === 'failed' || value === 'crashed') return 'bg-red-500';
+  if (value === 'stopped') return 'bg-slate-400';
+  return 'bg-amber-500';
 }
 
 function isWeakWorkflowStatus(status: unknown): boolean {
@@ -997,6 +1057,13 @@ type WorkflowStartContexts = {
   workingDirectory?: string;
 };
 
+type WorkflowStartReviewSelection = {
+  planId: string;
+  intent: WorkflowAdversarialIntent;
+  overrides: RunReviewOverride[];
+  plan: RunReviewPlan;
+};
+
 type ContextWorkspaceDialogProps = {
   title: string;
   description: string;
@@ -1017,9 +1084,16 @@ type ContextWorkspaceDialogProps = {
   startContextTargets: string[];
   startContextScopeLabel: string;
   projectRoot?: string;
+  runReviewPlanning?: {
+    configFile: string;
+    rehearsal: boolean;
+    /** Intent this workflow was created under; preselected so the same question is not asked twice. */
+    baselineIntent: WorkflowAdversarialIntent | null;
+  };
+  onReviewPlanIdChange?: (planId: string | null) => void;
   onCancel: () => void;
-  onSkipPreflight?: (contexts: WorkflowStartContexts) => void;
-  onConfirm: (contexts: WorkflowStartContexts) => void;
+  onSkipPreflight?: (contexts: WorkflowStartContexts, review?: WorkflowStartReviewSelection) => void;
+  onConfirm: (contexts: WorkflowStartContexts, review?: WorkflowStartReviewSelection) => void;
 };
 
 type MonacoEditorInstance = {
@@ -1269,6 +1343,24 @@ type QualityCheckRecord = {
   }>;
 };
 
+export function resolveStartPreflightStrategy(input: {
+  plannedStart: boolean;
+  skipRequested: boolean;
+}): {
+  runInClient: boolean;
+  skipOnServer: boolean;
+} {
+  return {
+    // Legacy starts execute their previewed commands in the client flow so
+    // warnings can still be confirmed before launch. Planned starts execute
+    // the effective projection exactly once on the server.
+    runInClient: !input.plannedStart && !input.skipRequested,
+    // A legacy start has already checked (or explicitly skipped) its project
+    // commands. Planned starts only bypass them after an explicit user choice.
+    skipOnServer: !input.plannedStart || input.skipRequested,
+  };
+}
+
 function formatQualityCommandResult(command: QualityCheckRecord['commands'][number], index?: number) {
   const lines = [
     typeof index === 'number' ? `命令 ${index + 1}: ${command.command || '-'}` : `命令: ${command.command || '-'}`,
@@ -1341,6 +1433,7 @@ type DesignOptimizationCandidate = {
   rawOutput: string;
   filename?: string;
   payload: WorkflowPatchPayload;
+  target: DesignOptimizationTarget;
   candidateConfig: any;
   baseSnapshot: any;
   candidateSnapshot: any;
@@ -1464,6 +1557,14 @@ const AceAwareMarkdown = memo(function AceAwareMarkdown({
       </div>
     );
   }
+  const finalReviewOutput = parseWorkflowFinalReviewOutput(prepared);
+  if (finalReviewOutput) {
+    return (
+      <div className={className}>
+        <WorkflowFinalReviewOutputCard review={finalReviewOutput} rawOutput={prepared} />
+      </div>
+    );
+  }
   return (
     <div className={className}>
       <Markdown>{prepared}</Markdown>
@@ -1472,7 +1573,18 @@ const AceAwareMarkdown = memo(function AceAwareMarkdown({
 });
 
 function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
-  const startupFlowEnabled = (props.preflightPreview?.commands?.length || 0) > 0;
+  const [planningStep, setPlanningStep] = useState<'contexts' | 'plan'>('contexts');
+  const [adversarialIntent, setAdversarialIntent] = useState<WorkflowAdversarialIntent | null>(
+    props.runReviewPlanning?.baselineIntent ?? null,
+  );
+  const [reviewPlan, setReviewPlan] = useState<RunReviewPlan | null>(null);
+  const [reviewOverrides, setReviewOverrides] = useState<RunReviewOverride[]>([]);
+  const [reviewPreflightPreview, setReviewPreflightPreview] = useState<Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null>(null);
+  const [reviewPlanningBusy, setReviewPlanningBusy] = useState(false);
+  const [reviewPlanningError, setReviewPlanningError] = useState('');
+  const effectivePreflightPreview = reviewPreflightPreview || props.preflightPreview;
+  const startupFlowEnabled = (!props.runReviewPlanning || planningStep === 'plan')
+    && (effectivePreflightPreview?.commands?.length || 0) > 0;
   const [localGlobalDraft, setLocalGlobalDraft] = useState(props.globalDraft);
   const [localPhaseDrafts, setLocalPhaseDrafts] = useState<Record<string, string>>(props.phaseDrafts);
   const [localTaskInput, setLocalTaskInput] = useState<WorkflowTaskInput>(() => normalizeWorkflowTaskInput(props.taskInputDraft));
@@ -1480,7 +1592,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const [expandedTarget, setExpandedTarget] = useState(() => (
     props.startContextTargets.find((name) => (props.phaseDrafts[name] || '').trim()) || ''
   ));
-  const previewCommands = props.preflightPreview?.commands || [];
+  const previewCommands = effectivePreflightPreview?.commands || [];
   const taskInputFields = props.taskInputFields?.length ? props.taskInputFields : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
   const shortTaskInputFields = taskInputFields.filter((field) => field.type !== 'textarea');
   const longTaskInputFields = taskInputFields.filter((field) => field.type === 'textarea');
@@ -1506,6 +1618,19 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     setLocalWorkingDirectory(props.workingDirectoryDraft || '');
   }, [props.workingDirectoryDraft]);
 
+  useEffect(() => {
+    setPlanningStep('contexts');
+    setAdversarialIntent(props.runReviewPlanning?.baselineIntent ?? null);
+    setReviewPlan(null);
+    setReviewOverrides([]);
+    setReviewPreflightPreview(null);
+    setReviewPlanningError('');
+  }, [
+    props.runReviewPlanning?.configFile,
+    props.runReviewPlanning?.rehearsal,
+    props.runReviewPlanning?.baselineIntent,
+  ]);
+
   const updateTaskInputField = (fieldId: string, value: string) => {
     setLocalTaskInput((current) => setWorkflowTaskInputFieldValue(current, fieldId, value));
   };
@@ -1522,6 +1647,84 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
       : undefined,
     workingDirectory: localWorkingDirectory.trim() || undefined,
   });
+
+  const reviewSelection = (): WorkflowStartReviewSelection | undefined => (
+    reviewPlan && adversarialIntent
+      ? { planId: reviewPlan.id, intent: adversarialIntent, overrides: reviewOverrides, plan: reviewPlan }
+      : undefined
+  );
+
+  const createRunReviewPlan = async () => {
+    if (!props.runReviewPlanning || !adversarialIntent) return;
+    setReviewPlanningBusy(true);
+    setReviewPlanningError('');
+    try {
+      const response = await workflowApi.createStartPlan({
+        configFile: props.runReviewPlanning.configFile,
+        intent: adversarialIntent,
+        initialContexts: buildContexts(),
+        rehearsal: props.runReviewPlanning.rehearsal,
+      });
+      setReviewPlan(response.plan);
+      props.onReviewPlanIdChange?.(response.plan.id);
+      setReviewOverrides([]);
+      setReviewPreflightPreview((response.preflightPreview || null) as Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null);
+      setPlanningStep('plan');
+    } catch (error: any) {
+      setReviewPlanningError(error?.message || '无法生成本次运行方案');
+    } finally {
+      setReviewPlanningBusy(false);
+    }
+  };
+
+  const discardRunReviewPlan = async () => {
+    const planId = reviewPlan?.id;
+    setReviewPlan(null);
+    setReviewOverrides([]);
+    setReviewPreflightPreview(null);
+    props.onReviewPlanIdChange?.(null);
+    if (planId) await workflowApi.discardStartPlan(planId).catch(() => {});
+  };
+
+  const updateRunReviewOverrides = async (nextOverrides: RunReviewOverride[]) => {
+    if (!reviewPlan || !props.runReviewPlanning || adversarialIntent !== 'on-demand') return;
+    const previousOverrides = reviewOverrides;
+    setReviewOverrides(nextOverrides);
+    setReviewPlanningBusy(true);
+    setReviewPlanningError('');
+    try {
+      const response = await workflowApi.updateStartPlan({
+        planId: reviewPlan.id,
+        initialContexts: buildContexts(),
+        rehearsal: props.runReviewPlanning.rehearsal,
+        overrides: nextOverrides,
+      });
+      setReviewPlan(response.plan);
+      setReviewPreflightPreview((response.preflightPreview || null) as Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null);
+    } catch (error: any) {
+      setReviewOverrides(previousOverrides);
+      setReviewPlanningError(error?.message || '无法更新本次运行方案');
+    } finally {
+      setReviewPlanningBusy(false);
+    }
+  };
+
+  const updateStateOverride = (state: RunReviewPlan['states'][number], mode: 'standard' | 'adversarial' | null) => {
+    const next = reviewOverrides.filter((item) => item.kind === 'lightweight'
+      || item.configFile !== state.configFile
+      || item.stateId !== state.stateId);
+    if (mode !== null) next.push({ kind: 'state', configFile: state.configFile, stateId: state.stateId, mode });
+    void updateRunReviewOverrides(next);
+  };
+
+  const updateLightweightOverride = (
+    workflow: RunReviewPlan['workflows'][number],
+    requiresAdversarial: boolean | null,
+  ) => {
+    const next = reviewOverrides.filter((item) => item.kind !== 'lightweight' || item.configFile !== workflow.configFile);
+    if (requiresAdversarial !== null) next.push({ kind: 'lightweight', configFile: workflow.configFile, requiresAdversarial });
+    void updateRunReviewOverrides(next);
+  };
 
   const renderTaskInputField = (field: WorkflowTaskInputFieldDefinition) => {
     const value = getWorkflowTaskInputFieldValue(localTaskInput, field.id);
@@ -1574,6 +1777,182 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 sm:px-6">
+        {planningStep === 'plan' && reviewPlan ? (
+          <div className="space-y-4 py-5">
+            <div className="rounded-lg border bg-muted/20 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-medium">确认本次运行方案</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">只影响这一次 run；原工作流 YAML 不变，也不会创建副本。</p>
+                </div>
+                <Badge variant={adversarialIntent === 'disabled' ? 'outline' : 'secondary'}>
+                  {adversarialIntent === 'disabled' ? '全局：不开启对抗' : '全局：按需开启'}
+                </Badge>
+              </div>
+            </div>
+
+            {reviewPlan.evaluationError ? (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-800 dark:text-amber-200">
+                {reviewPlan.workflows.some((workflow) => workflow.manualSelectionRequired)
+                  || reviewPlan.states.some((state) => state.manualSelectionRequired)
+                  ? 'AI 本次未能完成按需评估。你仍可继续：请为下面所有标记“等待人工选择”的目标明确选择一次运行模式；全部选完后即可启动。'
+                  : 'AI 本次未能完成按需评估，已采用你的手工选择；现在可以继续启动。'}
+              </div>
+            ) : null}
+
+            {reviewPlan.workflows.filter((workflow) => workflow.baseKind === 'lightweight').map((workflow) => {
+              const workflowOverride = reviewOverrides.find((item) => item.kind === 'lightweight' && item.configFile === workflow.configFile);
+              const hasOverride = Boolean(workflowOverride);
+              const selectedRequiresAdversarial = workflowOverride?.kind === 'lightweight'
+                ? workflowOverride.requiresAdversarial
+                : null;
+              return (
+                <div key={`workflow-review-${workflow.configFile}`} className={cn('rounded-lg border p-3', workflow.blocked && 'border-destructive/50 bg-destructive/5')}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium">{workflow.workflowName}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{workflow.configFile} · 原配置为轻量工作流</div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {workflow.suggestion ? <Badge variant="outline">AI：{workflow.suggestion.requiresAdversarial ? '建议对抗' : '保持轻量'}</Badge> : null}
+                      <Badge variant={workflow.effectiveKind === 'state-machine' ? 'destructive' : 'secondary'}>
+                        本次：{workflow.effectiveKind === 'state-machine' ? '派生状态机' : '保持轻量'}
+                      </Badge>
+                      {workflow.locked ? <Badge variant="outline">已锁定</Badge> : null}
+                      {workflow.manualSelectionRequired ? <Badge variant="destructive">等待人工选择</Badge> : null}
+                    </div>
+                  </div>
+                  {workflow.suggestion?.rationale ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{workflow.suggestion.rationale}</p> : null}
+                  {workflow.operations.length ? <p className="mt-2 text-xs text-muted-foreground">本次快照将进行 {workflow.operations.length} 项本地安全协调。</p> : null}
+                  {workflow.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}
+                  {adversarialIntent === 'on-demand' ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        aria-pressed={hasOverride && selectedRequiresAdversarial === false}
+                        variant={hasOverride && selectedRequiresAdversarial === false ? 'primary' : 'outline'}
+                        className={hasOverride && selectedRequiresAdversarial === false ? 'ring-2 ring-primary/20' : undefined}
+                        onClick={() => updateLightweightOverride(workflow, false)}
+                        disabled={reviewPlanningBusy}
+                      >
+                        {hasOverride && selectedRequiresAdversarial === false ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        本次保持轻量
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        aria-pressed={hasOverride && selectedRequiresAdversarial === true}
+                        variant={hasOverride && selectedRequiresAdversarial === true ? 'primary' : 'outline'}
+                        className={hasOverride && selectedRequiresAdversarial === true ? 'ring-2 ring-primary/20' : undefined}
+                        onClick={() => updateLightweightOverride(workflow, true)}
+                        disabled={reviewPlanningBusy}
+                      >
+                        {hasOverride && selectedRequiresAdversarial === true ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        本次派生对抗状态机
+                      </Button>
+                      {hasOverride && workflow.suggestion ? (
+                        <Button type="button" size="sm" variant="outline" onClick={() => updateLightweightOverride(workflow, null)} disabled={reviewPlanningBusy}>
+                          <RotateCcw className="mr-1.5 h-4 w-4" />
+                          恢复 AI 建议
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+
+            {reviewPlan.states.map((state) => {
+              const stateOverride = reviewOverrides.find((item) => item.kind !== 'lightweight' && item.configFile === state.configFile && item.stateId === state.stateId);
+              const hasOverride = Boolean(stateOverride);
+              const selectedMode = stateOverride?.kind !== 'lightweight' ? stateOverride?.mode : null;
+              return (
+                <div key={`${state.configFile}:${state.stateId}`} className={cn('rounded-lg border p-3', state.blocked && 'border-destructive/50 bg-destructive/5')}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium">{state.stateName}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{state.workflowName} · {state.configFile}</div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">基线：{state.baseMode === 'adversarial' ? '对抗' : '标准'}</Badge>
+                      {adversarialIntent === 'on-demand' && state.suggestion ? <Badge variant="outline">AI：{state.suggestedMode === 'adversarial' ? '对抗' : '标准'}</Badge> : null}
+                      {state.configLocked ? <Badge variant="outline">配置锁</Badge> : null}
+                      <Badge variant={state.effectiveMode === 'adversarial' ? 'destructive' : 'secondary'}>本次：{state.effectiveMode === 'adversarial' ? '对抗' : '标准'}</Badge>
+                      {state.locked ? <Badge variant="outline">已锁定</Badge> : null}
+                      {state.manualSelectionRequired ? <Badge variant="destructive">等待人工选择</Badge> : null}
+                    </div>
+                  </div>
+                  {state.suggestion?.rationale ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{state.suggestion.rationale}</p> : null}
+                  {state.operations.length ? <p className="mt-2 text-xs text-muted-foreground">本次快照将进行 {state.operations.length} 项安全协调。</p> : null}
+                  {state.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}
+                  {adversarialIntent === 'on-demand' ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        aria-pressed={hasOverride && selectedMode === 'standard'}
+                        variant={hasOverride && selectedMode === 'standard' ? 'primary' : 'outline'}
+                        className={hasOverride && selectedMode === 'standard' ? 'ring-2 ring-primary/20' : undefined}
+                        onClick={() => updateStateOverride(state, 'standard')}
+                        disabled={reviewPlanningBusy}
+                      >
+                        {hasOverride && selectedMode === 'standard' ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        本次用标准
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        aria-pressed={hasOverride && selectedMode === 'adversarial'}
+                        variant={hasOverride && selectedMode === 'adversarial' ? 'primary' : 'outline'}
+                        className={hasOverride && selectedMode === 'adversarial' ? 'ring-2 ring-primary/20' : undefined}
+                        onClick={() => updateStateOverride(state, 'adversarial')}
+                        disabled={reviewPlanningBusy}
+                      >
+                        {hasOverride && selectedMode === 'adversarial' ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        本次用对抗
+                      </Button>
+                      {hasOverride && (state.configLocked || state.suggestion) ? (
+                        <Button type="button" size="sm" variant="outline" onClick={() => updateStateOverride(state, null)} disabled={reviewPlanningBusy}>
+                          <RotateCcw className="mr-1.5 h-4 w-4" />
+                          {state.configLocked ? '恢复配置锁定' : '恢复 AI 建议'}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+
+            {reviewPlan.warnings.map((warning) => <div key={warning} className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{warning}</div>)}
+            {reviewPlanningError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}
+            {startupFlowEnabled ? (
+              <section className="border-t border-border pt-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-medium">启动前检查</h3>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">每条命令按本次有效配置的工作目录执行；根/子工作流不同时会分别标注。</p>
+                  </div>
+                  <Badge variant="outline">{previewCommands.length} 条</Badge>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {previewCommands.map((item, index) => (
+                    <div key={`effective-preflight-${index}-${item.command}`} className="flex items-start gap-3 rounded-md border bg-muted/20 px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <code className="whitespace-pre-wrap break-all text-xs leading-5">{item.command}</code>
+                        {item.configFile || item.cwd ? (
+                          <div className="mt-1 break-all text-[11px] text-muted-foreground">{[item.configFile, item.cwd].filter(Boolean).join(' · ')}</div>
+                        ) : null}
+                      </div>
+                      <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'}>{item.origin === 'inferred' ? '推断' : '配置'}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        ) : (
+          <>
         {props.taskInputEditable ? (
           <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
             <div>
@@ -1702,21 +2081,24 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
           )}
         </section>
 
-        {startupFlowEnabled ? (
+        {!props.runReviewPlanning && startupFlowEnabled ? (
           <section className="border-t border-border py-5">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-medium">启动前检查</h3>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  命令将在 {localWorkingDirectory || props.preflightPreview?.cwd || props.projectRoot || '工作流配置目录'} 中执行。
-                </p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">每条命令按有效配置的工作目录执行；根/子工作流不同时会分别标注。</p>
               </div>
               <Badge variant="outline">{previewCommands.length} 条</Badge>
             </div>
             <div className="mt-3 space-y-2">
               {previewCommands.map((item, index) => (
                 <div key={`preflight-preview-${index}-${item.command}`} className="flex items-start gap-3 rounded-md border border-border bg-muted/20 px-3 py-2">
-                  <code className="min-w-0 flex-1 whitespace-pre-wrap break-all text-xs leading-5">{item.command}</code>
+                  <div className="min-w-0 flex-1">
+                    <code className="whitespace-pre-wrap break-all text-xs leading-5">{item.command}</code>
+                    {item.configFile || item.cwd ? (
+                      <div className="mt-1 break-all text-[11px] text-muted-foreground">{[item.configFile, item.cwd].filter(Boolean).join(' · ')}</div>
+                    ) : null}
+                  </div>
                   <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'} className="shrink-0">
                     {item.origin === 'inferred' ? '推断' : '配置'}
                   </Badge>
@@ -1725,28 +2107,67 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
             </div>
           </section>
         ) : null}
+
+        {props.runReviewPlanning ? (
+          <section className="border-t border-border py-5">
+            <Label className="text-sm font-medium">本次运行是否允许使用对抗流程？</Label>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              {props.runReviewPlanning.baselineIntent
+                ? `已按这个工作流创建时的选择预选「${props.runReviewPlanning.baselineIntent === 'disabled' ? '不开启对抗' : '按需开启'}」，可直接继续。本次修改只影响本次快照，不写回原配置。`
+                : '选择本次运行的做法；只影响本次有效快照，不写回原配置。'}
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => setAdversarialIntent('disabled')} className={cn('rounded-lg border p-3 text-left', adversarialIntent === 'disabled' ? 'border-primary bg-primary/5' : 'hover:bg-muted/40')}>
+                <div className="font-medium">不开启对抗</div>
+                <div className="mt-1 text-xs text-muted-foreground">零次 AI 评估；轻量保持原样，普通状态机全部使用标准模式。</div>
+              </button>
+              <button type="button" onClick={() => setAdversarialIntent('on-demand')} className={cn('rounded-lg border p-3 text-left', adversarialIntent === 'on-demand' ? 'border-primary bg-primary/5' : 'hover:bg-muted/40')}>
+                <div className="font-medium">按需开启</div>
+                <div className="mt-1 text-xs text-muted-foreground">一次整体规划；轻量任务必要时只为本次运行派生状态机。</div>
+              </button>
+            </div>
+            {reviewPlanningError ? <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}
+          </section>
+        ) : null}
+          </>
+        )}
       </div>
 
       <div className="shrink-0 border-t border-border bg-background px-5 py-4 sm:px-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs leading-5 text-muted-foreground sm:max-w-[55%]">{props.footerText}</div>
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="outline" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
-            {startupFlowEnabled && props.onSkipPreflight ? (
-              <Button
-                variant="secondary"
-                onClick={() => props.onSkipPreflight?.(buildContexts())}
-                disabled={props.actionBusy || taskInputInvalid}
-              >
-                跳过检查启动
+            <Button
+              variant="outline"
+              onClick={planningStep === 'plan'
+                ? () => { void discardRunReviewPlan(); setPlanningStep('contexts'); }
+                : () => { void discardRunReviewPlan(); props.onCancel(); }}
+              disabled={props.actionBusy || reviewPlanningBusy}
+            >
+              {planningStep === 'plan' ? '返回修改' : '取消'}
+            </Button>
+            {props.runReviewPlanning && planningStep === 'contexts' ? (
+              <Button onClick={() => void createRunReviewPlan()} disabled={props.actionDisabled || taskInputInvalid || !adversarialIntent || reviewPlanningBusy}>
+                {reviewPlanningBusy ? '正在生成本次方案...' : '下一步：确认本次运行方案'}
               </Button>
             ) : null}
-            <Button
-              onClick={() => props.onConfirm(buildContexts())}
-              disabled={props.actionDisabled || taskInputInvalid}
-            >
-              {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
-            </Button>
+            {startupFlowEnabled && props.onSkipPreflight && (!props.runReviewPlanning || planningStep === 'plan') ? (
+              <Button
+                variant="secondary"
+                onClick={() => props.onSkipPreflight?.(buildContexts(), reviewSelection())}
+                disabled={props.actionBusy || reviewPlanningBusy || taskInputInvalid || Boolean(reviewPlan?.blocked)}
+              >
+                跳过项目检查并启动
+              </Button>
+            ) : null}
+            {(!props.runReviewPlanning || planningStep === 'plan') ? (
+              <Button
+                onClick={() => props.onConfirm(buildContexts(), reviewSelection())}
+                disabled={props.actionDisabled || reviewPlanningBusy || taskInputInvalid || Boolean(reviewPlan?.blocked)}
+              >
+                {props.actionBusy ? props.actionBusyLabel : planningStep === 'plan' ? '确认方案并启动' : props.actionLabel}
+              </Button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1882,6 +2303,7 @@ export default function WorkbenchPage({
   const [historyRunAction, setHistoryRunAction] = useState<{ runId: string; action: 'view' | 'resume' | 'analyze' | 'delete' } | null>(null);
   const [focusedState, setFocusedState] = useState<string | null>(null); // 用于流程图视图跳转
   const [executionViewTabOverride, setExecutionViewTabOverride] = useState<string | null>(null);
+  const [runtimeStateViewMode, setRuntimeStateViewMode] = useState<'structure' | 'diagram'>('structure');
   const [executionPolicyDialogOpen, setExecutionPolicyDialogOpen] = useState(false);
   const [runDetail, setRunDetail] = useState<any>(null);
   const [viewingHistoryRun, setViewingHistoryRun] = useState(false);
@@ -2578,6 +3000,7 @@ export default function WorkbenchPage({
   const [applyingOptimization, setApplyingOptimization] = useState(false);
   const [showStartWorkflowDialog, setShowStartWorkflowDialog] = useState(false);
   const [pendingStartRequest, setPendingStartRequest] = useState<WorkflowStartRequest | null>(null);
+  const [pendingStartReviewPlanId, setPendingStartReviewPlanId] = useState<string | null>(null);
   const autoStartHandledRef = useRef(false);
   const [startGlobalContextDraft, setStartGlobalContextDraft] = useState('');
   const [startPhaseContextDrafts, setStartPhaseContextDrafts] = useState<Record<string, string>>({});
@@ -2734,9 +3157,17 @@ export default function WorkbenchPage({
     staleTime: 1_000,
     refetchInterval: isRuntimeWorkflowStatusActive(workflowStatus) ? 2_000 : false,
   });
+  const runtimeWorkflowConfig = useMemo(() => resolveWorkbenchRuntimeWorkflowConfig({
+    baseConfig: workflowConfig,
+    activeRunId: activeRuntimeRunId,
+    runDetail,
+    statusSnapshot: statusCompactQuery.data,
+  }), [activeRuntimeRunId, runDetail, statusCompactQuery.data, workflowConfig]);
+  const isRuntimeLightweightWorkflow = isLightweightWorkflowConfig(runtimeWorkflowConfig);
+  const isPromotedLightweightRun = isLightweightWorkflow && !isRuntimeLightweightWorkflow;
   const lightweightTasklistQuery = useLightweightTasklistEvidenceQuery(
     activeRuntimeRunId,
-    isLightweightWorkflow,
+    isRuntimeLightweightWorkflow,
     isRuntimeWorkflowStatusActive(workflowStatus),
   );
   const lightweightTaskBoardStepNames = useMemo(() => Array.from(new Set([
@@ -2744,19 +3175,19 @@ export default function WorkbenchPage({
     ...activeSteps,
     ...completedSteps,
     ...failedSteps,
-    ...(workflowConfig?.workflow?.states || []).flatMap((stateNode: any) => (stateNode.steps || [])
+    ...(runtimeWorkflowConfig?.workflow?.states || []).flatMap((stateNode: any) => (stateNode.steps || [])
       .map((step: any) => String(step?.name || step?.task || '').trim())),
   ].map((step) => String(step || '').trim()).filter(Boolean))), [
     activeSteps,
     completedSteps,
     currentStep,
     failedSteps,
-    workflowConfig?.workflow?.states,
+    runtimeWorkflowConfig?.workflow?.states,
   ]);
   const lightweightRuntimeToolEventsQuery = useLightweightRuntimeToolEventsQuery(
     activeRuntimeRunId,
     lightweightTaskBoardStepNames,
-    isLightweightWorkflow,
+    isRuntimeLightweightWorkflow,
     isRuntimeWorkflowStatusActive(workflowStatus),
   );
   const lightweightTaskBoardToolEvents = useMemo(() => {
@@ -2768,13 +3199,16 @@ export default function WorkbenchPage({
   }, [lightweightRuntimeToolEventsQuery.data, liveToolEvents]);
   const lightweightTaskBoardInput = useMemo(() => ({
     workflow: {
-      profile: workflowConfig?.workflow?.profile,
-      primaryAgent: workflowConfig?.workflow?.states?.[0]?.steps?.[0]?.agent,
-      states: workflowConfig?.workflow?.states,
+      profile: runtimeWorkflowConfig?.workflow?.profile,
+      primaryAgent: runtimeWorkflowConfig?.workflow?.states?.[0]?.steps?.[0]?.agent,
+      states: runtimeWorkflowConfig?.workflow?.states,
     },
     run: {
-      profile: workflowConfig?.workflow?.profile,
-      primaryAgent: workflowConfig?.workflow?.states?.[0]?.steps?.[0]?.agent,
+      profile: runtimeWorkflowConfig?.workflow?.profile,
+      status: workflowStatus,
+      currentPhase,
+      currentStep,
+      primaryAgent: runtimeWorkflowConfig?.workflow?.states?.[0]?.steps?.[0]?.agent,
       agents: Array.isArray((statusCompactQuery.data as any)?.agents)
         ? (statusCompactQuery.data as any).agents
         : (Array.isArray(runDetail?.agents) ? runDetail.agents : agents),
@@ -2790,7 +3224,7 @@ export default function WorkbenchPage({
       failedSteps,
     },
     tasklist: lightweightTasklistQuery.data?.tasklist || (statusCompactQuery.data as any)?.tasklist || runDetail?.tasklist,
-  }), [activeSteps, agents, completedSteps, failedSteps, lightweightTaskBoardToolEvents, lightweightTasklistQuery.data?.tasklist, runDetail, statusCompactQuery.data, workflowConfig?.workflow]);
+  }), [activeSteps, agents, completedSteps, currentPhase, currentStep, failedSteps, lightweightTaskBoardToolEvents, lightweightTasklistQuery.data?.tasklist, runDetail, runtimeWorkflowConfig?.workflow, statusCompactQuery.data, workflowStatus]);
   const appliedStatusCacheSignatureRef = useRef<string | null>(null);
   const workflowEventSeqByRunIdRef = useRef<Map<string, number>>(new Map());
   const workflowEventSyncInflightRef = useRef<Map<string, Promise<void>>>(new Map());
@@ -3237,7 +3671,7 @@ export default function WorkbenchPage({
   }, [configFile, leftRunPanelTab, rightPanelTab, runWorkbenchTab]);
 
   useEffect(() => {
-    if (isLightweightWorkflow && (runWorkbenchTab === 'agents' || runWorkbenchTab === 'agora')) {
+    if (isRuntimeLightweightWorkflow && (runWorkbenchTab === 'agents' || runWorkbenchTab === 'agora')) {
       handleRunWorkbenchTabChange('overview');
       return;
     }
@@ -3247,7 +3681,7 @@ export default function WorkbenchPage({
     if (runWorkbenchTab === 'spec' && !runtimeSpecAvailable) {
       handleRunWorkbenchTabChange('overview');
     }
-  }, [currentRunWorkspacePath, handleRunWorkbenchTabChange, isLightweightWorkflow, runWorkbenchTab, runtimeSpecAvailable]);
+  }, [currentRunWorkspacePath, handleRunWorkbenchTabChange, isRuntimeLightweightWorkflow, runWorkbenchTab, runtimeSpecAvailable]);
 
   useEffect(() => {
     setRunDetailSection((current) => {
@@ -3351,7 +3785,7 @@ export default function WorkbenchPage({
   const effectiveSpecCodingTasks = useMemo(() => {
     if (specCodingDisabled) return [];
     const tasks = (specCodingDetails?.tasks || []) as RuntimeSpecTask[];
-    const workflow = workflowConfig?.workflow as any;
+    const workflow = runtimeWorkflowConfig?.workflow as any;
     if (!tasks.length || !workflow) return tasks;
 
     const runningStepKeys = new Set<string>([...activeSteps, currentStep].filter(Boolean));
@@ -3419,7 +3853,7 @@ export default function WorkbenchPage({
         ? { ...task, status: derivedStatus }
         : task;
     });
-  }, [activeSteps, completedSteps, currentStep, failedSteps, specCodingDetails?.tasks, specCodingDisabled, workflowConfig]);
+  }, [activeSteps, completedSteps, currentStep, failedSteps, runtimeWorkflowConfig, specCodingDetails?.tasks, specCodingDisabled]);
 
   const specCodingTaskProgress = useMemo(() => {
     const tasks = flattenRuntimeSpecTasks((effectiveSpecCodingTasks || []) as RuntimeSpecTask[]);
@@ -4395,7 +4829,12 @@ export default function WorkbenchPage({
       workflowName: sourceConfig.workflow.name || configFile,
     });
   }, [configFile, editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
-  const handleOptimizeStateMachineState = useCallback((stateIndex: number) => {
+  const handleOptimizeStateMachineState = useCallback((
+    stateIndex: number,
+    presetInstruction?: string,
+    reviewPolicyOnly?: boolean,
+    unlockForAi?: boolean,
+  ) => {
     const sourceConfig = editingConfig || workflowConfig;
     const stateNode = sourceConfig?.workflow?.states?.[stateIndex];
     if (!stateNode) {
@@ -4407,7 +4846,10 @@ export default function WorkbenchPage({
       workflowMode: 'state-machine',
       stateIndex,
       stateName: stateNode.name || `状态 ${stateIndex + 1}`,
-    });
+      stateId: stateNode.id,
+      reviewPolicyOnly,
+      unlockForAi,
+    }, presetInstruction);
   }, [editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
   const handleOptimizeStateMachineStep = useCallback((stateIndex: number, stepIndex: number) => {
     const sourceConfig = editingConfig || workflowConfig;
@@ -4665,6 +5107,7 @@ export default function WorkbenchPage({
         rawOutput: finalContent,
         filename: payload.filename,
         payload,
+        target,
         candidateConfig,
         baseSnapshot: baseSnapshot ?? patchValue,
         candidateSnapshot: candidateSnapshot ?? patchValue,
@@ -4721,12 +5164,31 @@ export default function WorkbenchPage({
   }, []);
   const handleApplyDesignOptimizationCandidate = useCallback(() => {
     if (!designOptimizationCandidate) return;
-    latestEditingConfigRef.current = designOptimizationCandidate.candidateConfig;
-    dispatch({ type: 'SET_EDITING_CONFIG', payload: designOptimizationCandidate.candidateConfig });
+    const latestConfig = editingConfig || workflowConfig;
+    if (!latestConfig) {
+      toast('error', '当前工作流草稿已不可用，请重新生成优化建议');
+      return;
+    }
+    const latestBaseSnapshot = extractDesignOptimizationSnapshot(latestConfig, designOptimizationCandidate.target);
+    if (JSON.stringify(latestBaseSnapshot ?? null) !== JSON.stringify(designOptimizationCandidate.baseSnapshot ?? null)) {
+      toast('warning', '目标内容在 AI 生成建议后已变化，请重新生成，避免覆盖较新的修改');
+      return;
+    }
+    const candidateConfig = applyDesignOptimizationPatch(
+      latestConfig,
+      designOptimizationCandidate.payload,
+      designOptimizationCandidate.target,
+    );
+    if (!candidateConfig) {
+      toast('error', '优化建议已过期或无法安全应用，请重新生成');
+      return;
+    }
+    latestEditingConfigRef.current = candidateConfig;
+    dispatch({ type: 'SET_EDITING_CONFIG', payload: candidateConfig });
     handleCloseDesignOptimizationDialog();
     setDesignTab('orchestration');
     toast('success', 'AI 优化建议已应用到当前工作流草稿，请记得保存配置');
-  }, [designOptimizationCandidate, dispatch, handleCloseDesignOptimizationDialog, toast]);
+  }, [designOptimizationCandidate, dispatch, editingConfig, handleCloseDesignOptimizationDialog, toast, workflowConfig]);
   const handleDiscardDesignOptimizationCandidate = useCallback(() => {
     setDesignOptimizationCandidate(null);
   }, []);
@@ -4970,7 +5432,7 @@ export default function WorkbenchPage({
     });
   }, [runDetail?.taskInput, selectedRun?.taskIssueUrl, selectedRun?.taskTitle, statusCompactQuery.data]);
   const runtimeTaskTitle = getWorkflowTaskInputTitle(runtimeTaskInput);
-  const canStartWorkflow = isRunMode && Boolean(workflowConfig) && !starting && !startRequesting && !isRunning;
+  const canStartWorkflow = isRunMode && Boolean(workflowConfig) && !starting && !startRequesting && !stopping && !isRunning;
   const canStopWorkflow = isRunMode && !stopping && actionIsRunning;
   const canResumeWorkflow = isRunMode
     && Boolean(actionRunId)
@@ -4982,20 +5444,6 @@ export default function WorkbenchPage({
     : actionRunId
       ? '当前状态无需恢复'
       : '请选择一条运行记录';
-  useEffect(() => {
-    if (!actionIsRunning && stopping) {
-      setStopping(false);
-    }
-  }, [actionIsRunning, stopping]);
-
-  useEffect(() => {
-    if (!stopping) return;
-    const timer = window.setTimeout(() => {
-      setStopping(false);
-    }, 8000);
-    return () => window.clearTimeout(timer);
-  }, [stopping]);
-
   useEffect(() => {
     if (!isRunMode || !actionIsRunning) return;
     setRunClockNow(Date.now());
@@ -5661,6 +6109,7 @@ export default function WorkbenchPage({
     const phaseTitle = getSpecCodingTaskPhaseTitle(task);
     if (!phaseTitle) return;
     setFocusedState(phaseTitle);
+    setRuntimeStateViewMode('diagram');
     setExecutionViewTabOverride('diagram');
   }, [getSpecCodingTaskPhaseTitle]);
   const openAgentFromTask = useCallback((agentName: string) => {
@@ -6336,7 +6785,7 @@ export default function WorkbenchPage({
     const requestedTab = getRunWorkbenchTabFromSearchParams(effectiveSearchParams);
     const requestedDocumentSource = getDocumentSourceFilterFromSearchParams(effectiveSearchParams);
 
-    if (isLightweightWorkflow) {
+    if (isRuntimeLightweightWorkflow) {
       const redirect = resolveLightweightWorkbenchRunTabRedirect({ requestedTab, requestedDocumentSource });
       if (redirect) {
         setWorkbenchNavSection('runs');
@@ -6425,7 +6874,7 @@ export default function WorkbenchPage({
       }
       return fromHistory || current || { id: requestedRunId, status: workflowStatus || 'unknown', configFile };
     });
-  }, [configFile, dispatch, historyLoaded, historyLoading, historyRuns, isLightweightWorkflow, runId, runtimeSpecAvailable, searchParamsString, updateUrl, viewMode, workflowStatus]);
+  }, [configFile, dispatch, historyLoaded, historyLoading, historyRuns, isRuntimeLightweightWorkflow, runId, runtimeSpecAvailable, searchParamsString, updateUrl, viewMode, workflowStatus]);
 
   useEffect(() => {
     const next = getDocumentSourceFilterFromSearchParams(effectiveSearchParams);
@@ -7824,10 +8273,16 @@ export default function WorkbenchPage({
       skipPreflight?: boolean;
       preflightChecks?: QualityCheckRecord[];
       initialContexts?: WorkflowStartContexts;
+      reviewSelection?: WorkflowStartReviewSelection;
     },
   ) => {
     const isRehearsalStart = mode === 'rehearsal';
     const skipPreflight = !!options?.skipPreflight;
+    const plannedStart = Boolean(options?.reviewSelection);
+    const preflightStrategy = resolveStartPreflightStrategy({
+      plannedStart,
+      skipRequested: skipPreflight,
+    });
     const initialContexts = options?.initialContexts;
     const normalizedWorkingDirectory = (initialContexts?.workingDirectory || '').trim();
     const normalizedProjectRoot = normalizedWorkingDirectory || (projectRoot || '').trim();
@@ -7871,8 +8326,12 @@ export default function WorkbenchPage({
       setStartupProgressMode(mode);
       setRehearsalProgressSteps([
         isRehearsalStart
-          ? (skipPreflight ? '已进入演练模式，跳过启动前检查，正在创建演练运行' : '已进入演练模式，正在执行启动前检查')
-          : (skipPreflight ? '正在正式启动，已跳过启动前检查，正在创建运行' : '正在正式启动，正在执行启动前检查'),
+          ? (skipPreflight
+            ? '已进入演练模式，跳过项目检查，正在执行必要启动校验'
+            : '已进入演练模式，正在执行启动前检查')
+          : (skipPreflight
+            ? '正在正式启动，已跳过项目检查，正在执行必要启动校验'
+            : '正在正式启动，正在执行启动前检查'),
       ]);
       setRehearsalProgressDialogOpen(true);
       if (!isRehearsalStart) {
@@ -7884,7 +8343,8 @@ export default function WorkbenchPage({
         warningCount: 0,
         checks: options?.preflightChecks || [],
       };
-      if (!skipPreflight) {
+      const clientExecutedPreflight = preflightStrategy.runInClient;
+      if (clientExecutedPreflight) {
         preflight = await workflowApi.preflight(configFile, normalizedProjectRoot);
       }
       if (startupCancelRequestedRef.current) {
@@ -7892,10 +8352,12 @@ export default function WorkbenchPage({
         return;
       }
       setPreflightChecks(preflight.checks || []);
-      if (!skipPreflight) {
+      if (clientExecutedPreflight) {
         setRehearsalProgressSteps((prev) => [...prev, `启动前检查完成：${preflight.failedCount > 0 ? `${preflight.failedCount} 项失败` : preflight.warningCount > 0 ? `${preflight.warningCount} 项警告` : '全部通过'}`]);
+      } else if (plannedStart && !skipPreflight) {
+        setRehearsalProgressSteps((prev) => [...prev, '已确认检查计划，正在执行服务端启动前检查']);
       } else {
-        setRehearsalProgressSteps((prev) => [...prev, '已跳过启动前检查']);
+        setRehearsalProgressSteps((prev) => [...prev, '已跳过 lint、build、test 等项目检查；运行方案与工作流结构仍会校验']);
       }
       if (!preflight.ok) {
         const failedDetails = (preflight.checks || [])
@@ -7952,11 +8414,23 @@ export default function WorkbenchPage({
       startupExpectedRunIdRef.current = null;
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'preparing' });
       addLog('system', 'info', isRehearsalStart ? '正在启动演练模式...' : '正在启动工作流...');
-      setRehearsalProgressSteps((prev) => [...prev, isRehearsalStart ? '已通过检查，正在创建演练运行并等待结果' : '已通过检查，正在创建正式运行']);
+      setRehearsalProgressSteps((prev) => [...prev,
+        plannedStart && !skipPreflight
+          ? (isRehearsalStart ? '正在执行启动前检查并创建演练运行' : '正在执行启动前检查并创建正式运行')
+          : skipPreflight
+            ? (isRehearsalStart ? '正在完成必要校验并创建演练运行' : '正在完成必要校验并创建正式运行')
+            : (isRehearsalStart ? '已通过检查，正在创建演练运行并等待结果' : '已通过检查，正在创建正式运行'),
+      ]);
       const startResult = await workflowApi.start(configFile, undefined, {
-        skipPreflight: true,
+        // Legacy starts already ran their project checks in this client. A
+        // planned start delegates the single authoritative execution to the
+        // server unless the user explicitly skips project checks.
+        skipPreflight: preflightStrategy.skipOnServer,
         rehearsal: isRehearsalStart,
         preflightChecks: preflight.checks || [],
+        startPlanId: options?.reviewSelection?.planId,
+        adversarialIntent: options?.reviewSelection?.intent,
+        reviewOverrides: options?.reviewSelection?.overrides,
         initialContexts: {
           globalContext: normalizedGlobalContext,
           phaseContexts: normalizedPhaseContexts,
@@ -7964,6 +8438,9 @@ export default function WorkbenchPage({
           workingDirectory: normalizedWorkingDirectory || undefined,
         },
       });
+      if (plannedStart && !skipPreflight) {
+        setRehearsalProgressSteps((prev) => [...prev, '启动前检查完成：全部通过']);
+      }
       startupCreatedRunIdRef.current = startResult.runId || null;
       startupExpectedRunIdRef.current = startResult.runId || null;
       if (startupCancelRequestedRef.current) {
@@ -8025,13 +8502,24 @@ export default function WorkbenchPage({
       // Fetch status shortly after start to catch initial state
       setTimeout(fetchCurrentStatus, 500);
     } catch (error: any) {
+      const failedChecks = Array.isArray(error?.checks)
+        ? (error.checks as QualityCheckRecord[]).filter((check) => check?.status === 'failed')
+        : [];
+      if (Array.isArray(error?.checks)) {
+        setPreflightChecks(error.checks as QualityCheckRecord[]);
+      }
+      const failedDetails = failedChecks.slice(0, 5).map((check) => {
+        const commandResult = formatQualityCheckCommandResults(check);
+        return `${check.summary || describeQualityCheck(check)}${commandResult ? `\n${commandResult}` : ''}`;
+      });
       setRehearsalProgressSteps((prev) => [
         ...prev,
         isRehearsalStart ? `演练启动失败：${error.message}` : `正式启动失败：${error.message}`,
+        ...failedDetails.map((detail) => `失败详情：\n${detail}`),
       ]);
       setRehearsalProgressDialogOpen(true);
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
-      addLog('system', 'error', `启动失败: ${error.message}`);
+      addLog('system', 'error', `启动失败: ${error.message}${failedDetails.length ? `\n\n${failedDetails.join('\n\n')}` : ''}`);
     } finally {
       startupCancelRequestedRef.current = false;
       startupInProgressRef.current = false;
@@ -8041,9 +8529,14 @@ export default function WorkbenchPage({
     }
   };
 
-  const confirmStartWorkflow = useCallback((contexts: WorkflowStartContexts, preflightMode: 'run' | 'skip' = 'run') => {
+  const confirmStartWorkflow = useCallback((
+    contexts: WorkflowStartContexts,
+    reviewSelection?: WorkflowStartReviewSelection,
+    preflightMode: 'run' | 'skip' = 'run',
+  ) => {
     if (!pendingStartRequest) return;
     const request = pendingStartRequest;
+    setPendingStartReviewPlanId(null);
     setShowStartWorkflowDialog(false);
     setPendingStartRequest(null);
     setStartGlobalContextDraft(contexts.globalContext);
@@ -8051,19 +8544,41 @@ export default function WorkbenchPage({
     setStartTaskInputDraft(normalizeWorkflowTaskInput(contexts.taskInput));
     setStartWorkingDirectoryDraft(contexts.workingDirectory || '');
     void startWorkflow(request.mode, {
+      // Skipping applies only to project quality commands. Planned-run hashes,
+      // effective config validation, agent bindings and snapshots remain
+      // mandatory on the server.
       skipPreflight: request.skipPreflight || preflightMode === 'skip',
       preflightChecks: request.preflightChecks,
       initialContexts: contexts,
+      reviewSelection,
     });
   }, [pendingStartRequest, startWorkflow]);
 
   const stopWorkflow = useCallback(async () => {
     setStopping(true);
     setStopProgressDialogOpen(true);
-    setStopProgressSummary('正在发送停止请求。');
+    setStopProgressSummary('停止请求已发送，正在停止运行实例。');
     setStopProgressSteps(createStopProgressSteps());
+    let statusPollTimer: number | undefined;
+    let statusPollInFlight = false;
     try {
       const targetRunId = actionRunId || runId || selectedRun?.id || initialRunId || undefined;
+      const pollStoppedState = async () => {
+        if (statusPollInFlight) return;
+        statusPollInFlight = true;
+        try {
+          const status = await workflowApi.getStatus(configFile, targetRunId, { compact: true });
+          if (normalizeWorkflowStatusCode(status?.status) !== 'stopped') return;
+          setStopProgressSteps((prev) => markStopProgressStatePersisted(prev));
+          setStopProgressSummary('运行实例已停止，正在后台清理运行资源。');
+        } catch {
+          // The stop request remains authoritative; polling only improves visible progress.
+        } finally {
+          statusPollInFlight = false;
+        }
+      };
+      statusPollTimer = window.setInterval(() => { void pollStoppedState(); }, 500);
+      void pollStoppedState();
       const stopResult = await workflowApi.stop(configFile, targetRunId) as {
         success?: boolean;
         runIds?: string[];
@@ -8130,8 +8645,7 @@ export default function WorkbenchPage({
           : prev
       ));
       addLog('system', 'warning', '工作流已停止');
-      await loadHistory();
-      await fetchCurrentStatus();
+      await Promise.all([loadHistory(), fetchCurrentStatus()]);
       setStopProgressSteps((prev) => prev.map((step) => (
         step.id === 'refresh' ? { ...step, status: 'success', detail: '运行状态已刷新。' } : step
       )));
@@ -8143,6 +8657,7 @@ export default function WorkbenchPage({
       setStopProgressSummary('停止工作流失败。');
       addLog('system', 'error', '停止工作流失败。');
     } finally {
+      if (statusPollTimer !== undefined) window.clearInterval(statusPollTimer);
       setStopping(false);
     }
   }, [actionRunId, addLog, clearHumanApprovalData, clearPendingHumanQuestion, configFile, dispatch, fetchCurrentStatus, initialRunId, loadHistory, queryClient, runId, selectedRun?.id]);
@@ -8697,7 +9212,7 @@ export default function WorkbenchPage({
   };
 
   const selectStepByLogName = (logStepName: string) => {
-    const allSteps = (workflowConfig?.workflow?.states || []).flatMap((state: any) =>
+    const allSteps = (runtimeWorkflowConfig?.workflow?.states || []).flatMap((state: any) =>
       (state.steps || []).map((step: any) => ({ ...step, __stateName: state.name }))
     );
 
@@ -8715,7 +9230,7 @@ export default function WorkbenchPage({
   const openStepRecordInStateDiagram = (record: any) => {
     const stepName = String(record?.rawStepName || record?.stepName || '').trim();
     if (!stepName) return;
-    if (isLightweightWorkflowConfig(workflowConfig)) {
+    if (isRuntimeLightweightWorkflow) {
       setOverviewStepRecord(null);
       openRunDetailSection('overview');
       return;
@@ -8732,7 +9247,7 @@ export default function WorkbenchPage({
   };
 
   const openRunRecordDocument = (input: { stepName: string; filename?: string }) => {
-    const documentSource = isLightweightWorkflowConfig(workflowConfig) ? 'tasklist' : 'runtime-output';
+    const documentSource = isRuntimeLightweightWorkflow ? 'tasklist' : 'runtime-output';
     setDocumentFocusRequest(documentSource === 'tasklist' ? null : {
       requestId: Date.now(),
       stepName: input.stepName,
@@ -9009,7 +9524,7 @@ export default function WorkbenchPage({
       completedSteps,
       failedSteps,
       terminal: isTerminalWorkflowStatus(workflowStatus),
-      fallbackStepName: isLightweightWorkflow ? resolveSoleConfiguredWorkflowStepName(workflowConfig?.workflow) : '',
+      fallbackStepName: isRuntimeLightweightWorkflow ? resolveSoleConfiguredWorkflowStepName(runtimeWorkflowConfig?.workflow) : '',
     });
     for (const stepKey of rootLiveStreamSteps) {
       pushSource({
@@ -9068,7 +9583,7 @@ export default function WorkbenchPage({
     currentStep,
     failedSteps,
     getSubworkflowCacheKey,
-    isLightweightWorkflow,
+    isRuntimeLightweightWorkflow,
     liveStreamTarget.activeStep,
     liveStreamTarget.parallelActiveSteps,
     resolveLiveStreamSource,
@@ -9076,7 +9591,7 @@ export default function WorkbenchPage({
     selectedRun?.id,
     subworkflowDrilldownStack,
     subworkflowRuns,
-    workflowConfig?.workflow,
+    runtimeWorkflowConfig?.workflow,
     workflowStatus,
   ]);
 
@@ -10630,6 +11145,85 @@ export default function WorkbenchPage({
     } catch (error: any) {
       toast('error', '删除 Agent 失败: ' + error.message);
     }
+  };
+
+  const renderRunStructuredTaskListPanel = () => {
+    const tasks = flattenRuntimeSpecTasksWithDepth(effectiveSpecCodingTasks);
+    return (
+      <div className="h-full min-h-0 overflow-auto bg-muted/20 p-4" data-testid="runtime-structured-tasklist">
+        <div className="mx-auto max-w-6xl space-y-4">
+          <div className="rounded-2xl border bg-background p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-primary" style={{ fontSize: 19 }}>checklist</span>
+                  <h2 className="text-xl font-semibold">任务清单</h2>
+                </div>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">来自本次运行快照的结构化任务及 Agent 回写状态。</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">{specCodingTaskProgress.completed}/{specCodingTaskProgress.total}</Badge>
+                <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => {
+                  setSpecCodingArtifactTab('tasks');
+                  setSpecCodingModalOpen(true);
+                }}>
+                  查看 tasks.md
+                </Button>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-4">
+              {[
+                { label: '已完成', value: specCodingTaskProgress.completed, tone: 'text-emerald-600' },
+                { label: '进行中', value: specCodingTaskProgress.inProgress, tone: 'text-primary' },
+                { label: '阻塞', value: specCodingTaskProgress.blocked, tone: 'text-red-600' },
+                { label: '未开始', value: specCodingTaskProgress.pending, tone: 'text-muted-foreground' },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">{item.label}</div>
+                  <div className={cn('mt-1 text-lg font-semibold', item.tone)}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+            <Progress value={specCodingTaskProgress.percentage} className="mt-4 h-2" />
+          </div>
+
+          {tasks.length ? (
+            <div className="space-y-2">
+              {tasks.map((task) => (
+                <div key={task.id} className={cn(
+                  'rounded-xl border bg-background p-4',
+                  task.status === 'completed' ? 'border-emerald-500/30' : task.status === 'in-progress' ? 'border-primary/35' : task.status === 'blocked' ? 'border-red-500/35' : '',
+                )}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0" style={{ marginLeft: `${Math.min((task.depth || 0) * 20, 80)}px` }}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {task.depth ? <span className="material-symbols-outlined text-sm text-muted-foreground">subdirectory_arrow_right</span> : null}
+                        <span className="text-xs font-mono text-muted-foreground">{task.id}</span>
+                        <span className="text-sm font-semibold">{task.title}</span>
+                      </div>
+                      {task.detail ? <div className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{task.detail}</div> : null}
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                        {(task.ownerAgents || []).length ? <span>Agent：{(task.ownerAgents || []).join('、')}</span> : null}
+                        {task.validation ? <span>验证：{task.validation}</span> : null}
+                        {task.updatedAt ? <span>更新：{new Date(task.updatedAt).toLocaleString()}</span> : null}
+                      </div>
+                    </div>
+                    <Badge variant={task.status === 'blocked' ? 'destructive' : task.status === 'completed' ? 'secondary' : 'outline'} className="shrink-0">
+                      {formatSpecCodingTaskStatus(task.status)}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed bg-background p-8 text-center">
+              <div className="text-sm font-medium">暂无结构化任务</div>
+              <div className="mt-1 text-xs text-muted-foreground">本次运行尚未生成 tasks.md 或任务状态投影。</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const renderRuntimeInsightPanels = () => {
@@ -12248,8 +12842,9 @@ export default function WorkbenchPage({
     runtimeSpecAvailable,
   });
   const runDetailNavItems = buildWorkbenchRunDetailNavItems({
-    isLightweightWorkflow,
+    isLightweightWorkflow: isRuntimeLightweightWorkflow,
     runtimeSpecAvailable,
+    includeStructuredTasklist: isPromotedLightweightRun && runtimeSpecAvailable,
   });
 
   const openPreviewSection = () => {
@@ -12460,7 +13055,7 @@ export default function WorkbenchPage({
 
   const renderRunStateMapPanel = () => (
     <div className="h-full min-h-0 overflow-hidden bg-background">
-      {workflowConfig ? (
+      {runtimeWorkflowConfig ? (
         <div className="relative h-full p-4">
             {subworkflowDrilldownLoading ? (
               <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/60 backdrop-blur-[1px]">
@@ -12472,55 +13067,86 @@ export default function WorkbenchPage({
             ) : null}
             {subworkflowDrilldownStack.length > 0 ? (
               renderSubworkflowDrilldown()
-            ) : isLightweightWorkflowConfig(workflowConfig) ? (
+            ) : isRuntimeLightweightWorkflow ? (
               <LightweightTaskExecutionGraph
                 {...lightweightTaskBoardInput}
                 className="h-full"
               />
             ) : (
-              <StateMachineExecutionView
-                states={workflowConfig.workflow.states || []}
-                agents={agentConfigs}
-                currentState={currentPhase}
-                currentStep={currentStep}
-                activeSteps={activeSteps}
-                activeConcurrencyGroups={activeConcurrencyGroups}
-                completedSteps={completedSteps}
-                failedSteps={failedSteps}
-                stateHistory={smStateHistory}
-                issueTracker={smIssueTracker}
-                transitionCount={smTransitionCount}
-                maxTransitions={workflowConfig.workflow.maxTransitions || 50}
-                status={workflowStatus as any}
-                isRunning={isRunning}
-                allowForceTransition={canForceTransition}
-                focusedState={focusedState}
-                startTime={runStartTime}
-                endTime={runEndTime}
-                accumulatedWaitMs={runAccumulatedWaitMs}
-                waitStartedAt={runWaitStartedAt}
-                supervisorFlow={supervisorFlow}
-                agentFlow={agentFlow}
-                tokenAnalytics={workflowTokenAnalytics}
-                executionTrace={executionTrace}
-                runtimeEvents={dbRuntimeEvents}
-                subworkflowRuns={subworkflowRuns}
-                subworkflowSummary={subworkflowSummary}
-                activeSubworkflowRunId={activeSubworkflowRunId}
-                onOpenSubworkflowRun={openSubworkflowRun}
-                overviewFooter={null}
-                activeTabOverride="trace"
-                defaultActiveTab="trace"
-                onActiveTabChange={setMainExecutionActiveTab}
-                hasPendingHumanQuestion={!!pendingHumanQuestion}
-                pendingHumanQuestion={pendingHumanQuestion as any}
-                formationAgents={supervisorFormationAgents}
-                supervisorAgent={runtimeSupervisorAgent}
-                onStateClick={selectStateDetails}
-                onStepClick={handleRunDiagramStepClick}
-                onRerunFromStep={handleRerunFromStep}
-                onForceTransition={handleForceTransition}
-              />
+              <div className="flex h-full min-h-0 flex-col gap-3">
+                <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">本次运行状态</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">按运行快照展示实际状态、步骤和转移，不修改原工作流。</div>
+                  </div>
+                  <div className="inline-flex rounded-lg border bg-muted/20 p-1">
+                    <Button type="button" size="sm" variant={runtimeStateViewMode === 'structure' ? 'secondary' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => setRuntimeStateViewMode('structure')}>
+                      状态结构
+                    </Button>
+                    <Button type="button" size="sm" variant={runtimeStateViewMode === 'diagram' ? 'secondary' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => setRuntimeStateViewMode('diagram')}>
+                      拓扑图
+                    </Button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1">
+                  {runtimeStateViewMode === 'structure' ? (
+                    <RuntimeStateStructurePanel
+                      states={runtimeWorkflowConfig.workflow.states || []}
+                      currentState={currentPhase}
+                      currentStep={currentStep}
+                      activeSteps={activeSteps}
+                      completedSteps={completedSteps}
+                      failedSteps={failedSteps}
+                      stateHistory={smStateHistory}
+                      workflowStatus={workflowStatus}
+                    />
+                  ) : (
+                    <StateMachineExecutionView
+                      states={runtimeWorkflowConfig.workflow.states || []}
+                      agents={agentConfigs}
+                      currentState={currentPhase}
+                      currentStep={currentStep}
+                      activeSteps={activeSteps}
+                      activeConcurrencyGroups={activeConcurrencyGroups}
+                      completedSteps={completedSteps}
+                      failedSteps={failedSteps}
+                      stateHistory={smStateHistory}
+                      issueTracker={smIssueTracker}
+                      transitionCount={smTransitionCount}
+                      maxTransitions={runtimeWorkflowConfig.workflow.maxTransitions || 50}
+                      status={workflowStatus as any}
+                      isRunning={isRunning}
+                      allowForceTransition={canForceTransition}
+                      focusedState={focusedState}
+                      startTime={runStartTime}
+                      endTime={runEndTime}
+                      accumulatedWaitMs={runAccumulatedWaitMs}
+                      waitStartedAt={runWaitStartedAt}
+                      supervisorFlow={supervisorFlow}
+                      agentFlow={agentFlow}
+                      tokenAnalytics={workflowTokenAnalytics}
+                      executionTrace={executionTrace}
+                      runtimeEvents={dbRuntimeEvents}
+                      subworkflowRuns={subworkflowRuns}
+                      subworkflowSummary={subworkflowSummary}
+                      activeSubworkflowRunId={activeSubworkflowRunId}
+                      onOpenSubworkflowRun={openSubworkflowRun}
+                      overviewFooter={null}
+                      activeTabOverride="trace"
+                      defaultActiveTab="trace"
+                      onActiveTabChange={setMainExecutionActiveTab}
+                      hasPendingHumanQuestion={!!pendingHumanQuestion}
+                      pendingHumanQuestion={pendingHumanQuestion as any}
+                      formationAgents={supervisorFormationAgents}
+                      supervisorAgent={runtimeSupervisorAgent}
+                      onStateClick={selectStateDetails}
+                      onStepClick={handleRunDiagramStepClick}
+                      onRerunFromStep={handleRerunFromStep}
+                      onForceTransition={handleForceTransition}
+                    />
+                  )}
+                </div>
+              </div>
             )}
           </div>
       ) : (<WorkbenchExecutionLoadingSkeleton />)}
@@ -12529,7 +13155,8 @@ export default function WorkbenchPage({
 
   const renderAgentFormationPanel = (mode: 'preview' | 'run') => {
     const isPreview = mode === 'preview';
-    if (isLightweightWorkflow) {
+    const lightweightMode = isPreview ? isLightweightWorkflow : isRuntimeLightweightWorkflow;
+    if (lightweightMode) {
       return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
           <div className="mb-3 shrink-0">
@@ -13015,7 +13642,7 @@ export default function WorkbenchPage({
       ...(Array.isArray((statusCompactQuery.data as any)?.stepLogs) ? (statusCompactQuery.data as any).stepLogs : []),
       ...persistedStepLogs,
     ];
-    if (isLightweightWorkflow) {
+    if (isRuntimeLightweightWorkflow) {
       const lightweightTokenMetric = buildLightweightTokenConsumptionMetric(workflowTokenAnalytics);
       const visibleStatusReason = formatWorkflowFailureReasonWithStepLogs(
         runDetail?.statusReason
@@ -13086,7 +13713,7 @@ export default function WorkbenchPage({
           {selectedRunId || '当前运行'} · {workflowBaseTitle}
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {isLightweightWorkflow
+          {isRuntimeLightweightWorkflow
             ? '汇总当前运行状态、当前位置和关键执行数据。任务清单、实时输出和工作区通过左侧运行记录子菜单进入。'
             : '汇总当前运行状态、当前位置和关键执行数据。状态图和工作区通过左侧运行记录子菜单进入。'}
         </p>
@@ -13365,7 +13992,7 @@ export default function WorkbenchPage({
                         <span className="inline-flex items-center gap-1.5">
                           <span className={cn(
                             'h-2 w-2 rounded-full',
-                            isRunning ? 'bg-emerald-500' : workflowStatus === 'completed' ? 'bg-blue-500' : 'bg-amber-500',
+                            getWorkflowStatusDotClass(workflowStatus, isRunning),
                           )} />
                           {workflowStatus || '准备中'}
                         </span>
@@ -13394,26 +14021,28 @@ export default function WorkbenchPage({
                     renderRunAgoraPanel()
                   ) : runDetailSection === 'live' ? (
                     renderRunLiveOutputPanel()
+                  ) : runDetailSection === 'documents' && isPromotedLightweightRun && documentSourceFilter === 'tasklist' ? (
+                    renderRunStructuredTaskListPanel()
                   ) : runDetailSection === 'documents' ? (
                     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
                       <DocumentsPanel
                         runId={runId || selectedRun?.id || null}
                         focusRequest={documentFocusRequest}
-                        documentSource={isLightweightWorkflow ? 'tasklist' : documentSourceFilter}
-                        lockedDocumentSource={isLightweightWorkflow ? 'tasklist' : undefined}
+                        documentSource={isRuntimeLightweightWorkflow ? 'tasklist' : documentSourceFilter}
+                        lockedDocumentSource={isRuntimeLightweightWorkflow ? 'tasklist' : undefined}
                         onDocumentSourceChange={(source: DocumentSourceFilter) => {
-                          if (isLightweightWorkflow && source !== 'tasklist') return;
+                          if (isRuntimeLightweightWorkflow && source !== 'tasklist') return;
                           setDocumentSourceFilter(source);
                           void updateUrl({ documentSource: source === 'all' ? null : source });
                         }}
-                        phaseDefinitions={(workflowConfig?.workflow?.states || []).map((state: any, order: number) => ({
+                        phaseDefinitions={(runtimeWorkflowConfig?.workflow?.states || []).map((state: any, order: number) => ({
                           name: String(state?.name || ''),
                           label: String(state?.label || state?.title || state?.displayName || ''),
                           order,
                         }))}
                         onOpenWorkspaceDirectory={(path: string) => openWorkspaceEditorAtPath(path, '文档目录')}
-                        previewPresentation={isLightweightWorkflow ? 'inline' : 'drawer'}
-                        lightweightTasklistLayout={isLightweightWorkflow}
+                        previewPresentation={isRuntimeLightweightWorkflow ? 'inline' : 'drawer'}
+                        lightweightTasklistLayout={isRuntimeLightweightWorkflow}
                       />
                     </div>
                   ) : runDetailSection === 'spec' && runtimeSpecAvailable ? (
@@ -13486,7 +14115,7 @@ export default function WorkbenchPage({
                 <DetailDrawerBody className="space-y-4">
                   {overviewStepRecord ? (
                     <>
-                      {!isLightweightWorkflow ? (
+                      {!isRuntimeLightweightWorkflow ? (
                         <div className="flex justify-end">
                           <Button
                             type="button"
@@ -15469,6 +16098,8 @@ export default function WorkbenchPage({
         open={showStartWorkflowDialog && Boolean(pendingStartRequest)}
         onOpenChange={(open) => {
           if (open) return;
+          if (pendingStartReviewPlanId) void workflowApi.discardStartPlan(pendingStartReviewPlanId).catch(() => {});
+          setPendingStartReviewPlanId(null);
           setShowStartWorkflowDialog(false);
           setPendingStartRequest(null);
         }}
@@ -15505,16 +16136,23 @@ export default function WorkbenchPage({
               startContextTargets={startContextTargets}
               startContextScopeLabel={startContextScopeLabel}
               projectRoot={resolvedProjectRoot || projectRoot}
+              runReviewPlanning={workflowConfig?.workflow?.mode === 'state-machine' ? {
+                configFile,
+                rehearsal: pendingStartRequest.mode === 'rehearsal',
+                baselineIntent: inferBaselineAdversarialIntent(workflowConfig),
+              } : undefined}
+              onReviewPlanIdChange={setPendingStartReviewPlanId}
               onCancel={() => {
+                setPendingStartReviewPlanId(null);
                 setShowStartWorkflowDialog(false);
                 setPendingStartRequest(null);
               }}
               onSkipPreflight={
                 pendingStartRequest.mode === 'real' && (Boolean(pendingStartRequest.skipPreflight) || Boolean(pendingStartRequest.preflightPreview?.commands?.length))
-                  ? (contexts) => confirmStartWorkflow(contexts, 'skip')
+                  ? (contexts, review) => confirmStartWorkflow(contexts, review, 'skip')
                   : undefined
               }
-              onConfirm={(contexts) => confirmStartWorkflow(contexts, pendingStartRequest.skipPreflight ? 'skip' : 'run')}
+              onConfirm={(contexts, review) => confirmStartWorkflow(contexts, review, pendingStartRequest.skipPreflight ? 'skip' : 'run')}
             />
           ) : null}
         </DialogContent>
@@ -15808,7 +16446,7 @@ export default function WorkbenchPage({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={stopProgressDialogOpen} onOpenChange={(open) => { if (!stopping) setStopProgressDialogOpen(open); }}>
+      <Dialog open={stopProgressDialogOpen} onOpenChange={setStopProgressDialogOpen}>
         <DialogContent className="sm:max-w-lg p-0 overflow-hidden">
           <div className="flex flex-col">
             <div className="border-b px-6 py-4">
@@ -15867,8 +16505,8 @@ export default function WorkbenchPage({
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t px-6 py-4">
-              <Button variant="outline" onClick={() => setStopProgressDialogOpen(false)} disabled={stopping}>
-                关闭
+              <Button variant="outline" onClick={() => setStopProgressDialogOpen(false)}>
+                {stopping ? '后台继续' : '关闭'}
               </Button>
             </div>
           </div>

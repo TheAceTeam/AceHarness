@@ -43,6 +43,7 @@ import {
   type SpecCodingArtifactKey,
 } from '@/lib/ai/result-normalizers';
 import {
+  WORKFLOW_CLARIFICATION_BUNDLE_KIND,
   WORKFLOW_CLARIFICATION_FACTS_KIND,
   WORKFLOW_CLARIFICATION_GAPS_KIND,
   WORKFLOW_CLARIFICATION_QUESTION_KIND,
@@ -66,6 +67,12 @@ import {
   type WorkflowCreationState,
   type WorkflowCreationItemValidationContext,
 } from '@/lib/ai/workflow-creation-items';
+import {
+  buildWorkflowCreationReviewProtocolPrompt,
+  type WorkflowCreationAdversarialIntent,
+  type WorkflowCreationJourney,
+  type WorkflowTargetKind,
+} from '@/lib/ai/workflow-creation-review-protocol';
 import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
@@ -207,11 +214,12 @@ type ModalAiMessage =
       reason?: string;
     };
 
-const MODAL_MACHINE_RESULT_KIND_PATTERN = '(?:workflow_draft|plan_draft|clarification_form|workflow_clarification_summary|workflow_clarification_facts|workflow_clarification_gaps|workflow_clarification_question|spec_coding_meta|spec_requirement|spec_design|spec_decision|spec_task|workflow_state_outline|workflow_state_steps|workflow_patch_item|spec_revision_item|spec_coding_revision|spec-coding-revision)';
+const MODAL_MACHINE_RESULT_KIND_PATTERN = '(?:workflow_draft|plan_draft|clarification_form|workflow_clarification_bundle|workflow_clarification_summary|workflow_clarification_facts|workflow_clarification_gaps|workflow_clarification_question|spec_coding_meta|spec_requirement|spec_design|spec_decision|spec_task|workflow_state_outline|workflow_state_steps|workflow_patch_item|spec_revision_item|spec_coding_revision|spec-coding-revision)';
 const REPAIR_DIAGNOSTIC_KIND_LABELS: Record<Extract<ModalAiMessage, { role: 'repair-diagnostic' }>['kind'], string> = {
   clarification_form: '澄清表单',
   plan_draft: '正式计划',
   workflow_draft: 'Workflow 草案',
+  workflow_clarification_bundle: '补充问答表',
   workflow_clarification_summary: '澄清摘要',
   workflow_clarification_facts: '已知事实',
   workflow_clarification_gaps: '待补信息',
@@ -397,7 +405,11 @@ function collectWorkflowCreationRetryEvents(
     }));
 }
 
-function buildWorkflowCreationItemExample(kind: WorkflowCreationItemKind, name: string): Record<string, any> {
+function buildWorkflowCreationItemExample(
+  kind: WorkflowCreationItemKind,
+  name: string,
+  validationContext?: WorkflowCreationItemValidationContext,
+): Record<string, any> {
   if (kind === WORKFLOW_CLARIFICATION_SUMMARY_KIND) {
     return { kind, data: { summary: '用 1-2 句话概括当前目标、对象和成功结果。' } };
   }
@@ -406,6 +418,30 @@ function buildWorkflowCreationItemExample(kind: WorkflowCreationItemKind, name: 
   }
   if (kind === WORKFLOW_CLARIFICATION_GAPS_KIND) {
     return { kind, data: { gaps: ['blocking: 会影响方案的缺口。', 'optional: 可后续补充的偏好。'] } };
+  }
+  if (kind === WORKFLOW_CLARIFICATION_BUNDLE_KIND) {
+    return {
+      kind,
+      data: {
+        summary: '用 1-2 句话概括当前目标、对象和成功结果。',
+        facts: ['已确认事实 1，最好带来源。', '已确认事实 2。'],
+        gaps: ['blocking: 会影响工作流类型或验收方式的缺口。'],
+        questions: [
+          {
+            id: 'target_outcome',
+            label: '目标结果',
+            question: '哪一种交付结果最符合本次目标？',
+            selectionMode: 'single',
+            options: [
+              { id: 'recommended', label: '推荐结果', description: '说明默认方案和影响。', recommended: true },
+              { id: 'alternative', label: '备选结果', description: '说明取舍。' },
+            ],
+            placeholder: '跳过时系统采用的保守假设。',
+            required: true,
+          },
+        ],
+      },
+    };
   }
   if (kind === WORKFLOW_CLARIFICATION_QUESTION_KIND) {
     return {
@@ -464,29 +500,82 @@ function buildWorkflowCreationItemExample(kind: WorkflowCreationItemKind, name: 
     return { kind, data: { id: name || 'T1.1', title: '任务标题', requirementIds: ['R1'], designRefs: ['D1'], actions: ['具体动作'], deliverables: ['交付物'], validation: '验证方式' } };
   }
   if (kind === WORKFLOW_STATE_OUTLINE_KIND) {
+    if (validationContext?.targetWorkflowKind === 'lightweight') {
+      return {
+        kind,
+        data: {
+          workflowKind: 'lightweight',
+          workflowKindRationale: '目标清晰，可由单个 Agent 通过任务清单完成，且不需要状态级对抗。',
+          ...(validationContext.creationAdversarialIntent === 'on-demand'
+            ? {
+                reviewAssessment: {
+                  requiresAdversarial: false,
+                  rationale: '任务边界清晰、可验证且容易回滚。',
+                  riskSignals: [],
+                  confidence: 'high',
+                },
+              }
+            : {}),
+          states: [{ name: '执行', description: '完成单一任务目标', isInitial: true, isFinal: true }],
+        },
+      };
+    }
+    const withReview = validationContext?.creationAdversarialIntent !== 'disabled';
     return {
       kind,
       data: {
+        workflowKind: 'state-machine',
+        workflowKindRationale: '任务需要显式状态边界、失败回退和状态级验收。',
+        ...(withReview ? {
+          reviewAssessment: {
+            requiresAdversarial: true,
+            rationale: '核心交付涉及跨模块改动，需要独立挑战和裁决。',
+            riskSignals: ['跨模块影响'],
+            confidence: 'high',
+          },
+        } : {}),
         states: [
           {
             name: '准备',
             description: '准备输入与约束',
+            ...(withReview ? { reviewPolicy: {
+              mode: 'standard',
+              rationale: '输入准备可自动验证且容易修正。',
+              riskSignals: [],
+              confidence: 'high',
+            } } : {}),
             transitions: [
               { to: '执行', condition: { verdict: 'pass' }, label: '准备完成' },
               { to: '准备', condition: { verdict: 'fail' }, label: '信息不足，继续准备' },
             ],
           },
-          { name: '执行', description: '完成核心工作' },
+          {
+            name: '执行',
+            description: '完成核心工作',
+            ...(withReview ? { reviewPolicy: {
+              mode: 'adversarial',
+              rationale: '核心改动影响范围较大且失败代价较高。',
+              riskSignals: ['跨模块影响'],
+              confidence: 'high',
+            } } : {}),
+          },
           { name: '完成', description: '汇总结果', isFinal: true },
         ],
       },
     };
   }
   if (kind === WORKFLOW_STATE_STEPS_KIND) {
+    const withReview = validationContext?.creationAdversarialIntent !== 'disabled';
     return {
       kind,
       data: {
         stateName: name || '执行',
+        ...(withReview ? { reviewPolicy: {
+          mode: 'adversarial',
+          rationale: '详细步骤确认存在需要独立挑战的高风险改动。',
+          riskSignals: ['高失败代价'],
+          confidence: 'high',
+        } } : {}),
         steps: [
           {
             name: '步骤名称',
@@ -524,6 +613,9 @@ function summarizeWorkflowCreationStateForPrompt(state: WorkflowCreationState): 
       tasks: state.spec.tasks,
     },
     workflow: {
+      mode: state.workflow.mode,
+      kindRationale: state.workflow.kindRationale,
+      reviewAssessment: state.workflow.reviewAssessment,
       outline: state.workflow.outline,
       statesWithSteps: Object.keys(state.workflow.stateSteps),
       statesWithTransitions: Object.keys(state.workflow.stateTransitions || {}),
@@ -532,7 +624,11 @@ function summarizeWorkflowCreationStateForPrompt(state: WorkflowCreationState): 
   return truncateForPrompt(JSON.stringify(summary, null, 2), 6000);
 }
 
-function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, baseContext: string): string {
+function buildWorkflowCreationItemSystemPrompt(
+  step: WorkflowCreationItemStep,
+  baseContext: string,
+  validationContext?: WorkflowCreationItemValidationContext,
+): string {
   const specQualityRules = [
     'SpecCoding 内容质量规则：',
     '- spec_requirement：必须是行为需求，不写实现方案；必须包含稳定 R 编号、用户故事、至少 2 条 WHEN/THEN 验收标准，并覆盖主路径与边界/异常之一。',
@@ -558,7 +654,7 @@ function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, b
     '',
     '格式示例：',
     '<result>',
-    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name), null, 2),
+    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name, validationContext), null, 2),
     '</result>',
     '',
     '创建上下文：',
@@ -586,6 +682,7 @@ function buildWorkflowCreationItemRepairMessage(
   step: WorkflowCreationItemStep,
   previousOutput: string,
   reason: string,
+  validationContext?: WorkflowCreationItemValidationContext,
 ): string {
   return [
     `当前小点「${step.title}」没有通过系统解析或校验。`,
@@ -605,7 +702,7 @@ function buildWorkflowCreationItemRepairMessage(
     '',
     '格式示例：',
     '<result>',
-    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name), null, 2),
+    JSON.stringify(buildWorkflowCreationItemExample(step.kind, step.name, validationContext), null, 2),
     '</result>',
     '',
     '上一轮输出：',
@@ -641,7 +738,7 @@ export function resolveWorkflowCreationItemAttempt({
     return {
       status: 'retry',
       reason: extracted.error,
-      repairPrompt: buildWorkflowCreationItemRepairMessage(step, finalContent, extracted.error),
+      repairPrompt: buildWorkflowCreationItemRepairMessage(step, finalContent, extracted.error, validationContext),
       nextAttempt,
     };
   }
@@ -751,6 +848,12 @@ type WorkflowCreationRecommendations = {
   recommendedAgents: string[];
   recommendedSupervisorAgent?: string;
   availableStepAgents?: string[];
+  availableStepAgentProfiles?: Array<{
+    name: string;
+    description?: string;
+    team?: string;
+    capabilities?: string[];
+  }>;
   availableSupervisorAgents?: string[];
 };
 
@@ -1705,7 +1808,11 @@ function buildCreationRecommendationsPrompt(recommendations: WorkflowCreationRec
       recommendations.recommendedSupervisorAgent ? `- 指挥官: ${recommendations.recommendedSupervisorAgent}` : '',
       recommendations.recommendedAgents.length ? `- 推荐角色编队: ${recommendations.recommendedAgents.join('、')}` : '',
       recommendations.availableStepAgents?.length ? `- 可用普通执行 Agent: ${recommendations.availableStepAgents.join('、')}` : '',
-      '- 若未手动覆盖，生成 workflow 草案时应优先采用该编队，而不是回退到固定占位角色',
+      ...(recommendations.availableStepAgentProfiles || []).map((agent) => {
+        const details = [agent.description, agent.team, ...(agent.capabilities || [])].filter(Boolean).join('；');
+        return `- ${agent.name}${details ? `：${details}` : ''}`;
+      }),
+      '- 根据状态职责和 Agent 能力自动选择最合适的执行者；不得虚构 Agent，也不得把 Supervisor 编排为执行步骤',
     ].filter(Boolean).join('\n'));
   }
 
@@ -1716,8 +1823,12 @@ function buildWorkflowCreationValidationContext(
   step: WorkflowCreationItemStep,
   recommendations: WorkflowCreationRecommendations | null,
   fallbackSupervisorAgent?: string,
-): WorkflowCreationItemValidationContext | undefined {
-  if (step.kind !== WORKFLOW_STATE_STEPS_KIND) return undefined;
+  options?: {
+    creationJourney: WorkflowCreationJourney;
+    targetWorkflowKind?: WorkflowTargetKind;
+    creationAdversarialIntent: WorkflowCreationAdversarialIntent;
+  },
+): WorkflowCreationItemValidationContext {
 
   const clean = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
   const unique = (values: unknown[]) => Array.from(new Set(values.map(clean).filter(Boolean)));
@@ -1735,9 +1846,12 @@ function buildWorkflowCreationValidationContext(
   ]);
 
   return {
-    expectedStateName: step.name,
+    expectedStateName: step.kind === WORKFLOW_STATE_STEPS_KIND ? step.name : undefined,
     availableStepAgents,
     supervisorAgents,
+    creationJourney: options?.creationJourney,
+    targetWorkflowKind: options?.targetWorkflowKind,
+    creationAdversarialIntent: options?.creationAdversarialIntent,
   };
 }
 
@@ -1747,6 +1861,7 @@ function cloneReferenceWorkflowConfig(referenceConfig: any, options: {
   workspaceMode: 'isolated-copy' | 'in-place';
   description?: string;
   requirements?: string;
+  availableAgentNames?: string[];
 }) {
   const cloned = JSON.parse(JSON.stringify(referenceConfig || {}));
   cloned.workflow = cloned.workflow || {};
@@ -1757,11 +1872,16 @@ function cloneReferenceWorkflowConfig(referenceConfig: any, options: {
   cloned.context.workspaceMode = options.workspaceMode;
   cloned.context.requirements = options.requirements || cloned.context.requirements || '';
 
+  const availableAgentNames = Array.from(new Set((options.availableAgentNames || []).map((agent) => agent.trim()).filter(Boolean)));
+  let fallbackAgentIndex = 0;
   if (Array.isArray(cloned.workflow.states)) {
     cloned.workflow.states = cloned.workflow.states.map((state: any, stateIndex: number) => ({
       ...state,
       steps: (state.steps || []).map((step: any, stepIndex: number) => ({
         ...step,
+        agent: availableAgentNames.length > 0 && !availableAgentNames.includes(step.agent)
+          ? availableAgentNames[fallbackAgentIndex++ % availableAgentNames.length]
+          : step.agent,
         task: options.requirements?.trim()
           ? `基于当前需求「${options.requirements.trim()}」，在状态「${state.name || `状态 ${stateIndex + 1}`}」中完成步骤「${step.name || `步骤 ${stepIndex + 1}`}」的任务。`
           : step.task,
@@ -1791,7 +1911,8 @@ function pickRecommendedAgent(
   usedAgents: Set<string>,
   excludedAgents: Set<string> = new Set()
 ) {
-  const candidate = (recommendedAgents || []).find((agent) => agent && !usedAgents.has(agent) && !excludedAgents.has(agent));
+  const availableAgents = (recommendedAgents || []).filter((agent) => agent && !excludedAgents.has(agent));
+  const candidate = availableAgents.find((agent) => !usedAgents.has(agent)) || availableAgents[0];
   if (candidate) {
     usedAgents.add(candidate);
     return candidate;
@@ -2282,6 +2403,20 @@ function WorkflowCreationProgressPanel({
 
       {hasWorkflow && stage === 'workflowDraft' ? (
         <div className="space-y-2">
+          <div className="rounded-lg border bg-background/75 p-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-medium">最终产品建议</span>
+              <Badge variant="secondary">{state.workflow.mode === 'lightweight' ? '轻量工作流' : '状态机'}</Badge>
+              {state.workflow.reviewAssessment ? (
+                <Badge variant={state.workflow.reviewAssessment.requiresAdversarial ? 'destructive' : 'outline'}>
+                  {state.workflow.reviewAssessment.requiresAdversarial ? '需要对抗' : '无需对抗'}
+                </Badge>
+              ) : null}
+            </div>
+            {state.workflow.kindRationale ? (
+              <div className="mt-2 text-xs leading-5 text-muted-foreground">{state.workflow.kindRationale}</div>
+            ) : null}
+          </div>
           {state.workflow.outline.map((outlineState, index) => {
             const steps = state.workflow.stateSteps[outlineState.name] || [];
             return (
@@ -2317,7 +2452,7 @@ function WorkflowCreationProgressPanel({
   );
 }
 
-type CreationWorkspaceStatusTone = 'amber' | 'blue' | 'emerald' | 'green' | 'muted';
+type CreationWorkspaceStatusTone = 'amber' | 'blue' | 'emerald' | 'green' | 'red' | 'muted';
 
 function CreationWorkspaceStatus({
   label,
@@ -2334,6 +2469,7 @@ function CreationWorkspaceStatus({
     blue: 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300',
     emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
     green: 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300',
+    red: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300',
     muted: 'border-border bg-muted/50 text-muted-foreground',
   };
 
@@ -2611,6 +2747,8 @@ export default function NewConfigModal({
   const [workflowMode, setWorkflowMode] = useState<WorkflowCreationMode>(
     aiGuidedEntry ? 'ai-guided' : normalizeWorkflowCreationMode(initialMode),
   );
+  const [creationAdversarialIntent, setCreationAdversarialIntent] = useState<WorkflowCreationAdversarialIntent | null>(null);
+  const [directAssessmentTargetWorkflowKind, setDirectAssessmentTargetWorkflowKind] = useState<WorkflowTargetKind | null>(null);
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
   const [formStep, setFormStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [previewSession, setPreviewSession] = useState<any | null>(null);
@@ -2637,6 +2775,7 @@ export default function NewConfigModal({
   const [planningStage, setPlanningStage] = useState<'idle' | 'clarifying' | 'awaiting-answers' | 'generating-plan'>('idle');
   const [clarificationForm, setClarificationForm] = useState<ClarificationFormResult | null>(null);
   const [clarificationAnswers, setClarificationAnswers] = useState<Record<string, ClarificationAnswerValue>>({});
+  const [clarificationGenerationError, setClarificationGenerationError] = useState('');
   const [workflowCreationProgressState, setWorkflowCreationProgressState] = useState<WorkflowCreationState>(() => createEmptyWorkflowCreationState());
   const [workflowCreationProgressStage, setWorkflowCreationProgressStage] = useState<CreationStageKey | null>(null);
   const [workflowCreationActiveStep, setWorkflowCreationActiveStep] = useState<WorkflowCreationActiveStep | null>(null);
@@ -2684,8 +2823,6 @@ export default function NewConfigModal({
   const [referenceLoading, setReferenceLoading] = useState(false);
   const [referenceConfig, setReferenceConfig] = useState<{ config: any; raw: string } | null>(null);
   const [referenceConfigLoading, setReferenceConfigLoading] = useState(false);
-  const [creationRecommendations, setCreationRecommendations] = useState<WorkflowCreationRecommendations | null>(null);
-  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(null);
   const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(null);
@@ -2766,6 +2903,13 @@ export default function NewConfigModal({
   const persistModeValue = watch('persistMode') || 'none';
   const specRootValue = watch('specRoot') || '.spec';
   const isLightweight = workflowMode === 'lightweight';
+  const creationJourney: WorkflowCreationJourney = directAssessmentTargetWorkflowKind
+    ? 'direct'
+    : workflowMode === 'ai-guided'
+      ? 'ai-guided'
+      : 'direct';
+  const requestedTargetWorkflowKind: WorkflowTargetKind | undefined = directAssessmentTargetWorkflowKind
+    || (workflowMode === 'ai-guided' ? undefined : workflowMode);
   const isDirectCreationPending = isCreatingConfig || createConfigMutation.isPending || isSubmitting;
   const persistedWorkflowMode = toPersistedWorkflowMode(workflowMode);
   const showReferenceWorkflowOptions = !isLightweight && (workflowMode === 'ai-guided' || workflowMode === 'state-machine');
@@ -2784,13 +2928,61 @@ export default function NewConfigModal({
       && normalizeReferenceWorkflowMode(workflow.mode) === referenceWorkflowMode
     ))
   ), [referenceWorkflowMode, referenceWorkflows]);
-  const effectiveCreationRecommendations = creationRecommendations;
   const effectiveReferenceWorkflowValue = referenceWorkflowValue || '';
   const agents = agentsQuery.data?.agents || [];
   const workflowStepAgents = useMemo(
     () => agents.filter(isWorkflowStepSelectableAgent),
     [agents],
   );
+  const availableWorkflowStepAgentNames = useMemo(
+    () => workflowStepAgents.map((agent) => agent.name).filter(Boolean),
+    [workflowStepAgents],
+  );
+  const effectiveCreationRecommendations = useMemo<WorkflowCreationRecommendations>(() => {
+    const availableAgentSet = new Set(availableWorkflowStepAgentNames);
+    const referenceAgents: string[] = Array.from(new Set<string>(
+      (referenceConfig?.config?.workflow?.states || [])
+        .flatMap((state: any) => Array.isArray(state?.steps) ? state.steps : [])
+        .map((step: any) => typeof step?.agent === 'string' ? step.agent.trim() : '')
+        .filter((agent: string) => agent && availableAgentSet.has(agent)),
+    ));
+    const recommendedAgents: string[] = Array.from(new Set<string>([
+      ...referenceAgents,
+      ...availableWorkflowStepAgentNames,
+    ]));
+    const referenceSummary = referenceWorkflows.find((workflow) => workflow.filename === effectiveReferenceWorkflowValue);
+    const availableSupervisorAgents = agents
+      .filter((agent) => agent?.roleType === 'supervisor' || agent?.catalogVisibility === 'system')
+      .map((agent) => agent.name)
+      .filter(Boolean);
+    const referenceSupervisorAgent = referenceConfig?.config?.workflow?.supervisor?.agent;
+    const recommendedSupervisorAgent = referenceSupervisorAgent
+      || availableSupervisorAgents[0]
+      || 'default-supervisor';
+    return {
+      referenceWorkflow: effectiveReferenceWorkflowValue && referenceConfig
+        ? {
+            filename: effectiveReferenceWorkflowValue,
+            name: referenceSummary?.name || referenceConfig.config?.workflow?.name,
+            description: referenceSummary?.description || referenceConfig.config?.workflow?.description,
+            mode: 'state-machine',
+            agents: referenceAgents,
+            supervisorAgent: referenceSupervisorAgent,
+          }
+        : null,
+      recommendedAgents,
+      recommendedSupervisorAgent,
+      availableStepAgents: availableWorkflowStepAgentNames,
+      availableStepAgentProfiles: workflowStepAgents.map((agent) => ({
+        name: agent.name,
+        description: agent.description,
+        team: agent.team,
+        capabilities: Array.isArray(agent.capabilities) ? agent.capabilities : [],
+      })),
+      availableSupervisorAgents,
+    };
+  }, [agents, availableWorkflowStepAgentNames, effectiveReferenceWorkflowValue, referenceConfig, referenceWorkflows, workflowStepAgents]);
+  const recommendationsLoading = agentsQuery.isLoading || referenceConfigLoading;
   const agentOptions = useMemo(() => workflowStepAgents.map((agent) => ({
     value: agent.name,
     label: agent.name,
@@ -2867,6 +3059,8 @@ export default function NewConfigModal({
     draftSessionCreatedInCurrentOpenRef.current = false;
     setCreationSource('custom');
     if (!resumeCreationSessionId) {
+      setCreationAdversarialIntent(null);
+      setDirectAssessmentTargetWorkflowKind(null);
       setPreviewSession(null);
       setPreviewConfigValidation(null);
       setPlanningFrontendSessionId(null);
@@ -2970,6 +3164,18 @@ export default function NewConfigModal({
       ? 'ai-guided'
       : normalizeWorkflowCreationMode(session.mode);
     setWorkflowMode(restoredMode);
+    const restoredAdversarialIntent = session.uiState?.creationAdversarialIntent;
+    setCreationAdversarialIntent(
+      restoredAdversarialIntent === 'disabled' || restoredAdversarialIntent === 'on-demand'
+        ? restoredAdversarialIntent
+        : null,
+    );
+    setDirectAssessmentTargetWorkflowKind(
+      session.uiState?.creationJourney === 'direct'
+        && (session.uiState?.targetWorkflowKind === 'lightweight' || session.uiState?.targetWorkflowKind === 'state-machine')
+        ? session.uiState.targetWorkflowKind
+        : null,
+    );
     setDraftCreationSessionId(session.id);
     draftSessionCreatedInCurrentOpenRef.current = true;
     stageSessionsRef.current = session.stageSessions || {} as Record<CreationStageKey, any>;
@@ -3102,54 +3308,6 @@ export default function NewConfigModal({
       cancelled = true;
     };
   }, [effectiveReferenceWorkflowValue, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      setCreationRecommendations(null);
-      return;
-    }
-
-    const seed = `${workflowNameValue || ''}${requirementsValue || ''}${workingDirectoryValue || ''}${referenceWorkflowValue || ''}`.trim();
-    if (seed.length < 4 && !referenceWorkflowValue) {
-      setCreationRecommendations(null);
-      return;
-    }
-
-    let cancelled = false;
-    setRecommendationsLoading(true);
-    const timer = window.setTimeout(() => {
-      modalAuthJsonFetch<{ recommendations: WorkflowCreationRecommendations | null }>('/api/configs/recommendations', {
-        method: 'POST',
-        body: JSON.stringify({
-          workflowName: workflowNameValue || '',
-          requirements: requirementsValue || descriptionValue || '',
-          workingDirectory: workingDirectoryValue || '',
-          referenceWorkflow: referenceWorkflowValue || '',
-          workflowMode: referenceWorkflowMode,
-        }),
-      })
-        .then((result) => {
-          if (!cancelled) {
-            setCreationRecommendations(result.recommendations || null);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setCreationRecommendations(null);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setRecommendationsLoading(false);
-          }
-        });
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [descriptionValue, isOpen, referenceWorkflowMode, referenceWorkflowValue, requirementsValue, workflowNameValue, workingDirectoryValue]);
 
   useEffect(() => {
     if (restoringSessionRef.current) return;
@@ -3428,6 +3586,7 @@ export default function NewConfigModal({
     setPlanningStage('idle');
     setClarificationForm(null);
     setClarificationAnswers({});
+    setClarificationGenerationError('');
     setPlanWorkspaceOpen(false);
     setPlanWorkspaceTab('artifacts');
     setPlanWorkspaceFullscreen(false);
@@ -3655,6 +3814,7 @@ export default function NewConfigModal({
         workspaceMode: values.workspaceMode,
         description: values.description,
         requirements: values.requirements,
+        availableAgentNames: availableWorkflowStepAgentNames,
       });
     }
     return createStateMachinePreviewConfig(
@@ -3665,7 +3825,7 @@ export default function NewConfigModal({
       recommendedAgents,
       recommendedSupervisorAgent
     );
-  }, [getValues, recommendedAgents, recommendedSupervisorAgent, referenceConfig?.config, workflowMode]);
+  }, [availableWorkflowStepAgentNames, getValues, recommendedAgents, recommendedSupervisorAgent, referenceConfig?.config]);
 
   const validatePersistedSpecSelection = useCallback(async (values?: Partial<NewConfigForm>) => {
     const draftValues = values || getValues();
@@ -3781,6 +3941,10 @@ export default function NewConfigModal({
         specRoot,
         config,
         uiState: {
+          creationAdversarialIntent,
+          workflowMode,
+          creationJourney,
+          targetWorkflowKind: requestedTargetWorkflowKind,
           formStep: 1,
           planningStage: 'idle',
           clarificationAnswers: {},
@@ -3800,6 +3964,7 @@ export default function NewConfigModal({
     appendCreationSessionTags,
     bindDraftCreationSessionToChat,
     buildPreviewConfigFromForm,
+    creationAdversarialIntent,
     draftCreationSessionId,
     effectiveReferenceWorkflowValue,
     ensurePlanningChatSession,
@@ -3860,6 +4025,10 @@ export default function NewConfigModal({
         specRoot,
       },
       uiState: {
+        creationAdversarialIntent,
+        workflowMode,
+        creationJourney,
+        targetWorkflowKind: requestedTargetWorkflowKind,
         formStep: 4,
         planningStage: 'idle',
         clarificationForm: clarificationForm || undefined,
@@ -3894,7 +4063,7 @@ export default function NewConfigModal({
     await bindDraftCreationSessionToChat(data.session);
     await appendCreationSessionTags(data.session, '计划草案已生成');
     return data.session;
-  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, creationAdversarialIntent, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
 
   const updatePreviewSessionFromPlanDraft = useCallback(async (draft: PlanDraftResult, revisionSummary: string) => {
     if (!previewSession?.id) {
@@ -3953,6 +4122,10 @@ export default function NewConfigModal({
           specRoot,
         },
         uiState: {
+          creationAdversarialIntent,
+          workflowMode,
+          creationJourney,
+          targetWorkflowKind: requestedTargetWorkflowKind,
           formStep: 4,
           planningStage: 'idle',
           clarificationForm: clarificationForm || undefined,
@@ -3970,7 +4143,7 @@ export default function NewConfigModal({
     await bindDraftCreationSessionToChat(data.session);
     await appendCreationSessionTags(data.session, '计划草案已修订');
     return data.session;
-  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, effectiveReferenceWorkflowValue, frontendSessionId, getValues, planningFrontendSessionId, previewSession, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, creationAdversarialIntent, effectiveReferenceWorkflowValue, frontendSessionId, getValues, planningFrontendSessionId, previewSession, workflowMode]);
 
   const ensureDraftCreationSession = useCallback(async (chatSessionId?: string | null) => {
     if (draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current) return draftCreationSessionId;
@@ -4002,6 +4175,10 @@ export default function NewConfigModal({
         specRoot,
         config,
         uiState: {
+          creationAdversarialIntent,
+          workflowMode,
+          creationJourney,
+          targetWorkflowKind: requestedTargetWorkflowKind,
           formStep: 2,
           planningStage: 'clarifying',
           clarificationAnswers: {},
@@ -4016,15 +4193,16 @@ export default function NewConfigModal({
     await bindDraftCreationSessionToChat(data.session);
     await appendCreationSessionTags(data.session, '补充问答中');
     return data.session.id as string;
-  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, createInitialDraftCreationSession, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, createInitialDraftCreationSession, creationAdversarialIntent, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
 
   const persistDraftUiState = useCallback(async (input: {
     formStep: 2 | 3 | 4 | 5;
     planningStage: 'idle' | 'clarifying' | 'awaiting-answers' | 'generating-plan';
     clarificationForm?: ClarificationFormResult | null;
     clarificationAnswers?: Record<string, ClarificationAnswerValue>;
+    frontendSessionId?: string | null;
   }) => {
-    const targetSessionId = await ensureDraftCreationSession(planningFrontendSessionId);
+    const targetSessionId = await ensureDraftCreationSession(input.frontendSessionId || planningFrontendSessionId);
     await modalSessionJsonFetch(`/api/spec-coding/sessions/${encodeURIComponent(targetSessionId)}`, {
       method: 'PUT',
       body: JSON.stringify({
@@ -4033,6 +4211,10 @@ export default function NewConfigModal({
         planningModel: aiModelRef.current || undefined,
         stageSessions: stageSessionsRef.current,
         uiState: {
+          creationAdversarialIntent,
+          workflowMode,
+          creationJourney,
+          targetWorkflowKind: requestedTargetWorkflowKind,
           formStep: input.formStep,
           planningStage: input.planningStage,
           clarificationForm: input.clarificationForm || undefined,
@@ -4040,7 +4222,7 @@ export default function NewConfigModal({
         },
       }),
     }).catch(() => {});
-  }, [ensureDraftCreationSession, planningFrontendSessionId]);
+  }, [creationAdversarialIntent, ensureDraftCreationSession, planningFrontendSessionId, workflowMode]);
 
   useEffect(() => {
     if (!isOpen || !draftCreationSessionId || restoringSessionRef.current) return;
@@ -4073,6 +4255,10 @@ export default function NewConfigModal({
           specRoot,
           config,
           uiState: {
+            creationAdversarialIntent,
+            workflowMode,
+            creationJourney,
+            targetWorkflowKind: requestedTargetWorkflowKind,
             formStep: formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5 ? formStep : undefined,
             planningStage,
             clarificationForm: clarificationForm || undefined,
@@ -4094,6 +4280,7 @@ export default function NewConfigModal({
     buildPreviewConfigFromForm,
     clarificationAnswers,
     clarificationForm,
+    creationAdversarialIntent,
     descriptionValue,
     draftCreationSessionId,
     effectiveReferenceWorkflowValue,
@@ -4337,6 +4524,42 @@ export default function NewConfigModal({
           }
         });
 
+        const rejectBackendStreamFailure = (eventName: 'engine_error' | 'failed', event: MessageEvent) => {
+          let data: Record<string, any> = {};
+          try {
+            data = parseAceSseEventData(event.data);
+          } catch {
+            // Keep the raw payload below when the backend error itself is not JSON.
+          }
+          es.close();
+          eventSourceRef.current = null;
+          chatIdRef.current = null;
+          setCurrentStream('');
+          setCurrentThinking('');
+          const backendMessage = typeof data.message === 'string'
+            ? data.message
+            : typeof data.error === 'string'
+              ? data.error
+              : '生成引擎执行失败';
+          reject(new Error([
+            `小点「${input.step.title}」生成失败。`,
+            `event=${eventName}`,
+            `chatId=${chatId}`,
+            `runtimeSessionId=${normalizeRuntimeSessionId(data.runtimeSessionId) || activeRuntimeSessionId || '(new session)'}`,
+            `后端错误：${backendMessage}`,
+            '原始事件：',
+            formatStreamPayloadPreview(event.data),
+          ].join('\n')));
+        };
+
+        es.addEventListener('engine_error', (event) => {
+          rejectBackendStreamFailure('engine_error', event as MessageEvent);
+        });
+
+        es.addEventListener('failed', (event) => {
+          rejectBackendStreamFailure('failed', event as MessageEvent);
+        });
+
         es.addEventListener('error', (event) => {
           es.close();
           eventSourceRef.current = null;
@@ -4380,6 +4603,7 @@ export default function NewConfigModal({
     setCurrentThinking('');
     setClarificationForm(null);
     setClarificationAnswers({});
+    setClarificationGenerationError('');
     clarificationAbortRef.current = false;
     const emptyCreationState = createEmptyWorkflowCreationState();
     setWorkflowCreationProgressState(emptyCreationState);
@@ -4415,50 +4639,18 @@ export default function NewConfigModal({
       referenceContext,
       buildCreationRecommendationsPrompt(effectiveCreationRecommendations),
     ].filter(Boolean).join('\n\n');
-    const steps: WorkflowCreationItemStep[] = [
-      {
-        kind: WORKFLOW_CLARIFICATION_SUMMARY_KIND,
-        name: 'current_understanding',
-        title: '当前理解摘要',
-        guidance: '用用户主语言概括当前目标、业务对象、预期结果和最关键的不确定性。',
-      },
-      {
-        kind: WORKFLOW_CLARIFICATION_FACTS_KIND,
-        name: 'confirmed_facts',
-        title: '已确认事实',
-        guidance: '列出 3-6 条已经从表单、需求、补充说明或模板中确认的信息；不要把推测写成事实。',
-      },
-      {
-        kind: WORKFLOW_CLARIFICATION_GAPS_KIND,
-        name: 'decision_gaps',
-        title: '待补信息',
-        guidance: '列出会影响方案、范围、兼容、验收或任务拆分的缺口；用 blocking/optional 前缀标出优先级。',
-      },
-      {
-        kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-        name: 'target_outcome',
-        title: '澄清问题：目标结果',
-        guidance: '生成一个关于目标用户、成功结果或交付形态的问题。id 固定为 target_outcome，提供 2-4 个选项和默认推荐项。',
-      },
-      {
-        kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-        name: 'scope_boundaries',
-        title: '澄清问题：范围边界',
-        guidance: '生成一个关于本次必须覆盖与明确排除范围的问题。id 固定为 scope_boundaries，selectionMode 优先 multiple。',
-      },
-      {
-        kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-        name: 'failure_compatibility',
-        title: '澄清问题：异常兼容',
-        guidance: '生成一个关于失败路径、兼容策略、旧数据或外部依赖异常时系统行为的问题。id 固定为 failure_compatibility。',
-      },
-      {
-        kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
-        name: 'validation_evidence',
-        title: '澄清问题：验证证据',
-        guidance: '生成一个关于自动检查、人工验收或制品审阅证据的问题。id 固定为 validation_evidence，required 可以为 false。',
-      },
-    ];
+    const steps: WorkflowCreationItemStep[] = [{
+      kind: WORKFLOW_CLARIFICATION_BUNDLE_KIND,
+      name: 'clarification_bundle',
+      title: '补充问答表',
+      guidance: [
+        '一次返回 summary、facts、gaps 和 questions，不要拆成多轮回答。',
+        'summary 用用户主语言概括目标、对象和成功结果；facts 列出 3-6 条已确认信息；gaps 只列真正影响工作流类型、范围、异常处理或验收方式的缺口，需求充分时可以为空数组。',
+        'questions 生成 1-4 个真正需要用户决定的问题，每题提供 2-4 个选项和一个 recommended=true 的推荐项。需求已经非常明确时减少问题数量，不要为了凑数重复询问用户已写明的内容。',
+        '优先覆盖目标结果、范围边界、异常兼容和验证证据；id 使用 target_outcome、scope_boundaries、failure_compatibility、validation_evidence 中适用的稳定值。',
+        '本阶段只整理用户已经提供的表单和参考工作流信息，不读取工作目录、不调用工具，也不执行项目分析。',
+      ].join('\n'),
+    }];
 
     try {
       for (const step of steps) {
@@ -4512,14 +4704,29 @@ export default function NewConfigModal({
         }, '等待补充回答');
       }
     } catch (error) {
+      const errorMessage = formatErrorForRepair(error);
+      const partialClarification = assembleClarificationForm(creationState);
+      const recoverableClarification = partialClarification.questions.length > 0
+        ? partialClarification
+        : null;
       setWorkflowCreationActiveStep(null);
-      setAiPhase('waiting');
+      setAiPhase('idle');
       setIsGeneratingPlan(false);
       if (clarificationAbortRef.current) {
         setPlanningStage('idle');
+        setClarificationGenerationError('');
         return;
       }
       setPlanningStage('idle');
+      setClarificationForm(recoverableClarification);
+      setClarificationGenerationError(errorMessage);
+      await persistDraftUiState({
+        formStep: 2,
+        planningStage: 'idle',
+        clarificationForm: recoverableClarification,
+        clarificationAnswers,
+        frontendSessionId: targetFrontendSessionId,
+      });
       throw error;
     }
   }, [appendCreationSessionTags, runtimeSessionId, clarificationAnswers, effectiveCreationRecommendations, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding, referenceConfig, runWorkflowCreationItemStream]);
@@ -5199,6 +5406,19 @@ export default function NewConfigModal({
   }, [artifactDrafts, previewSession, selectedArtifactKey, toast]);
 
   const startAiStream = useCallback(async (sourceSession?: any, instruction?: string) => {
+    if (!creationAdversarialIntent) {
+      throw new Error('请先选择是否允许这个工作流使用红蓝对抗，再调用 AI。');
+    }
+    if (agentsQuery.isLoading) {
+      throw new Error('正在加载可用 Agent，请稍后再生成工作流。');
+    }
+    if (agentsQuery.isError) {
+      throw new Error('可用 Agent 加载失败，请刷新 Agent 列表后重试。');
+    }
+    if (availableWorkflowStepAgentNames.length === 0) {
+      throw new Error('当前没有可执行的普通 Agent。请先在 Agent 管理中创建或启用至少一个普通执行 Agent。');
+    }
+    const activeIntent = creationAdversarialIntent;
     const values = getValues();
     const filename = (values.filename || '').trim();
     const reqs = values.requirements || values.description || '';
@@ -5300,10 +5520,16 @@ export default function NewConfigModal({
       referenceContext,
       specContext,
       buildCreationRecommendationsPrompt(effectiveCreationRecommendations),
+      buildWorkflowCreationReviewProtocolPrompt({
+        creationJourney,
+        targetWorkflowKind: requestedTargetWorkflowKind,
+        stage: 'outline',
+        creationAdversarialIntent: activeIntent,
+      }),
       '',
       'Workflow 装配规则：状态按主要执行顺序组织；必须在 transitions 中明确 pass / conditional_pass / fail 的目标状态。三种 verdict 的下一步完全由当前状态 transitions 决定，不要根据名称假设 conditional_pass 一定前进或一定回退；如果希望它自迭代就配置到当前状态，如果希望它放行就配置到下一状态。并发只允许出现在同一个状态的 steps 内，用相同 parallelGroup 表达。',
       `Supervisor "${effectiveCreationRecommendations?.recommendedSupervisorAgent || recommendedSupervisorAgent}" 只用于 workflow.supervisor 的调度、审阅和检查点建议，不作为任何 state.steps 的执行 agent；步骤 agent 必须选择普通执行角色。`,
-      '每个非终态状态都应该有 1-4 个步骤；如果需要红蓝审查或多角色协作，把这些并行或协作步骤放在同一个状态中。',
+      '最终为 state-machine 时每个非终态状态都应该有 1-4 个业务步骤；最终为 lightweight 时不要生成逐状态步骤，本地会装配固定单步骤任务清单。',
       hasConfirmedSpecCoding
         ? '如果提供了 SpecCoding 任务，specTaskBinding.taskIds 必须优先使用当前 tasks 中真实存在的叶子任务 id。'
         : '当前没有 SpecCoding 任务；不要输出 specTaskBinding，不要把状态或步骤设计成创建 Spec 文档。',
@@ -5314,16 +5540,32 @@ export default function NewConfigModal({
         kind: WORKFLOW_STATE_OUTLINE_KIND,
         name: 'state_outline',
         title: 'Workflow 状态轮廓',
-        guidance: '生成 3-5 个按主要执行顺序组织的状态。第一个状态是初始状态，最后一个状态标记 isFinal=true。状态名短、稳定、适合状态图展示；必须在非终态状态上补 transitions，使用 condition.verdict=pass/conditional_pass/fail 指向目标状态。conditional_pass 的目标不要写死，按该状态希望表达的真实流程配置。',
+        guidance: [
+          '同一次返回 workflowKind、workflowKindRationale、整体 reviewAssessment 和必要的状态说明。',
+          'workflowKind=lightweight 时只提供 1 个任务目标说明状态，状态不得带 reviewPolicy；最终固定 1 state / 1 step / 0 transitions 由本地装配。',
+          'workflowKind=state-machine 时按“最小充分”生成至少 1 个可执行状态和 1 个终态；不要机械生成 3-5 个状态。第一个状态是初始状态，最后一个状态标记 isFinal=true。',
+          '状态机非终态必须补 pass/conditional_pass/fail transitions；按需开启时还必须补 reviewPolicy，终态不得包含 reviewPolicy。',
+        ].join('\n'),
       };
+      const outlineValidationContext = buildWorkflowCreationValidationContext(
+        outlineStep,
+        effectiveCreationRecommendations,
+        recommendedSupervisorAgent,
+        {
+          creationJourney,
+          targetWorkflowKind: requestedTargetWorkflowKind,
+          creationAdversarialIntent: activeIntent,
+        },
+      );
       const outlineOutput = await runWorkflowCreationItemStream({
         step: outlineStep,
         stage: 'workflowDraft',
         frontendSessionId: targetFrontendSessionId,
         runtimeSessionId: activeRuntimeSessionId,
-        systemPrompt: buildWorkflowCreationItemSystemPrompt(outlineStep, baseContext),
+        systemPrompt: buildWorkflowCreationItemSystemPrompt(outlineStep, baseContext, outlineValidationContext),
         message: buildWorkflowCreationItemUserMessage(outlineStep, creationState),
         workingDirectory: values.workingDirectory,
+        validationContext: outlineValidationContext,
       });
       activeRuntimeSessionId = outlineOutput.runtimeSessionId;
       creationState = applyWorkflowCreationItem(creationState, outlineOutput.result);
@@ -5342,21 +5584,33 @@ export default function NewConfigModal({
             hasConfirmedSpecCoding
               ? '必须给每个步骤补上 specTaskBinding.taskIds、requirementIds、artifactKeys，只能引用当前 SpecCoding tasks 中真实存在的叶子任务。'
               : '不要输出 specTaskBinding、taskIds、requirementIds 或 artifactKeys；步骤 task 必须直接围绕用户需求本身，不要创建“生成/修订 Spec”的步骤。',
+            buildWorkflowCreationReviewProtocolPrompt({
+              creationJourney,
+              targetWorkflowKind: 'state-machine',
+              stage: 'state-steps',
+              creationAdversarialIntent: activeIntent,
+            }),
           ].join('\n'),
         };
+        const stateStepsValidationContext = buildWorkflowCreationValidationContext(
+          step,
+          effectiveCreationRecommendations,
+          recommendedSupervisorAgent,
+          {
+            creationJourney,
+            targetWorkflowKind: 'state-machine',
+            creationAdversarialIntent: activeIntent,
+          },
+        );
         const output = await runWorkflowCreationItemStream({
           step,
           stage: 'workflowDraft',
           frontendSessionId: targetFrontendSessionId,
           runtimeSessionId: activeRuntimeSessionId,
-          systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
+          systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext, stateStepsValidationContext),
           message: buildWorkflowCreationItemUserMessage(step, creationState),
           workingDirectory: values.workingDirectory,
-          validationContext: buildWorkflowCreationValidationContext(
-            step,
-            effectiveCreationRecommendations,
-            recommendedSupervisorAgent,
-          ),
+          validationContext: stateStepsValidationContext,
         });
         activeRuntimeSessionId = output.runtimeSessionId;
         creationState = applyWorkflowCreationItem(creationState, output.result);
@@ -5369,9 +5623,11 @@ export default function NewConfigModal({
           workingDirectory: values.workingDirectory,
           workspaceMode: values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place',
           recommendedAgents: effectiveCreationRecommendations?.recommendedAgents,
+          availableAgents: availableWorkflowStepAgentNames,
           recommendedSupervisorAgent: effectiveCreationRecommendations?.recommendedSupervisorAgent,
           specCoding: hasConfirmedSpecCoding ? specCoding : undefined,
           includeSpecTaskBindings: hasConfirmedSpecCoding,
+          creationAdversarialIntent: activeIntent,
         });
         setWorkflowDraftConfig(partialConfig);
         setWorkflowDraftPreview({
@@ -5391,9 +5647,11 @@ export default function NewConfigModal({
         workingDirectory: values.workingDirectory,
         workspaceMode: values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place',
         recommendedAgents: effectiveCreationRecommendations?.recommendedAgents,
+        availableAgents: availableWorkflowStepAgentNames,
         recommendedSupervisorAgent: effectiveCreationRecommendations?.recommendedSupervisorAgent,
         specCoding: hasConfirmedSpecCoding ? specCoding : undefined,
         includeSpecTaskBindings: hasConfirmedSpecCoding,
+        creationAdversarialIntent: activeIntent,
       });
       const validation = await validateWorkflowDraftConfig(config);
       const normalizedConfig = validation?.normalized || config;
@@ -5429,22 +5687,46 @@ export default function NewConfigModal({
       setCurrentStream('');
       setCurrentThinking('');
     }
-  }, [runtimeSessionId, clarificationAnswers, clarificationForm, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, specPlanningEnabled, toast, validateWorkflowDraftConfig]);
+  }, [agentsQuery.isError, agentsQuery.isLoading, availableWorkflowStepAgentNames, creationAdversarialIntent, creationJourney, requestedTargetWorkflowKind, runtimeSessionId, clarificationAnswers, clarificationForm, effectiveCreationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, specPlanningEnabled, toast, validateWorkflowDraftConfig]);
 
   // Re-trigger AI stream after engine/model change
   useEffect(() => {
     if (aiRestartFlag > 0 && formStep === 5) {
       startAiStream();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiRestartFlag]);
 
   // Handle "下一步": validate form then enter plan preview
   const handleNextStep = async () => {
+    if (!creationAdversarialIntent) {
+      toast('error', '请先选择是否允许这个工作流使用红蓝对抗');
+      return;
+    }
+    if (agentsQuery.isLoading) {
+      toast('info', '正在加载可用 Agent，请稍后再继续');
+      return;
+    }
+    if (agentsQuery.isError) {
+      toast('error', '可用 Agent 加载失败，请刷新 Agent 列表后重试');
+      return;
+    }
+    if (availableWorkflowStepAgentNames.length === 0) {
+      toast('error', '当前没有可执行的普通 Agent。请先在 Agent 管理中创建或启用至少一个普通执行 Agent。');
+      return;
+    }
     const draft = getValues();
-    if (workflowMode !== 'ai-guided') {
+    if (workflowMode !== 'ai-guided' && creationAdversarialIntent === 'disabled') {
       await onSubmit(draft);
       return;
+    }
+    if (workflowMode !== 'ai-guided' && creationAdversarialIntent === 'on-demand') {
+      if (workflowMode === 'lightweight') {
+        const lightweight = validateLightweightValues();
+        if (!lightweight) return;
+        setValue('requirements', lightweight.task, { shouldDirty: true, shouldValidate: false });
+      }
+      setDirectAssessmentTargetWorkflowKind(workflowMode);
+      setWorkflowMode('ai-guided');
     }
 
     const normalizedDraft = normalizeNewConfigFormValues({
@@ -5650,7 +5932,11 @@ export default function NewConfigModal({
     try {
       const result = await createConfigMutation.mutateAsync({
         ...values,
-        mode: draftIsLightweight ? 'lightweight' : persistedWorkflowMode,
+        mode: draftIsLightweight ? 'lightweight' : 'state-machine',
+        creationJourney,
+        targetWorkflowKind: requestedTargetWorkflowKind,
+        creationAdversarialIntent,
+        creationReviewAssessment: workflowCreationProgressState.workflow.reviewAssessment,
         frontendSessionId: planningFrontendSessionId || frontendSessionId,
         creationSessionId: !draftIsLightweight && specPlanningEnabled ? previewSession?.id : undefined,
         skipSpecCoding: draftIsLightweight || !specPlanningEnabled,
@@ -5716,6 +6002,8 @@ export default function NewConfigModal({
     bindDraftCreationSessionToChat,
     checkExistingWorkflowFile,
     completeAiWorkflowCreation,
+    creationAdversarialIntent,
+    creationJourney,
     createConfigMutation,
     frontendSessionId,
     getValues,
@@ -5727,7 +6015,9 @@ export default function NewConfigModal({
     workflowDraftConfig,
     workflowDraftPreview,
     workflowDraftValidation,
+    workflowCreationProgressState.workflow.reviewAssessment,
     workflowMode,
+    requestedTargetWorkflowKind,
   ]);
 
   const handleQuickConfirm = async () => {
@@ -5752,6 +6042,22 @@ export default function NewConfigModal({
   const onSubmit = async (data: NewConfigForm) => {
     // AI-guided mode uses preview + AI flow, not direct submit
     if (workflowMode === 'ai-guided') return;
+    if (!creationAdversarialIntent) {
+      toast('error', '请先选择是否允许这个工作流使用红蓝对抗');
+      return;
+    }
+    if (agentsQuery.isLoading) {
+      toast('info', '正在加载可用 Agent，请稍后再创建');
+      return;
+    }
+    if (agentsQuery.isError) {
+      toast('error', '可用 Agent 加载失败，请刷新 Agent 列表后重试');
+      return;
+    }
+    if (availableWorkflowStepAgentNames.length === 0) {
+      toast('error', '当前没有可执行的普通 Agent。请先在 Agent 管理中创建或启用至少一个普通执行 Agent。');
+      return;
+    }
     if (nonAiCreationInFlightRef.current) return;
     nonAiCreationInFlightRef.current = true;
     setIsCreatingConfig(true);
@@ -5785,6 +6091,9 @@ export default function NewConfigModal({
       try {
         const result = await createConfigMutation.mutateAsync({
           ...values,
+          creationJourney: 'direct',
+          targetWorkflowKind: workflowMode,
+          creationAdversarialIntent,
           frontendSessionId: planningFrontendSessionId || frontendSessionId,
           creationSessionId: !isLightweight && specPlanningEnabled ? (previewSession?.id || draftCreationSessionId || undefined) : undefined,
           skipSpecCoding: isLightweight || !specPlanningEnabled,
@@ -6063,6 +6372,20 @@ export default function NewConfigModal({
 
   const renderClarificationResultPanel = () => {
     if (!clarificationForm) {
+      if (!isGeneratingPlan && planningStage !== 'clarifying') {
+        return (
+          <div className="flex min-h-[24rem] flex-col items-center justify-center rounded-lg border border-red-500/30 bg-red-500/5 px-6 text-center" role="alert">
+            <span className="material-symbols-outlined text-3xl text-red-500">error</span>
+            <div className="mt-3 text-sm font-medium text-red-700 dark:text-red-300">
+              {clarificationGenerationError ? '补充问答生成失败' : '尚未生成补充问题'}
+            </div>
+            <div className="mt-2 max-h-40 max-w-2xl overflow-auto whitespace-pre-wrap break-words text-left text-xs leading-5 text-muted-foreground">
+              {clarificationGenerationError || '当前没有正在运行的生成任务。'}
+            </div>
+            <div className="mt-3 text-xs text-muted-foreground">请点击右下角“重新提问”再次生成。</div>
+          </div>
+        );
+      }
       return (
         <div className="flex min-h-[24rem] flex-col gap-4">
           <WorkflowCreationProgressPanel
@@ -6084,7 +6407,15 @@ export default function NewConfigModal({
     }
 
     return (
-      <div className="space-y-5">
+        <div className="space-y-5">
+        {clarificationGenerationError ? (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3" role="alert">
+            <div className="text-xs font-medium text-red-700 dark:text-red-300">补充问答生成未完成</div>
+            <div className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
+              {clarificationGenerationError}
+            </div>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-start justify-between gap-3 border-b pb-4">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium">AI 补充问答表</div>
@@ -6349,8 +6680,8 @@ export default function NewConfigModal({
                 : '先补全会影响工作流和 Agent 编排的关键信息，然后直接生成 workflow 草案。'}
               icon="route"
               iconClassName="text-amber-500"
-              statusLabel={isGeneratingPlan ? '分析中' : clarificationForm ? `已生成 ${clarificationForm.questions.length} 题` : '等待问题'}
-              statusTone={isGeneratingPlan ? 'amber' : clarificationForm ? 'emerald' : 'muted'}
+              statusLabel={isGeneratingPlan ? '分析中' : clarificationGenerationError ? '生成失败' : clarificationForm ? `已生成 ${clarificationForm.questions.length} 题` : '等待问题'}
+              statusTone={isGeneratingPlan ? 'amber' : clarificationGenerationError ? 'red' : clarificationForm ? 'emerald' : 'muted'}
               statusSpinning={isGeneratingPlan}
               engineControls={creationEngineControls}
               onBack={() => {
@@ -6393,6 +6724,7 @@ export default function NewConfigModal({
                   setAiPhase('waiting');
                   setPlanningStage('idle');
                   setWorkflowCreationActiveStep(null);
+                  setClarificationGenerationError('');
                   void persistDraftUiState({
                     formStep: 2,
                     planningStage: 'idle',
@@ -7455,7 +7787,10 @@ export default function NewConfigModal({
                 </Label>
                 <WorkflowModeSelector
                   value={workflowMode}
-                  onChange={setWorkflowMode}
+                  onChange={(mode) => {
+                    setWorkflowMode(mode);
+                    setDirectAssessmentTargetWorkflowKind(null);
+                  }}
                   showDetails={true}
                 />
               </div>
@@ -7463,6 +7798,71 @@ export default function NewConfigModal({
               <div className="border-t border-gray-200 dark:border-gray-700" />
             </>
           )}
+
+          <section className="space-y-3 rounded-lg border bg-muted/20 p-4" aria-label="全局对抗意愿">
+            <div>
+              <Label className="text-sm font-semibold">
+                是否允许这个工作流使用红蓝对抗 <span className="text-destructive">*</span>
+              </Label>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                该选择只约束是否允许红蓝对抗，不决定生成轻量工作流还是状态机。
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="工作流全局对抗意愿">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={creationAdversarialIntent === 'disabled'}
+                onClick={() => setCreationAdversarialIntent('disabled')}
+                className={cn(
+                  'rounded-lg border p-3 text-left transition-colors',
+                  creationAdversarialIntent === 'disabled' ? 'border-primary bg-primary/5' : 'hover:border-primary/50',
+                )}
+              >
+                <span className="block text-sm font-medium">不开启红蓝对抗</span>
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">AI 仍会选择轻量或状态机；若为状态机，所有非终态都使用标准模式。</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={creationAdversarialIntent === 'on-demand'}
+                onClick={() => setCreationAdversarialIntent('on-demand')}
+                className={cn(
+                  'rounded-lg border p-3 text-left transition-colors',
+                  creationAdversarialIntent === 'on-demand' ? 'border-primary bg-primary/5' : 'hover:border-primary/50',
+                )}
+              >
+                <span className="block text-sm font-medium">按需开启</span>
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">AI 先选择工作流类型；若为状态机，再按整体和状态风险提出对抗建议，用户可逐状态修改。</span>
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">会引入额外的评估与对抗步骤，耗时和 token 消耗通常更高。</span>
+              </button>
+            </div>
+            {!creationAdversarialIntent ? (
+              <p className="text-xs text-destructive">请选择一项后再创建或调用 AI。</p>
+            ) : null}
+          </section>
+
+          {!isLightweight ? (
+            <section className="space-y-2 rounded-lg border bg-muted/20 p-4" aria-label="Agent 自动编排">
+              <div>
+                <h3 className="text-sm font-semibold">Agent 自动编排</h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  系统会根据状态职责、Agent 能力和参考工作流自动分配执行者；生成后仍可在设计页逐个调整。
+                </p>
+              </div>
+              {agentsQuery.isLoading ? (
+                <p className="text-xs text-muted-foreground">正在确认可用 Agent…</p>
+              ) : agentsQuery.isError ? (
+                <p className="text-xs text-destructive">Agent 列表加载失败，请刷新后重试。</p>
+              ) : availableWorkflowStepAgentNames.length === 0 ? (
+                <p className="text-xs text-destructive">当前没有可执行的普通 Agent，请先到 Agent 管理中创建或启用一个。</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  已发现 {availableWorkflowStepAgentNames.length} 个可用普通 Agent；Supervisor 仅负责调度，不会被分配为执行步骤。
+                </p>
+              )}
+            </section>
+          ) : null}
 
           {/* AI 引导模式的需求输入 */}
           {isLightweight ? (
@@ -7820,7 +8220,14 @@ export default function NewConfigModal({
                   <Button
                     type="button"
                     onClick={handleNextStep}
-                    disabled={isGeneratingPlan || isDirectCreationPending}
+                    disabled={
+                      isGeneratingPlan
+                      || isDirectCreationPending
+                      || !creationAdversarialIntent
+                      || agentsQuery.isLoading
+                      || agentsQuery.isError
+                      || availableWorkflowStepAgentNames.length === 0
+                    }
                   >
                     {workflowMode === 'ai-guided'
                       ? specPlanningEnabled

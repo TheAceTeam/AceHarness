@@ -234,6 +234,12 @@ export async function resolveRequestedChatRuntimeEngineType(requestedEngine?: st
   return getConfiguredChatRuntimeEngine();
 }
 
+export function resolveRequestedChatRuntimeModel(requestedModel?: string | null): string {
+  const requested = String(requestedModel || '').trim();
+  if (requested) return requested;
+  return readConfiguredRuntimeSelection().defaultModel;
+}
+
 export function resolveRecoveredRuntimeSessionId(result: ChatRuntimeResult, fallbackSessionId?: string | null): string | null {
   const recovery = result.metadata?.contextRecovery;
   if (recovery?.contextRecovered) {
@@ -584,14 +590,21 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
   }
 }
 
-function readConfiguredEngine(): string | null {
+function readConfiguredRuntimeSelection(): { engine: string | null; defaultModel: string } {
   try {
-    if (!existsSync(getEngineConfigPath())) return null;
+    if (!existsSync(getEngineConfigPath())) return { engine: null, defaultModel: '' };
     const raw = JSON.parse(readFileSync(getEngineConfigPath(), 'utf-8'));
-    return typeof raw.engine === 'string' && raw.engine.trim() ? raw.engine.trim() : null;
+    return {
+      engine: typeof raw.engine === 'string' && raw.engine.trim() ? raw.engine.trim() : null,
+      defaultModel: typeof raw.defaultModel === 'string' ? raw.defaultModel.trim() : '',
+    };
   } catch {
-    return null;
+    return { engine: null, defaultModel: '' };
   }
+}
+
+function readConfiguredEngine(): string | null {
+  return readConfiguredRuntimeSelection().engine;
 }
 
 function resolveChatModelRouteId(agentId: string, model: string): string | undefined {

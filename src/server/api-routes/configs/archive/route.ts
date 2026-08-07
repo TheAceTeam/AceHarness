@@ -136,7 +136,11 @@ async function assertExportableWorkflow(filename: string, user: AuthUser): Promi
   } catch (error: any) {
     throw Object.assign(new Error(`工作流 YAML 解析失败: ${filename}`), { status: 400, cause: error });
   }
-  const validation = validateWorkflowDraft(parsed, { mode: 'portable' });
+  const validation = validateWorkflowDraft(parsed, {
+    mode: 'portable',
+    materializeIds: true,
+    workflowKey: filename,
+  });
   if (!validation.ok) {
     throw Object.assign(new Error(`工作流配置无效: ${filename}`), {
       status: 400,
@@ -228,7 +232,11 @@ function parseWorkflowImportCandidate(
   } catch (error: any) {
     throw Object.assign(new Error(`工作流 YAML 解析失败: ${filename}`), { status: 400, cause: error });
   }
-  const validation = validateWorkflowDraft(parsed, { mode: 'portable' });
+  const validation = validateWorkflowDraft(parsed, {
+    mode: 'portable',
+    materializeIds: true,
+    workflowKey: filename,
+  });
   if (!validation.ok || !validation.normalized) {
     throw Object.assign(new Error(`工作流校验失败: ${filename}`), {
       status: 400,

@@ -36,11 +36,17 @@ import LightweightWorkflowDesignPanel, {
   hasLightweightWorkflowTopology,
   type LightweightWorkflowDesignMetadata,
 } from './LightweightWorkflowDesignPanel';
-import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
+import type { ReviewPolicy, StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
 import { useWorkflowConfigQuery } from '@/client/query/configs';
 import { useSaveConfigMutation } from '@/client/query/workflow-mutations';
 import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
 import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
+import {
+  hashReviewStep,
+  hashReviewState,
+  reconcileReviewPolicy,
+  type ReviewPolicyOperation,
+} from '@/lib/workflow/state-review-policy';
 
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
@@ -48,7 +54,12 @@ interface StateMachineDesignPanelProps {
   availableAgents: any[];
   availableSkills?: { name: string; description: string }[];
   specTasks?: { id: string; title: string; phaseTitle?: string; ownerAgents?: string[] }[];
-  onOptimizeState?: (stateIndex: number) => void;
+  onOptimizeState?: (
+    stateIndex: number,
+    presetInstruction?: string,
+    reviewPolicyOnly?: boolean,
+    unlockForAi?: boolean,
+  ) => void;
   onOptimizeStep?: (stateIndex: number, stepIndex: number) => void;
   onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
   lightweightMetadata?: LightweightWorkflowDesignMetadata;
@@ -70,6 +81,47 @@ type StepGroup = {
   startIndex: number;
   steps: Array<{ step: WorkflowStep; index: number }>;
 };
+
+type ReviewPolicyCandidate = {
+  stateId?: string;
+  stateName: string;
+  targetMode: 'standard' | 'adversarial';
+  targetPolicy: ReviewPolicy;
+  nextState: StateMachineState;
+  operations: ReviewPolicyOperation[];
+  warnings: string[];
+  blocked: boolean;
+  unsafeDeleteRepairSignature?: string;
+};
+
+function isReviewStructureStep(step: WorkflowStep | undefined): boolean {
+  return Boolean(step && (
+    step.role
+    || step.provenance?.origin === 'review-policy'
+    || step.provenance?.managedRole === 'standard-closer'
+  ));
+}
+
+function getReviewOperationFieldChanges(operation: ReviewPolicyOperation): Array<{ label: string; before: string; after: string }> {
+  const fields: Array<{ key: keyof WorkflowStep; label: string }> = [
+    { key: 'role', label: '角色' },
+    { key: 'agent', label: 'Agent' },
+    { key: 'agentInstanceId', label: '实例' },
+    { key: 'parallelGroup', label: '并发组' },
+    { key: 'concurrency', label: '汇合' },
+    { key: 'task', label: '任务' },
+  ];
+  const compact = (value: unknown) => {
+    const raw = value && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '—');
+    const text = raw.replace(/\s+/g, ' ').trim() || '—';
+    return text.length > 96 ? `${text.slice(0, 96)}…` : text;
+  };
+  return fields.flatMap(({ key, label }) => {
+    const before = compact(operation.before?.[key]);
+    const after = compact(operation.after?.[key]);
+    return before === after ? [] : [{ label, before, after }];
+  });
+}
 
 function getAgentTeamTone(team?: string) {
   if (team === 'red') return { ring: 'ring-red-400/40' };
@@ -260,23 +312,24 @@ export function buildWorkflowStepFromEditData(data: any, existingStep?: Workflow
         workflow: data.workflow,
         subworkflow: data.subworkflow,
         inputs: data.inputs,
-        role: data.role,
+        role: data.role ?? existingStep?.role,
         parallelGroup: data.parallelGroup,
         concurrency: data.concurrency,
-        agentInstanceId: data.agentInstanceId,
+        agentInstanceId: data.agentInstanceId ?? existingStep?.agentInstanceId,
         channelIds: data.channelIds,
         specTaskBinding: data.specTaskBinding,
       } as WorkflowStep
     : ({
+        ...(existingStep || {}),
         name: data.name,
         agent: data.agent,
         task: data.task,
-        role: data.role,
+        role: data.role ?? existingStep?.role,
         constraints: normalizedConstraints,
         enableReviewPanel: data.enableReviewPanel,
         parallelGroup: data.parallelGroup,
         concurrency: data.concurrency,
-        agentInstanceId: data.agentInstanceId,
+        agentInstanceId: data.agentInstanceId ?? existingStep?.agentInstanceId,
         channelIds: data.channelIds,
         specTaskBinding: data.specTaskBinding,
         ...(normalizedSkills !== undefined ? { skills: normalizedSkills } : {}),
@@ -414,7 +467,7 @@ function getStateNodeErrors(state: StateMachineState, states: StateMachineState[
 
 // 可拖拽的步骤行
 function SortableStepRow({
-  step, index, availableAgents, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup, onSpecTaskClick, onOptimize, onPreviewSubworkflow,
+  step, index, availableAgents, isParallel = false, canGroupPrevious, canGroupNext, structureLocked = false, dragLocked = false, editLocked = false, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup, onSpecTaskClick, onOptimize, onPreviewSubworkflow,
 }: {
   step: WorkflowStep;
   index: number;
@@ -422,6 +475,9 @@ function SortableStepRow({
   isParallel?: boolean;
   canGroupPrevious?: boolean;
   canGroupNext?: boolean;
+  structureLocked?: boolean;
+  dragLocked?: boolean;
+  editLocked?: boolean;
   onEdit: () => void;
   onDelete: () => void;
   onGroupWithPrevious?: () => void;
@@ -431,7 +487,7 @@ function SortableStepRow({
   onOptimize?: () => void;
   onPreviewSubworkflow?: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index) });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index), disabled: dragLocked });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
 
   const agentTeam = findAgentConfig(availableAgents, step.agent || '')?.team;
@@ -453,7 +509,7 @@ function SortableStepRow({
   return (
     <div ref={setNodeRef} style={style} className={`group rounded-lg border px-3 py-2.5 transition-colors ${roleColor}`}>
       <div className="flex items-start gap-2.5">
-        <button {...attributes} {...listeners} className="mt-1 flex-shrink-0 cursor-grab rounded p-0.5 text-gray-400 hover:text-gray-600">
+        <button {...attributes} {...listeners} disabled={dragLocked} title={dragLocked ? '当前审查结构已锁定' : '拖动排序'} className="mt-1 flex-shrink-0 cursor-grab rounded p-0.5 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40">
           <GripVertical className="w-4 h-4" />
         </button>
         <div className="min-w-0 flex-1">
@@ -514,29 +570,29 @@ function SortableStepRow({
             </div>
             <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/75 p-0.5 text-muted-foreground shadow-sm opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {canGroupPrevious && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="与上一并发" onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '与上一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
                   <MergeIntoParallelIcon direction="previous" />
                 </Button>
               )}
               {canGroupNext && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="与下一并发" onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '与下一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
                   <MergeIntoParallelIcon direction="next" />
                 </Button>
               )}
               {isParallel && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="拆分并发组" onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '拆分并发组'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
                   <span className="material-symbols-outlined text-[15px]">call_split</span>
                 </Button>
               )}
               {onOptimize ? (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="AI 优化" onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '审查角色步骤由本地编排维护' : 'AI 优化'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
                   <span className="material-symbols-outlined text-[14px]">auto_fix_high</span>
                 </Button>
               ) : null}
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="编辑" onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '审查角色步骤由本地编排维护' : '编辑'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onEdit(); }}>
                 <span className="material-symbols-outlined text-[14px]">edit</span>
               </Button>
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" title="删除" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" title={structureLocked ? '当前审查结构已锁定' : '删除'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
                 <Trash2 className="w-3 h-3" />
               </Button>
             </div>
@@ -614,6 +670,15 @@ function SortableStateListItem({
         {errors && errors.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 self-center" title={errors.join('；')} /> : null}
         {state.isInitial && <span className="w-1.5 h-1.5 rounded-full bg-green-400 self-center" title="初始状态" />}
         {state.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-red-400 self-center" title="终止状态" />}
+        {!state.isFinal && state.reviewPolicy ? (
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${state.reviewPolicy.mode === 'adversarial' ? 'bg-rose-400' : 'bg-sky-400'}`}
+            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式' : '标准模式'}
+          />
+        ) : null}
+        {!state.isFinal && state.reviewPolicy?.locked ? (
+          <span className="material-symbols-outlined text-[12px] leading-none" title="用户已锁定审查模式">lock</span>
+        ) : null}
       </div>
       <Button
         type="button"
@@ -626,6 +691,8 @@ function SortableStateListItem({
           e.stopPropagation();
           onDelete();
         }}
+        disabled={Boolean(state.reviewPolicy?.locked)}
+        title={state.reviewPolicy?.locked ? '请先将审查模式交还 AI 或解除锁定' : '删除状态'}
       >
         <Trash2 className="w-3 h-3" />
       </Button>
@@ -1045,6 +1112,8 @@ export default function StateMachineDesignPanel({
   const [editingStateInfo, setEditingStateInfo] = useState(false);
   const [editingStep, setEditingStep] = useState<{ index: number; isNew: boolean; focusSpec?: boolean } | null>(null);
   const [subworkflowDrilldown, setSubworkflowDrilldown] = useState<SubworkflowDrilldownState | null>(null);
+  const [reviewPolicyCandidate, setReviewPolicyCandidate] = useState<ReviewPolicyCandidate | null>(null);
+  const [reviewPolicyUnsafeDeletes, setReviewPolicyUnsafeDeletes] = useState<Set<string>>(new Set());
   const subworkflowConfigFile = subworkflowDrilldown?.configFile || '';
   const subworkflowConfigQuery = useWorkflowConfigQuery(subworkflowConfigFile);
   const saveSubworkflowConfigMutation = useSaveConfigMutation(subworkflowConfigFile);
@@ -1075,6 +1144,174 @@ export default function StateMachineDesignPanel({
   const updateState = useCallback((updated: StateMachineState) => {
     onStatesChange(states.map((s, i) => i === selectedStateIndex ? updated : s));
   }, [states, selectedStateIndex, onStatesChange]);
+  const executableAgents = useMemo(() => (availableAgents || [])
+    .filter((agent) => agent?.roleType !== 'supervisor' && agent?.team !== 'black-gold'), [availableAgents]);
+  const executableAgentNames = useMemo(() => Array.from(new Set(
+    executableAgents
+      .map((agent) => String(agent?.name || '').trim())
+      .filter(Boolean)
+  )), [executableAgents]);
+
+  const requestReviewModeChange = useCallback((targetMode: 'standard' | 'adversarial') => {
+    if (!selectedState || selectedState.isFinal) return;
+    const current = selectedState.reviewPolicy;
+    const targetPolicy: ReviewPolicy = {
+      mode: targetMode,
+      source: 'user',
+      locked: true,
+      confidence: targetMode === 'standard' && current?.confidence === 'low'
+        ? 'medium'
+        : (current?.confidence || 'high'),
+      riskSignals: current?.riskSignals || [],
+      rationale: `用户明确选择${targetMode === 'adversarial' ? '对抗' : '标准'}模式。`,
+    };
+    const result = reconcileReviewPolicy(selectedState, targetPolicy, {
+      availableAgents: executableAgentNames,
+      fallbackAgent: executableAgentNames[0],
+      idFactory: () => crypto.randomUUID(),
+    });
+    setReviewPolicyUnsafeDeletes(new Set());
+    setReviewPolicyCandidate({
+      stateId: selectedState.id,
+      stateName: selectedState.name,
+      targetMode,
+      targetPolicy,
+      nextState: result.nextState,
+      operations: result.operations,
+      warnings: result.warnings,
+      blocked: result.blocked,
+    });
+  }, [executableAgentNames, selectedState]);
+
+  const applyReviewPolicyCandidate = useCallback(() => {
+    if (!reviewPolicyCandidate || reviewPolicyCandidate.blocked) return;
+    const latestState = states.find((state) => (
+      reviewPolicyCandidate.stateId
+        ? state.id === reviewPolicyCandidate.stateId
+        : state.name === reviewPolicyCandidate.stateName
+    ));
+    if (!latestState) {
+      setReviewPolicyCandidate(null);
+      return;
+    }
+    const refreshed = reconcileReviewPolicy(latestState, reviewPolicyCandidate.targetPolicy, {
+      availableAgents: executableAgentNames,
+      fallbackAgent: executableAgentNames[0],
+      idFactory: () => crypto.randomUUID(),
+    });
+    if (refreshed.blocked) {
+      setReviewPolicyCandidate((current) => current ? {
+        ...current,
+        blocked: true,
+        warnings: Array.from(new Set([...current.warnings, ...refreshed.warnings])),
+      } : current);
+      return;
+    }
+    const unsafeDeleteIds = reviewPolicyUnsafeDeletes;
+    if (unsafeDeleteIds.size > 0) {
+      const staleDeleteIds = [...unsafeDeleteIds].filter((stepId) => {
+        const previewOperation = reviewPolicyCandidate.operations.find((operation) => (
+          !operation.safe && operation.stepId === stepId
+        ));
+        const refreshedOperation = refreshed.operations.find((operation) => (
+          !operation.safe && operation.stepId === stepId
+        ));
+        if (!previewOperation?.before || !refreshedOperation?.before) return true;
+        return hashReviewStep(previewOperation.before as WorkflowStep)
+          !== hashReviewStep(refreshedOperation.before as WorkflowStep);
+      });
+      if (staleDeleteIds.length > 0) {
+        setReviewPolicyCandidate((current) => current ? {
+          ...current,
+          nextState: refreshed.nextState,
+          operations: refreshed.operations,
+          warnings: Array.from(new Set([
+            ...current.warnings,
+            ...refreshed.warnings,
+            '待删除步骤在预览后已发生变化，已取消删除选择；请基于最新 diff 再次确认。',
+          ])),
+        } : current);
+        setReviewPolicyUnsafeDeletes(new Set());
+        return;
+      }
+    }
+    let nextState = unsafeDeleteIds.size > 0
+      ? {
+          ...refreshed.nextState,
+          steps: refreshed.nextState.steps.filter((step) => !step.id || !unsafeDeleteIds.has(step.id)),
+        }
+      : refreshed.nextState;
+    if (unsafeDeleteIds.size > 0) {
+      const repairSeed = hashReviewState(nextState).replace(/[^a-zA-Z0-9_-]/g, '-');
+      let repairStepIndex = 0;
+      const repairedAfterDelete = reconcileReviewPolicy(nextState, reviewPolicyCandidate.targetPolicy, {
+        availableAgents: executableAgentNames,
+        fallbackAgent: executableAgentNames[0],
+        idFactory: () => `${repairSeed}-${++repairStepIndex}`,
+      });
+      if (repairedAfterDelete.blocked) {
+        setReviewPolicyCandidate((current) => current ? {
+          ...current,
+          blocked: true,
+          warnings: Array.from(new Set([...current.warnings, ...repairedAfterDelete.warnings])),
+        } : current);
+        return;
+      }
+      nextState = repairedAfterDelete.nextState;
+      if (repairedAfterDelete.operations.length > 0) {
+        const repairSignature = hashReviewState(repairedAfterDelete.nextState);
+        if (reviewPolicyCandidate.unsafeDeleteRepairSignature !== repairSignature) {
+          setReviewPolicyCandidate((current) => current ? {
+            ...current,
+            nextState: repairedAfterDelete.nextState,
+            operations: [...refreshed.operations, ...repairedAfterDelete.operations],
+            warnings: Array.from(new Set([
+              ...current.warnings,
+              ...repairedAfterDelete.warnings,
+              '明确删除后需要重新建立标准 verdict 输出者；请确认下方新增的收口变更。',
+            ])),
+            unsafeDeleteRepairSignature: repairSignature,
+          } : current);
+          return;
+        }
+      }
+    }
+    const latestIndex = states.findIndex((state) => (
+      reviewPolicyCandidate.stateId
+        ? state.id === reviewPolicyCandidate.stateId
+        : state.name === reviewPolicyCandidate.stateName
+    ));
+    if (latestIndex < 0) {
+      setReviewPolicyCandidate(null);
+      return;
+    }
+    onStatesChange(states.map((state, index) => index === latestIndex ? nextState : state));
+    setReviewPolicyCandidate(null);
+    setReviewPolicyUnsafeDeletes(new Set());
+  }, [executableAgentNames, onStatesChange, reviewPolicyCandidate, reviewPolicyUnsafeDeletes, states]);
+
+  const returnReviewPolicyToAi = useCallback(() => {
+    if (!selectedState || selectedState.isFinal || !selectedState.reviewPolicy) return;
+    onOptimizeState?.(
+      selectedStateIndex,
+      `只重新评估状态「${selectedState.name}」的 reviewPolicy，返回 mode、rationale、riskSignals、confidence。不要返回步骤、状态名称、转移或任何管理字段；步骤编排由本地系统生成。`,
+      true,
+      true,
+    );
+  }, [onOptimizeState, selectedState, selectedStateIndex]);
+
+  const lockCurrentReviewPolicy = useCallback(() => {
+    if (!selectedState || selectedState.isFinal || !selectedState.reviewPolicy) return;
+    updateState({
+      ...selectedState,
+      reviewPolicy: {
+        ...selectedState.reviewPolicy,
+        source: 'user',
+        locked: true,
+        rationale: selectedState.reviewPolicy.rationale || '用户确认并锁定当前审查模式。',
+      },
+    });
+  }, [selectedState, updateState]);
 
   const openSubworkflowDrilldown = useCallback((step: WorkflowStep, context?: { stateName?: string; stepIndex?: number }) => {
     const configFile = String(step.workflow || step.subworkflow?.configFile || '').trim();
@@ -1122,6 +1359,18 @@ export default function StateMachineDesignPanel({
     if (!over || active.id === over.id) return;
     const oldIndex = Number(active.id);
     const newIndex = Number(over.id);
+    if (selectedState.reviewPolicy?.locked) {
+      const steps = selectedState.steps || [];
+      const activeStep = steps[oldIndex];
+      if (!activeStep || activeStep.provenance?.origin === 'review-policy') return;
+      if (selectedState.reviewPolicy.mode === 'adversarial') {
+        const attackerIndex = steps.findIndex((step) => step.role === 'attacker');
+        if (activeStep.role !== 'defender' || attackerIndex < 0 || newIndex >= attackerIndex) return;
+      } else {
+        const closerIndex = steps.findIndex((step) => step.provenance?.managedRole === 'standard-closer');
+        if (closerIndex >= 0 && newIndex >= closerIndex) return;
+      }
+    }
     updateState({ ...selectedState, steps: arrayMove(selectedState.steps, oldIndex, newIndex) });
   };
 
@@ -1136,18 +1385,30 @@ export default function StateMachineDesignPanel({
   const handleAddState = () => {
     const name = `状态${states.length + 1}`;
     const newState: StateMachineState = {
+      id: crypto.randomUUID(),
       name,
       description: '',
       steps: [],
       transitions: [],
       isInitial: states.length === 0,
       isFinal: false,
+      maxSelfTransitions: 3,
+      reviewPolicy: {
+        mode: 'standard',
+        source: 'default',
+        locked: false,
+        confidence: 'medium',
+        riskSignals: [],
+        rationale: '手工新增状态默认采用标准模式，可在状态详情中调整。',
+      },
     };
     onStatesChange([...states, newState]);
     setSelectedStateName(name);
   };
 
   const handleDeleteState = (name: string) => {
+    const target = states.find((state) => state.name === name);
+    if (target?.reviewPolicy?.locked) return;
     onStatesChange(states.filter(s => s.name !== name));
     if (selectedStateName === name) {
       setSelectedStateName(states.find(s => s.name !== name)?.name ?? null);
@@ -1157,10 +1418,45 @@ export default function StateMachineDesignPanel({
   const handleSaveStep = (data: any) => {
     if (!selectedState || editingStep === null) return;
     const existingStep = !editingStep.isNew ? selectedState.steps[editingStep.index] : null;
+    if (selectedState.reviewPolicy?.locked
+      && (existingStep?.provenance?.origin === 'review-policy'
+        || existingStep?.provenance?.managedRole === 'standard-closer')) return;
     const newStep = buildWorkflowStepFromEditData(data, existingStep);
+    if (editingStep.isNew) {
+      newStep.id = crypto.randomUUID();
+      newStep.provenance = { origin: 'user' };
+    }
+    if (selectedState.reviewPolicy?.locked && existingStep && isReviewStructureStep(existingStep)) {
+      newStep.id = existingStep.id;
+      newStep.provenance = existingStep.provenance;
+      newStep.role = existingStep.role;
+      newStep.agentInstanceId = existingStep.agentInstanceId;
+      newStep.parallelGroup = existingStep.parallelGroup;
+      newStep.concurrency = existingStep.concurrency;
+    }
+    if (selectedState.reviewPolicy?.locked
+      && selectedState.reviewPolicy.mode === 'adversarial'
+      && editingStep.isNew) {
+      newStep.role = 'defender';
+      newStep.agentInstanceId = crypto.randomUUID();
+      const groupId = getStepParallelGroup(newStep);
+      if (groupId) {
+        newStep.concurrency = {
+          ...(newStep.concurrency || {}),
+          groupId,
+          joinPolicy: { mode: 'all' },
+        };
+      }
+    }
     const steps = [...selectedState.steps];
     if (editingStep.isNew) {
-      steps.push(newStep);
+      const protectedTailIndex = selectedState.reviewPolicy?.locked
+        ? selectedState.reviewPolicy.mode === 'standard'
+          ? steps.findIndex((step) => step.provenance?.managedRole === 'standard-closer')
+          : steps.findIndex((step) => step.role === 'attacker')
+        : -1;
+      if (protectedTailIndex >= 0) steps.splice(protectedTailIndex, 0, newStep);
+      else steps.push(newStep);
     } else {
       steps[editingStep.index] = newStep;
     }
@@ -1170,12 +1466,15 @@ export default function StateMachineDesignPanel({
 
   const handleDeleteStep = (index: number) => {
     if (!selectedState) return;
+    if (selectedState.reviewPolicy?.locked && isReviewStructureStep(selectedState.steps?.[index])) return;
     updateState({ ...selectedState, steps: (selectedState.steps || []).filter((_, i) => i !== index) });
     setEditingStep(null);
   };
 
   const handleGroupSteps = (start: number, end: number, groupId?: string) => {
     if (!selectedState) return;
+    if (selectedState.reviewPolicy?.locked
+      && selectedState.steps.slice(start, end + 1).some((step) => isReviewStructureStep(step))) return;
     const nextGroupId = groupId || makeParallelGroupId(selectedState.name, start);
     const steps = (selectedState.steps || []).map((step, index) => (
       index >= start && index <= end ? withParallelGroup(step, nextGroupId, index - start) : step
@@ -1205,6 +1504,8 @@ export default function StateMachineDesignPanel({
     if (!selectedState) return;
     const steps = selectedState.steps || [];
     const range = getGroupRange(steps, index);
+    if (selectedState.reviewPolicy?.locked
+      && steps.slice(range.start, range.end + 1).some((step) => isReviewStructureStep(step))) return;
     updateState({
       ...selectedState,
       steps: steps.map((step, stepIndex) => (
@@ -1216,6 +1517,7 @@ export default function StateMachineDesignPanel({
   const handleSetJoinPolicy = (groupId: string, mode: 'all' | 'any' | 'quorum' | 'manual') => {
     if (!selectedState) return;
     const groupSteps = (selectedState.steps || []).filter((step) => getStepParallelGroup(step) === groupId);
+    if (selectedState.reviewPolicy?.locked && groupSteps.some((step) => isReviewStructureStep(step))) return;
     const defaultQuorum = Math.max(1, Math.min(2, groupSteps.length));
     updateState({
       ...selectedState,
@@ -1246,6 +1548,7 @@ export default function StateMachineDesignPanel({
   const handleSetJoinPolicyQuorum = (groupId: string, quorum: number) => {
     if (!selectedState) return;
     const groupSteps = (selectedState.steps || []).filter((step) => getStepParallelGroup(step) === groupId);
+    if (selectedState.reviewPolicy?.locked && groupSteps.some((step) => isReviewStructureStep(step))) return;
     const normalizedQuorum = Math.max(1, Math.min(groupSteps.length || 1, Math.floor(quorum) || 1));
     updateState({
       ...selectedState,
@@ -1518,6 +1821,7 @@ export default function StateMachineDesignPanel({
                     <Input
                       className="h-8 text-sm"
                       value={selectedState.name}
+                      disabled={Boolean(selectedState.reviewPolicy?.locked)}
                       onChange={(e) => {
                         const newName = e.target.value;
                         const previousName = selectedState.name;
@@ -1537,7 +1841,24 @@ export default function StateMachineDesignPanel({
                     <label className="flex items-center gap-1.5 cursor-pointer">
                       <Checkbox
                         checked={selectedState.isFinal}
-                        onCheckedChange={(v) => updateState({ ...selectedState, isFinal: !!v })}
+                        disabled={Boolean(selectedState.reviewPolicy?.locked)}
+                        onCheckedChange={(v) => {
+                          const isFinal = !!v;
+                          updateState({
+                            ...selectedState,
+                            isFinal,
+                            reviewPolicy: isFinal
+                              ? undefined
+                              : selectedState.reviewPolicy || {
+                                  mode: 'standard',
+                                  source: 'default',
+                                  locked: false,
+                                  confidence: 'medium',
+                                  riskSignals: [],
+                                  rationale: '从终态改为可执行状态，默认采用标准模式。',
+                                },
+                          });
+                        }}
                       />
                       <span className="text-xs">终止状态</span>
                     </label>
@@ -1575,6 +1896,7 @@ export default function StateMachineDesignPanel({
                       min={1}
                       max={100}
                       value={selectedState.maxSelfTransitions ?? 3}
+                      disabled={Boolean(selectedState.reviewPolicy?.locked)}
                       onChange={(e) => updateState({
                         ...selectedState,
                         maxSelfTransitions: Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)),
@@ -1646,6 +1968,103 @@ export default function StateMachineDesignPanel({
             )}
           </div>
 
+          {!selectedState.isFinal && selectedState.reviewPolicy ? (
+            <div className="rounded-xl border border-border bg-card p-3 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold">状态审查模式</span>
+                    <Badge
+                      variant="outline"
+                      className={selectedState.reviewPolicy.mode === 'adversarial'
+                        ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
+                        : 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300'}
+                    >
+                      {selectedState.reviewPolicy.mode === 'adversarial' ? '对抗模式' : '标准模式'}
+                    </Badge>
+                    {selectedState.reviewPolicy.locked ? (
+                      <Badge variant="outline" className="gap-1 text-[10px]"><span className="material-symbols-outlined text-[12px]">lock</span>用户锁定</Badge>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    来源：{{ ai: 'AI 判断', user: '用户选择', legacy: '旧配置推断', default: '兼容默认' }[selectedState.reviewPolicy.source]}
+                    {' · '}置信度：{{ high: '高', medium: '中', low: '低' }[selectedState.reviewPolicy.confidence]}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={selectedState.reviewPolicy.mode === 'standard' ? 'default' : 'outline'}
+                    className="h-7 px-2.5 text-xs"
+                    disabled={selectedState.reviewPolicy.mode === 'standard'}
+                    onClick={() => requestReviewModeChange('standard')}
+                  >
+                    标准
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={selectedState.reviewPolicy.mode === 'adversarial' ? 'default' : 'outline'}
+                    className="h-7 px-2.5 text-xs"
+                    disabled={selectedState.reviewPolicy.mode === 'adversarial'}
+                    onClick={() => requestReviewModeChange('adversarial')}
+                  >
+                    对抗
+                  </Button>
+                  {!selectedState.reviewPolicy.locked ? (
+                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={lockCurrentReviewPolicy}>
+                      锁定当前模式
+                    </Button>
+                  ) : null}
+                  {onOptimizeState ? (
+                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={returnReviewPolicyToAi}>
+                      {selectedState.reviewPolicy.locked ? '交还 AI 判断' : 'AI 重新评估'}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5">
+                {selectedState.reviewPolicy.rationale || '暂无判断理由。'}
+              </div>
+              {selectedState.reviewPolicy.riskSignals.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedState.reviewPolicy.riskSignals.map((signal) => (
+                    <Badge key={signal} variant="secondary" className="text-[10px]">{signal}</Badge>
+                  ))}
+                </div>
+              ) : null}
+              {selectedState.reviewPolicy.mode === 'adversarial' ? (
+                <div>
+                  <div className="mb-1.5 text-xs font-medium">角色与运行实例</div>
+                  <div className="grid gap-1.5 md:grid-cols-3">
+                    {(['defender', 'attacker', 'judge'] as const).map((role) => {
+                      const roleSteps = selectedState.steps.filter((step) => step.role === role);
+                      return (
+                        <div key={role} className="rounded-lg border border-border px-2.5 py-2 text-[11px]">
+                          <div className="font-semibold">{{ defender: 'Defender（防守执行）', attacker: 'Attacker（攻击审查）', judge: 'Judge（独立裁决）' }[role]}</div>
+                          {roleSteps.length > 0 ? roleSteps.map((step) => {
+                            const agent = findAgentConfig(availableAgents, step.agent || '');
+                            return (
+                              <div key={step.id || step.name} className="mt-1 text-muted-foreground">
+                                {step.agent || '未分配'}{agent?.team ? ` · ${agent.team}队` : ''}
+                                <div className="truncate font-mono text-[10px]" title={step.agentInstanceId || ''}>{step.agentInstanceId || '缺少实例 ID'}</div>
+                              </div>
+                            );
+                          }) : <div className="mt-1 text-destructive">缺少角色步骤</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : selectedState.isFinal ? (
+            <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+              终态只汇总结果，不参与标准/对抗模式配置，也不要求输出 verdict。
+            </div>
+          ) : null}
+
           {/* 执行步骤 */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -1660,6 +2079,8 @@ export default function StateMachineDesignPanel({
                   {buildStepGroups(selectedState.steps || []).map((group) => {
                     const isParallelGroup = !!group.id && group.steps.length > 1;
                     const firstStep = group.steps[0]?.step;
+                    const groupReviewLocked = Boolean(selectedState.reviewPolicy?.locked
+                      && group.steps.some(({ step }) => isReviewStructureStep(step)));
                     const joinMode = getStepJoinPolicyMode(firstStep);
                     const quorumValue = getStepJoinPolicyQuorum(firstStep) || Math.max(1, Math.min(2, group.steps.length));
                     if (isParallelGroup) {
@@ -1681,6 +2102,7 @@ export default function StateMachineDesignPanel({
                                   size="sm"
                                   variant={joinMode === mode ? 'default' : 'outline'}
                                   className="h-6 px-2 text-[10px]"
+                                  disabled={groupReviewLocked}
                                   onClick={() => group.id && handleSetJoinPolicy(group.id, mode)}
                                 >
                                   {joinPolicyLabels[mode]}
@@ -1694,12 +2116,13 @@ export default function StateMachineDesignPanel({
                                     max={group.steps.length}
                                     value={quorumValue}
                                     className="h-5 w-12 border-0 p-0 text-center text-[10px] shadow-none focus-visible:ring-0"
+                                    disabled={groupReviewLocked}
                                     onChange={(event) => group.id && handleSetJoinPolicyQuorum(group.id, Number(event.target.value) || 1)}
                                   />
                                   <span className="text-muted-foreground">个</span>
                                 </label>
                               ) : null}
-                              <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => handleUngroup(group.startIndex)}>
+                              <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[10px]" disabled={groupReviewLocked} onClick={() => handleUngroup(group.startIndex)}>
                                 拆分
                               </Button>
                             </div>
@@ -1707,11 +2130,18 @@ export default function StateMachineDesignPanel({
                           <div className="space-y-1.5">
                             {group.steps.map(({ step, index }) => (
                               <SortableStepRow
-                                key={index}
+                                key={step.id || `${step.name}-${index}`}
                                 step={step}
                                 index={index}
                                 availableAgents={availableAgents}
                                 isParallel
+                                structureLocked={Boolean(selectedState.reviewPolicy?.locked && isReviewStructureStep(step))}
+                                dragLocked={Boolean(selectedState.reviewPolicy?.locked
+                                  && (step.provenance?.origin === 'review-policy'
+                                    || step.provenance?.managedRole === 'standard-closer'))}
+                                editLocked={Boolean(selectedState.reviewPolicy?.locked
+                                  && (step.provenance?.origin === 'review-policy'
+                                    || step.provenance?.managedRole === 'standard-closer'))}
                                 canGroupPrevious={index > 0 && getStepParallelGroup((selectedState.steps || [])[index - 1]) !== getStepParallelGroup(step)}
                                 canGroupNext={index < (selectedState.steps?.length ?? 0) - 1 && getStepParallelGroup((selectedState.steps || [])[index + 1]) !== getStepParallelGroup(step)}
                                 onGroupWithPrevious={() => handleGroupWithPrevious(index)}
@@ -1731,10 +2161,17 @@ export default function StateMachineDesignPanel({
                     const { step, index } = group.steps[0];
                     return (
                       <SortableStepRow
-                        key={index}
+                        key={step.id || `${step.name}-${index}`}
                         step={step}
                         index={index}
                         availableAgents={availableAgents}
+                        structureLocked={Boolean(selectedState.reviewPolicy?.locked && isReviewStructureStep(step))}
+                        dragLocked={Boolean(selectedState.reviewPolicy?.locked
+                          && (step.provenance?.origin === 'review-policy'
+                            || step.provenance?.managedRole === 'standard-closer'))}
+                        editLocked={Boolean(selectedState.reviewPolicy?.locked
+                          && (step.provenance?.origin === 'review-policy'
+                            || step.provenance?.managedRole === 'standard-closer'))}
                         canGroupPrevious={index > 0}
                         canGroupNext={index < (selectedState.steps?.length ?? 0) - 1}
                         onGroupWithPrevious={() => handleGroupWithPrevious(index)}
@@ -1842,6 +2279,114 @@ export default function StateMachineDesignPanel({
           onDelete={editingStep.isNew ? undefined : () => handleDeleteStep(editingStep.index)}
         />
       )}
+
+      <Dialog
+        open={Boolean(reviewPolicyCandidate)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setReviewPolicyCandidate(null);
+            setReviewPolicyUnsafeDeletes(new Set());
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[82vh] overflow-y-auto">
+          <DialogTitle>确认状态审查模式变更</DialogTitle>
+          {reviewPolicyCandidate ? (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
+                状态「{reviewPolicyCandidate.stateName}」将切换为
+                <span className="mx-1 font-semibold">{reviewPolicyCandidate.targetMode === 'adversarial' ? '对抗模式' : '标准模式'}</span>
+                ，确认后该选择会标记为用户来源并锁定。
+              </div>
+              {reviewPolicyCandidate.warnings.length > 0 ? (
+                <div className="space-y-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                  {reviewPolicyCandidate.warnings.map((warning) => <div key={warning}>• {warning}</div>)}
+                </div>
+              ) : null}
+              <div>
+                <div className="mb-2 text-sm font-semibold">编排差异</div>
+                {reviewPolicyCandidate.operations.length > 0 ? (
+                  <div className="space-y-2">
+                    {reviewPolicyCandidate.operations.map((operation, index) => {
+                      const identity = operation.stepId || `${operation.stepName}-${index}`;
+                      const deleteUnsafe = !operation.safe && Boolean(operation.stepId) && reviewPolicyUnsafeDeletes.has(operation.stepId!);
+                      const fieldChanges = getReviewOperationFieldChanges(operation);
+                      return (
+                        <div key={`${operation.op}-${identity}-${index}`} className="rounded-lg border border-border px-3 py-2">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2 text-xs font-medium">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {{ insert: '新增', delete: '删除', retag: '角色/实例调整', convert: '转换' }[operation.op]}
+                                </Badge>
+                                {operation.stepName}
+                                {!operation.safe ? <Badge variant="outline" className="border-amber-300 text-[10px] text-amber-700">用户内容</Badge> : null}
+                              </div>
+                              <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{operation.reason}</div>
+                              {fieldChanges.length > 0 ? (
+                                <div className="mt-2 space-y-1 rounded-md bg-muted/50 px-2 py-1.5 text-[10px] leading-4">
+                                  {fieldChanges.map((change) => (
+                                    <div key={change.label} className="grid grid-cols-[44px_minmax(0,1fr)] gap-1">
+                                      <span className="text-muted-foreground">{change.label}</span>
+                                      <span className="break-words">
+                                        <span className="text-red-600/80 line-through">{change.before}</span>
+                                        <span className="mx-1 text-muted-foreground">→</span>
+                                        <span className="text-emerald-700 dark:text-emerald-300">{change.after}</span>
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                            {!operation.safe && operation.stepId ? (
+                              <div className="flex gap-1">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={!deleteUnsafe ? 'default' : 'outline'}
+                                  className="h-7 px-2 text-[10px]"
+                                  onClick={() => setReviewPolicyUnsafeDeletes((current) => {
+                                    const next = new Set(current);
+                                    next.delete(operation.stepId!);
+                                    return next;
+                                  })}
+                                >
+                                  保留并转换
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={deleteUnsafe ? 'destructive' : 'outline'}
+                                  className="h-7 px-2 text-[10px]"
+                                  onClick={() => setReviewPolicyUnsafeDeletes((current) => new Set(current).add(operation.stepId!))}
+                                >
+                                  明确删除
+                                </Button>
+                              </div>
+                            ) : (
+                              <Checkbox checked disabled aria-label="必要的安全变更" />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                    步骤编排无需调整，只更新审查策略和锁定状态。
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setReviewPolicyCandidate(null)}>取消</Button>
+                <Button type="button" disabled={reviewPolicyCandidate.blocked} onClick={applyReviewPolicyCandidate}>
+                  确认并应用
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

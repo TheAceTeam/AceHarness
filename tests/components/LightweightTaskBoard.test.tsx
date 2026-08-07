@@ -4,7 +4,10 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, test } from 'vitest';
 import LightweightTaskBoard from '@/components/workflow/LightweightTaskBoard';
 import { adaptLightweightTaskBoardEvidence } from '@/components/workflow/lightweight-task-board-evidence';
-import { buildLightweightTaskExecutionGraphModel } from '@/components/workflow/LightweightTaskExecutionGraph';
+import {
+  buildLightweightRuntimeFallbackTask,
+  buildLightweightTaskExecutionGraphModel,
+} from '@/components/workflow/LightweightTaskExecutionGraph';
 import {
   buildWorkbenchPreviewDetailNavItems,
   buildWorkbenchRunDetailNavItems,
@@ -217,6 +220,43 @@ describe('lightweight task board evidence', () => {
     expect(noDependencies.nodes.map((node) => node.id)).toEqual(['T1']);
     expect(noDependencies.edges).toEqual([]);
     expect(noDependencies.hasExplicitDependencies).toBe(false);
+  });
+
+  test('maps the internal Root agent owner to the configured primary Agent', () => {
+    const model = adaptLightweightTaskBoardEvidence({
+      workflow: { profile: 'lightweight', primaryAgent: 'analyst' },
+      run: { agents: [{ name: 'analyst', status: 'completed' }] },
+      tasklist: {
+        tasks: [
+          { id: 'T1', title: '分析项目', owner: 'Root agent', status: 'completed' },
+          { id: 'T2', title: '验证结果', owner: 'reviewer', status: 'completed' },
+        ],
+      },
+    });
+
+    expect(model.tasks.map((task) => task.owner)).toEqual(['analyst', 'reviewer']);
+  });
+
+  test('uses the configured lightweight step as a provisional running node before task evidence arrives', () => {
+    const fallback = buildLightweightRuntimeFallbackTask({
+      workflow: {
+        profile: 'lightweight',
+        states: [{ steps: [{ name: '执行任务', agent: 'analyst' }] }],
+      },
+      run: {
+        status: 'running',
+        currentStep: '执行-执行任务',
+        activeSteps: ['执行-执行任务'],
+      },
+    });
+
+    expect(fallback).toEqual(expect.objectContaining({
+      id: 'lightweight-runtime-step',
+      title: '执行任务',
+      owner: 'analyst',
+      executionMode: 'serial',
+      status: 'running',
+    }));
   });
 
   test('resolves lightweight Workbench top-level state graph and removes top-level Agents tab', () => {

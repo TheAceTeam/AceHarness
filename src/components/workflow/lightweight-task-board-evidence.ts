@@ -31,10 +31,13 @@ export interface LightweightTaskBoardInput {
   workflow?: {
     profile?: unknown;
     primaryAgent?: unknown;
-    states?: Array<{ steps?: Array<{ agent?: unknown }> }>;
+    states?: Array<{ steps?: Array<{ name?: unknown; agent?: unknown }> }>;
   } | null;
   run?: {
     profile?: unknown;
+    status?: unknown;
+    currentPhase?: unknown;
+    currentStep?: unknown;
     primaryAgent?: unknown;
     agents?: unknown;
     runtimeAgents?: unknown;
@@ -269,7 +272,20 @@ function runtimeStatusForTask(task: Record<string, unknown>, run: LightweightTas
   return 'unknown';
 }
 
-function taskBoardTasks(input: LightweightTaskBoardInput): LightweightTaskBoardTask[] {
+function resolveTaskOwner(value: unknown, primaryAgentName?: string | null): string | null {
+  const owner = text(value);
+  if (!owner) return null;
+  const normalized = owner.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+  if (normalized === 'root agent') {
+    return text(primaryAgentName) || null;
+  }
+  return owner;
+}
+
+function taskBoardTasks(
+  input: LightweightTaskBoardInput,
+  primaryAgentName?: string | null,
+): LightweightTaskBoardTask[] {
   return taskEntries(input.tasklist).flatMap((entry, index) => {
     const title = firstText(entry.title, entry.name, entry.description);
     if (!title) return [];
@@ -279,7 +295,7 @@ function taskBoardTasks(input: LightweightTaskBoardInput): LightweightTaskBoardT
     return [{
       id,
       title,
-      owner: firstText(entry.owner, entry.ownerAgent, entry.agent) || null,
+      owner: resolveTaskOwner(firstText(entry.owner, entry.ownerAgent, entry.agent), primaryAgentName),
       dependencies: toStringList(entry.dependencies ?? entry.dependsOn),
       parallelGroup,
       executionMode: normalizeExecutionMode(entry.executionMode, parallelGroup),
@@ -335,7 +351,7 @@ export function adaptLightweightTaskBoardEvidence(input: LightweightTaskBoardInp
     childAgents.push(agent);
   }
 
-  const tasks = taskBoardTasks(input);
+  const tasks = taskBoardTasks(input, primaryAgent?.name);
   const progressPercent = calculateProgress(tasks);
   return {
     isLightweight: true,

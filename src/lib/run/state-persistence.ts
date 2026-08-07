@@ -8,6 +8,7 @@ import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/su
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 import type { WorkflowTaskInput } from '@/lib/workflow/task-input';
+import type { RunReviewPlan } from '@/lib/workflow/run-review-types';
 import { mergeRuntimeToolEvents, type RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
 const RUNS_DIR = getWorkspaceRunsDir();
@@ -316,6 +317,8 @@ export interface PersistedQualityCheck {
   category: 'lint' | 'compile' | 'test' | 'custom';
   status: 'passed' | 'failed' | 'warning';
   origin?: 'workflow' | 'inferred';
+  configFile?: string;
+  cwd?: string;
   summary: string;
   createdAt: string;
   commands: PersistedQualityCommandResult[];
@@ -470,6 +473,8 @@ export interface PersistedRunState {
   subworkflowAuditEvents?: PersistedSubworkflowAuditEvent[];
   workflowSnapshotRoot?: string;
   workflowSnapshotManifestHash?: string;
+  /** Immutable state-level review projection selected for this run. */
+  runReviewPlan?: RunReviewPlan;
   /** Authenticated user who owns/started this run. */
   runOwnerId?: string;
   runOwnerName?: string;
@@ -831,6 +836,7 @@ function buildRunSnapshotFromState(state: PersistedRunState, summary: ReturnType
     currentState: state.currentState,
     currentStep: state.currentStep,
     mode: state.mode,
+    runReviewPlan: state.runReviewPlan,
     activeSteps: state.activeSteps || [],
     activeConcurrencyGroups: state.activeConcurrencyGroups || [],
     completedSteps: state.completedSteps || [],

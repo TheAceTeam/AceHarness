@@ -142,6 +142,24 @@ export const subworkflowReferenceSchema = z.object({
   runtime: subworkflowRuntimeSchema,
 });
 
+export const reviewPolicySchema = z.object({
+  mode: z.enum(['standard', 'adversarial']),
+  source: z.enum(['ai', 'user', 'legacy', 'default']),
+  locked: z.boolean().default(false),
+  confidence: z.enum(['high', 'medium', 'low']),
+  riskSignals: z.array(z.string()).default([]),
+  rationale: z.string().default(''),
+});
+
+export const workflowStepProvenanceSchema = z.object({
+  origin: z.enum(['user', 'ai-draft', 'review-policy', 'legacy']),
+  managedRole: z.enum(['attacker', 'judge', 'standard-closer']).optional(),
+  baselineHash: z.string().optional(),
+});
+
+export type ReviewPolicy = z.infer<typeof reviewPolicySchema>;
+export type WorkflowStepProvenance = z.infer<typeof workflowStepProvenanceSchema>;
+
 export interface WorkflowStep {
   id?: string;
   name: string;
@@ -163,6 +181,7 @@ export interface WorkflowStep {
   specTaskBinding?: SpecTaskBinding;
   enableReviewPanel?: boolean;
   skills?: string[];
+  provenance?: WorkflowStepProvenance;
 }
 
 // 工作流步骤 Schema
@@ -190,6 +209,7 @@ export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
   specTaskBinding: specTaskBindingSchema.optional(),
   enableReviewPanel: z.boolean().optional(), // 是否启用会审模式
   skills: z.array(z.string().min(1)).optional(),
+  provenance: workflowStepProvenanceSchema.optional(),
 }).superRefine((step, ctx) => {
   if (step.type === 'subworkflow') {
     const configFile = step.workflow?.trim() || step.subworkflow?.configFile?.trim();
@@ -592,6 +612,10 @@ export const creationSessionSchema = z.object({
     }).optional(),
   }).optional(),
   uiState: z.object({
+    workflowMode: z.enum(['ai-guided', 'lightweight', 'state-machine']).optional(),
+    creationJourney: z.enum(['direct', 'ai-guided']).optional(),
+    targetWorkflowKind: z.enum(['lightweight', 'state-machine']).optional(),
+    creationAdversarialIntent: z.enum(['disabled', 'on-demand']).optional(),
     formStep: z.number().int().min(1).max(5).optional(),
     planningStage: z.enum(['idle', 'clarifying', 'awaiting-answers', 'generating-plan']).optional(),
     clarificationForm: z.object({
@@ -725,6 +749,7 @@ export const stateTransitionSchema = z.object({
 
 // 状态机状态 Schema
 export const stateMachineStateSchema = z.object({
+  id: z.string().min(1).optional(),
   name: z.string().min(1, '状态名称不能为空'),
   description: z.string().optional(),
   type: z.enum(['normal', 'human-checkpoint']).default('normal').optional(), // 状态类型（将废弃）
@@ -735,7 +760,8 @@ export const stateMachineStateSchema = z.object({
   position: z.object({ x: z.number(), y: z.number() }).optional(), // 可视化位置
   isInitial: z.boolean().default(false), // 是否为初始状态
   isFinal: z.boolean().default(false), // 是否为终止状态
-  maxSelfTransitions: z.number().min(1).max(100).default(3).optional(), // 最大自我转换次数，超出后自动熔断
+  maxSelfTransitions: z.number().min(1).max(100).optional(), // 最大自我转换次数，超出后自动熔断
+  reviewPolicy: reviewPolicySchema.optional(),
   executionMode: z.enum(['sequential', 'parallel']).optional(), // 并发设计元数据；当前执行器不保证真实并发
   joinPolicy: joinPolicySchema.optional(),
   channels: z.array(z.string()).optional(),
@@ -784,6 +810,14 @@ export const stateMachineWorkflowSchema = z.object({
       });
     }
     return;
+  }
+
+  if (workflow.states.some((state) => state.reviewPolicy !== undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['workflow', 'states'],
+      message: 'lightweight workflow states must not define reviewPolicy',
+    });
   }
 
   if (workflow.states.length !== 1) {

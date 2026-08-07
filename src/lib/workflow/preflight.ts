@@ -31,9 +31,22 @@ export function truncate(text: string, max: number): string {
 type PreflightCommand = {
   command: string;
   origin: 'workflow' | 'inferred';
+  configFile?: string;
+  cwd?: string;
 };
 
-export async function getWorkflowPreflightPlan(configFile: string, personalDir: string, workingDirectory?: string): Promise<{
+type PreflightOptions = {
+  configContent?: string;
+  /** Exact run-owned contents for the root workflow and every referenced subworkflow. */
+  configContents?: Record<string, string>;
+};
+
+export async function getWorkflowPreflightPlan(
+  configFile: string,
+  personalDir: string,
+  workingDirectory?: string,
+  options: PreflightOptions = {},
+): Promise<{
   cwd: string;
   commands: PreflightCommand[];
   policy: {
@@ -42,8 +55,41 @@ export async function getWorkflowPreflightPlan(configFile: string, personalDir: 
     inferredCommandCount: number;
   };
 }> {
-  const configPath = await getRuntimeWorkflowConfigPath(configFile);
-  const raw = await readFile(configPath, 'utf-8');
+  if (options.configContents) {
+    const orderedFiles = [
+      configFile,
+      ...Object.keys(options.configContents).filter((file) => file !== configFile).sort(),
+    ].filter((file, index, files) => files.indexOf(file) === index);
+    const plans = await Promise.all(orderedFiles.map(async (file) => getWorkflowPreflightPlan(
+      file,
+      personalDir,
+      workingDirectory,
+      { configContent: options.configContents?.[file] },
+    )));
+    const commands: PreflightCommand[] = [];
+    const seen = new Set<string>();
+    for (let index = 0; index < plans.length; index += 1) {
+      const plan = plans[index];
+      const file = orderedFiles[index];
+      for (const item of plan.commands) {
+        const key = `${plan.cwd}\0${item.command}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        commands.push({ ...item, configFile: file, cwd: plan.cwd });
+      }
+    }
+    return {
+      cwd: plans[0]?.cwd || resolveProjectRoot(personalDir, workingDirectory),
+      commands,
+      policy: {
+        blockOnFailure: true,
+        allowOnWarning: true,
+        inferredCommandCount: commands.filter((command) => command.origin === 'inferred').length,
+      },
+    };
+  }
+
+  const raw = options.configContent ?? await readFile(await getRuntimeWorkflowConfigPath(configFile), 'utf-8');
   const config = parse(raw) as any;
   const cwd = resolveProjectRoot(personalDir, workingDirectory || config?.context?.projectRoot);
   const commands = await collectPreflightCommands(config, cwd);
@@ -125,7 +171,12 @@ async function collectPreflightCommands(config: any, cwd: string): Promise<Prefl
   return inferProjectPreflightCommands(cwd);
 }
 
-export async function runWorkflowPreflight(configFile: string, personalDir: string, workingDirectory?: string): Promise<{
+export async function runWorkflowPreflight(
+  configFile: string,
+  personalDir: string,
+  workingDirectory?: string,
+  options: PreflightOptions = {},
+): Promise<{
   ok: boolean;
   cwd: string;
   checks: PersistedQualityCheck[];
@@ -137,7 +188,7 @@ export async function runWorkflowPreflight(configFile: string, personalDir: stri
     inferredCommandCount: number;
   };
 }> {
-  const { cwd, commands, policy } = await getWorkflowPreflightPlan(configFile, personalDir, workingDirectory);
+  const { cwd, commands, policy } = await getWorkflowPreflightPlan(configFile, personalDir, workingDirectory, options);
 
   if (commands.length === 0) {
     return {
@@ -156,10 +207,11 @@ export async function runWorkflowPreflight(configFile: string, personalDir: stri
 
   for (const item of commands) {
     const command = item.command;
+    const commandCwd = item.cwd || cwd;
     let result: PersistedQualityCommandResult;
     try {
       const { stdout, stderr } = await execAsync(command, {
-        cwd,
+        cwd: commandCwd,
         timeout: EXEC_TIMEOUT_MS,
         maxBuffer: 1024 * 1024 * 8,
         env: process.env,
@@ -195,11 +247,13 @@ export async function runWorkflowPreflight(configFile: string, personalDir: stri
       category,
       status: result.status,
       origin: item.origin,
+      ...(item.configFile ? { configFile: item.configFile } : {}),
+      ...(item.cwd ? { cwd: item.cwd } : {}),
       summary: result.status === 'passed'
-        ? `${item.origin === 'inferred' ? '[推断]' : '[配置]'} ${command} 通过`
+        ? `${item.configFile ? `[${item.configFile}] ` : ''}${item.origin === 'inferred' ? '[推断]' : '[配置]'} ${command} 通过`
         : result.status === 'failed'
-          ? `${item.origin === 'inferred' ? '[推断]' : '[配置]'} ${command} 失败`
-          : `${item.origin === 'inferred' ? '[推断]' : '[配置]'} ${command} 返回警告`,
+          ? `${item.configFile ? `[${item.configFile}] ` : ''}${item.origin === 'inferred' ? '[推断]' : '[配置]'} ${command} 失败`
+          : `${item.configFile ? `[${item.configFile}] ` : ''}${item.origin === 'inferred' ? '[推断]' : '[配置]'} ${command} 返回警告`,
       createdAt: new Date().toISOString(),
       commands: [result],
     });

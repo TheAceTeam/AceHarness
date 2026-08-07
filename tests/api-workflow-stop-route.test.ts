@@ -262,7 +262,7 @@ describe('workflow stop route ACPX cleanup scope', () => {
       await Promise.resolve();
     }
     expect(manager.stop).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(8000);
+    await vi.advanceTimersByTimeAsync(3000);
     const response = await responsePromise;
     const body = await responseJson(response);
 

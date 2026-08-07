@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -106,7 +106,11 @@ describe('/api/chat runtime model route resolution', () => {
       close: vi.fn(async () => undefined),
     });
 
-    const { getWorkspaceDataFile } = await import('@/lib/core/app-paths');
+    const { getEngineConfigPath, getWorkspaceDataFile } = await import('@/lib/core/app-paths');
+    writeFileSync(getEngineConfigPath(), JSON.stringify({
+      engine: 'codex',
+      defaultModel: 'gpt-5.5[low]',
+    }), 'utf8');
     const { openRuntimeSqliteDatabase } = await import('@/lib/runtime-agent/sqlite/database');
     const { upsertModelCatalogEntry, upsertModelProvider, upsertModelRoute } = await import('@/lib/runtime-agent/models/model-routes');
     const db = openRuntimeSqliteDatabase(getWorkspaceDataFile('runtime-agent.sqlite'));
@@ -219,6 +223,42 @@ describe('/api/chat runtime model route resolution', () => {
       }));
       expect(runTurn).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
         input: expect.stringContaining('hello'),
+      }));
+    });
+  });
+
+  test('streaming chat resolves an omitted model to the configured system default', async () => {
+    const { ensureSession } = await setupImportedCodexGpt55Low();
+
+    const { GET, POST } = await import('@/server/api-routes/chat/stream/route');
+    const response = await POST(makeRequest('/api/chat/stream', {
+      json: {
+        message: 'hello',
+      },
+    }));
+    const body = await responseJson(response);
+
+    expect(response.status).toBe(200);
+    expect(body.chatId).toMatch(/^chat-/);
+    const streamResponse = await GET(makeRequest(`/api/chat/stream?id=${body.chatId}`));
+    const events = await readSseEvents(streamResponse);
+
+    expect(events).toContainEqual({
+      event: 'done',
+      data: expect.objectContaining({
+        result: 'echo:true',
+        isError: false,
+      }),
+    });
+    await waitFor(() => {
+      expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: 'codex',
+          modelRoute: expect.objectContaining({
+            modelRouteId: 'codex__gpt-5.5-low',
+            providerModel: 'gpt-5.5[low]',
+          }),
+        }),
       }));
     });
   });

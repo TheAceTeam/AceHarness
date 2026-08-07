@@ -118,6 +118,27 @@ describe('subworkflow config dependencies', () => {
     });
   });
 
+  test('writes authoritative content overrides into the immutable snapshot without changing source files', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const configsDir = path.join(aceHome, 'configs');
+      await mkdir(configsDir, { recursive: true });
+      const original = stringify(stateMachineConfig('Original'));
+      const effective = stringify(stateMachineConfig('Effective'));
+      await writeFile(path.join(configsDir, 'root.yaml'), original, 'utf-8');
+
+      const { createWorkflowConfigSnapshot } = await loadSubworkflowConfig();
+      const graph = await createWorkflowConfigSnapshot({
+        rootConfigFile: 'root.yaml',
+        runId: 'run-effective-snapshot',
+        contentOverrides: { 'root.yaml': effective },
+      });
+
+      expect(parse(await readFile(path.join(aceHome, 'runs', 'run-effective-snapshot', 'configs', 'root.yaml'), 'utf-8')).workflow.name).toBe('Effective');
+      expect(await readFile(path.join(configsDir, 'root.yaml'), 'utf-8')).toBe(original);
+      expect(graph.configs[0].sha256).not.toBe('');
+    });
+  });
+
   test('rejects recursive subworkflow dependency graphs', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       const configsDir = path.join(aceHome, 'configs');

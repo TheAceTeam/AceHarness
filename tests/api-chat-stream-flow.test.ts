@@ -18,6 +18,7 @@ vi.mock('@/lib/chat/chat-engine-runtime', () => ({
   isChatRuntimeTimingDebug: vi.fn().mockReturnValue(false),
   resolveRecoveredRuntimeSessionId: vi.fn((result: { sessionId?: string }, fallback?: string) => result.sessionId || fallback || null),
   resolveRequestedChatRuntimeEngineType: vi.fn().mockResolvedValue('mock-engine'),
+  resolveRequestedChatRuntimeModel: vi.fn((model?: string | null) => String(model || '').trim()),
 }));
 
 vi.mock('@/lib/core/process-manager', () => ({

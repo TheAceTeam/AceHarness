@@ -38,7 +38,7 @@ export interface WorkflowConfigDependencyGraph {
   configs: WorkflowConfigDependency[];
 }
 
-interface WorkflowConfigDependencyGraphWithContent extends WorkflowConfigDependencyGraph {
+export interface WorkflowConfigDependencyGraphWithContent extends WorkflowConfigDependencyGraph {
   configs: Array<WorkflowConfigDependency & { content: string }>;
 }
 
@@ -155,7 +155,7 @@ export function listSubworkflowReferences(config: any): SubworkflowReference[] {
   return result;
 }
 
-async function resolveWorkflowConfigDependencyGraphWithContent(
+export async function resolveWorkflowConfigDependencyGraphWithContent(
   rootConfigFile: string,
   options: { maxDepth?: number; maxGraphSize?: number; maxSnapshotBytes?: number } = {},
 ): Promise<WorkflowConfigDependencyGraphWithContent> {
@@ -277,11 +277,41 @@ export async function createWorkflowConfigSnapshot(input: {
   maxDepth?: number;
   maxGraphSize?: number;
   maxSnapshotBytes?: number;
+  contentOverrides?: Record<string, string>;
 }): Promise<WorkflowConfigDependencyGraph> {
-  const graph = await resolveWorkflowConfigDependencyGraphWithContent(input.rootConfigFile, {
+  const sourceGraph = await resolveWorkflowConfigDependencyGraphWithContent(input.rootConfigFile, {
     maxDepth: input.maxDepth,
     maxGraphSize: input.maxGraphSize,
     maxSnapshotBytes: input.maxSnapshotBytes,
+  });
+  const normalizedOverrides = new Map(Object.entries(input.contentOverrides || {}).map(([file, content]) => [
+    normalizeWorkflowConfigRef(file),
+    content,
+  ]));
+  const graph: WorkflowConfigDependencyGraphWithContent = {
+    ...sourceGraph,
+    configs: sourceGraph.configs.map((entry) => {
+      const content = normalizedOverrides.get(entry.file) ?? entry.content;
+      return {
+        ...entry,
+        content,
+        sha256: sha256(content),
+      };
+    }),
+  };
+  const snapshotByteLimit = input.maxSnapshotBytes || DEFAULT_SUBWORKFLOW_MAX_SNAPSHOT_BYTES;
+  const totalSnapshotBytes = graph.configs.reduce(
+    (total, entry) => total + Buffer.byteLength(entry.content, 'utf-8'),
+    0,
+  );
+  if (totalSnapshotBytes > snapshotByteLimit) {
+    throw new Error(`工作流配置快照总大小超过上限 ${snapshotByteLimit} bytes`);
+  }
+  const manifestConfigs = graph.configs.map(({ content: _content, ...entry }) => entry);
+  graph.manifestHash = computeManifestHash({
+    root: graph.root,
+    createdAt: graph.createdAt,
+    configs: manifestConfigs,
   });
   const runConfigsDir = path.resolve(getWorkspaceRunsDir(), input.runId, 'configs');
   const tmpConfigsDir = path.resolve(getWorkspaceRunsDir(), input.runId, `configs.tmp-${process.pid}-${Date.now()}`);

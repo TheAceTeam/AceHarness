@@ -4,6 +4,8 @@ import {
   applyAcceptedWorkbenchRecovery,
   applyWorkbenchLiveStreamTransportFrame,
   buildWorkflowConfigWithName,
+  createStopProgressSteps,
+  markStopProgressStatePersisted,
   mergeUserVisibleStopProgressSteps,
   reconstructWorkbenchCachedLiveStreamContent,
   selectCurrentStepAttemptLogs,
@@ -11,7 +13,11 @@ import {
   shouldEnableWorkbenchStatusSync,
   upsertStartedRunInHistory,
   formatLiveOutputTimestamp,
+  getWorkflowStatusDotClass,
   resolveSoleConfiguredWorkflowStepName,
+  resolveStartPreflightStrategy,
+  resolveWorkbenchRuntimeWorkflowConfig,
+  buildWorkbenchRunDetailNavItems,
   resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
 } from '@/client/pages/workbench/WorkbenchClient';
@@ -19,12 +25,70 @@ import {
 const initialStopSteps: WorkbenchStopProgressStep[] = [
   { id: 'request', label: '发送停止请求', status: 'running' },
   { id: 'manager-stop', label: '停止运行实例', status: 'pending' },
-  { id: 'process-cleanup', label: '清理运行资源', status: 'pending' },
   { id: 'state-persist', label: '保存停止状态', status: 'pending' },
+  { id: 'process-cleanup', label: '清理运行资源', status: 'pending' },
   { id: 'refresh', label: '刷新运行状态', status: 'pending' },
 ];
 
 describe('Workbench historical run live sync', () => {
+  test('uses consistent semantic colors for run status dots', () => {
+    expect(getWorkflowStatusDotClass('running', true)).toBe('bg-blue-500');
+    expect(getWorkflowStatusDotClass('completed', false)).toBe('bg-emerald-500');
+    expect(getWorkflowStatusDotClass('failed', false)).toBe('bg-red-500');
+    expect(getWorkflowStatusDotClass('stopped', false)).toBe('bg-slate-400');
+  });
+
+  test('uses the matching run snapshot workflow instead of the reusable base config', () => {
+    const baseConfig = { workflow: { name: 'Reusable', mode: 'lightweight', states: [{ name: '执行' }] }, context: { keep: true } };
+    const projected = resolveWorkbenchRuntimeWorkflowConfig({
+      baseConfig,
+      activeRunId: 'run-promoted',
+      runDetail: {
+        runId: 'run-promoted',
+        workflow: { name: 'Reusable', mode: 'state-machine', states: [{ name: '执行与对抗' }, { name: '完成' }] },
+      },
+    });
+
+    expect(projected).toEqual({
+      workflow: { name: 'Reusable', mode: 'state-machine', states: [{ name: '执行与对抗' }, { name: '完成' }] },
+      context: { keep: true },
+    });
+    expect(resolveWorkbenchRuntimeWorkflowConfig({
+      baseConfig,
+      activeRunId: 'run-other',
+      runDetail: { runId: 'run-promoted', workflow: projected.workflow },
+    })).toBe(baseConfig);
+  });
+
+  test('keeps structured tasks and runtime output navigation for a promoted lightweight run', () => {
+    const items = buildWorkbenchRunDetailNavItems({
+      isLightweightWorkflow: false,
+      runtimeSpecAvailable: true,
+      includeStructuredTasklist: true,
+    });
+
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'state', label: '状态图' }),
+      expect.objectContaining({ id: 'tasklist', label: '任务清单', documentSource: 'tasklist' }),
+      expect.objectContaining({ id: 'documents', label: '步骤文档', documentSource: 'runtime-output' }),
+    ]));
+  });
+
+  test('executes project preflight exactly once and honors a planned-run skip', () => {
+    expect(resolveStartPreflightStrategy({ plannedStart: false, skipRequested: false })).toEqual({
+      runInClient: true,
+      skipOnServer: true,
+    });
+    expect(resolveStartPreflightStrategy({ plannedStart: true, skipRequested: false })).toEqual({
+      runInClient: false,
+      skipOnServer: false,
+    });
+    expect(resolveStartPreflightStrategy({ plannedStart: true, skipRequested: true })).toEqual({
+      runInClient: false,
+      skipOnServer: true,
+    });
+  });
+
   test('keeps a newly started run locally selectable before history refresh completes', () => {
     const startedRun = { id: 'run-new', status: 'preparing' };
 
@@ -171,6 +235,32 @@ describe('Workbench historical run live sync', () => {
 });
 
 describe('Workbench stop progress', () => {
+  test('moves past request submission immediately while the manager is stopping', () => {
+    expect(createStopProgressSteps()).toEqual([
+      { id: 'request', label: '发送停止请求', status: 'success' },
+      { id: 'manager-stop', label: '停止运行实例', status: 'running' },
+      { id: 'state-persist', label: '保存停止状态', status: 'pending' },
+      { id: 'process-cleanup', label: '清理运行资源', status: 'pending' },
+      { id: 'refresh', label: '刷新运行状态', status: 'pending' },
+    ]);
+  });
+
+  test('advances to background cleanup as soon as stopped state is persisted', () => {
+    expect(markStopProgressStatePersisted(createStopProgressSteps())).toEqual([
+      { id: 'request', label: '发送停止请求', status: 'success' },
+      { id: 'manager-stop', label: '停止运行实例', status: 'success' },
+      { id: 'state-persist', label: '保存停止状态', status: 'success' },
+      { id: 'process-cleanup', label: '清理运行资源', status: 'running' },
+      { id: 'refresh', label: '刷新运行状态', status: 'pending' },
+    ]);
+  });
+
+  test('uses neutral startup preflight wording', async () => {
+    const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
+    expect(source).not.toContain('权威');
+    expect(source).toContain('正在执行启动前检查并创建正式运行');
+  });
+
   test('keeps only user-facing phases and discards ACP/session diagnostics', () => {
     const steps = mergeUserVisibleStopProgressSteps(initialStopSteps, [
       {
@@ -197,8 +287,8 @@ describe('Workbench stop progress', () => {
     expect(steps.map((step) => step.id)).toEqual([
       'request',
       'manager-stop',
-      'process-cleanup',
       'state-persist',
+      'process-cleanup',
       'refresh',
     ]);
     expect(steps.find((step) => step.id === 'process-cleanup')).toMatchObject({

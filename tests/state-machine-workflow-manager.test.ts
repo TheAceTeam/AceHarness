@@ -238,6 +238,63 @@ function makeConfig(overrides: Record<string, any> = {}) {
   } as any;
 }
 
+function makeAdversarialConfig() {
+  return makeConfig({
+    workflow: {
+      states: [
+        {
+          name: '高风险实现',
+          isInitial: true,
+          reviewPolicy: { mode: 'adversarial', source: 'user', locked: false },
+          steps: [
+            {
+              id: 'defender-a-id',
+              name: 'defender-a',
+              agent: 'developer',
+              agentInstanceId: 'developer-defender-a',
+              parallelGroup: 'defender-group',
+              concurrency: { groupId: 'defender-group', branchId: 'defender-a', joinPolicy: { mode: 'all' } },
+              task: 'Produce defender evidence A',
+              role: 'defender',
+            },
+            {
+              id: 'defender-b-id',
+              name: 'defender-b',
+              agent: 'developer',
+              agentInstanceId: 'developer-defender-b',
+              parallelGroup: 'defender-group',
+              concurrency: { groupId: 'defender-group', branchId: 'defender-b', joinPolicy: { mode: 'all' } },
+              task: 'Produce defender evidence B',
+              role: 'defender',
+            },
+            {
+              id: 'attacker-id',
+              name: 'attacker',
+              agent: 'developer',
+              agentInstanceId: 'developer-attacker',
+              task: 'Challenge defender evidence',
+              role: 'attacker',
+            },
+            {
+              id: 'judge-id',
+              name: 'judge',
+              agent: 'developer',
+              agentInstanceId: 'developer-judge',
+              task: 'Judge all evidence',
+              role: 'judge',
+            },
+          ],
+          transitions: [
+            { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
+            { condition: { verdict: 'fail' }, to: '高风险实现', priority: 2 },
+          ],
+        },
+        { name: '完成', isFinal: true, steps: [], transitions: [] },
+      ],
+    },
+  });
+}
+
 function makeLightweightConfig() {
   return {
     workflow: {
@@ -404,6 +461,32 @@ describe('parseVerdict', () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);
     expect(parseVerdict('```json\n{"verdict": "conditional_pass"}\n```')).toBe('conditional_pass');
+  });
+
+  test('recovers a json-fenced verdict truncated only by its outer closing brace', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const parseVerdict = (manager as any).parseVerdict.bind(manager);
+    const output = [
+      '```json',
+      '{',
+      '  "verdict": "conditional_pass",',
+      '  "remaining_issues": 2,',
+      '  "summary": "核心逻辑正确，但仍需补充边界测试。"',
+      '```',
+      '<step-conclusion>需要回到实现状态修复。</step-conclusion>',
+    ].join('\n');
+
+    expect((manager as any).hasRequiredVerdictJson(output)).toBe(true);
+    expect(parseVerdict(output)).toBe('conditional_pass');
+  });
+
+  test('does not recover an ambiguous truncated verdict with an unterminated string', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const parseVerdict = (manager as any).parseVerdict.bind(manager);
+    const output = '```json\n{"verdict":"pass","summary":"unfinished\n```';
+
+    expect((manager as any).hasRequiredVerdictJson(output)).toBe(false);
+    expect(() => parseVerdict(output)).toThrow('缺少严格最终裁决 JSON');
   });
 
   test('rejects keyword-only pass without strict verdict JSON', async () => {
@@ -1054,6 +1137,27 @@ describe('subworkflow step dispatch', () => {
       status: 'crashed',
       statusReason: expect.stringContaining('manifest 校验失败'),
     }));
+    vi.doUnmock('@/lib/workflow/subworkflow-config');
+  });
+
+  test('fails closed when a planned run cannot read its child snapshot', async () => {
+    vi.resetModules();
+    const createSnapshot = vi.fn();
+    vi.doMock('@/lib/workflow/subworkflow-config', () => ({
+      createWorkflowConfigSnapshot: createSnapshot,
+      getSubworkflowConfigFile: vi.fn((step: any) => step?.workflow || step?.subworkflow?.configFile || ''),
+      isSubworkflowStep: vi.fn((step: any) => step?.type === 'subworkflow'),
+      normalizeWorkflowConfigRef: vi.fn((input: string) => input),
+      readWorkflowConfigSnapshot: vi.fn().mockRejectedValue(new Error('planned manifest missing')),
+    }));
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).currentRunId = 'run-planned';
+    (manager as any).currentConfigFile = 'parent.yaml';
+    (manager as any).runReviewPlan = { id: 'start-plan-1' };
+
+    await expect((manager as any).ensureSubworkflowSnapshot('run-planned', 'child.yaml'))
+      .rejects.toThrow(/禁止从当前 YAML 重新生成.*planned manifest missing/);
+    expect(createSnapshot).not.toHaveBeenCalled();
     vi.doUnmock('@/lib/workflow/subworkflow-config');
   });
 
@@ -2214,7 +2318,10 @@ describe('state machine resume', () => {
     }, config)).toBeNull();
     expect((manager as any).resumeStateName).toBe('设计');
     expect((manager as any).resumeStepKey).toBe('设计-review-step');
-    expect((manager as any).executeStateMachine).toHaveBeenCalledWith(config, 'Build a feature');
+    expect((manager as any).executeStateMachine).toHaveBeenCalledWith(
+      expect.objectContaining({ workflow: expect.objectContaining({ name: 'Test Workflow' }) }),
+      'Build a feature',
+    );
   });
 
   test('rerun reloads a disabled Git baseline gate and clears stale persisted Git state', async () => {
@@ -2964,9 +3071,10 @@ describe('state machine execution flow', () => {
     expect(saveProcessOutputMock.mock.calls.at(-1)?.[2]).not.toContain('漏掉 verdict JSON');
   });
 
-  test('serial steps ignore agentInstanceId so synthetic parallel agents are not started', async () => {
+  test('serial steps use agentInstanceId as the isolated runtime identity in the main flow', async () => {
     const engine = new MockEngine({ success: true, output: 'Step completed by base role\n{"verdict":"pass","summary":"base role"}' });
     const manager = await createManagerForTest(engine);
+    (manager as any).agents.push(makeAgentState('developer-1'));
 
     const config = makeConfig({
       workflow: {
@@ -2986,8 +3094,8 @@ describe('state machine execution flow', () => {
     const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
 
     expect(result.stepOutputs[0]).toContain('base role');
-    expect(engine.calls[0].options.agent).toBe('developer');
-    expect((manager as any).stepLogs[0].agent).toBe('developer');
+    expect(engine.calls[0].options.agent).toBe('developer-1');
+    expect((manager as any).stepLogs[0].agent).toBe('developer-1');
   });
 
   test('agentInstanceId is used only for step-level parallel branches', async () => {
@@ -3347,7 +3455,7 @@ describe('state machine execution flow', () => {
     expect((manager as any).activeConcurrencyGroups.at(-1).status).toBe('failed');
   });
 
-  test('initializeAgents does not create unused serial agentInstanceId aliases', async () => {
+  test('initializeAgents creates the serial agentInstanceId runtime identity', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const config = makeConfig({
       workflow: {
@@ -3375,7 +3483,7 @@ describe('state machine execution flow', () => {
 
     expect((manager as any).agents.map((agent: any) => agent.name).sort()).toEqual([
       'default-supervisor',
-      'developer',
+      'developer-main',
     ]);
   });
 
@@ -3904,6 +4012,319 @@ describe('state machine execution flow', () => {
 // ============================================================
 // Force transition
 // ============================================================
+describe('state-level adversarial runtime', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('serial steps use agentInstanceId as the isolated runtime identity', async () => {
+    const engine = new MockEngine({ success: true, output: 'Step completed by base role\n{"verdict":"pass","summary":"base role"}' });
+    const manager = await createManagerForTest(engine);
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'developer-1', task: 'Design', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+    (manager as any).initializeAgents(config);
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.stepOutputs[0]).toContain('base role');
+    expect(engine.calls[0].options.agent).toBe('developer-1');
+    expect((manager as any).stepLogs[0].agent).toBe('developer-1');
+  });
+
+  test('agentInstanceId remains isolated for step-level parallel branches', async () => {
+    const engine = new MockEngine({ success: true, output: 'Parallel branch completed' });
+    const manager = await createManagerForTest(engine);
+    (manager as any).agents.push(makeAgentState('developer-a'), makeAgentState('developer-b'));
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'branch-a', agent: 'developer', agentInstanceId: 'developer-a', parallelGroup: 'group-1', task: 'Design A', role: 'defender' },
+              { name: 'branch-b', agent: 'developer', agentInstanceId: 'developer-b', parallelGroup: 'group-1', task: 'Design B', role: 'defender' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(engine.calls.map((call) => call.options.agent).sort()).toEqual(['developer-a', 'developer-b']);
+    expect((manager as any).stepLogs.map((log: any) => log.agent).sort()).toEqual(['developer-a', 'developer-b']);
+  });
+
+  test('terminal summary step does not require or parse verdict JSON, including legacy judge role', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '<step-conclusion>Human-readable final summary without workflow verdict.</step-conclusion>',
+    });
+    const manager = await createManagerForTest(engine);
+    const parseVerdict = vi.spyOn(manager as any, 'parseVerdict');
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '完成',
+            isInitial: true,
+            isFinal: true,
+            steps: [
+              { name: '汇总结果', agent: 'developer', task: 'Summarize results', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    (manager as any).initializeAgents(config);
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls).toHaveLength(1);
+    expect(parseVerdict).not.toHaveBeenCalled();
+  });
+
+  test('terminal parallel and resumed paths never parse verdict', async () => {
+    const engine = new MockEngine({ success: true, output: '<step-conclusion>plain terminal output</step-conclusion>' });
+    const manager = await createManagerForTest(engine);
+    const parseVerdict = vi.spyOn(manager as any, 'parseVerdict');
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '完成',
+            isInitial: true,
+            isFinal: true,
+            steps: [
+              { name: 'summary-a', agent: 'developer', parallelGroup: 'summary-group', task: 'Summary A', role: 'judge' },
+              { name: 'summary-b', agent: 'developer', parallelGroup: 'summary-group', task: 'Summary B', role: 'judge' },
+              { name: 'final-note', agent: 'developer', task: 'Final note', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+    (manager as any).stepLogs = [{
+      id: 'summary-a-log',
+      stepName: '完成-summary-a',
+      agent: 'developer',
+      status: 'completed',
+      output: '<step-conclusion>resumed terminal summary A</step-conclusion>',
+      error: '',
+      costUsd: 0,
+      durationMs: 1,
+      timestamp: '2024-01-01T00:00:00.000Z',
+    }];
+    (manager as any).resumeStateName = '完成';
+    (manager as any).resumeStepKey = '完成-final-note';
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(parseVerdict).not.toHaveBeenCalled();
+  });
+
+  test('non-final parallel defenders succeed without verdict and feed all evidence to attacker and judge', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      const outputs: Record<string, string> = {
+        'defender-a': '<step-conclusion>DEFENDER-A-CONCLUSION</step-conclusion>\nDEFENDER-A-RAW',
+        'defender-b': '<step-conclusion>DEFENDER-B-CONCLUSION</step-conclusion>\nDEFENDER-B-RAW',
+        attacker: '<step-conclusion>ATTACKER-CONCLUSION</step-conclusion>\nATTACKER-RAW',
+        judge: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"approved"}\n```\n<step-conclusion>JUDGE-CONCLUSION</step-conclusion>',
+      };
+      return {
+        success: true,
+        output: outputs[String(options.step)] || 'unexpected step',
+        sessionId: `session-${options.agent}`,
+      };
+    };
+    const manager = await createManagerForTest(engine);
+    const config = makeAdversarialConfig();
+    (manager as any).initializeAgents(config);
+    const buildStepContext = (manager as any).buildStepContext as ReturnType<typeof vi.fn>;
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls.map((call) => call.options.step).sort()).toEqual(['attacker', 'defender-a', 'defender-b', 'judge']);
+    const attackerEvidence = buildStepContext.mock.calls.find((call: any[]) => call[0].name === 'attacker')?.[4];
+    const judgeEvidence = buildStepContext.mock.calls.find((call: any[]) => call[0].name === 'judge')?.[4];
+    expect(attackerEvidence).toContain('DEFENDER-A-CONCLUSION');
+    expect(attackerEvidence).toContain('DEFENDER-B-CONCLUSION');
+    expect(attackerEvidence).not.toContain('ATTACKER-CONCLUSION');
+    expect(judgeEvidence).toContain('DEFENDER-A-CONCLUSION');
+    expect(judgeEvidence).toContain('DEFENDER-B-CONCLUSION');
+    expect(judgeEvidence).toContain('ATTACKER-CONCLUSION');
+    const adversarialSessions = (manager as any).agents
+      .filter((agent: any) => agent.name.startsWith('developer-'))
+      .map((agent: any) => agent.sessionId);
+    expect(new Set(adversarialSessions).size).toBe(4);
+  });
+
+  test('a technical defender branch failure stops the adversarial state before attacker', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeAdversarialConfig();
+    (manager as any).initializeAgents(config);
+    const dispatch = vi.spyOn(manager as any, 'executeWorkflowStepDispatch').mockImplementation(async (step: any) => {
+      if (step.name === 'defender-b') throw new Error('defender branch technical failure');
+      if (step.name === 'judge') return '```json\n{"verdict":"pass","remaining_issues":0,"summary":"should not run"}\n```';
+      return `<step-conclusion>${step.name} completed without verdict</step-conclusion>`;
+    });
+
+    (manager as any).initializeAgents(config);
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('fail');
+    expect(dispatch.mock.calls.map((call: any[]) => call[0].name).sort()).toEqual(['defender-a', 'defender-b']);
+  });
+
+  test('adversarial resume reconstructs defender and attacker evidence from completed step logs', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"resumed"}\n```\n<step-conclusion>resumed judge</step-conclusion>',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeAdversarialConfig();
+    (manager as any).initializeAgents(config);
+    const makeLog = (stepName: string, output: string, outputRef: string) => ({
+      id: `log-${stepName}`,
+      stepName: `高风险实现-${stepName}`,
+      agent: `runtime-${stepName}`,
+      status: 'completed',
+      output,
+      outputRef,
+      error: '',
+      costUsd: 0,
+      durationMs: 1,
+      timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    (manager as any).stepLogs = [
+      makeLog('defender-a', '<step-conclusion>RESUME-DEFENDER-A</step-conclusion>', 'outputs/defender-a.md'),
+      makeLog('defender-b', '<step-conclusion>RESUME-DEFENDER-B</step-conclusion>', 'outputs/defender-b.md'),
+      makeLog('attacker', '<step-conclusion>RESUME-ATTACKER</step-conclusion>', 'outputs/attacker.md'),
+    ];
+    (manager as any).resumeStateName = '高风险实现';
+    (manager as any).resumeStepKey = '高风险实现-judge';
+    const buildStepContext = (manager as any).buildStepContext as ReturnType<typeof vi.fn>;
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls.map((call) => call.options.step)).toEqual(['judge']);
+    const judgeEvidence = buildStepContext.mock.calls.find((call: any[]) => call[0].name === 'judge')?.[4];
+    expect(judgeEvidence).toContain('RESUME-DEFENDER-A');
+    expect(judgeEvidence).toContain('RESUME-DEFENDER-B');
+    expect(judgeEvidence).toContain('RESUME-ATTACKER');
+    expect(judgeEvidence).toContain('outputs/defender-a.md');
+  });
+
+  test('runtime evidence formatting preserves every item under the 32k state budget with stable truncation', async () => {
+    const { formatRuntimeEvidenceContext } = await import('@/lib/state-machine/workflow-manager');
+    const evidence = Array.from({ length: 6 }, (_, index) => ({
+      stepId: `defender-${index}`,
+      stepName: `Defender ${index}`,
+      role: 'defender' as const,
+      agentInstanceId: `defender-instance-${index}`,
+      conclusion: `CONCLUSION-${index}-START-${'c'.repeat(3_000)}-CONCLUSION-${index}-TAIL`,
+      output: `RAW-${index}-START-${'x'.repeat(12_000)}-RAW-${index}-TAIL`,
+      outputRef: `outputs/defender-${index}.md`,
+    }));
+
+    const context = formatRuntimeEvidenceContext(evidence);
+
+    expect(context.length).toBeLessThanOrEqual(32_000);
+    for (let index = 0; index < evidence.length; index++) {
+      expect(context).toContain(`stepId: defender-${index}`);
+      expect(context).toContain(`RAW-${index}-TAIL`);
+    }
+    expect(context).toContain('证据已截断');
+  });
+
+  test('adversarial structure validation rejects cross-role instance reuse and non-all defender joins', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeAdversarialConfig();
+    const state = config.workflow.states[0];
+    state.steps[0].concurrency.joinPolicy = { mode: 'any' };
+    state.steps.find((step: any) => step.role === 'attacker').agentInstanceId = 'developer-judge';
+
+    expect(() => (manager as any).initializeAgents(config)).toThrow(/joinPolicy=all/);
+    expect(() => (manager as any).initializeAgents(config)).toThrow(/运行实例必须两两不相交/);
+  });
+
+  test('adversarial runtime hard-fails if distinct role instances receive the same non-empty session', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      const isJudge = options.step === 'judge';
+      return {
+        success: true,
+        output: isJudge
+          ? '```json\n{"verdict":"pass","remaining_issues":0,"summary":"approved"}\n```'
+          : `<step-conclusion>${options.step} complete</step-conclusion>`,
+        sessionId: options.step === 'attacker' ? 'session-defender-a' : `session-${options.step}`,
+      };
+    };
+    const manager = await createManagerForTest(engine);
+    const config = makeAdversarialConfig();
+    (manager as any).initializeAgents(config);
+
+    await expect((manager as any).executeState(config.workflow.states[0], config, 'Build a feature'))
+      .rejects.toThrow(/会话隔离失败/);
+    expect(engine.calls.some((call) => call.options.step === 'judge')).toBe(false);
+  });
+
+  test('initializeAgents creates the serial agentInstanceId runtime identity', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig({
+      workflow: {
+        concurrency: {
+          enabled: false,
+          agentInstances: [
+            { id: 'developer-main', role: 'developer' },
+            { id: 'architect-main', role: 'architect' },
+          ],
+        },
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'developer-main', task: 'Design', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    (manager as any).initializeAgents(config);
+
+    expect((manager as any).agents.map((agent: any) => agent.name).sort()).toEqual([
+      'default-supervisor',
+      'developer-main',
+    ]);
+  });
+});
+
 describe('force transition', () => {
   beforeEach(() => {
     vi.clearAllMocks();

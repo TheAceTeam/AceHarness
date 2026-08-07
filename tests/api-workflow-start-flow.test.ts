@@ -20,6 +20,13 @@ const transcriptMocks = vi.hoisted(() => ({
   })),
 }));
 
+const runReviewMocks = vi.hoisted(() => ({
+  applyRunReviewPlanOverrides: vi.fn(),
+  validateRunReviewPlanArtifact: vi.fn(),
+  loadRunReviewPlanArtifact: vi.fn(),
+  consumeRunReviewPlanArtifact: vi.fn(),
+}));
+
 // Mock all heavy dependencies before importing the route
 vi.mock('@/lib/auth/middleware', () => ({
   requireAuth: vi.fn(),
@@ -27,6 +34,16 @@ vi.mock('@/lib/auth/middleware', () => ({
 
 vi.mock('@/lib/workflow/preflight', () => ({
   runWorkflowPreflight: vi.fn(),
+}));
+
+vi.mock('@/lib/workflow/run-review-plan', () => ({
+  applyRunReviewPlanOverrides: runReviewMocks.applyRunReviewPlanOverrides,
+  validateRunReviewPlanArtifact: runReviewMocks.validateRunReviewPlanArtifact,
+}));
+
+vi.mock('@/lib/workflow/run-review-plan-store', () => ({
+  loadRunReviewPlanArtifact: runReviewMocks.loadRunReviewPlanArtifact,
+  consumeRunReviewPlanArtifact: runReviewMocks.consumeRunReviewPlanArtifact,
 }));
 
 vi.mock('@/lib/workflow/registry', () => ({
@@ -71,7 +88,11 @@ vi.mock('@/lib/run/runtime-configs', () => ({
 }));
 
 vi.mock('@/lib/workflow/subworkflow-config', () => ({
-  createWorkflowConfigSnapshot: vi.fn().mockResolvedValue(undefined),
+  createWorkflowConfigSnapshot: vi.fn().mockResolvedValue({
+    root: 'test.yaml',
+    manifestHash: 'snapshot-hash',
+    configs: [],
+  }),
 }));
 
 vi.mock('fs/promises', () => ({
@@ -103,6 +124,10 @@ describe('workflow start flow', () => {
     });
     runtimeSessionMocks.bindWorkflowRunToConversation.mockReset().mockResolvedValue(true);
     transcriptMocks.appendWorkflowRuntimeTranscript.mockReset().mockResolvedValue(null);
+    runReviewMocks.applyRunReviewPlanOverrides.mockReset();
+    runReviewMocks.validateRunReviewPlanArtifact.mockReset().mockResolvedValue(undefined);
+    runReviewMocks.loadRunReviewPlanArtifact.mockReset().mockReturnValue(null);
+    runReviewMocks.consumeRunReviewPlanArtifact.mockReset();
   });
 
   test('returns 401 when no auth token', async () => {
@@ -184,6 +209,141 @@ describe('workflow start flow', () => {
     const json = await responseJson(response);
     expect(json.success).toBe(true);
     expect(json.runId).toBeTruthy();
+  });
+
+  test('planned starts discard client management fields and preflight the effective projection when not skipped', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
+    const artifact = {
+      plan: {
+        id: 'start-plan-1',
+        rootConfigFile: 'test.yaml',
+        intent: 'on-demand',
+        blocked: false,
+        workflows: [],
+        states: [],
+        warnings: [],
+      },
+      effectiveConfigContents: { 'test.yaml': 'workflow:\n  name: Effective\n' },
+      originalConfigContents: { 'test.yaml': 'workflow:\n  name: Original\n' },
+      suggestions: {},
+    } as any;
+    runReviewMocks.loadRunReviewPlanArtifact.mockReturnValue(artifact);
+    runReviewMocks.applyRunReviewPlanOverrides.mockResolvedValue(artifact);
+
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
+    (runWorkflowPreflight as any).mockResolvedValue({ ok: true, failedCount: 0, checks: [], cwd: '/tmp' });
+    const mockManager = {
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      start: vi.fn().mockResolvedValue(undefined),
+      emit: vi.fn(),
+    };
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: {
+        configFile: 'test.yaml',
+        startPlanId: 'start-plan-1',
+        adversarialIntent: 'on-demand',
+        skipPreflight: false,
+        reviewOverrides: [{
+          kind: 'state',
+          configFile: 'test.yaml',
+          stateId: 'state-1',
+          mode: 'adversarial',
+          locked: false,
+          source: 'malicious-client',
+          steps: [{ name: 'must-be-dropped' }],
+        }],
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(runReviewMocks.applyRunReviewPlanOverrides).toHaveBeenCalledWith({
+      artifact,
+      overrides: [{ kind: 'state', configFile: 'test.yaml', stateId: 'state-1', mode: 'adversarial' }],
+    });
+    expect(runWorkflowPreflight).toHaveBeenCalledWith(
+      'test.yaml',
+      '/tmp',
+      undefined,
+      { configContents: artifact.effectiveConfigContents },
+    );
+    const { createWorkflowConfigSnapshot } = await import('@/lib/workflow/subworkflow-config');
+    expect(createWorkflowConfigSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      rootConfigFile: 'test.yaml',
+      contentOverrides: artifact.effectiveConfigContents,
+    }));
+    expect((mockManager as any)._rootRunId).toMatch(/^run-/);
+    expect((mockManager as any)._runReviewPlan).toBe(artifact.plan);
+    expect(runReviewMocks.consumeRunReviewPlanArtifact).toHaveBeenCalledWith('user-1', 'start-plan-1');
+  });
+
+  test('planned starts may skip project commands without bypassing plan and snapshot validation', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
+    const artifact = {
+      plan: {
+        id: 'start-plan-skip',
+        rootConfigFile: 'test.yaml',
+        intent: 'disabled',
+        blocked: false,
+        workflows: [],
+        states: [],
+        warnings: [],
+      },
+      effectiveConfigContents: { 'test.yaml': 'workflow:\n  name: Effective\n' },
+      originalConfigContents: { 'test.yaml': 'workflow:\n  name: Original\n' },
+      suggestions: {},
+    } as any;
+    runReviewMocks.loadRunReviewPlanArtifact.mockReturnValue(artifact);
+    runReviewMocks.applyRunReviewPlanOverrides.mockResolvedValue(artifact);
+
+    const mockManager = {
+      getStatus: vi.fn().mockReturnValue({ status: 'idle' }),
+      start: vi.fn().mockResolvedValue(undefined),
+      emit: vi.fn(),
+    };
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: {
+        configFile: 'test.yaml',
+        startPlanId: 'start-plan-skip',
+        adversarialIntent: 'disabled',
+        skipPreflight: true,
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(runReviewMocks.validateRunReviewPlanArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      artifact,
+    }));
+    expect(runReviewMocks.applyRunReviewPlanOverrides).toHaveBeenCalledWith({
+      artifact,
+      overrides: [],
+    });
+    expect(runWorkflowPreflight).not.toHaveBeenCalled();
+    const { createWorkflowConfigSnapshot } = await import('@/lib/workflow/subworkflow-config');
+    expect(createWorkflowConfigSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      rootConfigFile: 'test.yaml',
+      contentOverrides: artifact.effectiveConfigContents,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockManager.start).toHaveBeenCalledWith(
+      'test.yaml',
+      undefined,
+      [],
+      expect.any(Object),
+      expect.stringMatching(/^run-/),
+    );
   });
 
   test('rehearsal mode returns runId with rehearsal.enabled=true', async () => {

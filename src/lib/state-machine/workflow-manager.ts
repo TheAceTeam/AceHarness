@@ -178,6 +178,8 @@ import {
   resolveLightweightTasklistDirectory,
 } from '@/lib/workflow/lightweight-runtime';
 import { formatWorkflowFailureReason } from '@/lib/workflow/error-summary';
+import { normalizeStateMachineWorkflowConfig } from '@/lib/workflow/state-review-policy';
+import type { RunReviewPlan } from '@/lib/workflow/run-review-types';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -195,6 +197,10 @@ const ZERO_ENGINE_USAGE: WorkflowRuntimeTokenUsage = {
 
 const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
+const RUNTIME_EVIDENCE_CONCLUSION_LIMIT = 2_000;
+const RUNTIME_EVIDENCE_OUTPUT_LIMIT = 8_000;
+const RUNTIME_EVIDENCE_STATE_LIMIT = 32_000;
+const RUNTIME_EVIDENCE_TRUNCATION_MARKER = '\n...[证据已截断，保留首尾片段]...\n';
 const DEFAULT_AGENT_PREWARM_CONCURRENCY = Math.max(
   1,
   Math.min(4, Number.parseInt(process.env.ACE_WORKFLOW_AGENT_PREWARM_CONCURRENCY || '2', 10) || 2)
@@ -231,6 +237,13 @@ interface LiveFeedbackOptions {
   id?: string;
   interrupt?: boolean;
   automatic?: boolean;
+}
+
+function parseNormalizedWorkflowConfig(content: string, workflowKey?: string): StateMachineWorkflowConfig {
+  return normalizeStateMachineWorkflowConfig(
+    parse(content) as StateMachineWorkflowConfig,
+    { materializeIds: false, workflowKey },
+  );
 }
 
 type AgentStepExecutionResult = {
@@ -335,6 +348,17 @@ export interface StateExecutionResult {
   executionFailed?: boolean;
 }
 
+export interface RuntimeEvidenceItem {
+  stepId: string;
+  stepName: string;
+  role?: 'defender' | 'attacker';
+  agentInstanceId?: string;
+  output: string;
+  conclusion?: string;
+  outputRef?: string;
+  truncated?: boolean;
+}
+
 export interface StateTransitionRecord {
   from: string;
   to: string;
@@ -407,6 +431,59 @@ function normalizeWorkflowVerdict(value: unknown): 'pass' | 'conditional_pass' |
   return null;
 }
 
+/**
+ * Recover the narrow truncation produced by some runtimes where a fenced
+ * verdict object is otherwise valid JSON but loses only its outer closing
+ * brace. Keep this local to verdict parsing: general structured results must
+ * still provide balanced JSON, and prose/unterminated strings are never
+ * promoted into workflow control decisions.
+ */
+function extractSingleMissingClosingBraceVerdictJson(raw: string): any | null {
+  const candidate = String(raw || '').trim();
+  if (!candidate.startsWith('{')) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < candidate.length; index += 1) {
+    const char = candidate[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      // A balanced or over-closed candidate is not the one-brace truncation
+      // handled here. Let the ordinary strict parser decide its validity.
+      if (depth <= 0) return null;
+    }
+  }
+
+  if (inString || escaped || depth !== 1) return null;
+
+  try {
+    const parsed = JSON.parse(`${candidate}\n}`);
+    return parsed && normalizeWorkflowVerdict(parsed.verdict) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function compactStepConclusion(raw: string): string {
   const MAX_CONCLUSION_CHARS = 4000;
   // A final-verdict repair can append a corrected conclusion after an earlier
@@ -425,6 +502,81 @@ export function compactStepConclusion(raw: string): string {
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
   return tail.length > MAX_CONCLUSION_CHARS ? tail.slice(-MAX_CONCLUSION_CHARS).trim() : tail;
+}
+
+function truncateRuntimeEvidenceText(raw: string, limit: number): { text: string; truncated: boolean } {
+  const text = String(raw || '');
+  if (text.length <= limit) return { text, truncated: false };
+  if (limit <= 0) return { text: '', truncated: true };
+  if (limit <= RUNTIME_EVIDENCE_TRUNCATION_MARKER.length) {
+    return {
+      text: RUNTIME_EVIDENCE_TRUNCATION_MARKER.slice(0, limit),
+      truncated: true,
+    };
+  }
+
+  const available = limit - RUNTIME_EVIDENCE_TRUNCATION_MARKER.length;
+  const headLength = Math.floor(available * 0.35);
+  const tailLength = available - headLength;
+  return {
+    text: `${text.slice(0, headLength)}${RUNTIME_EVIDENCE_TRUNCATION_MARKER}${text.slice(-tailLength)}`,
+    truncated: true,
+  };
+}
+
+export function formatRuntimeEvidenceContext(items: RuntimeEvidenceItem[]): string {
+  if (items.length === 0) return '';
+
+  const header = [
+    '# 对抗审查证据上下文',
+    '以下证据按状态步骤顺序提供。请基于证据独立履行当前角色职责，不要假设可读取其他 Agent 的会话。',
+    '',
+  ].join('\n');
+  const separator = '\n\n';
+  const separatorBudget = separator.length * Math.max(0, items.length - 1);
+  const remainingBudget = Math.max(0, RUNTIME_EVIDENCE_STATE_LIMIT - header.length - separatorBudget);
+  const baseItemBudget = Math.floor(remainingBudget / items.length);
+  const extraBudget = remainingBudget % items.length;
+
+  const blocks = items.map((item, index) => {
+    const itemBudget = baseItemBudget + (index < extraBudget ? 1 : 0);
+    const conclusionSource = String(item.conclusion || '(无显式 step-conclusion)');
+    const outputSource = String(item.output || '(空输出)');
+    const cappedConclusion = truncateRuntimeEvidenceText(conclusionSource, RUNTIME_EVIDENCE_CONCLUSION_LIMIT);
+    const cappedOutput = truncateRuntimeEvidenceText(outputSource, RUNTIME_EVIDENCE_OUTPUT_LIMIT);
+
+    const metadata = [
+      `## 证据 ${index + 1}: ${item.stepName}`,
+      `- stepId: ${item.stepId}`,
+      `- role: ${item.role || 'unknown'}`,
+      `- agentInstanceId: ${item.agentInstanceId || '(未设置)'}`,
+      `- outputRef: ${item.outputRef || '(未持久化引用)'}`,
+    ];
+    const labelsLength = '\n- truncated: false\n### step-conclusion\n\n### raw-output-summary\n'.length;
+    const variableBudget = Math.max(0, itemBudget - metadata.join('\n').length - labelsLength);
+    const conclusionBudget = Math.min(cappedConclusion.text.length, variableBudget);
+    const outputBudget = Math.max(0, variableBudget - conclusionBudget);
+    const renderedConclusion = truncateRuntimeEvidenceText(cappedConclusion.text, conclusionBudget);
+    const renderedOutput = truncateRuntimeEvidenceText(cappedOutput.text, outputBudget);
+    const truncated = Boolean(
+      item.truncated
+      || cappedConclusion.truncated
+      || cappedOutput.truncated
+      || renderedConclusion.truncated
+      || renderedOutput.truncated
+    );
+
+    return [
+      ...metadata,
+      `- truncated: ${truncated ? 'true' : 'false'}`,
+      '### step-conclusion',
+      renderedConclusion.text,
+      '### raw-output-summary',
+      renderedOutput.text,
+    ].join('\n');
+  });
+
+  return `${header}${blocks.join(separator)}`.slice(0, RUNTIME_EVIDENCE_STATE_LIMIT);
 }
 
 function createEmptySpecRevisionTally(): Record<WorkflowSpecRevisionVoteChoice, number> {
@@ -561,7 +713,7 @@ function getStepConcurrencyGroup(step: WorkflowStep): string | undefined {
 }
 
 function getStepRuntimeAgentName(step: WorkflowStep): string {
-  return getStepConcurrencyGroup(step) ? (step.agentInstanceId || step.agent) : step.agent;
+  return step.agentInstanceId || step.agent;
 }
 
 function normalizeGuardText(value: string | null | undefined): string {
@@ -668,12 +820,24 @@ function isRecoverableStepExecutionError(message: string): boolean {
 }
 
 function isFatalRuntimeConfigurationError(error: unknown): boolean {
+  const fatalCodes = new Set([
+    'MODEL_ROUTE_NOT_FOUND',
+    'ADVERSARIAL_RUNTIME_INVALID',
+    'ADVERSARIAL_SESSION_COLLISION',
+  ]);
   return Boolean(
     error
     && typeof error === 'object'
     && (error as { fatal?: unknown }).fatal === true
-    && (error as { code?: unknown }).code === 'MODEL_ROUTE_NOT_FOUND'
+    && fatalCodes.has(String((error as { code?: unknown }).code || ''))
   );
+}
+
+function createFatalRuntimeConfigurationError(code: string, message: string): Error {
+  const error = new Error(message) as Error & { fatal: true; code: string };
+  error.fatal = true;
+  error.code = code;
+  return error;
 }
 
 function buildStepAutoRecoveryPrompt(input: {
@@ -734,6 +898,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private subworkflowAuditEvents: PersistedSubworkflowAuditEvent[] = [];
   private workflowSnapshotRoot: string | null = null;
   private workflowSnapshotManifestHash: string | null = null;
+  private runReviewPlan: RunReviewPlan | null = null;
   private lightweightRunMetadata: PersistedLightweightRunMetadata | null = null;
   private embeddedProjectRoot: string | null = null;
   private embeddedWorkspaceMode: 'in-place' | 'isolated-copy' | null = null;
@@ -837,6 +1002,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private runtimeDatabaseGrant: RuntimeDatabaseGrant | null = null;
   /** Optional frontend chat session to auto-bind with this run */
   public _frontendSessionId?: string;
+  /** Optional root run identity injected by the start planner before execution. */
+  public _rootRunId?: string;
+  /** Immutable effective review plan injected by the start planner. */
+  public _runReviewPlan?: RunReviewPlan;
   /** Explicit creation session to bind to the next run */
   public _creationSessionId?: string;
   private runtimeGeneration = 0;
@@ -931,7 +1100,178 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private shouldRequireFinalVerdict(step: WorkflowStep, state: StateMachineState): boolean {
-    return this.isStateLastStep(step, state) && !step.parallelGroup;
+    return !state.isFinal && this.isStateLastStep(step, state) && !getStepConcurrencyGroup(step);
+  }
+
+  private isAdversarialState(state: StateMachineState): boolean {
+    return state.reviewPolicy?.mode === 'adversarial';
+  }
+
+  private getAdversarialRoleSteps(state: StateMachineState): WorkflowStep[] {
+    if (!this.isAdversarialState(state)) return [];
+    return (state.steps || []).filter((step) => ['defender', 'attacker', 'judge'].includes(String(step.role || '')));
+  }
+
+  private assertAdversarialRuntimeConfig(config: StateMachineWorkflowConfig): void {
+    const errors: string[] = [];
+    const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+
+    for (const state of config.workflow.states || []) {
+      if (!this.isAdversarialState(state)) continue;
+      if (state.isFinal) {
+        errors.push(`状态 "${state.name}" 是终态，不能启用 adversarial reviewPolicy`);
+        continue;
+      }
+
+      const segments = groupStateStepsIntoSegments(state.steps || []);
+      const defenderSegments = segments.slice(0, -2);
+      const attackerSegment = segments.at(-2);
+      const judgeSegment = segments.at(-1);
+      if (segments.length < 3 || defenderSegments.length === 0) {
+        errors.push(`状态 "${state.name}" 必须是一个或多个 defender segment → attacker → judge`);
+      }
+      if (attackerSegment?.type !== 'serial' || attackerSegment.step.role !== 'attacker') {
+        errors.push(`状态 "${state.name}" 的倒数第二个 segment 必须是串行 attacker`);
+      }
+      if (judgeSegment?.type !== 'serial' || judgeSegment.step.role !== 'judge') {
+        errors.push(`状态 "${state.name}" 的最后一个 segment 必须是串行 judge`);
+      }
+
+      for (const segment of defenderSegments) {
+        const steps = segment.type === 'parallel' ? segment.steps : [segment.step];
+        if (steps.some((step) => step.role !== 'defender')) {
+          errors.push(`状态 "${state.name}" 在 attacker 之前只能包含 defender segment`);
+        }
+        if (segment.type === 'parallel') {
+          const joinPolicy = resolveJoinPolicy(segment, config);
+          if (joinPolicy.mode !== 'all') {
+            errors.push(`状态 "${state.name}" 的 defender 并行组 "${segment.groupId}" 只允许 joinPolicy=all`);
+          }
+          if (joinPolicy.onUnjoinedBranches && joinPolicy.onUnjoinedBranches !== 'stop') {
+            errors.push(`状态 "${state.name}" 的 defender 并行组 "${segment.groupId}" 不允许 detach/wait-background`);
+          }
+          const branchInstances = steps.map((step) => String(step.agentInstanceId || '').trim());
+          if (branchInstances.some((id) => !id) || new Set(branchInstances).size !== branchInstances.length) {
+            errors.push(`状态 "${state.name}" 的并行 defender branch 必须使用互不相同的 agentInstanceId`);
+          }
+        }
+      }
+
+      const roleSteps = this.getAdversarialRoleSteps(state);
+      for (const step of roleSteps) {
+        const instanceId = String(step.agentInstanceId || '').trim();
+        if (!instanceId) {
+          errors.push(`状态 "${state.name}" 的 ${step.role} 步骤 "${step.name}" 缺少 agentInstanceId`);
+        }
+        if (instanceId === supervisorName || step.agent === supervisorName) {
+          errors.push(`状态 "${state.name}" 的步骤 "${step.name}" 不得使用 Supervisor "${supervisorName}"`);
+        }
+        const roleConfig = this.agentConfigs.find((role) => role.name === step.agent)
+          || config.roles?.find((role) => role.name === step.agent);
+        if (roleConfig?.team === 'black-gold') {
+          errors.push(`状态 "${state.name}" 的步骤 "${step.name}" 不得使用 black-gold Supervisor Agent 配置`);
+        }
+      }
+
+      const defenderInstances = new Set(roleSteps
+        .filter((step) => step.role === 'defender')
+        .map((step) => String(step.agentInstanceId || '').trim())
+        .filter(Boolean));
+      const attackerInstances = new Set(roleSteps
+        .filter((step) => step.role === 'attacker')
+        .map((step) => String(step.agentInstanceId || '').trim())
+        .filter(Boolean));
+      const judgeInstances = new Set(roleSteps
+        .filter((step) => step.role === 'judge')
+        .map((step) => String(step.agentInstanceId || '').trim())
+        .filter(Boolean));
+      const crossRoleCollision = [...defenderInstances].some((id) => attackerInstances.has(id) || judgeInstances.has(id))
+        || [...attackerInstances].some((id) => judgeInstances.has(id));
+      if (crossRoleCollision) {
+        errors.push(`状态 "${state.name}" 的 defender、attacker、judge 运行实例必须两两不相交`);
+      }
+    }
+
+    if (errors.length > 0) {
+      throw createFatalRuntimeConfigurationError(
+        'ADVERSARIAL_RUNTIME_INVALID',
+        `对抗状态运行配置非法：\n- ${Array.from(new Set(errors)).join('\n- ')}`,
+      );
+    }
+  }
+
+  private assertAdversarialRuntimeSessionIsolation(
+    state: StateMachineState,
+    proposedRuntimeAgentName?: string,
+    proposedSessionId?: string | null,
+  ): void {
+    const runtimeNames = new Set(this.getAdversarialRoleSteps(state).map((step) => getStepRuntimeAgentName(step)));
+    if (runtimeNames.size === 0) return;
+
+    const sessionOwners = new Map<string, string>();
+    for (const runtimeName of runtimeNames) {
+      const sessionId = runtimeName === proposedRuntimeAgentName && proposedSessionId
+        ? proposedSessionId
+        : this.agents.find((agent) => agent.name === runtimeName)?.sessionId;
+      if (!sessionId) continue;
+      const existingOwner = sessionOwners.get(sessionId);
+      if (existingOwner && existingOwner !== runtimeName) {
+        throw createFatalRuntimeConfigurationError(
+          'ADVERSARIAL_SESSION_COLLISION',
+          `对抗状态 "${state.name}" 会话隔离失败：运行实例 "${existingOwner}" 与 "${runtimeName}" 共享非空 sessionId`,
+        );
+      }
+      sessionOwners.set(sessionId, runtimeName);
+    }
+  }
+
+  private createRuntimeEvidenceItem(
+    state: StateMachineState,
+    step: WorkflowStep,
+    output: string,
+    log?: PersistedStepLog | null,
+  ): RuntimeEvidenceItem | null {
+    if (!this.isAdversarialState(state) || (step.role !== 'defender' && step.role !== 'attacker')) return null;
+    return {
+      stepId: String(step.id || this.getWorkflowStepKey(state.name, step)),
+      stepName: step.name,
+      role: step.role,
+      agentInstanceId: getStepRuntimeAgentName(step),
+      output,
+      conclusion: compactStepConclusion(output.replace(/<memory-handoff>[\s\S]*?<\/memory-handoff>/gi, '')),
+      outputRef: log?.outputRef,
+      truncated: Boolean(log?.outputBytes && Buffer.byteLength(log.output || '', 'utf-8') < log.outputBytes),
+    };
+  }
+
+  private appendRuntimeEvidence(
+    evidence: RuntimeEvidenceItem[],
+    state: StateMachineState,
+    step: WorkflowStep,
+    output: string,
+    log?: PersistedStepLog | null,
+  ): void {
+    const item = this.createRuntimeEvidenceItem(state, step, output, log);
+    if (item) evidence.push(item);
+  }
+
+  private buildAdversarialEvidenceContext(step: WorkflowStep, evidence: RuntimeEvidenceItem[]): string | undefined {
+    if (step.role !== 'attacker' && step.role !== 'judge') return undefined;
+    const visibleEvidence = step.role === 'attacker'
+      ? evidence.filter((item) => item.role === 'defender')
+      : evidence.filter((item) => item.role === 'defender' || item.role === 'attacker');
+    if (visibleEvidence.length === 0) return undefined;
+
+    const roleProtocol = step.role === 'attacker'
+      ? [
+          '# Attacker 强制审查协议',
+          '主动寻找 defender 产出的反例、边界、遗漏和错误假设；不得仅复述或润色 defender 结论。',
+        ].join('\n')
+      : [
+          '# Judge 独立裁决协议',
+          '同时核对 defender 支持证据与 attacker 质疑，独立给出当前状态的最终裁决。',
+        ].join('\n');
+    return `${roleProtocol}\n\n${formatRuntimeEvidenceContext(visibleEvidence)}`;
   }
 
   private async initializeMemoryV2(workflowConfig: StateMachineWorkflowConfig): Promise<void> {
@@ -1691,6 +2031,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       subworkflowAuditEvents: this.subworkflowAuditEvents,
       workflowSnapshotRoot: this.workflowSnapshotRoot,
       workflowSnapshotManifestHash: this.workflowSnapshotManifestHash,
+      runReviewPlan: this.runReviewPlan,
       lightweight: this.lightweightRunMetadata,
       runOwnerId: this._createdBy,
       runOwnerName: this._createdByName,
@@ -1933,6 +2274,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.subworkflowAuditEvents = [];
       this.workflowSnapshotRoot = null;
       this.workflowSnapshotManifestHash = null;
+      this.runReviewPlan = null;
       this.lightweightRunMetadata = null;
       this.embeddedProjectRoot = null;
       this.embeddedWorkspaceMode = null;
@@ -1968,10 +2310,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.embeddedContextOverrides = (this as any)._embeddedContextOverrides && typeof (this as any)._embeddedContextOverrides === 'object'
         ? { ...(this as any)._embeddedContextOverrides }
         : null;
+      this.runReviewPlan = (this as any)._runReviewPlan && typeof (this as any)._runReviewPlan === 'object'
+        ? { ...(this as any)._runReviewPlan }
+        : null;
 
       // Load config
       const configContent = await this.readWorkflowConfigContent(configFile);
-      let workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+      let workflowConfig = parseNormalizedWorkflowConfig(configContent, configFile);
       if (initialContexts?.workingDirectory) {
         workflowConfig = {
           ...workflowConfig,
@@ -3206,7 +3551,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           rootRunId: this.rootRunId,
           configFile,
         })).content;
-        this.assertStateMachineWorkflowConfig(configFile, parse(content));
+        this.assertStateMachineWorkflowConfig(configFile, parseNormalizedWorkflowConfig(content, configFile));
         return content;
       } catch (error) {
         if (this.parentRunId || this.rootRunId === this.currentRunId) throw error;
@@ -3214,7 +3559,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
     content = await readFile(configPath, 'utf-8');
-    this.assertStateMachineWorkflowConfig(configFile, parse(content));
+    this.assertStateMachineWorkflowConfig(configFile, parseNormalizedWorkflowConfig(content, configFile));
     return content;
   }
 
@@ -3454,6 +3799,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         subworkflowAuditEvents: this.subworkflowAuditEvents,
         workflowSnapshotRoot: this.workflowSnapshotRoot || undefined,
         workflowSnapshotManifestHash: this.workflowSnapshotManifestHash || undefined,
+        runReviewPlan: this.runReviewPlan || undefined,
         lightweight: this.lightweightRunMetadata || undefined,
         runOwnerId: this._createdBy,
         runOwnerName: this._createdByName,
@@ -3566,11 +3912,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private extractVerdictJson(raw: string): { verdict: 'pass' | 'conditional_pass' | 'fail' } | null {
-    const fencedJsonPattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+    const fencedJsonPattern = /```(json)?\s*([\s\S]*?)```/gi;
     const candidates: any[] = [];
     let match: RegExpExecArray | null;
     while ((match = fencedJsonPattern.exec(raw)) !== null) {
-      const parsed = this.extractJsonObject(match[1] || '');
+      const content = match[2] || '';
+      const parsed = this.extractJsonObject(content)
+        || (match[1] ? extractSingleMissingClosingBraceVerdictJson(content) : null);
       if (parsed && normalizeWorkflowVerdict(parsed.verdict)) candidates.push(parsed);
     }
 
@@ -4247,7 +4595,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     if (!this.currentRunId || !this.currentConfigFile) return;
     const configPath = await getRuntimeWorkflowConfigPath(this.currentConfigFile);
     const configContent = await readFile(configPath, 'utf-8');
-    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    const workflowConfig = parseNormalizedWorkflowConfig(configContent, this.currentConfigFile);
     const supervisorConfig = workflowConfig.workflow.supervisor;
     if (!this.isSupervisorEnabled(workflowConfig)) return;
 
@@ -4648,6 +4996,7 @@ try {
   }
 
   private initializeAgents(workflowConfig: StateMachineWorkflowConfig): void {
+    this.assertAdversarialRuntimeConfig(workflowConfig);
     const runtimeAgentRoles = new Map<string, string>();
     const addRuntimeAgent = (runtimeName: string | undefined, baseRole: string | undefined) => {
       if (!runtimeName || !baseRole) return;
@@ -5532,7 +5881,7 @@ try {
             step,
             status: 'fulfilled' as const,
             output,
-            verdict: this.parseVerdict(output),
+            verdict: useVerdict ? this.parseVerdict(output) : undefined,
             issues: this.parseIssuesFromOutput(output, step, state.name),
             childRunId: typeof parsed?.childRunId === 'string' ? parsed.childRunId : undefined,
             childConfigFile: typeof parsed?.childConfigFile === 'string' ? parsed.childConfigFile : undefined,
@@ -5540,6 +5889,7 @@ try {
           },
         };
       } catch (error: any) {
+        if (isFatalRuntimeConfigurationError(error)) throw error;
         const shouldRecordFailure = !this.shouldStop && !this.pendingForceTransition;
         if (shouldRecordFailure) {
           this.addFailedStep(this.getWorkflowStepKey(state.name, step));
@@ -5560,7 +5910,16 @@ try {
     });
 
     while (pending.size > 0) {
-      const settled = await Promise.race(pending.values());
+      let settled: { index: number; result: ParallelBranchResult };
+      try {
+        settled = await Promise.race(pending.values());
+      } catch (error) {
+        if (isFatalRuntimeConfigurationError(error)) {
+          this.cancelCurrentProcesses();
+          await Promise.allSettled(pending.values());
+        }
+        throw error;
+      }
       pending.delete(settled.index);
       resultsByIndex.set(settled.index, settled.result);
       const currentResults = Array.from(resultsByIndex.entries())
@@ -5704,6 +6063,7 @@ try {
     summary: string;
     failed: boolean;
     executionFailed: boolean;
+    results: ParallelBranchResult[];
   }> {
     const joinPolicy = resolveJoinPolicy(segment, config);
     const groupState: ActiveConcurrencyGroup = {
@@ -5798,7 +6158,7 @@ try {
     this.emit('parallel-group-complete', { state: state.name, groupId: segment.groupId, joinPolicy, results, passed: joinResult.passed });
     await this.persistState();
 
-    return { outputs, issues, verdict, summary, failed: !joinResult.passed, executionFailed };
+    return { outputs, issues, verdict, summary, failed: !joinResult.passed, executionFailed, results };
   }
 
   private async executeState(
@@ -5806,6 +6166,8 @@ try {
     config: StateMachineWorkflowConfig,
     requirements?: string
   ): Promise<StateExecutionResult> {
+    this.assertAdversarialRuntimeConfig(config);
+    this.assertAdversarialRuntimeSessionIsolation(state);
     const stateGeneration = this.runtimeGeneration;
     const stateLead = state.steps[0]?.agent || this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
     const stateCloser = [...state.steps].reverse().find((step) => step.agent)?.agent || stateLead;
@@ -5832,6 +6194,7 @@ try {
 
     const stepOutputs: string[] = [];
     const issues: Issue[] = [];
+    const runtimeEvidence: RuntimeEvidenceItem[] = [];
     let verdict: 'pass' | 'conditional_pass' | 'fail' = 'pass';
     let executionFailed = false;
 
@@ -5841,8 +6204,7 @@ try {
     let executedSegmentInThisPass = false;
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
-      const useSegmentVerdict = !isLightweightWorkflowConfig(config)
-        && i === segments.length - 1;
+      const useSegmentVerdict = !state.isFinal && i === segments.length - 1;
       if (this.shouldStop) break;
       // Allow forced transition to interrupt mid-state
       if (this.pendingForceTransition) break;
@@ -5860,6 +6222,7 @@ try {
               if (log?.output) {
                 stepOutputs.push(log.output);
                 issues.push(...this.parseIssuesFromOutput(log.output, skippedStep, state.name));
+                this.appendRuntimeEvidence(runtimeEvidence, state, skippedStep, log.output, log);
                 if (useSegmentVerdict) {
                   const stepVerdict = this.parseVerdict(log.output);
                   if (stepVerdict === 'fail') verdict = 'fail';
@@ -5869,6 +6232,10 @@ try {
             }
           } else {
             const skippedVerdict = this.collectSkippedStepOutput(segment.step, state.name, stepOutputs, issues, useSegmentVerdict);
+            const skippedLog = this.getLatestStepLog(this.getWorkflowStepKey(state.name, segment.step), 'completed');
+            if (skippedLog?.output) {
+              this.appendRuntimeEvidence(runtimeEvidence, state, segment.step, skippedLog.output, skippedLog);
+            }
             if (skippedVerdict === 'fail') verdict = 'fail';
             else if (skippedVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
           }
@@ -5896,6 +6263,12 @@ try {
         executedSegmentInThisPass = true;
         stepOutputs.push(...parallelResult.outputs);
         issues.push(...parallelResult.issues);
+        for (const branchResult of parallelResult.results) {
+          if (branchResult.status === 'fulfilled' && branchResult.output) {
+            const branchLog = this.getLatestStepLog(this.getWorkflowStepKey(state.name, branchResult.step), 'completed');
+            this.appendRuntimeEvidence(runtimeEvidence, state, branchResult.step, branchResult.output, branchLog);
+          }
+        }
         if (parallelResult.verdict === 'fail') verdict = 'fail';
         else if (parallelResult.verdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
         if (parallelResult.executionFailed) {
@@ -5909,7 +6282,8 @@ try {
       const step = segment.step;
       try {
         const stepGeneration = this.runtimeGeneration;
-        const output = await this.executeWorkflowStepDispatch(step, state, config, requirements, undefined, useSegmentVerdict);
+        const evidenceContext = this.buildAdversarialEvidenceContext(step, runtimeEvidence);
+        const output = await this.executeWorkflowStepDispatch(step, state, config, requirements, evidenceContext, useSegmentVerdict);
         if (stepGeneration !== this.runtimeGeneration || stateGeneration !== this.runtimeGeneration) {
           this.emit('log', {
             level: 'warning',
@@ -5919,6 +6293,8 @@ try {
         }
         executedSegmentInThisPass = true;
         stepOutputs.push(output);
+        const stepLog = this.getLatestStepLog(this.getWorkflowStepKey(state.name, step), 'completed');
+        this.appendRuntimeEvidence(runtimeEvidence, state, step, output, stepLog);
 
         // Parse issues from output
         const stepIssues = this.parseIssuesFromOutput(output, step, state.name);
@@ -6455,6 +6831,7 @@ try {
     useVerdict: boolean,
   ): 'pass' | 'conditional_pass' | 'fail' {
     if (finalStatus !== 'completed') return 'fail';
+    if (!useVerdict) return 'pass';
 
     const readVerdict = (candidate: any): 'pass' | 'conditional_pass' | 'fail' | null => (
       candidate && ['pass', 'conditional_pass', 'fail'].includes(candidate.verdict)
@@ -6471,7 +6848,7 @@ try {
     if (structuredVerdict) return structuredVerdict;
 
     if (/(?:\bfail(?:ed|ure)?\b|失败|不通过)/i.test(decisionOutput)) return 'fail';
-    return useVerdict ? 'conditional_pass' : 'pass';
+    return 'conditional_pass';
   }
 
   private buildSubworkflowParentHandoffBlock(input: {
@@ -6509,6 +6886,10 @@ try {
       return { snapshotFile: snapshot.snapshotFile };
     } catch (error) {
       if (rootRunId !== this.currentRunId || !this.currentConfigFile) throw error;
+      if (this.runReviewPlan || this.workflowSnapshotRoot || this.workflowSnapshotManifestHash) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`本次运行的工作流配置快照损坏，禁止从当前 YAML 重新生成: ${reason}`);
+      }
       await createWorkflowConfigSnapshot({ rootConfigFile: this.currentConfigFile, runId: rootRunId });
       const snapshot = await readWorkflowConfigSnapshot({ rootRunId, configFile: childConfigFile });
       this.workflowSnapshotRoot = snapshot.manifest.root;
@@ -6736,6 +7117,7 @@ try {
       (childManager as any)._parentStepId = stepId;
       (childManager as any)._parentStepName = step.name;
       (childManager as any)._rootRunId = rootRunId;
+      childManager._runReviewPlan = this.runReviewPlan || undefined;
       (childManager as any)._nestingPath = childNestingPath;
       const workspaceEmbedding = this.resolveSubworkflowWorkspaceEmbedding(step, config);
       (childManager as any)._embeddedProjectRoot = workspaceEmbedding.projectRoot;
@@ -7270,7 +7652,7 @@ try {
               reuseExistingSession: Boolean(repairSessionId),
             },
           )
-          : this.buildMissingFinalVerdictPrompt(context, output, state, step);
+          : this.buildMissingFinalVerdictPrompt(repairSessionId ? '' : context, output, state, step);
         const repairResult = await this.runAgentStep(
           step,
           repairContext,
@@ -7319,6 +7701,7 @@ try {
         observedStepResult = stepResult;
       }
       this.assertStepOutputIsNotSupervisorReview(step, state, runtimeAgentName, output);
+      this.assertAdversarialRuntimeSessionIsolation(state, runtimeAgentName, stepResult.sessionId);
       const conclusion = compactStepConclusion(output.replace(/<memory-handoff>[\s\S]*?<\/memory-handoff>/gi, ''));
       if (stepStartGeneration !== this.runtimeGeneration) {
         this.recordMemoryV2Terminal(memoryStep, 'cancelled');
@@ -7686,7 +8069,7 @@ try {
       '\n# 系统补充要求：缺少最终裁决 JSON',
       `你刚才完成了状态 "${state.name}" 的最后步骤 "${step.name}"，但回复中没有包含可解析的最终裁决 JSON。`,
       '不要重新执行任务，不要重复完整过程，只基于你刚才的结果补交最终裁决。',
-      '必须只补交以下 JSON 块（用 ```json 包裹），且 verdict 的值必须从 pass、conditional_pass、fail 中选择一个真实值：',
+      '本轮回复必须且只能包含以下 JSON 代码块；不要补充说明，不要重复 <step-conclusion>。verdict 的值必须从 pass、conditional_pass、fail 中选择一个真实值：',
       '```json',
       '{',
       '  "verdict": "pass",',
@@ -7695,7 +8078,6 @@ try {
       '}',
       '```',
       '如果不能通过，请把 verdict 改为 conditional_pass 或 fail，并同步填写 remaining_issues。',
-      '随后可以输出 <step-conclusion>，用于步骤归档和后续步骤复用。',
       '\n# 你上一轮输出',
       previous || '[上一轮没有可用输出]',
     ].join('\n');
@@ -9315,7 +9697,7 @@ try {
 
     // Load config and continue execution
     const configContent = await this.readWorkflowConfigContent(runState.configFile);
-    let workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    let workflowConfig = parseNormalizedWorkflowConfig(configContent, runState.configFile);
     this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
     this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
     if (runState.workingDirectory) {
@@ -9523,6 +9905,7 @@ try {
     this.subworkflowAuditEvents = runState.subworkflowAuditEvents || [];
     this.workflowSnapshotRoot = runState.workflowSnapshotRoot || null;
     this.workflowSnapshotManifestHash = runState.workflowSnapshotManifestHash || null;
+    this.runReviewPlan = runState.runReviewPlan || null;
     this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
     this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
     this._creationSessionId = runState.creationSessionId;
@@ -9877,7 +10260,7 @@ try {
 
     const persistedHistory = (runState.stateHistory || []) as StateTransitionRecord[];
     const configContent = await this.readWorkflowConfigContent(runState.configFile);
-    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    const workflowConfig = parseNormalizedWorkflowConfig(configContent, runState.configFile);
     this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
     const configuredSteps = workflowConfig.workflow.states.flatMap((state) => state.steps.map((step) => ({
       state,
@@ -10107,7 +10490,7 @@ try {
     // block execution of the operator-selected target state.
     this.failedSteps = [];
     const configContent = await this.readWorkflowConfigContent(runState.configFile);
-    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    const workflowConfig = parseNormalizedWorkflowConfig(configContent, runState.configFile);
     this.workflowGitBaselineEnabled = workflowConfig.context?.gitBaselineEnabled !== false;
     const target = workflowConfig.workflow.states.find((state) => state.name === targetState);
     if (!target) {
