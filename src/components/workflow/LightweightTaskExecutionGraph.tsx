@@ -44,6 +44,7 @@ interface LightweightTaskExecutionGraphProps extends LightweightTaskBoardInput {
 
 interface LightweightTaskExecutionGraphInnerProps {
   tasks: LightweightTaskBoardTask[];
+  provisional?: boolean;
   className?: string;
 }
 
@@ -104,6 +105,56 @@ function graphMode(tasks: LightweightTaskBoardTask[]): TaskGraphMode {
   if (hasParallel) return 'parallel';
   if (hasSerial) return 'serial';
   return 'unknown';
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => text(item)).filter(Boolean)
+    : [];
+}
+
+function runtimeFallbackStatus(input: LightweightTaskBoardInput, stepName: string): LightweightTaskStatus {
+  const currentStep = text(input.run?.currentStep);
+  const aliases = [stepName, currentStep].filter(Boolean);
+  const matches = (value: unknown) => {
+    const entries = stringList(value);
+    return aliases.some((alias) => entries.some((entry) => entry === alias || entry.endsWith(`-${alias}`)));
+  };
+  if (matches(input.run?.failedSteps)) return 'failed';
+  if (matches(input.run?.completedSteps)) return 'completed';
+  if (matches(input.run?.activeSteps)) return 'running';
+
+  const status = text(input.run?.status).toLowerCase().replace(/[\s_]+/g, '-');
+  if (['failed', 'crashed', 'error'].includes(status)) return 'failed';
+  if (['completed', 'complete', 'success', 'succeeded'].includes(status)) return 'completed';
+  if (['running', 'in-progress', 'active'].includes(status)) return 'running';
+  if (['blocked', 'waiting', 'paused'].includes(status)) return 'blocked';
+  if (['cancelled', 'canceled', 'stopped'].includes(status)) return 'skipped';
+  return 'pending';
+}
+
+export function buildLightweightRuntimeFallbackTask(
+  input: LightweightTaskBoardInput,
+): LightweightTaskBoardTask | null {
+  const configuredStep = input.workflow?.states
+    ?.flatMap((state) => state.steps || [])
+    .find((step) => text(step.name) || text(step.agent));
+  const currentStep = text(input.run?.currentStep);
+  const stepName = text(configuredStep?.name)
+    || (currentStep.includes('-') ? currentStep.slice(currentStep.indexOf('-') + 1) : currentStep)
+    || '执行任务';
+  if (!stepName) return null;
+
+  return {
+    id: 'lightweight-runtime-step',
+    title: stepName,
+    owner: text(configuredStep?.agent) || text(input.workflow?.primaryAgent) || text(input.run?.primaryAgent) || null,
+    dependencies: [],
+    parallelGroup: null,
+    executionMode: 'serial',
+    status: runtimeFallbackStatus(input, stepName),
+    progressPercent: runtimeFallbackStatus(input, stepName) === 'completed' ? 100 : null,
+  };
 }
 
 function resolveTaskAliasMap(tasks: LightweightTaskBoardTask[]): Map<string, string> {
@@ -313,7 +364,7 @@ const nodeTypes: NodeTypes = {
   lightweightTask: TaskNode,
 };
 
-function LightweightTaskExecutionGraphInner({ tasks = [], className }: LightweightTaskExecutionGraphInnerProps) {
+function LightweightTaskExecutionGraphInner({ tasks = [], provisional = false, className }: LightweightTaskExecutionGraphInnerProps) {
   const model = useMemo(() => buildLightweightTaskExecutionGraphModel(tasks), [tasks]);
 
   if (!model.available) {
@@ -334,12 +385,15 @@ function LightweightTaskExecutionGraphInner({ tasks = [], className }: Lightweig
             任务执行关系图
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            基于任务清单证据绘制依赖、串行/并行分组和运行状态。
+            {provisional
+              ? '任务尚未拆分，先展示当前工作流执行节点；任务清单生成后会自动展开。'
+              : '基于任务清单证据绘制依赖、串行/并行分组和运行状态。'}
           </p>
         </div>
         <div className="flex flex-wrap gap-1 text-[10px]">
           <Badge variant="outline">任务 {tasks.length}</Badge>
           <Badge variant="outline">依赖边 {model.edges.length}</Badge>
+          {provisional ? <Badge variant="outline">等待任务拆分</Badge> : null}
           {model.parallelGroups.length ? <Badge variant="outline">并行组 {model.parallelGroups.length}</Badge> : null}
         </div>
       </div>
@@ -386,10 +440,12 @@ function LightweightTaskExecutionGraphInner({ tasks = [], className }: Lightweig
 export default function LightweightTaskExecutionGraph(props: LightweightTaskExecutionGraphProps) {
   const adapted = adaptLightweightTaskBoardEvidence(props);
   if (!adapted.isLightweight) return null;
-  const tasks = props.tasks || adapted.tasks;
+  const evidenceTasks = props.tasks || adapted.tasks;
+  const fallbackTask = evidenceTasks.length ? null : buildLightweightRuntimeFallbackTask(props);
+  const tasks = evidenceTasks.length ? evidenceTasks : fallbackTask ? [fallbackTask] : [];
   return (
     <ReactFlowProvider>
-      <LightweightTaskExecutionGraphInner {...props} tasks={tasks} />
+      <LightweightTaskExecutionGraphInner {...props} tasks={tasks} provisional={!evidenceTasks.length && Boolean(fallbackTask)} />
     </ReactFlowProvider>
   );
 }

@@ -8,7 +8,9 @@ import { openRuntimeSqliteDatabase } from '@/lib/runtime-agent/sqlite/database';
 import { RuntimeSqliteStore } from '@/lib/runtime-agent/sqlite/runtime-store';
 import { existsSync } from 'fs';
 
-const STOP_TIMEOUT_MS = 8000;
+// A cooperative manager stop only needs enough time to persist its final snapshot. If the
+// runtime does not answer promptly, exact run-scoped process cleanup continues below.
+const STOP_TIMEOUT_MS = 3000;
 const MAX_STOP_SCOPE_RUNS = 64;
 const ACTIVE_PERSISTED_CHILD_RUN_STATUSES = new Set<PersistedRunState['status']>(['preparing', 'running']);
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
+import { isStepBaselineUnmodified, withReviewStepBaseline } from '@/lib/workflow/state-review-policy';
 
 function specCoding() {
   return {
@@ -105,5 +106,20 @@ describe('compileStepTaskBindings', () => {
     expect(result.validation.ok).toBe(false);
     expect(result.validation.errors.join('\n')).toContain('显式提供 specTaskBinding.taskIds');
     expect(result.validation.bindings[0].source).toBe('auto-title');
+  });
+
+  test('refreshes an untouched managed baseline after binding compilation', () => {
+    const step = withReviewStepBaseline({
+      id: 'step-implement',
+      name: 'Implement feature',
+      agent: 'developer',
+      task: 'Implement the feature.',
+    }, 'ai-draft');
+    expect(isStepBaselineUnmodified(step)).toBe(true);
+
+    const result = compileStepTaskBindings(workflowConfig(step), specCoding());
+    const compiledStep = result.config.workflow.states[0].steps[0];
+    expect(compiledStep.specTaskBinding?.taskIds).toEqual(['T1.1']);
+    expect(isStepBaselineUnmodified(compiledStep)).toBe(true);
   });
 });

@@ -9,6 +9,11 @@ import { normalizeAgentAvatar } from '@/lib/agent/personas';
 import { getWorkspaceAgentsDir } from '@/lib/core/app-paths';
 import { getSubworkflowConfigFile, isSubworkflowStep, normalizeWorkflowConfigRef } from '@/lib/workflow/subworkflow-config';
 import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
+import {
+  isStandardReviewStructure,
+  isStrictAdversarialRoleSequence,
+  normalizeStateMachineWorkflowConfig,
+} from '@/lib/workflow/state-review-policy';
 
 export interface ValidationIssue {
   path: string[];
@@ -25,6 +30,8 @@ export interface ValidationResult<T> {
 
 export interface WorkflowValidationOptions {
   mode?: 'runtime' | 'portable';
+  materializeIds?: boolean;
+  workflowKey?: string;
 }
 
 function expandZodIssue(issue: ZodIssue, inheritedPath: string[] = []): ValidationIssue[] {
@@ -190,7 +197,11 @@ export function validateAgentDraft(input: any): ValidationResult<any> {
 }
 
 export function validateWorkflowDraft(input: any, options: WorkflowValidationOptions = {}): ValidationResult<any> {
-  const parsed = unifiedWorkflowConfigSchema.safeParse(input);
+  const normalizedInput = normalizeStateMachineWorkflowConfig(input, {
+    materializeIds: options.materializeIds,
+    workflowKey: options.workflowKey,
+  });
+  const parsed = unifiedWorkflowConfigSchema.safeParse(normalizedInput);
   if (!parsed.success) {
     return {
       ok: false,
@@ -298,6 +309,74 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
     }
     if (state.isFinal) {
       continue;
+    }
+
+    if (!isLightweightWorkflow) {
+      if (!state.reviewPolicy) {
+        pushIssue(issues, 'error', ['workflow', 'states', state.name, 'reviewPolicy'], `非终态 "${state.name}" 必须包含 reviewPolicy`);
+      } else if (state.reviewPolicy.mode === 'adversarial' && !isStrictAdversarialRoleSequence(state)) {
+        pushIssue(
+          issues,
+          'error',
+          ['workflow', 'states', state.name, 'steps'],
+          `对抗状态 "${state.name}" 必须严格按 defender 段 → 串行 attacker → 最终串行 judge 编排`,
+          'invalid_adversarial_sequence',
+        );
+      } else if (state.reviewPolicy.mode === 'adversarial') {
+        const roleSteps = (state.steps || []).filter((step: any) => ['defender', 'attacker', 'judge'].includes(step.role));
+        const missingInstance = roleSteps.find((step: any) => !String(step.agentInstanceId || '').trim());
+        if (missingInstance) {
+          pushIssue(
+            issues,
+            'error',
+            ['workflow', 'states', state.name, 'steps'],
+            `对抗状态 "${state.name}" 的角色步骤 "${missingInstance.name}" 缺少 agentInstanceId`,
+            'missing_adversarial_instance',
+          );
+        }
+        const rolesByInstance = new Map<string, Set<string>>();
+        for (const step of roleSteps) {
+          const instanceId = String(step.agentInstanceId || '').trim();
+          if (!instanceId) continue;
+          const roles = rolesByInstance.get(instanceId) || new Set<string>();
+          roles.add(step.role);
+          rolesByInstance.set(instanceId, roles);
+        }
+        const collision = [...rolesByInstance.entries()].find(([, roles]) => roles.size > 1);
+        if (collision) {
+          pushIssue(
+            issues,
+            'error',
+            ['workflow', 'states', state.name, 'steps'],
+            `对抗状态 "${state.name}" 的运行实例 "${collision[0]}" 被多个角色复用`,
+            'adversarial_instance_collision',
+          );
+        }
+      } else if (
+        state.reviewPolicy.mode === 'standard'
+        && ['ai', 'user'].includes(state.reviewPolicy.source)
+        && (state.steps || []).some((step: any) => step.role === 'attacker' || step.role === 'judge')
+      ) {
+        pushIssue(
+          issues,
+          'error',
+          ['workflow', 'states', state.name, 'steps'],
+          `标准状态 "${state.name}" 不应包含 attacker 或独立 judge`,
+          'invalid_standard_roles',
+        );
+      } else if (
+        state.reviewPolicy.mode === 'standard'
+        && ['ai', 'user'].includes(state.reviewPolicy.source)
+        && !isStandardReviewStructure(state)
+      ) {
+        pushIssue(
+          issues,
+          'error',
+          ['workflow', 'states', state.name, 'steps'],
+          `标准状态 "${state.name}" 必须以一个串行步骤收口并输出 verdict`,
+          'missing_standard_verdict_closer',
+        );
+      }
     }
 
     const transitions = Array.isArray(state.transitions) ? state.transitions : [];

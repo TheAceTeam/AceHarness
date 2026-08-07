@@ -1,13 +1,14 @@
-import { access, readFile, writeFile } from 'fs/promises';
+import { access, readdir, readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { ZodError } from 'zod';
 import { requireAuth } from '@/lib/auth/middleware';
 import { updateChatSessionCreationBinding } from '@/lib/chat/persistence';
 import { canAccessConfigMeta, getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
+import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import { newConfigFormSchema } from '@/lib/core/schemas';
-import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 import { assertPersistedSpecRootReady } from '@/lib/spec/persistence';
 import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec/coding-store';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
@@ -19,6 +20,11 @@ import {
   LIGHTWEIGHT_WORKFLOW_PROFILE,
 } from '@/lib/workflow/lightweight';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
+import {
+  normalizeWorkflowReviewAssessment,
+  type WorkflowCreationAdversarialIntent,
+  type WorkflowCreationJourney,
+} from '@/lib/ai/workflow-creation-review-protocol';
 
 type CreationMode = 'lightweight' | 'state-machine';
 
@@ -62,7 +68,34 @@ function createStateMachineConfig(
   workingDirectory: string,
   workspaceMode: 'isolated-copy' | 'in-place',
   description?: string,
+  creationAdversarialIntent?: WorkflowCreationAdversarialIntent,
 ) {
+  const reviewPolicy = creationAdversarialIntent === 'disabled'
+    ? {
+        mode: 'standard' as const,
+        source: 'user' as const,
+        locked: true,
+        confidence: 'high' as const,
+        riskSignals: [],
+        rationale: '用户创建工作流时选择不开启对抗，全部非终态强制使用标准模式。',
+      }
+    : creationAdversarialIntent === 'on-demand'
+      ? {
+          mode: 'adversarial' as const,
+          source: 'default' as const,
+          locked: false,
+          confidence: 'medium' as const,
+          riskSignals: ['默认状态机模板包含高代价设计、实施和验证边界'],
+          rationale: '直接状态机模板包含设计、实施和测试边界，缺少 AI 判断证据时按保守默认启用对抗审查。',
+        }
+      : undefined;
+  const stateSteps = (standardStep: any, attacker: any, judge: any) => creationAdversarialIntent === 'disabled'
+    ? [{
+        ...standardStep,
+        role: undefined,
+        task: `${standardStep.task}\n\n在同一次输出中给出严格 JSON 裁决，verdict 只能是 pass、conditional_pass 或 fail。`,
+      }]
+    : [standardStep, attacker, judge];
   return {
     workflow: {
       name: workflowName,
@@ -78,11 +111,12 @@ function createStateMachineConfig(
           isFinal: false,
           maxSelfTransitions: 3,
           position: { x: 100, y: 200 },
-          steps: [
+          ...(reviewPolicy ? { reviewPolicy } : {}),
+          steps: stateSteps(
             { name: '方案设计', agent: 'architect', role: 'defender', task: '根据需求设计技术方案，输出设计文档' },
             { name: '方案挑战', agent: 'solution-breaker', role: 'attacker', task: '审查设计方案，寻找潜在缺陷和风险点' },
             { name: '设计评审', agent: 'design-judge', role: 'judge', task: '综合红队方案和蓝队意见，给出评审结论和 verdict' },
-          ],
+          ),
           transitions: createVerdictTransitions({
             passTo: '实施',
             conditionalPassTo: '设计',
@@ -99,11 +133,12 @@ function createStateMachineConfig(
           isFinal: false,
           maxSelfTransitions: 3,
           position: { x: 400, y: 200 },
-          steps: [
+          ...(reviewPolicy ? { reviewPolicy } : {}),
+          steps: stateSteps(
             { name: '编码实施', agent: 'developer', role: 'defender', task: '根据设计方案进行编码实施' },
             { name: '代码审查', agent: 'code-hunter', role: 'attacker', task: '审查代码实现，检查安全性、性能和代码质量' },
             { name: '实施评审', agent: 'code-judge', role: 'judge', task: '综合实施结果和审查意见，给出评审结论和 verdict' },
-          ],
+          ),
           transitions: createVerdictTransitions({
             passTo: '测试',
             conditionalPassTo: '实施',
@@ -120,11 +155,12 @@ function createStateMachineConfig(
           isFinal: false,
           maxSelfTransitions: 3,
           position: { x: 700, y: 200 },
-          steps: [
+          ...(reviewPolicy ? { reviewPolicy } : {}),
+          steps: stateSteps(
             { name: '功能测试', agent: 'tester', role: 'defender', task: '编写并执行测试用例，验证功能正确性' },
             { name: '压力测试', agent: 'stress-tester', role: 'attacker', task: '进行边界测试和压力测试，寻找潜在问题' },
             { name: '测试评审', agent: 'code-judge', role: 'judge', task: '综合测试结果，给出最终评审结论和 verdict' },
-          ],
+          ),
           transitions: createVerdictTransitions({
             passTo: '完成',
             conditionalPassTo: '实施',
@@ -140,11 +176,7 @@ function createStateMachineConfig(
           isInitial: false,
           isFinal: true,
           position: { x: 1000, y: 200 },
-          steps: [
-            { name: '生成报告', agent: 'developer', role: 'defender', task: '汇总各阶段成果，生成最终报告' },
-            { name: '报告审查', agent: 'code-hunter', role: 'attacker', task: '审查最终报告的完整性和准确性' },
-            { name: '最终确认', agent: 'code-judge', role: 'judge', task: '确认报告质量，给出最终结论' },
-          ],
+          steps: [{ name: '生成报告', agent: 'developer', task: '汇总各阶段成果、验证证据和剩余风险，生成最终报告；终态不输出 verdict' }],
           transitions: [],
         },
       ],
@@ -237,12 +269,121 @@ function normalizeLightweightConfigDraft(configDraft: any): any {
   if (Array.isArray(cloned.workflow.states)) {
     cloned.workflow.states = cloned.workflow.states.map((state: any) => ({
       ...state,
+      reviewPolicy: undefined,
       steps: Array.isArray(state?.steps)
-        ? state.steps.map(normalizeLightweightStep)
+        ? state.steps.map((step: any) => {
+            const normalized = normalizeLightweightStep(step);
+            delete normalized.role;
+            delete normalized.agentInstanceId;
+            delete normalized.provenance;
+            return normalized;
+          })
         : state?.steps,
     }));
   }
   cloned.workflow.lightweight = {};
+  return cloned;
+}
+
+function readCreationJourney(value: unknown): WorkflowCreationJourney | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === 'direct' || value === 'ai-guided') return value;
+  throw new CreationInputError('creationJourney 只能是 direct 或 ai-guided');
+}
+
+function readCreationAdversarialIntent(value: unknown): WorkflowCreationAdversarialIntent | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === 'disabled' || value === 'on-demand') return value;
+  throw new CreationInputError('creationAdversarialIntent 只能是 disabled 或 on-demand');
+}
+
+async function listAvailableWorkflowAgentNames(): Promise<string[]> {
+  const agentsDirectory = await getRuntimeAgentsDirPath();
+  const files = (await readdir(agentsDirectory))
+    .filter((file) => file.endsWith('.yaml') || file.endsWith('.yml'))
+    .sort((left, right) => left.localeCompare(right));
+  const names: string[] = [];
+  for (const file of files) {
+    try {
+      const agent = parse(await readFile(resolve(agentsDirectory, file), 'utf8'));
+      const name = typeof agent?.name === 'string' ? agent.name.trim() : '';
+      if (name && isWorkflowStepSelectableAgent(agent) && !names.includes(name)) names.push(name);
+    } catch {
+      // Malformed Agent configs are not safe workflow execution targets.
+    }
+  }
+  return names;
+}
+
+function applyAvailableAgentRoster(config: any, availableAgentNames: string[]): any {
+  if (availableAgentNames.length === 0) {
+    throw new CreationInputError('当前没有可执行的普通 Agent，无法创建可运行的工作流。请先创建或启用至少一个普通执行 Agent。');
+  }
+  const cloned = structuredCloneSafe(config || {});
+  if (!Array.isArray(cloned?.workflow?.states)) return cloned;
+  let fallbackIndex = 0;
+  cloned.workflow.states = cloned.workflow.states.map((state: any) => ({
+    ...state,
+    steps: Array.isArray(state?.steps)
+      ? state.steps.map((step: any) => ({
+          ...step,
+          agent: availableAgentNames.includes(String(step?.agent || '').trim())
+            ? step.agent
+            : availableAgentNames[fallbackIndex++ % availableAgentNames.length],
+        }))
+      : state?.steps,
+  }));
+  return cloned;
+}
+
+function forceDisabledReviewConfig(config: any): any {
+  const cloned = structuredCloneSafe(config || {});
+  if (cloned?.workflow?.profile === LIGHTWEIGHT_WORKFLOW_PROFILE) {
+    return normalizeLightweightConfigDraft(cloned);
+  }
+  if (!Array.isArray(cloned?.workflow?.states)) return cloned;
+  cloned.workflow.states = cloned.workflow.states.map((state: any) => {
+    if (state?.isFinal) {
+      const finalState = {
+        ...state,
+        steps: Array.isArray(state?.steps)
+          ? state.steps.map((step: any) => {
+              const next = { ...step };
+              delete next.role;
+              delete next.agentInstanceId;
+              return next;
+            })
+          : state?.steps,
+      };
+      delete finalState.reviewPolicy;
+      return finalState;
+    }
+    const steps = Array.isArray(state?.steps) ? state.steps.map((step: any) => {
+      const next = { ...step };
+      delete next.role;
+      delete next.agentInstanceId;
+      return next;
+    }) : [];
+    if (steps.length > 0) {
+      const last = steps[steps.length - 1];
+      const instruction = '在同一次输出中给出严格 JSON 裁决，verdict 只能是 pass、conditional_pass 或 fail。';
+      if (!String(last.task || '').includes(instruction)) {
+        last.task = `${String(last.task || '').trim()}\n\n${instruction}`.trim();
+      }
+    }
+    return {
+      ...state,
+      reviewPolicy: {
+        mode: 'standard',
+        source: 'user',
+        locked: true,
+        confidence: 'high',
+        riskSignals: [],
+        rationale: '用户创建工作流时选择不开启对抗，全部非终态强制使用标准模式。',
+      },
+      steps,
+    };
+  });
   return cloned;
 }
 
@@ -320,6 +461,26 @@ export async function POST(request: Request) {
     const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
     const configDraft = body.configDraft && typeof body.configDraft === 'object' ? body.configDraft : null;
     const skipSpecCoding = body.skipSpecCoding === true;
+    const creationJourney = readCreationJourney(body.creationJourney);
+    const creationAdversarialIntent = readCreationAdversarialIntent(body.creationAdversarialIntent);
+    const creationReviewAssessment = normalizeWorkflowReviewAssessment(body.creationReviewAssessment);
+    const creationUiState = creationJourney && creationAdversarialIntent
+      ? {
+          workflowMode: creationJourney === 'ai-guided' ? 'ai-guided' as const : readCreationMode(body.mode),
+          creationJourney,
+          targetWorkflowKind: body.targetWorkflowKind === 'lightweight' || body.targetWorkflowKind === 'state-machine'
+            ? body.targetWorkflowKind
+            : undefined,
+          creationAdversarialIntent,
+          clarificationAnswers: {},
+        }
+      : undefined;
+    const mergeCreationUiState = (existing?: {
+      clarificationAnswers: Record<string, { optionIds: string[]; note: string }>;
+      [key: string]: unknown;
+    }) => creationUiState
+      ? { ...(existing || {}), ...creationUiState, clarificationAnswers: existing?.clarificationAnswers ?? {} }
+      : existing;
     const form = newConfigFormSchema.safeParse(body);
     if (!form.success) {
       return jsonOk({ error: '表单验证失败', details: form.error.issues }, { status: 400 });
@@ -341,6 +502,14 @@ export async function POST(request: Request) {
       ? 'lightweight'
       : getWorkflowMode(configDraft);
     const workflowMode = draftWorkflowMode || requestedWorkflowMode;
+    if (
+      workflowMode === 'lightweight'
+      && Boolean(creationJourney)
+      && creationAdversarialIntent === 'on-demand'
+      && (!creationReviewAssessment || creationReviewAssessment.requiresAdversarial || creationReviewAssessment.confidence === 'low')
+    ) {
+      throw new CreationInputError('按需开启的 lightweight 草案必须包含明确的低风险整体判断；需要对抗或低置信度时请重新规划为 state-machine');
+    }
     const specCodingEnabled = workflowMode !== 'lightweight' && !skipSpecCoding;
     const normalizedPersistMode = specCodingEnabled && persistMode === 'repository' ? 'repository' : 'none';
     const normalizedSpecRoot = normalizedPersistMode === 'repository' ? (specRoot?.trim() || '.spec') : undefined;
@@ -349,6 +518,10 @@ export async function POST(request: Request) {
     }
 
     await ensureRuntimeConfigsSeeded();
+    const availableWorkflowAgentNames = await listAvailableWorkflowAgentNames();
+    if (availableWorkflowAgentNames.length === 0) {
+      throw new CreationInputError('当前没有可执行的普通 Agent，无法创建可运行的工作流。请先创建或启用至少一个普通执行 Agent。');
+    }
     const configsDirectory = await getRuntimeConfigsDirPath();
     const filepath = resolve(configsDirectory, filename);
     try {
@@ -402,10 +575,25 @@ export async function POST(request: Request) {
         requirements,
       });
     } else {
-      defaultConfig = createStateMachineConfig(workflowName, workingDirectory, workspaceMode, description);
+      defaultConfig = createStateMachineConfig(
+        workflowName,
+        workingDirectory,
+        workspaceMode,
+        description,
+        creationAdversarialIntent,
+      );
     }
 
-    const configValidation = validateWorkflowDraft(defaultConfig);
+    defaultConfig = applyAvailableAgentRoster(defaultConfig, availableWorkflowAgentNames);
+
+    if (creationAdversarialIntent === 'disabled') {
+      defaultConfig = forceDisabledReviewConfig(defaultConfig);
+    }
+
+    const configValidation = validateWorkflowDraft(defaultConfig, {
+      materializeIds: true,
+      workflowKey: filename,
+    });
     if (!configValidation.ok || !configValidation.normalized) {
       return jsonOk({
         error: '工作流草案验证失败',
@@ -463,6 +651,7 @@ export async function POST(request: Request) {
             requirements,
             referenceWorkflow: undefined,
             lightweight: lightweightSession,
+            uiState: mergeCreationUiState(creationSession.uiState),
             generatedConfigSummary: summarizeGeneratedConfig(defaultConfig),
           }) || creationSession;
         } else {
@@ -481,6 +670,7 @@ export async function POST(request: Request) {
             persistMode: 'none',
             config: defaultConfig,
             lightweight: lightweightSession,
+            uiState: mergeCreationUiState(),
           });
           await saveCreationSession(creationSession);
         }
@@ -527,6 +717,7 @@ export async function POST(request: Request) {
         requirements,
         referenceWorkflow,
         lightweight: lightweightSession,
+        uiState: mergeCreationUiState(creationSession.uiState),
         specCoding: {
           ...creationSession.specCoding,
           status: creationSession.specCoding.status === 'draft' ? 'confirmed' : creationSession.specCoding.status,
@@ -552,6 +743,7 @@ export async function POST(request: Request) {
         requirements,
         referenceWorkflow,
         lightweight: lightweightSession,
+        uiState: mergeCreationUiState(),
         persistMode: normalizedPersistMode,
         specRoot: normalizedSpecRoot,
         config: defaultConfig,

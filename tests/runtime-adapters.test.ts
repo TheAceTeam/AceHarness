@@ -86,13 +86,18 @@ describe('runtime adapters', () => {
     });
   });
 
-  test('uses argv overrides so Windows can launch CodeGenie command shims', () => {
+  test('uses command-string overrides accepted by the installed acpx registry', async () => {
     const overrides = getAcpxAgentRegistryOverrides();
 
-    expect(overrides.nga).toEqual(['ngagent', '--disable-update', 'acp']);
-    expect(overrides.codeagent).toEqual(['codeagent', 'acp']);
-    expect(overrides.codegenie).toEqual(expect.arrayContaining(['acp']));
-    expect(Array.isArray(overrides.codegenie)).toBe(true);
+    expect(overrides.nga).toBe('ngagent --disable-update acp');
+    expect(overrides.codeagent).toBe('codeagent acp');
+    expect(overrides.codegenie).toContain('acp');
+    expect(typeof overrides.codegenie).toBe('string');
+
+    const { createAgentRegistry } = await import('acpx/runtime');
+    const registry = createAgentRegistry({ overrides });
+    expect(registry.resolve('codegenie')).toBe(overrides.codegenie);
+    expect(registry.resolve('opencode')).toEqual(expect.any(String));
   });
 
   test('normalizes acpx events without exposing provider or acpx native ids in payload', () => {

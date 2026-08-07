@@ -6,6 +6,7 @@ import type {
   StateMachineWorkflowConfig,
   WorkflowStep,
 } from '@/lib/core/schemas';
+import { isStepBaselineUnmodified, withReviewStepBaseline } from '@/lib/workflow/state-review-policy';
 
 export type StepTaskBindingSource = 'explicit' | 'auto-title' | 'auto-index' | 'auto-container' | 'missing';
 
@@ -186,6 +187,8 @@ export function compileStepTaskBindings(
   const covered = new Set<string>();
 
   for (const ref of refs) {
+    const shouldRefreshReviewBaseline = ['ai-draft', 'review-policy'].includes(ref.step.provenance?.origin || '')
+      && isStepBaselineUnmodified(ref.step);
     const existingIds = getSpecTaskBindingIds(ref.step.specTaskBinding);
     const validExistingIds = existingIds.filter((id) => validTaskIds.has(id));
     const invalidExistingIds = existingIds.filter((id) => !validTaskIds.has(id));
@@ -220,6 +223,13 @@ export function compileStepTaskBindings(
           artifactKeys,
         }
       : undefined;
+    if (shouldRefreshReviewBaseline && ref.step.provenance) {
+      ref.step.provenance = withReviewStepBaseline(
+        ref.step,
+        ref.step.provenance.origin,
+        ref.step.provenance.managedRole,
+      ).provenance;
+    }
 
     for (const id of chosen.taskIds) covered.add(id);
     bindings.push({

@@ -6,6 +6,7 @@ import {
   isChatRuntimeTimingDebug,
   resolveRecoveredRuntimeSessionId,
   resolveRequestedChatRuntimeEngineType,
+  resolveRequestedChatRuntimeModel,
   type ChatRuntimeResultMetadata,
   type ChatRuntimeTokenUsage,
 } from '@/lib/chat/chat-engine-runtime';
@@ -268,12 +269,12 @@ export async function POST(request: Request) {
 
     const chatId = `chat-${Date.now()}`;
     const streamPrepT0 = Date.now();
-    const useModel = model || '';
     const engineRuntimeDirectory = typeof workingDirectory === 'string' && workingDirectory.trim()
       ? workingDirectory.trim()
       : getWorkspaceRoot();
 
     const configuredEngine = await resolveRequestedChatRuntimeEngineType(perChatEngine);
+    const useModel = resolveRequestedChatRuntimeModel(model);
     if (useModel && !resolveActiveChatModelRoute(configuredEngine, useModel)) {
       return jsonError(chatModelRouteError(configuredEngine, useModel), 422);
     }

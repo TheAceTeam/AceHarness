@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { stringify } from 'yaml';
 import { describe, expect, test, vi } from 'vitest';
 import { withIsolatedAceHome } from './helpers/module-helpers';
 import { makeRequest, responseJson } from './helpers/route-helpers';
@@ -23,10 +26,11 @@ function minimalRunState(overrides: Record<string, any> = {}): any {
 
 describe('runs detail route', () => {
   test('backfills workflow session bindings for pre-runtime event-store snapshots', async () => {
-    await withIsolatedAceHome(async () => {
+    await withIsolatedAceHome(async (aceHome) => {
       vi.resetModules();
       const { saveRunState } = await import('@/lib/run/state-persistence');
       const { getWorkflowEventStore } = await import('@/lib/workflow/event-store');
+      const { createWorkflowConfigSnapshot } = await import('@/lib/workflow/subworkflow-config');
 
       const state = minimalRunState({
         supervisorAgent: 'default-supervisor',
@@ -64,6 +68,39 @@ describe('runs detail route', () => {
         ],
       });
 
+      const effectiveConfig = {
+        workflow: {
+          name: 'Runtime promoted workflow',
+          mode: 'state-machine',
+          states: [
+            {
+              name: '执行与对抗',
+              isInitial: true,
+              isFinal: false,
+              steps: [{ name: '执行任务', agent: 'developer', task: '执行任务', role: 'defender' }],
+              transitions: [
+                { to: '完成', condition: { verdict: 'pass' } },
+                { to: '执行与对抗', condition: { verdict: 'conditional_pass' } },
+                { to: '执行与对抗', condition: { verdict: 'fail' } },
+              ],
+            },
+            {
+              name: '完成',
+              isInitial: false,
+              isFinal: true,
+              steps: [{ name: '汇总', agent: 'developer', task: '汇总' }],
+              transitions: [],
+            },
+          ],
+          supervisor: { enabled: true, agent: 'default-supervisor' },
+        },
+        context: { projectRoot: '{project_root}' },
+      };
+      const configsDir = path.join(aceHome, 'configs');
+      await mkdir(configsDir, { recursive: true });
+      await writeFile(path.join(configsDir, state.configFile), stringify(effectiveConfig), 'utf-8');
+      await createWorkflowConfigSnapshot({ rootConfigFile: state.configFile, runId: state.runId });
+
       await saveRunState(state);
       await getWorkflowEventStore().saveSnapshot(state.runId, {
         runId: state.runId,
@@ -94,6 +131,10 @@ describe('runs detail route', () => {
       expect(body.__source).toBe('event-store');
       expect(body.workflowFrontendSessionId).toBe('workflow-frontend-preRuntime');
       expect(body.supervisorSessionId).toBe('supervisor-session-preRuntime');
+      expect(body.workflow).toMatchObject({
+        mode: 'state-machine',
+        states: [expect.objectContaining({ name: '执行与对抗' }), expect.objectContaining({ name: '完成' })],
+      });
       expect(body.attachedAgentSessions).toEqual({
         'default-supervisor': 'supervisor-session-preRuntime',
         developer: 'developer-session-preRuntime',

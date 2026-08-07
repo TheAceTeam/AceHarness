@@ -26,6 +26,6 @@ describe('WorkflowModeSelector AI entry', () => {
     expect(entry).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: '轻量工作流' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('radio', { name: '状态机' })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByText('AI 会先收集需求，再展示可确认、可编辑的草案，然后才创建配置文件。')).toBeInTheDocument();
+    expect(screen.getByText('AI 会先收集需求，同次判断最终应生成轻量工作流还是状态机，再展示可确认、可编辑的草案；ai-guided 本身不会写入工作流 YAML。')).toBeInTheDocument();
   });
 });

@@ -40,8 +40,8 @@ const modes: Array<{
     id: 'ai-guided',
     title: 'AI 引导创建',
     tagline: '描述需求，AI 整理最佳实践',
-    description: '先通过对话梳理目标和约束，再生成合适的工作流草案。',
-    highlights: ['自然语言描述需求', '交互式补充与确认', '生成可编辑草案'],
+    description: '先通过对话梳理目标和约束，再推荐并生成轻量工作流或状态机草案。',
+    highlights: ['自然语言描述需求', '推荐最终产品类型', '生成可编辑草案'],
     icon: Sparkles,
   },
 ];
@@ -59,8 +59,8 @@ const detailCopy: Record<WorkflowCreationMode, { title: string; description: str
   },
   'ai-guided': {
     title: '关于 AI 引导创建',
-    description: 'AI 会先收集需求，再展示可确认、可编辑的草案，然后才创建配置文件。',
-    flow: ['描述需求', 'AI 分析', '确认草案'],
+    description: 'AI 会先收集需求，同次判断最终应生成轻量工作流还是状态机，再展示可确认、可编辑的草案；ai-guided 本身不会写入工作流 YAML。',
+    flow: ['描述需求', 'AI 推荐最终类型', '确认草案'],
   },
 };
 

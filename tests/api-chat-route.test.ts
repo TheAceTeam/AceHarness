@@ -14,6 +14,7 @@ const routeMocks = vi.hoisted(() => ({
   getWorkspaceDataFile: vi.fn(),
   requireAuth: vi.fn(),
   resolveActiveChatModelRoute: vi.fn(),
+  resolveRequestedChatRuntimeModel: vi.fn(),
 }));
 
 vi.mock('@/lib/chat/chat-engine-runtime', () => ({
@@ -21,6 +22,7 @@ vi.mock('@/lib/chat/chat-engine-runtime', () => ({
   executeChatRuntimeWithContextRecovery: routeMocks.executeChatRuntimeWithContextRecovery,
   resolveRecoveredRuntimeSessionId: routeMocks.resolveRecoveredRuntimeSessionId,
   resolveRequestedChatRuntimeEngineType: routeMocks.resolveRequestedChatRuntimeEngineType,
+  resolveRequestedChatRuntimeModel: routeMocks.resolveRequestedChatRuntimeModel,
 }));
 
 vi.mock('@/lib/chat/request-options', () => ({
@@ -49,6 +51,7 @@ describe('/api/chat route', () => {
     vi.useFakeTimers();
 
     routeMocks.resolveRequestedChatRuntimeEngineType.mockResolvedValue('opencode');
+    routeMocks.resolveRequestedChatRuntimeModel.mockImplementation((model?: string | null) => String(model || '').trim());
     routeMocks.buildChatRequestContext.mockResolvedValue({ systemPrompt: 'system prompt' });
     routeMocks.ensureEngineRuntimeSkillsAvailable.mockResolvedValue(undefined);
     routeMocks.resolveRecoveredRuntimeSessionId.mockImplementation((result: { sessionId?: string }, sessionId?: string) => result.sessionId || sessionId || undefined);

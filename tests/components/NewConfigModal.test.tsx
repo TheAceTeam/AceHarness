@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   createConfig: vi.fn(),
   createSession: vi.fn(),
   onSuccess: vi.fn(),
+  agents: [
+    { name: 'default-supervisor', roleType: 'supervisor', catalogVisibility: 'system', description: '系统协调' },
+    { name: 'developer', team: 'red', description: '实现任务' },
+  ] as any[],
 }));
 
 vi.mock('next-themes', () => ({
@@ -74,8 +78,8 @@ vi.mock('@/components/ui/combobox', () => ({
       {options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
   ),
-  MultiCombobox: ({ value = [], onValueChange, options = [] }: any) => (
-    <select aria-label="步骤 Skills" multiple value={value} onChange={(event) => onValueChange(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
+  MultiCombobox: ({ value = [], onValueChange, options = [], placeholder }: any) => (
+    <select aria-label={placeholder || '多选'} multiple value={value} onChange={(event) => onValueChange(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
       {options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
   ),
@@ -89,11 +93,9 @@ vi.mock('@/client/query/workflow-mutations', () => ({
 vi.mock('@/client/query/agents', () => ({
   useAgentsQuery: () => ({
     isLoading: false,
+    isError: false,
     data: {
-      agents: [
-        { name: 'default-supervisor', roleType: 'supervisor', catalogVisibility: 'system', description: '系统协调' },
-        { name: 'developer', team: 'red', description: '实现任务' },
-      ],
+      agents: mocks.agents,
     },
   }),
 }));
@@ -142,6 +144,10 @@ describe('NewConfigModal lightweight workflow creation', () => {
     window.localStorage.clear();
     mocks.createSession.mockReturnValue('ai-session-1');
     mocks.createConfig.mockResolvedValue({ filename: 'tasklist-flow.yaml', message: '轻量工作流已创建' });
+    mocks.agents = [
+      { name: 'default-supervisor', roleType: 'supervisor', catalogVisibility: 'system', description: '系统协调' },
+      { name: 'developer', team: 'red', description: '实现任务' },
+    ];
     vi.stubGlobal('fetch', vi.fn(async () => createJsonResponse({ configs: [] })));
   });
 
@@ -174,6 +180,35 @@ describe('NewConfigModal lightweight workflow creation', () => {
     expect(Array.from(selector.options, (option) => option.value)).not.toContain('default-supervisor');
   });
 
+  test('lets AI guided creation assign Agents automatically without asking the user for a roster', async () => {
+    renderModal({ initialMode: 'state-machine' });
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'AI 引导创建' }));
+    expect(await screen.findByRole('region', { name: 'Agent 自动编排' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('选择参与编排的执行 Agent')).not.toBeInTheDocument();
+    expect(screen.getByText(/已发现 1 个可用普通 Agent/)).toBeInTheDocument();
+  });
+
+  test('lets direct state-machine creation assign Agents automatically', async () => {
+    renderModal({ initialMode: 'state-machine' });
+
+    expect(await screen.findByRole('region', { name: 'Agent 自动编排' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('选择参与编排的执行 Agent')).not.toBeInTheDocument();
+    expect(screen.getByText(/系统会根据状态职责、Agent 能力和参考工作流自动分配执行者/)).toBeInTheDocument();
+  });
+
+  test('blocks creation on the first screen when no normal execution Agent is available', async () => {
+    mocks.agents = [
+      { name: 'default-supervisor', roleType: 'supervisor', catalogVisibility: 'system', description: '系统协调' },
+    ];
+    renderModal({ initialMode: 'state-machine' });
+
+    fireEvent.click(await screen.findByRole('radio', { name: /^不开启/ }));
+    expect(screen.getByText(/当前没有可执行的普通 Agent/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建' })).toBeDisabled();
+    expect(mocks.createConfig).not.toHaveBeenCalled();
+  });
+
   test('selecting AI guided mode keeps its own selected state without creating a chat session', async () => {
     window.localStorage.setItem('aceharness.newConfig.specPlanningEnabled', '1');
     renderModal({
@@ -185,6 +220,7 @@ describe('NewConfigModal lightweight workflow creation', () => {
       expect(screen.getByRole('switch', { name: 'Spec 计划模式' })).toHaveAttribute('aria-checked', 'true');
     });
     fireEvent.click(await screen.findByRole('radio', { name: 'AI 引导创建' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^按需开启/ }));
 
     expect(screen.getByRole('radio', { name: '轻量工作流' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('radio', { name: '状态机' })).toHaveAttribute('aria-checked', 'false');
@@ -233,6 +269,7 @@ describe('NewConfigModal lightweight workflow creation', () => {
     });
 
     fireEvent.click(await screen.findByRole('radio', { name: 'AI 引导创建' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^按需开启/ }));
     await waitFor(() => {
       expect(screen.getByRole('switch', { name: 'Spec 计划模式' })).toHaveAttribute('aria-checked', 'true');
     });
@@ -249,6 +286,63 @@ describe('NewConfigModal lightweight workflow creation', () => {
     });
     expect(await screen.findByRole('heading', { name: '补充问答' })).toBeInTheDocument();
     expect(requests.filter((request) => request.url.endsWith('/api/chat/sessions') && request.method === 'POST')).toHaveLength(1);
+  });
+
+  test('leaves the clarification loading state and exposes the backend error when the AI stream fails', async () => {
+    let activeEventSource: TestEventSource | null = null;
+    class TestEventSource extends EventTarget {
+      readyState = 1;
+
+      constructor() {
+        super();
+        activeEventSource = this;
+      }
+
+      close() {
+        this.readyState = 2;
+      }
+    }
+    vi.stubGlobal('EventSource', TestEventSource);
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || 'GET').toUpperCase();
+      if (url.endsWith('/api/chat/sessions') && method === 'POST') {
+        return createJsonResponse({ session: { id: 'planning-session-error', messages: [] } });
+      }
+      if (url.includes('/api/spec-coding/sessions') && method === 'POST') {
+        return createJsonResponse({ session: { id: 'draft-session-error', status: 'draft' } });
+      }
+      if (url.includes('/api/chat/stream') && method === 'POST') {
+        return createJsonResponse({ chatId: 'chat-stream-error' });
+      }
+      if (url.includes('/api/chat/stream?checkActive=')) {
+        return createJsonResponse({ found: false });
+      }
+      return createJsonResponse({ session: { id: 'draft-session-error', messages: [] }, configs: [] });
+    });
+
+    renderModal({
+      initialMode: 'state-machine',
+      initialRequirements: '',
+    });
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'AI 引导创建' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^按需开启/ }));
+    fireEvent.change(await screen.findByPlaceholderText(/我想创建一个代码审查工作流/), {
+      target: { value: '创建一个低风险项目体检工作流。' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '直接进入编排' }));
+
+    expect(await screen.findByRole('heading', { name: '补充问答' })).toBeInTheDocument();
+    await waitFor(() => expect(activeEventSource).not.toBeNull());
+    activeEventSource!.dispatchEvent(new MessageEvent('engine_error', {
+      data: JSON.stringify({ message: '本地引擎流式会话启动失败' }),
+    }));
+
+    expect(await screen.findByText('补充问答生成失败')).toBeInTheDocument();
+    expect(screen.getByText(/本地引擎流式会话启动失败/)).toBeInTheDocument();
+    expect(screen.queryByText('正在整理关键问题')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新提问' })).toBeEnabled();
   });
 
   test('defers recovery of an existing AI planning session until planning starts', async () => {
@@ -308,6 +402,7 @@ describe('NewConfigModal lightweight workflow creation', () => {
     await waitFor(() => {
       expect(screen.getByRole('switch', { name: 'Spec 计划模式' })).toHaveAttribute('aria-checked', 'true');
     });
+    fireEvent.click(screen.getByRole('radio', { name: /^按需开启/ }));
     expect(requests.some((request) => request.url.includes('/api/spec-coding/sessions?chatSessionId=home-session-1'))).toBe(false);
 
     fireEvent.change(await screen.findByPlaceholderText(/我想创建一个代码审查工作流/), {
@@ -342,6 +437,7 @@ describe('NewConfigModal lightweight workflow creation', () => {
     await screen.findByText('轻量工作流设置');
     fireEvent.change(screen.getByLabelText(/文件名/), { target: { value: 'tasklist-flow.yaml' } });
     expect(screen.queryByLabelText('步骤 Skills')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: /^不开启红蓝对抗/ }));
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
 
     await waitFor(() => {
@@ -369,6 +465,7 @@ describe('NewConfigModal lightweight workflow creation', () => {
 
     await screen.findByText('轻量工作流设置');
     fireEvent.change(screen.getByLabelText(/文件名/), { target: { value: 'in-flight.yaml' } });
+    fireEvent.click(screen.getByRole('radio', { name: /^不开启红蓝对抗/ }));
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
 
     const pendingButton = await screen.findByRole('button', { name: '创建中...' });
@@ -420,6 +517,9 @@ describe('NewConfigModal lightweight workflow creation', () => {
       expect(screen.getByLabelText('执行 Agent')).toHaveValue('developer');
       expect(screen.queryByLabelText(/任务清单目录/)).not.toBeInTheDocument();
     });
+    expect(screen.getByText('请选择一项后再创建或调用 AI。')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^不开启红蓝对抗/ })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /^按需开启/ })).toHaveAttribute('aria-checked', 'false');
   });
 
   test('keeps the ordinary state-machine creation form and payload available', async () => {
@@ -432,6 +532,7 @@ describe('NewConfigModal lightweight workflow creation', () => {
     expect(screen.getByRole('radio', { name: '状态机' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('参考已有工作流（可选）')).toBeInTheDocument();
     fireEvent.change(requirements, { target: { value: '构建一个普通状态机工作流。' } });
+    fireEvent.click(screen.getByRole('radio', { name: /^不开启红蓝对抗/ }));
     fireEvent.click(screen.getByRole('button', { name: '创建' }));
 
     await waitFor(() => {

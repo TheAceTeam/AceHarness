@@ -153,6 +153,7 @@ import { Route as ApiAgentsBatchRouteImport } from './routes/api.agents.batch'
 import { Route as ApiAgentsArchiveRouteImport } from './routes/api.agents.archive'
 import { Route as ApiAgentsAiDraftRouteImport } from './routes/api.agents.ai-draft'
 import { Route as ApiAgentsNameRouteImport } from './routes/api.agents.$name'
+import { Route as ApiWorkflowStartPlanRouteImport } from './routes/api.workflow.start.plan'
 import { Route as ApiSpecCodingSessionsIdRouteImport } from './routes/api.spec-coding.sessions.$id'
 import { Route as ApiSchedulesIdTriggerRouteImport } from './routes/api.schedules.$id.trigger'
 import { Route as ApiSchedulesIdToggleRouteImport } from './routes/api.schedules.$id.toggle'
@@ -962,6 +963,11 @@ const ApiAgentsNameRoute = ApiAgentsNameRouteImport.update({
   path: '/$name',
   getParentRoute: () => ApiAgentsRoute,
 } as any)
+const ApiWorkflowStartPlanRoute = ApiWorkflowStartPlanRouteImport.update({
+  id: '/plan',
+  path: '/plan',
+  getParentRoute: () => ApiWorkflowStartRoute,
+} as any)
 const ApiSpecCodingSessionsIdRoute = ApiSpecCodingSessionsIdRouteImport.update({
   id: '/$id',
   path: '/$id',
@@ -1512,7 +1518,7 @@ export interface FileRoutesByFullPath {
   '/api/workflow/resume': typeof ApiWorkflowResumeRoute
   '/api/workflow/spec-import': typeof ApiWorkflowSpecImportRoute
   '/api/workflow/spec-merge': typeof ApiWorkflowSpecMergeRoute
-  '/api/workflow/start': typeof ApiWorkflowStartRoute
+  '/api/workflow/start': typeof ApiWorkflowStartRouteWithChildren
   '/api/workflow/state-history': typeof ApiWorkflowStateHistoryRoute
   '/api/workflow/status': typeof ApiWorkflowStatusRoute
   '/api/workflow/step-logs': typeof ApiWorkflowStepLogsRoute
@@ -1577,6 +1583,7 @@ export interface FileRoutesByFullPath {
   '/api/schedules/$id/toggle': typeof ApiSchedulesIdToggleRoute
   '/api/schedules/$id/trigger': typeof ApiSchedulesIdTriggerRoute
   '/api/spec-coding/sessions/$id': typeof ApiSpecCodingSessionsIdRouteWithChildren
+  '/api/workflow/start/plan': typeof ApiWorkflowStartPlanRoute
   '/api/agents/$name/chat/session': typeof ApiAgentsNameChatSessionRoute
   '/api/agents/$name/chat/stream': typeof ApiAgentsNameChatStreamRoute
   '/api/channels/integrations/$id/bootstrap': typeof ApiChannelsIntegrationsIdBootstrapRoute
@@ -1734,7 +1741,7 @@ export interface FileRoutesByTo {
   '/api/workflow/resume': typeof ApiWorkflowResumeRoute
   '/api/workflow/spec-import': typeof ApiWorkflowSpecImportRoute
   '/api/workflow/spec-merge': typeof ApiWorkflowSpecMergeRoute
-  '/api/workflow/start': typeof ApiWorkflowStartRoute
+  '/api/workflow/start': typeof ApiWorkflowStartRouteWithChildren
   '/api/workflow/state-history': typeof ApiWorkflowStateHistoryRoute
   '/api/workflow/status': typeof ApiWorkflowStatusRoute
   '/api/workflow/step-logs': typeof ApiWorkflowStepLogsRoute
@@ -1799,6 +1806,7 @@ export interface FileRoutesByTo {
   '/api/schedules/$id/toggle': typeof ApiSchedulesIdToggleRoute
   '/api/schedules/$id/trigger': typeof ApiSchedulesIdTriggerRoute
   '/api/spec-coding/sessions/$id': typeof ApiSpecCodingSessionsIdRouteWithChildren
+  '/api/workflow/start/plan': typeof ApiWorkflowStartPlanRoute
   '/api/agents/$name/chat/session': typeof ApiAgentsNameChatSessionRoute
   '/api/agents/$name/chat/stream': typeof ApiAgentsNameChatStreamRoute
   '/api/channels/integrations/$id/bootstrap': typeof ApiChannelsIntegrationsIdBootstrapRoute
@@ -1957,7 +1965,7 @@ export interface FileRoutesById {
   '/api/workflow/resume': typeof ApiWorkflowResumeRoute
   '/api/workflow/spec-import': typeof ApiWorkflowSpecImportRoute
   '/api/workflow/spec-merge': typeof ApiWorkflowSpecMergeRoute
-  '/api/workflow/start': typeof ApiWorkflowStartRoute
+  '/api/workflow/start': typeof ApiWorkflowStartRouteWithChildren
   '/api/workflow/state-history': typeof ApiWorkflowStateHistoryRoute
   '/api/workflow/status': typeof ApiWorkflowStatusRoute
   '/api/workflow/step-logs': typeof ApiWorkflowStepLogsRoute
@@ -2022,6 +2030,7 @@ export interface FileRoutesById {
   '/api/schedules/$id/toggle': typeof ApiSchedulesIdToggleRoute
   '/api/schedules/$id/trigger': typeof ApiSchedulesIdTriggerRoute
   '/api/spec-coding/sessions/$id': typeof ApiSpecCodingSessionsIdRouteWithChildren
+  '/api/workflow/start/plan': typeof ApiWorkflowStartPlanRoute
   '/api/agents/$name/chat/session': typeof ApiAgentsNameChatSessionRoute
   '/api/agents/$name/chat/stream': typeof ApiAgentsNameChatStreamRoute
   '/api/channels/integrations/$id/bootstrap': typeof ApiChannelsIntegrationsIdBootstrapRoute
@@ -2246,6 +2255,7 @@ export interface FileRouteTypes {
     | '/api/schedules/$id/toggle'
     | '/api/schedules/$id/trigger'
     | '/api/spec-coding/sessions/$id'
+    | '/api/workflow/start/plan'
     | '/api/agents/$name/chat/session'
     | '/api/agents/$name/chat/stream'
     | '/api/channels/integrations/$id/bootstrap'
@@ -2468,6 +2478,7 @@ export interface FileRouteTypes {
     | '/api/schedules/$id/toggle'
     | '/api/schedules/$id/trigger'
     | '/api/spec-coding/sessions/$id'
+    | '/api/workflow/start/plan'
     | '/api/agents/$name/chat/session'
     | '/api/agents/$name/chat/stream'
     | '/api/channels/integrations/$id/bootstrap'
@@ -2690,6 +2701,7 @@ export interface FileRouteTypes {
     | '/api/schedules/$id/toggle'
     | '/api/schedules/$id/trigger'
     | '/api/spec-coding/sessions/$id'
+    | '/api/workflow/start/plan'
     | '/api/agents/$name/chat/session'
     | '/api/agents/$name/chat/stream'
     | '/api/channels/integrations/$id/bootstrap'
@@ -2815,7 +2827,7 @@ export interface RootRouteChildren {
   ApiWorkflowResumeRoute: typeof ApiWorkflowResumeRoute
   ApiWorkflowSpecImportRoute: typeof ApiWorkflowSpecImportRoute
   ApiWorkflowSpecMergeRoute: typeof ApiWorkflowSpecMergeRoute
-  ApiWorkflowStartRoute: typeof ApiWorkflowStartRoute
+  ApiWorkflowStartRoute: typeof ApiWorkflowStartRouteWithChildren
   ApiWorkflowStateHistoryRoute: typeof ApiWorkflowStateHistoryRoute
   ApiWorkflowStatusRoute: typeof ApiWorkflowStatusRoute
   ApiWorkflowStepLogsRoute: typeof ApiWorkflowStepLogsRoute
@@ -3861,6 +3873,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/agents/$name'
       preLoaderRoute: typeof ApiAgentsNameRouteImport
       parentRoute: typeof ApiAgentsRoute
+    }
+    '/api/workflow/start/plan': {
+      id: '/api/workflow/start/plan'
+      path: '/plan'
+      fullPath: '/api/workflow/start/plan'
+      preLoaderRoute: typeof ApiWorkflowStartPlanRouteImport
+      parentRoute: typeof ApiWorkflowStartRoute
     }
     '/api/spec-coding/sessions/$id': {
       id: '/api/spec-coding/sessions/$id'
@@ -4922,6 +4941,17 @@ const ApiWorkflowHumanQuestionsRouteWithChildren =
     ApiWorkflowHumanQuestionsRouteChildren,
   )
 
+interface ApiWorkflowStartRouteChildren {
+  ApiWorkflowStartPlanRoute: typeof ApiWorkflowStartPlanRoute
+}
+
+const ApiWorkflowStartRouteChildren: ApiWorkflowStartRouteChildren = {
+  ApiWorkflowStartPlanRoute: ApiWorkflowStartPlanRoute,
+}
+
+const ApiWorkflowStartRouteWithChildren =
+  ApiWorkflowStartRoute._addFileChildren(ApiWorkflowStartRouteChildren)
+
 interface ApiChannelsWechatOfficialLoginIdRouteChildren {
   ApiChannelsWechatOfficialLoginIdWaitRoute: typeof ApiChannelsWechatOfficialLoginIdWaitRoute
 }
@@ -5123,7 +5153,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiWorkflowResumeRoute: ApiWorkflowResumeRoute,
   ApiWorkflowSpecImportRoute: ApiWorkflowSpecImportRoute,
   ApiWorkflowSpecMergeRoute: ApiWorkflowSpecMergeRoute,
-  ApiWorkflowStartRoute: ApiWorkflowStartRoute,
+  ApiWorkflowStartRoute: ApiWorkflowStartRouteWithChildren,
   ApiWorkflowStateHistoryRoute: ApiWorkflowStateHistoryRoute,
   ApiWorkflowStatusRoute: ApiWorkflowStatusRoute,
   ApiWorkflowStepLogsRoute: ApiWorkflowStepLogsRoute,

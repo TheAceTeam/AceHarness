@@ -63,7 +63,7 @@ export async function GET(
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     const content = await readFile(filepath, 'utf-8');
     const config = normalizeLightweightWorkflowConfig(parse(content));
-    const validation = validateWorkflowDraft(config);
+    const validation = validateWorkflowDraft(config, { workflowKey: filename });
     const meta = await getConfigMeta(filename, 'workflow');
     const specCodingDisabled = isLightweightWorkflowConfig(config)
       || meta?.specCodingEnabled === false
@@ -159,7 +159,10 @@ export async function POST(
     const { roles, ...configWithoutRoles } = config;
 
     // Validate config (roles is optional now)
-    const validationResult = validateWorkflowDraft(configWithoutRoles);
+    const validationResult = validateWorkflowDraft(configWithoutRoles, {
+      materializeIds: true,
+      workflowKey: filename,
+    });
     if (!validationResult.ok || !validationResult.normalized) {
       return jsonOk(
         {

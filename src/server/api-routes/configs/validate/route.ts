@@ -26,7 +26,10 @@ export async function POST(request: Request) {
     }
 
     config = normalizeLightweightWorkflowConfig(config);
-    const validation = validateWorkflowDraft(config);
+    const validation = validateWorkflowDraft(config, {
+      materializeIds: false,
+      workflowKey: filename || config?.workflow?.name || 'workflow-draft',
+    });
     if (validation.ok && config?.workflow?.mode === 'state-machine') {
       try {
         if (filename) {

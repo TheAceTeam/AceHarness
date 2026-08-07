@@ -187,13 +187,16 @@ export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options:
   return getAcpxCommandAttemptsForRuntime(command, options)[0]?.command || '';
 }
 
-export function getAcpxAgentRegistryOverrides(): Record<string, string | string[]> {
-  // ACPX accepts argv arrays on Windows; passing a raw command string makes
-  // the runtime reject the launch before it can resolve a .cmd shim.
+export function getAcpxAgentRegistryOverrides(): Record<string, string> {
+  // acpx 0.13 accepts command strings here and performs its own Windows .cmd
+  // resolution. Passing argv arrays makes its registry call command.trim().
+  // Keep construction free of command discovery because this runs once per
+  // permission-specific runtime.
+  const configuredCodegenieCommand = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
   return {
-    nga: getAcpxAgentRegistryOverride('nga'),
-    codeagent: getAcpxAgentRegistryOverride('codeagent'),
-    codegenie: getAcpxAgentRegistryOverride('codegenie'),
+    nga: 'ngagent --disable-update acp',
+    codeagent: 'codeagent acp',
+    codegenie: formatCommandParts([configuredCodegenieCommand || 'codegenie', 'acp']),
   };
 }
 
@@ -254,12 +257,6 @@ function buildAcpxCommandAttemptParts(
     return [{ source: 'codegenie', parts: [resolvedCommand, ...args] }];
   }
   return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
-}
-
-function getAcpxAgentRegistryOverride(agentId: 'nga' | 'codeagent' | 'codegenie'): string[] {
-  const command = resolveAcpxCommand(agentId);
-  return buildAcpxCommandAttemptParts(command, { agentId })[0]?.parts
-    ?? [command.command, ...(command.args || [])];
 }
 
 function shouldUseAcpxRegistryAgent(command: AcpxCommandResolution, agentId?: string): boolean {

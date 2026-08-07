@@ -70,4 +70,30 @@ describe('state machine design updates', () => {
     expect(savedStep.type).toBe('subworkflow');
     expect(savedStep).not.toHaveProperty('skills');
   });
+
+  test('preserves stable IDs and provenance when editing an existing agent step', () => {
+    const savedStep = buildWorkflowStepFromEditData({
+      type: 'agent',
+      name: 'Implement',
+      agent: 'developer',
+      task: 'Implement and verify',
+      role: 'defender',
+    }, {
+      id: 'step-stable',
+      name: 'Implement',
+      agent: 'developer',
+      task: 'Implement',
+      role: 'defender',
+      agentInstanceId: 'instance-stable',
+      provenance: { origin: 'user' },
+    });
+
+    expect(savedStep).toMatchObject({
+      id: 'step-stable',
+      task: 'Implement and verify',
+      role: 'defender',
+      agentInstanceId: 'instance-stable',
+      provenance: { origin: 'user' },
+    });
+  });
 });

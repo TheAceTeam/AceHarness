@@ -18,6 +18,16 @@ import { updateChatSessionCreationBinding } from '@/lib/chat/persistence';
 import { countWorkflowSteps } from '@/lib/workflow/step-counter';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { createWorkflowConfigSnapshot } from '@/lib/workflow/subworkflow-config';
+import {
+  applyRunReviewPlanOverrides,
+  validateRunReviewPlanArtifact,
+  type RunReviewPlanArtifact,
+} from '@/lib/workflow/run-review-plan';
+import {
+  consumeRunReviewPlanArtifact,
+  loadRunReviewPlanArtifact,
+} from '@/lib/workflow/run-review-plan-store';
+import type { RunReviewOverride } from '@/lib/workflow/run-review-types';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { getEffectiveWorkflowStepSkills, isLightweightWorkflowConfig } from '@/lib/workflow/lightweight';
 import { resolveLightweightTasklistDirectory } from '@/lib/workflow/lightweight-runtime';
@@ -111,6 +121,28 @@ function normalizeInitialContexts(input: any): { globalContext: string; phaseCon
   };
 }
 
+function normalizeRunReviewOverrides(input: any): RunReviewOverride[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((item) => {
+    const configFile = String(item?.configFile || '').trim();
+    if (!configFile) throw new Error('运行级覆盖缺少配置文件');
+    if (item?.kind === 'lightweight') {
+      if (![true, false, null].includes(item?.requiresAdversarial)) throw new Error('轻量工作流运行级覆盖格式无效');
+      return {
+        kind: 'lightweight',
+        configFile,
+        requiresAdversarial: item.requiresAdversarial,
+      };
+    }
+    const stateId = String(item?.stateId || '').trim();
+    const mode = item?.mode === null ? null : String(item?.mode || '');
+    if (!stateId || !['standard', 'adversarial', null].includes(mode as any)) {
+      throw new Error('逐状态运行级覆盖格式无效');
+    }
+    return { kind: 'state', configFile, stateId, mode } as RunReviewOverride;
+  });
+}
+
 function logWorkflowStartFailure(configFile: string, err: any) {
   const message = err?.message || String(err);
   console.error(`[Workflow] start failed for ${configFile}:`, message);
@@ -124,6 +156,9 @@ async function startRehearsalRun(input: {
   userId: string;
   username: string;
   lightweight?: PersistedLightweightRunMetadata;
+  configContent?: string;
+  configContentOverrides?: Record<string, string>;
+  runReviewPlan?: RunReviewPlanArtifact['plan'];
   preflightChecks: any[];
   initialContexts?: {
     globalContext: string;
@@ -133,7 +168,7 @@ async function startRehearsalRun(input: {
   };
 }) {
   const configPath = await getRuntimeWorkflowConfigPath(input.configFile);
-  const raw = await readFile(configPath, 'utf-8');
+  const raw = input.configContent ?? await readFile(configPath, 'utf-8');
   const config = parse(raw) as any;
   if (input.initialContexts?.workingDirectory) {
     config.context = {
@@ -142,6 +177,11 @@ async function startRehearsalRun(input: {
     };
   }
   const runId = input.runId;
+  const workflowSnapshot = await createWorkflowConfigSnapshot({
+    rootConfigFile: input.configFile,
+    runId,
+    contentOverrides: input.configContentOverrides,
+  });
   const now = new Date().toISOString();
   const totalSteps = countWorkflowSteps(config);
   if (input.lightweight) {
@@ -236,6 +276,9 @@ async function startRehearsalRun(input: {
       summary,
       recommendedNextSteps,
     },
+    runReviewPlan: input.runReviewPlan,
+    workflowSnapshotRoot: workflowSnapshot.root,
+    workflowSnapshotManifestHash: workflowSnapshot.manifestHash,
   };
   await saveRunState(state);
 
@@ -304,7 +347,15 @@ export async function POST(request: Request) {
 
   try {
     const body = await readJsonBody<any>(request, {});
-    const { configFile, frontendSessionId, creationSessionId, skipPreflight, rehearsal, preflightChecks: inputPreflightChecks } = body;
+    const {
+      configFile,
+      frontendSessionId,
+      creationSessionId,
+      skipPreflight,
+      rehearsal,
+      preflightChecks: inputPreflightChecks,
+      startPlanId,
+    } = body;
     const initialContexts = normalizeInitialContexts(body?.initialContexts);
 
     if (!configFile) {
@@ -314,24 +365,39 @@ export async function POST(request: Request) {
       );
     }
 
-    let preflightChecks = Array.isArray(inputPreflightChecks) ? inputPreflightChecks : undefined;
-    if (!skipPreflight) {
-      const preflight = await runWorkflowPreflight(configFile, user.personalDir || '', initialContexts.workingDirectory);
-      if (!preflight.ok) {
-        return jsonOk(
-          {
-            error: `启动前检查未通过：${preflight.failedCount} 项失败`,
-            checks: preflight.checks,
-            cwd: preflight.cwd,
-          },
-          { status: 412 }
-        );
+    let runReviewArtifact: RunReviewPlanArtifact | null = null;
+    if (typeof startPlanId === 'string' && startPlanId.trim()) {
+      const stored = loadRunReviewPlanArtifact(user.id, startPlanId.trim());
+      if (!stored) return jsonOk({ error: '本次运行方案不存在或已过期，请重新确认' }, { status: 409 });
+      if (stored.plan.rootConfigFile !== configFile) {
+        return jsonOk({ error: '本次运行方案与工作流配置不匹配' }, { status: 409 });
       }
-      preflightChecks = preflight.checks;
+      if (body?.adversarialIntent && body.adversarialIntent !== stored.plan.intent) {
+        return jsonOk({ error: '本次运行方案与全局意愿不匹配' }, { status: 409 });
+      }
+      try {
+        await validateRunReviewPlanArtifact({ artifact: stored, initialContexts, rehearsal: Boolean(rehearsal) });
+        runReviewArtifact = await applyRunReviewPlanOverrides({
+          artifact: stored,
+          overrides: normalizeRunReviewOverrides(body?.reviewOverrides),
+        });
+      } catch (error: any) {
+        return jsonOk({ error: '本次运行方案已失效', message: error?.message || String(error) }, { status: 409 });
+      }
+      if (runReviewArtifact.plan.blocked) {
+        return jsonOk({ error: '本次运行方案存在未解决问题', plan: runReviewArtifact.plan }, { status: 409 });
+      }
+    } else if (body?.adversarialIntent) {
+      return jsonOk({ error: '缺少已确认的本次运行方案' }, { status: 400 });
+    } else {
+      console.warn(`[Workflow] deprecated start without run-level adversarial intent: ${configFile}`);
     }
 
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
-    let config = parse(await readFile(configPath, 'utf-8')) as any;
+    let config = parse(
+      runReviewArtifact?.effectiveConfigContents[configFile]
+        ?? await readFile(configPath, 'utf-8'),
+    ) as any;
     const boundCreationSession = typeof creationSessionId === 'string'
       ? await loadCreationSession(creationSessionId).catch(() => null)
       : await loadLatestCreationSessionByFilename(configFile).catch(() => null);
@@ -349,8 +415,44 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      await writeFile(configPath, stringify(config), 'utf-8');
+      if (runReviewArtifact) {
+        runReviewArtifact.effectiveConfigContents[configFile] = stringify(config);
+      } else {
+        await writeFile(configPath, stringify(config), 'utf-8');
+      }
       await updateCreationSession(boundCreationSession.id, { bindingValidation });
+    }
+
+    let preflightChecks = Array.isArray(inputPreflightChecks) ? inputPreflightChecks : undefined;
+    // The run-review plan, effective config hash, schema, agent bindings and
+    // snapshot are validated independently from project quality commands.
+    // An explicit skip only bypasses lint/build/test/custom preflight commands;
+    // it must not bypass those structural launch safeguards.
+    if (!skipPreflight) {
+      const preflight = await runWorkflowPreflight(
+        configFile,
+        user.personalDir || '',
+        initialContexts.workingDirectory,
+        runReviewArtifact
+          ? { configContents: runReviewArtifact.effectiveConfigContents }
+          : {},
+      );
+      if (!preflight.ok) {
+        return jsonOk(
+          {
+            error: `启动前检查未通过：${preflight.failedCount} 项失败`,
+            checks: preflight.checks,
+            cwd: preflight.cwd,
+          },
+          { status: 412 },
+        );
+      }
+      preflightChecks = preflight.checks;
+    } else if (runReviewArtifact) {
+      // Planned starts cannot trust stale client-side results from a different
+      // projection. Persist no quality result when the user explicitly skips
+      // project checks; the structural validations above still remain active.
+      preflightChecks = [];
     }
 
     if (config?.workflow?.mode !== 'state-machine') {
@@ -393,7 +495,11 @@ export async function POST(request: Request) {
           lightweight,
           preflightChecks: preflightChecks || [],
           initialContexts,
+          configContent: runReviewArtifact?.effectiveConfigContents[configFile],
+          configContentOverrides: runReviewArtifact?.effectiveConfigContents,
+          runReviewPlan: runReviewArtifact?.plan,
         });
+        if (runReviewArtifact) consumeRunReviewPlanArtifact(user.id, runReviewArtifact.plan.id);
         return jsonOk({
           success: true,
           message: '演练模式已完成',
@@ -412,6 +518,7 @@ export async function POST(request: Request) {
       await createWorkflowConfigSnapshot({
         rootConfigFile: configFile,
         runId,
+        contentOverrides: runReviewArtifact?.effectiveConfigContents,
       });
     } catch (error: any) {
       return jsonOk(
@@ -455,6 +562,8 @@ export async function POST(request: Request) {
       manager._userPersonalDir = user.personalDir;
       manager._frontendSessionId = workflowConversation.sessionId;
       manager._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
+      manager._rootRunId = runId;
+      manager._runReviewPlan = runReviewArtifact?.plan;
       const startPromise = manager.start(configFile, undefined, preflightChecks, initialContexts, runId);
       void Promise.resolve(startPromise)
         .catch((err: any) => {
@@ -483,6 +592,8 @@ export async function POST(request: Request) {
         speakerName: supervisorAgent,
         dedupeKey: `workflow-run-starting-${runId}`,
       }, configFile, manager);
+
+      if (runReviewArtifact) consumeRunReviewPlanArtifact(user.id, runReviewArtifact.plan.id);
 
       return jsonOk({
         success: true,

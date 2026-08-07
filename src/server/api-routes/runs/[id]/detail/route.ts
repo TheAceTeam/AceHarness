@@ -3,6 +3,8 @@ import { loadRunState } from '@/lib/run/state-persistence';
 import { listChatSessions } from '@/lib/chat/persistence';
 import { loadWorkflowFinalReview } from '@/lib/workflow/experience-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
+import { readWorkflowConfigSnapshot } from '@/lib/workflow/subworkflow-config';
+import { parse } from 'yaml';
 
 const DEFAULT_HISTORY_LIMIT = 200;
 const DEFAULT_FLOW_LIMIT = 200;
@@ -145,6 +147,32 @@ async function withResolvedWorkflowFrontendSessionId(runId: string, detail: any)
   };
 }
 
+async function withEffectiveWorkflowSnapshot(runId: string, detail: any) {
+  if (!isRecord(detail)) return detail;
+  if (isRecord(detail.workflow) && Array.isArray(detail.workflow.states)) return detail;
+  const configFile = nonEmptyString(detail.configFile);
+  const rootRunId = nonEmptyString(detail.rootRunId) || runId;
+  if (!configFile) return detail;
+  try {
+    const snapshot = await readWorkflowConfigSnapshot({ rootRunId, configFile });
+    const config = parse(snapshot.content);
+    if (!isRecord(config?.workflow) || !Array.isArray(config.workflow.states)) return detail;
+    return {
+      ...detail,
+      workflow: config.workflow,
+      effectiveWorkflowSnapshot: {
+        configFile,
+        snapshotFile: snapshot.snapshotFile,
+        manifestHash: snapshot.manifest.manifestHash,
+      },
+    };
+  } catch {
+    // Old runs may predate immutable config snapshots. Keep the existing
+    // detail response usable and let the client fall back to the base config.
+    return detail;
+  }
+}
+
 function hasAgentSessionIds(agents: unknown): boolean {
   return Array.isArray(agents) && agents.some((agent) => nonEmptyString(agent?.sessionId));
 }
@@ -165,7 +193,9 @@ function shouldBackfillRunSnapshot(snapshot: any): boolean {
   if (!isRecord(snapshot)) return false;
   const attachedAgentSessions = normalizeSessionMap(snapshot.attachedAgentSessions);
   return (
-    snapshot.workflowFrontendSessionId === undefined
+    snapshot.workflow === undefined
+    || (snapshot.specCodingSummary !== undefined && snapshot.runSpecCoding === undefined)
+    || snapshot.workflowFrontendSessionId === undefined
     || snapshot.supervisorSessionId === undefined
     || snapshot.attachedAgentSessions === undefined
     || Object.keys(attachedAgentSessions).length === 0
@@ -277,6 +307,7 @@ export async function GET(
           }
         }
         detail = await withResolvedWorkflowFrontendSessionId(id, detail);
+        detail = await withEffectiveWorkflowSnapshot(id, detail);
         return jsonOk({
           ...detail,
           finalReview,
@@ -294,10 +325,13 @@ export async function GET(
       return jsonOk({ error: '运行详情不存在' }, { status: 404 });
     }
     if (!full) {
-      return jsonOk(await withResolvedWorkflowFrontendSessionId(id, compactRunDetail(state, finalReview)));
+      return jsonOk(await withEffectiveWorkflowSnapshot(
+        id,
+        await withResolvedWorkflowFrontendSessionId(id, compactRunDetail(state, finalReview)),
+      ));
     }
     return jsonOk({
-      ...(await withResolvedWorkflowFrontendSessionId(id, state)),
+      ...(await withEffectiveWorkflowSnapshot(id, await withResolvedWorkflowFrontendSessionId(id, state))),
       finalReview,
       __compact: false,
     });

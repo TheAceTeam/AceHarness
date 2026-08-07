@@ -1862,11 +1862,69 @@ export const usersApi = {
 };
 
 export const workflowApi = {
+  async createStartPlan(input: {
+    configFile: string;
+    intent: import('@/lib/workflow/run-review-types').WorkflowAdversarialIntent;
+    initialContexts?: {
+      globalContext?: string;
+      phaseContexts?: Record<string, string>;
+      taskInput?: WorkflowTaskInput;
+      workingDirectory?: string;
+    };
+    rehearsal?: boolean;
+  }): Promise<import('@/lib/workflow/run-review-types').RunReviewPlanResponse> {
+    const response = await authFetch(`${API_BASE}/workflow/start/plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      throw new Error(data?.message ? `${data.error}: ${data.message}` : (data?.error || '无法生成本次运行方案'));
+    }
+    return data;
+  },
+
+  async updateStartPlan(input: {
+    planId: string;
+    initialContexts?: {
+      globalContext?: string;
+      phaseContexts?: Record<string, string>;
+      taskInput?: WorkflowTaskInput;
+      workingDirectory?: string;
+    };
+    rehearsal?: boolean;
+    overrides: import('@/lib/workflow/run-review-types').RunReviewOverride[];
+  }): Promise<import('@/lib/workflow/run-review-types').RunReviewPlanResponse> {
+    const response = await authFetch(`${API_BASE}/workflow/start/plan`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      throw new Error(data?.message ? `${data.error}: ${data.message}` : (data?.error || '无法更新本次运行方案'));
+    }
+    return data;
+  },
+
+  async discardStartPlan(planId: string): Promise<void> {
+    const response = await authFetch(`${API_BASE}/workflow/start/plan`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planId }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) throw new Error(data?.error || '无法取消本次运行方案');
+  },
+
   async preflightPreview(configFile: string, workingDirectory?: string): Promise<{
     cwd: string;
     commands: Array<{
       command: string;
       origin: 'workflow' | 'inferred';
+      configFile?: string;
+      cwd?: string;
     }>;
     policy: {
       blockOnFailure: boolean;
@@ -1897,6 +1955,8 @@ export const workflowApi = {
       category: 'lint' | 'compile' | 'test' | 'custom';
       status: 'passed' | 'failed' | 'warning';
       origin?: 'workflow' | 'inferred';
+      configFile?: string;
+      cwd?: string;
       summary: string;
       createdAt: string;
       commands: Array<{
@@ -1957,6 +2017,9 @@ export const workflowApi = {
         errorText?: string | null;
       }>;
     }>;
+    startPlanId?: string;
+    adversarialIntent?: import('@/lib/workflow/run-review-types').WorkflowAdversarialIntent;
+    reviewOverrides?: import('@/lib/workflow/run-review-types').RunReviewOverride[];
   }): Promise<ApiResponse & { runId?: string | null; frontendSessionId?: string | null; sessionWorkbenchState?: any }> {
     const response = await authFetch(`${API_BASE}/workflow/start`, {
       method: 'POST',
@@ -1969,15 +2032,27 @@ export const workflowApi = {
         rehearsal: options?.rehearsal || false,
         initialContexts: options?.initialContexts,
         preflightChecks: options?.preflightChecks,
+        startPlanId: options?.startPlanId,
+        adversarialIntent: options?.adversarialIntent,
+        reviewOverrides: options?.reviewOverrides,
       }),
     });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || '启动工作流失败');
-    }
-    const data = await response.json();
-    if (data?.error) {
-      throw new Error(data.message ? `${data.error}: ${data.message}` : data.error);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      const error = new Error(
+        data?.message
+          ? `${data.error || '启动工作流失败'}: ${data.message}`
+          : (data?.error || '启动工作流失败'),
+      ) as Error & {
+        status?: number;
+        checks?: unknown[];
+        cwd?: string;
+      };
+      error.name = 'WorkflowStartError';
+      error.status = response.status;
+      error.checks = Array.isArray(data?.checks) ? data.checks : undefined;
+      error.cwd = typeof data?.cwd === 'string' ? data.cwd : undefined;
+      throw error;
     }
     return data;
   },

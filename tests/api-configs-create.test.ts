@@ -105,9 +105,10 @@ describe('configs create route', () => {
         const { token } = await createAuthToken();
         vi.resetModules();
         const { POST } = await import('@/server/api-routes/configs/create/route');
-        const { readFile } = await import('fs/promises');
+        const { readdir, readFile } = await import('fs/promises');
         const { parse } = await import('yaml');
         const path = await import('path');
+        const { isWorkflowStepSelectableAgent } = await import('@/lib/agent/catalog');
 
         const response = await POST(makeRequest('/api/configs/create', {
           token,
@@ -163,9 +164,10 @@ describe('configs create route', () => {
         const { token, user } = await createAuthToken();
         vi.resetModules();
         const { POST } = await import('@/server/api-routes/configs/create/route');
-        const { readFile } = await import('fs/promises');
+        const { readdir, readFile } = await import('fs/promises');
         const { parse } = await import('yaml');
         const path = await import('path');
+        const { isWorkflowStepSelectableAgent } = await import('@/lib/agent/catalog');
 
         const response = await POST(makeRequest('/api/configs/create', {
           token,
@@ -175,6 +177,8 @@ describe('configs create route', () => {
             workingDirectory: workspace,
             workspaceMode: 'isolated-copy',
             mode: 'state-machine',
+            creationJourney: 'direct',
+            creationAdversarialIntent: 'disabled',
           },
         }));
         expect(response.status).toBe(200);
@@ -191,6 +195,17 @@ describe('configs create route', () => {
         expect(Array.isArray(yamlContent.workflow.states)).toBe(true);
         expect(yamlContent.workflow.states.some((s: any) => s.isInitial)).toBe(true);
         expect(yamlContent.workflow.states.some((s: any) => s.isFinal)).toBe(true);
+        const agentsDirectory = path.join(aceHome, 'configs', 'agents');
+        const availableAgentNames = new Set((await Promise.all(
+          (await readdir(agentsDirectory))
+            .filter((file) => file.endsWith('.yaml') || file.endsWith('.yml'))
+            .map(async (file) => parse(await readFile(path.join(agentsDirectory, file), 'utf8'))),
+        )).filter(isWorkflowStepSelectableAgent).map((agent: any) => agent.name));
+        const assignedAgentNames = yamlContent.workflow.states
+          .flatMap((state: any) => state.steps || [])
+          .map((step: any) => step.agent);
+        expect(assignedAgentNames.length).toBeGreaterThan(0);
+        expect(assignedAgentNames.every((agent: string) => availableAgentNames.has(agent))).toBe(true);
         expect(yamlContent.context.workspaceMode).toBe('isolated-copy');
         const { getConfigMeta } = await import('@/lib/config/metadata');
         await expect(getConfigMeta('sm-test.yaml')).resolves.toMatchObject({
@@ -198,6 +213,51 @@ describe('configs create route', () => {
           specCodingEnabled: true,
           specCodingSkipped: false,
         });
+      });
+    });
+  });
+
+  test('rejects creation before persisting a workflow when no normal execution Agent exists', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token } = await createAuthToken();
+        vi.resetModules();
+        const { getRuntimeAgentsDirPath } = await import('@/lib/run/runtime-configs');
+        const { isWorkflowStepSelectableAgent } = await import('@/lib/agent/catalog');
+        const { readdir, readFile, writeFile } = await import('fs/promises');
+        const { parse, stringify } = await import('yaml');
+        const path = await import('path');
+        const agentsDirectory = await getRuntimeAgentsDirPath();
+        for (const file of await readdir(agentsDirectory)) {
+          if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
+          const agent = parse(await readFile(path.join(agentsDirectory, file), 'utf8'));
+          if (isWorkflowStepSelectableAgent(agent)) {
+            await writeFile(path.join(agentsDirectory, file), stringify({
+              ...agent,
+              roleType: 'supervisor',
+              catalogVisibility: 'system',
+            }), 'utf8');
+          }
+        }
+
+        const { POST } = await import('@/server/api-routes/configs/create/route');
+        const response = await POST(makeRequest('/api/configs/create', {
+          token,
+          json: {
+            filename: 'no-agent.yaml',
+            workflowName: 'No Agent',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'state-machine',
+            creationJourney: 'direct',
+            creationAdversarialIntent: 'disabled',
+            skipSpecCoding: true,
+          },
+        }));
+
+        expect(response.status).toBe(400);
+        expect(JSON.stringify(await responseJson<any>(response))).toContain('当前没有可执行的普通 Agent');
+        await expect(readFile(path.join(aceHome, 'configs', 'no-agent.yaml'), 'utf8')).rejects.toThrow();
       });
     });
   });
