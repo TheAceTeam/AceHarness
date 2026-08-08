@@ -593,6 +593,9 @@ export async function POST(request: Request) {
     const configValidation = validateWorkflowDraft(defaultConfig, {
       materializeIds: true,
       workflowKey: filename,
+      // Creating a workflow is the explicit opt-in: the caller just answered the
+      // global adversarial intent, so the new config adopts the protocol.
+      adoptLegacyPolicy: true,
     });
     if (!configValidation.ok || !configValidation.normalized) {
       return jsonOk({

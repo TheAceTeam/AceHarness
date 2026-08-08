@@ -557,6 +557,75 @@ describe('config API routes', () => {
     });
   });
 
+  test('saving a pre-protocol workflow does not adopt the review protocol for it', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token } = await createAuthToken();
+        const route = await import('@/server/api-routes/configs/[filename]/route');
+
+        // Shaped like a workflow authored before state-level review existed: no
+        // reviewPolicy anywhere, a parallel tail, and a defender/attacker/judge
+        // sequence that would otherwise be inferred as adversarial.
+        const legacyConfig = {
+          workflow: {
+            name: 'Pre Protocol',
+            mode: 'state-machine',
+            supervisor: { enabled: true, agent: 'default-supervisor' },
+            states: [
+              {
+                name: 'Build',
+                isInitial: true,
+                isFinal: false,
+                steps: [
+                  { name: 'Impl A', type: 'agent', agent: 'developer', task: 'A', parallelGroup: 'g' },
+                  { name: 'Impl B', type: 'agent', agent: 'developer', task: 'B', parallelGroup: 'g' },
+                ],
+                transitions: [
+                  { to: 'Review', condition: { verdict: 'pass' } },
+                  { to: 'Build', condition: { verdict: 'conditional_pass' } },
+                  { to: 'Build', condition: { verdict: 'fail' } },
+                ],
+              },
+              {
+                name: 'Review',
+                isInitial: false,
+                isFinal: false,
+                steps: [
+                  { name: 'Produce', type: 'agent', agent: 'developer', task: 'produce', role: 'defender' },
+                  { name: 'Challenge', type: 'agent', agent: 'developer', task: 'challenge', role: 'attacker' },
+                  { name: 'Decide', type: 'agent', agent: 'developer', task: 'decide', role: 'judge' },
+                ],
+                transitions: [
+                  { to: 'Done', condition: { verdict: 'pass' } },
+                  { to: 'Review', condition: { verdict: 'conditional_pass' } },
+                  { to: 'Review', condition: { verdict: 'fail' } },
+                ],
+              },
+              { name: 'Done', isInitial: false, isFinal: true, steps: [], transitions: [] },
+            ],
+          },
+          context: { projectRoot: workspace, workspaceMode: 'in-place', requirements: 'keep as authored' },
+        };
+
+        const response = await route.POST(
+          makeRequest('/api/configs/pre-protocol.yaml', { token, json: { config: legacyConfig } }),
+          { params: Promise.resolve({ filename: 'pre-protocol.yaml' }) },
+        );
+        expect(response.status).toBe(200);
+
+        const persisted = parse(await readFile(path.join(aceHome, 'configs', 'pre-protocol.yaml'), 'utf-8')) as any;
+        const [build, review] = persisted.workflow.states;
+        expect(build.steps).toHaveLength(2);
+        expect(build.reviewPolicy).toBeUndefined();
+        expect(build.maxSelfTransitions).toBeUndefined();
+        expect(review.steps).toHaveLength(3);
+        expect(review.reviewPolicy).toBeUndefined();
+        expect(review.maxSelfTransitions).toBeUndefined();
+        expect(review.steps.map((step: any) => step.agentInstanceId)).toEqual([undefined, undefined, undefined]);
+      });
+    });
+  });
+
   test('config copy route preserves SpecCoding for the copied workflow', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {

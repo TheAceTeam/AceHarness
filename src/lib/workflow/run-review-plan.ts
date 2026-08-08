@@ -255,6 +255,9 @@ function buildCandidates(graph: WorkflowConfigDependencyGraphWithContent): {
     const config = normalizeStateMachineWorkflowConfig(parsed, {
       materializeIds: false,
       workflowKey: entry.file,
+      // Planning a run is an explicit opt-in: the user just chose an intent, and
+      // the projection needs each state's baseline mode to plan against.
+      adoptLegacyPolicy: true,
     });
     normalizedConfigs.set(entry.file, config);
     if (isLightweightWorkflowConfig(config)) {
