@@ -132,6 +132,35 @@ describe('workflow design config draft helpers', () => {
     expect(hasWorkflowDesignDraftChanges(persisted, draft)).toBe(true);
   });
 
+  test('materializes legacy all-state review adoption in the save payload without mutating the draft', () => {
+    const config = {
+      ...stateMachineConfig,
+      workflow: {
+        ...stateMachineConfig.workflow,
+        states: [{
+          name: 'reviewed',
+          isInitial: true,
+          isFinal: false,
+          reviewPolicy: {
+            mode: 'adversarial' as const,
+            source: 'ai' as const,
+            locked: false,
+            confidence: 'high' as const,
+            riskSignals: ['cross-module'],
+            rationale: 'needs independent review',
+          },
+          steps: [],
+          transitions: [],
+        }],
+      },
+    };
+
+    const saved = buildWorkflowDesignConfigForSave(config, persistedDraftState);
+
+    expect((saved.workflow as any).reviewProtocol).toBe('state-level');
+    expect(config.workflow).not.toHaveProperty('reviewProtocol');
+  });
+
   test('removes historical supervisor from lightweight design save payloads', () => {
     const normalized = buildWorkflowDesignConfigForSave({
       ...lightweightConfig,

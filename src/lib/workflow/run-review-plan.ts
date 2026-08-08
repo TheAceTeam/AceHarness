@@ -13,6 +13,7 @@ import {
   canonicalJson,
   normalizeStateMachineWorkflowConfig,
   reconcileReviewPolicy,
+  type ReviewPolicyOperation,
 } from '@/lib/workflow/state-review-policy';
 import {
   normalizeWorkflowConfigRef,
@@ -45,6 +46,8 @@ type StateReviewCandidate = {
   baseMode: WorkflowReviewMode;
   configLocked: boolean;
   stepSummaries: Array<{ name: string; task: string; agent: string }>;
+  /** Structural changes adoption made while normalising, so the plan can show them. */
+  adoptionOperations: ReviewPolicyOperation[];
 };
 
 type LightweightReviewCandidate = {
@@ -252,12 +255,16 @@ function buildCandidates(graph: WorkflowConfigDependencyGraphWithContent): {
       normalizedConfigs.set(entry.file, parsed);
       continue;
     }
+    const adoptionOperations = new Map<string, ReviewPolicyOperation[]>();
     const config = normalizeStateMachineWorkflowConfig(parsed, {
       materializeIds: false,
       workflowKey: entry.file,
       // Planning a run is an explicit opt-in: the user just chose an intent, and
       // the projection needs each state's baseline mode to plan against.
       adoptLegacyPolicy: true,
+      collectOperations: (stateKey, operations) => {
+        adoptionOperations.set(stateKey, [...(adoptionOperations.get(stateKey) || []), ...operations]);
+      },
     });
     normalizedConfigs.set(entry.file, config);
     if (isLightweightWorkflowConfig(config)) {
@@ -291,6 +298,7 @@ function buildCandidates(graph: WorkflowConfigDependencyGraphWithContent): {
           task: String(step.task || ''),
           agent: String(step.agent || ''),
         })),
+        adoptionOperations: adoptionOperations.get(id) || adoptionOperations.get(state.name) || [],
       });
     }
   }
@@ -343,9 +351,29 @@ function deriveAdversarialStateMachine(
   const suffix = sha256(normalizeWorkflowConfigRef(configFile)).slice(0, 10);
   const executionName = '执行与对抗';
   const finalName = '完成';
+  const derivationOperations: ReviewPolicyOperation[] = [];
   const sourceSkills = Array.isArray(sourceStep.skills)
     ? sourceStep.skills.filter((skill: string) => skill !== LIGHTWEIGHT_TASKLIST_SKILL)
     : undefined;
+  const derivedSourceStep = {
+    ...sourceStep,
+    id: sourceStep.id || `run-review-defender-${suffix}`,
+    role: undefined,
+    agentInstanceId: undefined,
+    ...(sourceSkills?.length ? { skills: sourceSkills } : { skills: undefined }),
+    specTaskBinding: undefined,
+  };
+  if (Array.isArray(sourceStep.skills) && sourceStep.skills.includes(LIGHTWEIGHT_TASKLIST_SKILL)) {
+    derivationOperations.push({
+      op: 'retag',
+      stepId: sourceStep.id,
+      stepName: sourceStep.name,
+      reason: `派生状态机不再使用 lightweight 专用的 ${LIGHTWEIGHT_TASKLIST_SKILL}，本次快照会移除该 skill；源 YAML 保持不变。`,
+      before: structuredClone(sourceStep),
+      after: structuredClone(derivedSourceStep),
+      safe: true,
+    });
+  }
   const executionState: StateMachineState = {
     ...sourceState,
     id: `run-review-execution-${suffix}`,
@@ -353,14 +381,7 @@ function deriveAdversarialStateMachine(
     description: sourceState.description || config.workflow.description || '执行本次任务，并进行独立攻击审查与裁决。',
     isInitial: true,
     isFinal: false,
-    steps: [{
-      ...sourceStep,
-      id: sourceStep.id || `run-review-defender-${suffix}`,
-      role: undefined,
-      agentInstanceId: undefined,
-      ...(sourceSkills?.length ? { skills: sourceSkills } : { skills: undefined }),
-      specTaskBinding: undefined,
-    }],
+    steps: [derivedSourceStep],
     transitions: [
       { to: finalName, condition: { verdict: 'pass' }, priority: 10, label: '通过' },
       { to: executionName, condition: { verdict: 'conditional_pass' }, priority: 20, label: '修正后复核' },
@@ -385,7 +406,12 @@ function deriveAdversarialStateMachine(
     },
   );
   if (reconciled.blocked) {
-    return { config, operations: reconciled.operations, warnings: reconciled.warnings, blocked: true };
+    return {
+      config,
+      operations: [...derivationOperations, ...reconciled.operations],
+      warnings: reconciled.warnings,
+      blocked: true,
+    };
   }
   const { profile: _profile, lightweight: _lightweight, ...workflow } = config.workflow;
   const derived = {
@@ -405,10 +431,14 @@ function deriveAdversarialStateMachine(
           transitions: [],
         },
       ],
-      supervisor: workflow.supervisor || { enabled: true, agent: 'default-supervisor' },
     },
   };
-  return { config: derived, operations: reconciled.operations, warnings: reconciled.warnings, blocked: false };
+  return {
+    config: derived,
+    operations: [...derivationOperations, ...reconciled.operations],
+    warnings: reconciled.warnings,
+    blocked: false,
+  };
 }
 
 function isWorkflowOverride(value: RunReviewOverride): value is RunReviewWorkflowOverride {
@@ -580,7 +610,9 @@ function projectPlan(input: {
         locked,
         configLocked: candidate.configLocked,
         ...(suggestion ? { suggestion } : {}),
-        operations: reconciled.operations,
+        // Adoption reshaped the state before reconciliation ran, so both sets of
+        // changes belong to what this run is about to do.
+        operations: [...candidate.adoptionOperations, ...reconciled.operations],
         warnings: stateWarnings,
         blocked: reconciled.blocked || manualSelectionRequired,
         manualSelectionRequired,

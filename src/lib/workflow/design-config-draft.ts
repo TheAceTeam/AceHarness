@@ -1,5 +1,6 @@
 import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import { normalizeLightweightWorkflowConfig } from '@/lib/workflow/lightweight';
+import { materializeStateLevelReviewAdoption } from '@/lib/workflow/state-review-policy';
 
 export interface WorkflowDesignDraftState {
   projectRoot: string;
@@ -41,7 +42,7 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
   const ragKnowledgeBases = Array.isArray(draftState.ragKnowledgeBases) ? [...draftState.ragKnowledgeBases] : [];
   const skills = Array.isArray(draftState.skills) ? [...draftState.skills] : [];
   if (ragKnowledgeBases.length > 0 && !skills.includes('aceharness-rag')) skills.push('aceharness-rag');
-  return normalizeLightweightWorkflowConfig({
+  const normalized = normalizeLightweightWorkflowConfig({
     ...baseConfig,
     context: {
       ...(baseConfig.context || {}),
@@ -71,6 +72,7 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
       },
     },
   } as T);
+  return materializeStateLevelReviewAdoption(normalized);
 }
 
 function normalizeComparableValue(value: unknown): unknown {

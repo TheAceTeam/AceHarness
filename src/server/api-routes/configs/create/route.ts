@@ -590,6 +590,14 @@ export async function POST(request: Request) {
       defaultConfig = forceDisabledReviewConfig(defaultConfig);
     }
 
+    // Record adoption on the workflow itself. Creating is a deliberate opt-in —
+    // the caller just answered the global intent — and persisting it here means
+    // later saves, imports and AI edits no longer have to infer it from whichever
+    // state happens to carry a policy. Lightweight workflows never adopt.
+    if (workflowMode !== 'lightweight' && defaultConfig?.workflow) {
+      defaultConfig.workflow.reviewProtocol = 'state-level';
+    }
+
     const configValidation = validateWorkflowDraft(defaultConfig, {
       materializeIds: true,
       workflowKey: filename,

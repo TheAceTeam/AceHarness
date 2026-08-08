@@ -29,6 +29,7 @@ import {
 } from '@/lib/workflow/run-review-plan-store';
 import type { RunReviewOverride } from '@/lib/workflow/run-review-types';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
+import { getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import { getEffectiveWorkflowStepSkills, isLightweightWorkflowConfig } from '@/lib/workflow/lightweight';
 import { resolveLightweightTasklistDirectory } from '@/lib/workflow/lightweight-runtime';
 import { bindWorkflowRunToConversation, ensureWorkflowRuntimeConversation } from '@/lib/workflow/runtime-session';
@@ -50,6 +51,12 @@ const globalForWorkflowStart = globalThis as unknown as {
   __workflowStartLocks?: Set<string>;
 };
 const workflowStartLocks = globalForWorkflowStart.__workflowStartLocks ??= new Set<string>();
+const LEGACY_START_COMPATIBILITY_FLAG = 'ACEH_ALLOW_LEGACY_START_WITHOUT_REVIEW_PLAN';
+
+function allowsLegacyStartWithoutReviewPlan(userId: string): boolean {
+  const value = getConfiguredEnvValueSync(LEGACY_START_COMPATIBILITY_FLAG, { userId })?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
 
 async function appendAndFanoutWorkflowRuntimeTranscript(
   input: WorkflowRuntimeTranscriptInput,
@@ -390,7 +397,16 @@ export async function POST(request: Request) {
     } else if (body?.adversarialIntent) {
       return jsonOk({ error: '缺少已确认的本次运行方案' }, { status: 400 });
     } else {
-      console.warn(`[Workflow] deprecated start without run-level adversarial intent: ${configFile}`);
+      if (!allowsLegacyStartWithoutReviewPlan(user.id)) {
+        return jsonOk({
+          error: '缺少已确认的本次运行方案',
+          code: 'RUN_REVIEW_PLAN_REQUIRED',
+          message: `旧客户端如需临时兼容，必须显式启用 ${LEGACY_START_COMPATIBILITY_FLAG}`,
+        }, { status: 400 });
+      }
+      console.warn(
+        `[Workflow] compatibility start without run-level review plan via ${LEGACY_START_COMPATIBILITY_FLAG}: ${configFile}`,
+      );
     }
 
     const configPath = await getRuntimeWorkflowConfigPath(configFile);

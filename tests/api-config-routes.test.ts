@@ -622,6 +622,73 @@ describe('config API routes', () => {
         expect(review.reviewPolicy).toBeUndefined();
         expect(review.maxSelfTransitions).toBeUndefined();
         expect(review.steps.map((step: any) => step.agentInstanceId)).toEqual([undefined, undefined, undefined]);
+        expect(persisted.workflow.reviewProtocol).toBeUndefined();
+
+        // Adding one state must not drag the rest of a pre-protocol workflow into
+        // the protocol — every other state would then fail the "must declare a
+        // reviewPolicy" rule and the whole config would become unsavable.
+        const withExtraState = JSON.parse(JSON.stringify(legacyConfig));
+        withExtraState.workflow.states.splice(2, 0, {
+          name: 'Extra',
+          isInitial: false,
+          isFinal: false,
+          maxSelfTransitions: 3,
+          reviewPolicy: {
+            mode: 'standard',
+            source: 'default',
+            locked: false,
+            confidence: 'medium',
+            riskSignals: [],
+            rationale: '手工新增状态默认采用标准模式。',
+          },
+          steps: [{ name: 'Do', type: 'agent', agent: 'developer', task: 'do' }],
+          transitions: [
+            { to: 'Done', condition: { verdict: 'pass' } },
+            { to: 'Extra', condition: { verdict: 'conditional_pass' } },
+            { to: 'Extra', condition: { verdict: 'fail' } },
+          ],
+        });
+        const withExtra = await route.POST(
+          makeRequest('/api/configs/pre-protocol.yaml', { token, json: { config: withExtraState } }),
+          { params: Promise.resolve({ filename: 'pre-protocol.yaml' }) },
+        );
+        expect(withExtra.status).toBe(200);
+        const persistedWithExtra = parse(
+          await readFile(path.join(aceHome, 'configs', 'pre-protocol.yaml'), 'utf-8'),
+        ) as any;
+        expect(persistedWithExtra.workflow.reviewProtocol).toBeUndefined();
+        expect(persistedWithExtra.workflow.states[0].reviewPolicy).toBeUndefined();
+        expect(persistedWithExtra.workflow.states[1].reviewPolicy).toBeUndefined();
+        expect(persistedWithExtra.workflow.states[2].reviewPolicy?.mode).toBe('standard');
+
+        // Once every non-final state carries a policy, a save must replace the
+        // legacy quorum inference with the durable workflow-level marker.
+        const fullyAdopted = JSON.parse(JSON.stringify(legacyConfig));
+        fullyAdopted.workflow.states[0].reviewPolicy = {
+          mode: 'standard',
+          source: 'default',
+          locked: false,
+          confidence: 'medium',
+          riskSignals: [],
+          rationale: '存量标准状态。',
+        };
+        fullyAdopted.workflow.states[1].reviewPolicy = {
+          mode: 'adversarial',
+          source: 'default',
+          locked: false,
+          confidence: 'medium',
+          riskSignals: ['独立挑战'],
+          rationale: '存量对抗状态。',
+        };
+        const adoptedSave = await route.POST(
+          makeRequest('/api/configs/pre-protocol.yaml', { token, json: { config: fullyAdopted } }),
+          { params: Promise.resolve({ filename: 'pre-protocol.yaml' }) },
+        );
+        expect(adoptedSave.status).toBe(200);
+        const persistedAdopted = parse(
+          await readFile(path.join(aceHome, 'configs', 'pre-protocol.yaml'), 'utf-8'),
+        ) as any;
+        expect(persistedAdopted.workflow.reviewProtocol).toBe('state-level');
       });
     });
   });

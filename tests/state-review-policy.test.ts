@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ReviewPolicy, StateMachineState, WorkflowStep } from '@/lib/core/schemas';
 import {
+  defaultMaxSelfTransitions,
   hashReviewStep,
   inferLegacyReviewPolicy,
   isManagedStepUnmodified,
@@ -102,8 +103,12 @@ describe('state review policy domain', () => {
     expect(view.workflow.states[0].steps[0].id).toMatch(/^virtual-step-/);
     expect(view.workflow.states[0].reviewPolicy.mode).toBe('adversarial');
     expect(view.workflow.states[0].steps.map((step: any) => step.role)).toEqual(['defender', 'attacker', 'judge']);
-    expect(view.workflow.states[0].maxSelfTransitions).toBe(2);
+    // Left unpinned so a later mode change can still move it; readers resolve it.
+    expect(view.workflow.states[0].maxSelfTransitions).toBeUndefined();
+    expect(defaultMaxSelfTransitions(view.workflow.states[0])).toBe(2);
     expect(view.workflow.states[1].reviewPolicy).toBeUndefined();
+    expect(view.workflow.reviewProtocol).toBe('state-level');
+    expect(input.workflow).not.toHaveProperty('reviewProtocol');
 
     let nextId = 0;
     const saved = normalizeStateMachineWorkflowConfig(view, {
@@ -199,8 +204,14 @@ describe('state review policy domain', () => {
     expect(adopted.workflow.states[0].steps).toHaveLength(3);
     expect(adopted.workflow.states[0].reviewPolicy?.mode).toBe('standard');
     expect(adopted.workflow.states[1].reviewPolicy?.mode).toBe('adversarial');
-    expect(adopted.workflow.states[1].maxSelfTransitions).toBe(2);
+    // Adoption must not pin the ceiling: reconciliation only fills the field when
+    // it is undefined, so writing 2 here would stop a run that turns adversarial
+    // off from falling back to the standard ceiling. Readers resolve the default.
+    expect(adopted.workflow.states[1].maxSelfTransitions).toBeUndefined();
+    expect(defaultMaxSelfTransitions(adopted.workflow.states[1])).toBe(2);
+    expect(defaultMaxSelfTransitions(adopted.workflow.states[0])).toBe(3);
     expect(adopted.workflow.states[1].steps.every((step: any) => Boolean(step.agentInstanceId))).toBe(true);
+    expect(adopted.workflow.reviewProtocol).toBe('state-level');
   });
 
   test('normalization adds a stable serial closer when a standard state ends in parallel', () => {
@@ -235,6 +246,33 @@ describe('state review policy domain', () => {
     expect(isManagedStepUnmodified(saved.workflow.states[0].steps[2])).toBe(true);
   });
 
+  test('normalization reports adversarial instance bindings as operations', () => {
+    const operations: Array<{ op: string; stepName: string }> = [];
+    const reviewedState = state([
+      { name: 'Defend', agent: 'worker', task: 'defend', role: 'defender' },
+      { name: 'Attack', agent: 'worker', task: 'attack', role: 'attacker' },
+      { name: 'Judge', agent: 'worker', task: 'judge', role: 'judge' },
+    ], policy('adversarial'));
+    const normalized = normalizeStateMachineWorkflowConfig({
+      workflow: {
+        name: 'operation-visibility',
+        mode: 'state-machine',
+        reviewProtocol: 'state-level',
+        states: [reviewedState],
+      },
+    }, {
+      workflowKey: 'operation-visibility.yaml',
+      collectOperations: (_stateKey, nextOperations) => operations.push(...nextOperations),
+    }) as any;
+
+    expect(normalized.workflow.states[0].steps.every((step: any) => Boolean(step.agentInstanceId))).toBe(true);
+    expect(operations).toEqual([
+      expect.objectContaining({ op: 'retag', stepName: 'Defend' }),
+      expect.objectContaining({ op: 'retag', stepName: 'Attack' }),
+      expect.objectContaining({ op: 'retag', stepName: 'Judge' }),
+    ]);
+  });
+
   test('keeps managed baselines valid when normalization adds adversarial instance IDs', () => {
     const defender = withReviewStepBaseline({ id: 'd', name: '实现', agent: 'worker', task: '实现', role: 'defender' }, 'ai-draft');
     const attacker = withReviewStepBaseline({ id: 'a', name: '挑战', agent: 'worker', task: '挑战', role: 'attacker' }, 'review-policy', 'attacker');
@@ -267,7 +305,8 @@ describe('state review policy domain', () => {
     expect(result.nextState.steps.map((step) => step.role)).toEqual(['defender', 'attacker', 'judge']);
     expect(new Set(result.nextState.steps.map((step) => step.agentInstanceId)).size).toBe(3);
     expect(result.nextState.steps.every((step) => step.agent === 'worker')).toBe(true);
-    expect(result.nextState.maxSelfTransitions).toBe(2);
+    expect(result.nextState.maxSelfTransitions).toBeUndefined();
+    expect(defaultMaxSelfTransitions(result.nextState)).toBe(2);
     expect(isStrictAdversarialRoleSequence(result.nextState)).toBe(true);
     expect(result.operations.filter((operation) => operation.op === 'insert')).toHaveLength(2);
   });
@@ -289,6 +328,25 @@ describe('state review policy domain', () => {
     expect(defenderInstances.has(result.nextState.steps[2].agentInstanceId)).toBe(false);
     expect(defenderInstances.has(result.nextState.steps[3].agentInstanceId)).toBe(false);
     expect(result.nextState.steps[2].agentInstanceId).not.toBe(result.nextState.steps[3].agentInstanceId);
+  });
+
+  test('prefers review agents distinct from the defender and from each other', () => {
+    const result = reconcileReviewPolicy(state([
+      { id: 'work', name: '实现', agent: 'agent-b', task: '实现功能' },
+    ], policy('standard')), policy('adversarial'), {
+      availableAgents: ['agent-a', 'agent-b', 'agent-c'],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.nextState.steps.map((step) => [step.role, step.agent])).toEqual([
+      ['defender', 'agent-b'],
+      ['attacker', 'agent-a'],
+      ['judge', 'agent-c'],
+    ]);
+    expect(result.operations.filter((operation) => operation.op === 'insert').map((operation) => operation.after?.agent)).toEqual([
+      'agent-a',
+      'agent-c',
+    ]);
   });
 
   test('does not trust a verdict keyword in an arbitrary user step', () => {
@@ -346,6 +404,21 @@ describe('state review policy domain', () => {
     expect(adversarial.maxSelfTransitions).toBe(3);
     const standard = reconcileReviewPolicy(adversarial, policy('standard'), { availableAgents: ['worker'] }).nextState;
     expect(standard.maxSelfTransitions).toBe(3);
+  });
+
+  test('an unpinned ceiling follows the mode across switches', () => {
+    // The point of not writing the field: adopting as standard must not lock the
+    // ceiling at 3 and stop a later switch to adversarial from tightening it.
+    const business = withReviewStepBaseline({
+      id: 'step-business', name: '实现', agent: 'worker', task: '实现功能',
+    }, 'ai-draft');
+    const asStandard = reconcileReviewPolicy(state([business]), policy('standard'), { availableAgents: ['worker'] }).nextState;
+    expect(asStandard.maxSelfTransitions).toBeUndefined();
+    expect(defaultMaxSelfTransitions(asStandard)).toBe(3);
+
+    const asAdversarial = reconcileReviewPolicy(asStandard, policy('adversarial'), { availableAgents: ['worker'] }).nextState;
+    expect(asAdversarial.maxSelfTransitions).toBeUndefined();
+    expect(defaultMaxSelfTransitions(asAdversarial)).toBe(2);
   });
 
   test('direct terminal reconciliation removes an inapplicable policy', () => {

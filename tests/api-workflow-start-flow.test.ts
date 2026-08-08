@@ -27,6 +27,10 @@ const runReviewMocks = vi.hoisted(() => ({
   consumeRunReviewPlanArtifact: vi.fn(),
 }));
 
+const configuredEnvMocks = vi.hoisted(() => ({
+  getConfiguredEnvValueSync: vi.fn(),
+}));
+
 // Mock all heavy dependencies before importing the route
 vi.mock('@/lib/auth/middleware', () => ({
   requireAuth: vi.fn(),
@@ -44,6 +48,10 @@ vi.mock('@/lib/workflow/run-review-plan', () => ({
 vi.mock('@/lib/workflow/run-review-plan-store', () => ({
   loadRunReviewPlanArtifact: runReviewMocks.loadRunReviewPlanArtifact,
   consumeRunReviewPlanArtifact: runReviewMocks.consumeRunReviewPlanArtifact,
+}));
+
+vi.mock('@/lib/core/configured-env', () => ({
+  getConfiguredEnvValueSync: configuredEnvMocks.getConfiguredEnvValueSync,
 }));
 
 vi.mock('@/lib/workflow/registry', () => ({
@@ -128,6 +136,9 @@ describe('workflow start flow', () => {
     runReviewMocks.validateRunReviewPlanArtifact.mockReset().mockResolvedValue(undefined);
     runReviewMocks.loadRunReviewPlanArtifact.mockReset().mockReturnValue(null);
     runReviewMocks.consumeRunReviewPlanArtifact.mockReset();
+    // Most tests in this suite exercise the legacy request shape. They opt into
+    // the compatibility branch explicitly; production defaults to rejecting it.
+    configuredEnvMocks.getConfiguredEnvValueSync.mockReset().mockReturnValue('true');
   });
 
   test('returns 401 when no auth token', async () => {
@@ -158,6 +169,28 @@ describe('workflow start flow', () => {
 
     const json = await assertErrorResponse(response, 400);
     expect(json.error).toContain('配置文件');
+  });
+
+  test('rejects an unplanned legacy start unless the compatibility flag is explicitly enabled', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
+    configuredEnvMocks.getConfiguredEnvValueSync.mockReturnValue(undefined);
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'test.yaml' },
+    }));
+
+    const json = await assertErrorResponse(response, 400);
+    expect(json).toMatchObject({
+      error: '缺少已确认的本次运行方案',
+      code: 'RUN_REVIEW_PLAN_REQUIRED',
+    });
+    expect(configuredEnvMocks.getConfiguredEnvValueSync).toHaveBeenCalledWith(
+      'ACEH_ALLOW_LEGACY_START_WITHOUT_REVIEW_PLAN',
+      { userId: 'user-1' },
+    );
   });
 
   test('returns 412 when preflight fails', async () => {
