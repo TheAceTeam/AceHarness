@@ -132,6 +132,77 @@ describe('state review policy domain', () => {
     expect(inferLegacyReviewPolicy(orphanJudge)?.mode).toBe('standard');
   });
 
+  test('reports a pre-protocol role step as pre-protocol rather than as unknown origin', () => {
+    const result = reconcileReviewPolicy(state([
+      { id: 'legacy-work', name: '实现', agent: 'worker', task: '实现', role: 'defender', provenance: { origin: 'legacy' } },
+      { id: 'legacy-judge', name: '汇总', agent: 'worker', task: '汇总', role: 'judge', provenance: { origin: 'legacy' } },
+    ], policy('standard', 'ai')), policy('standard'), { availableAgents: ['worker'] });
+
+    const warnings = result.warnings.join('');
+    expect(warnings).toContain('状态级审查之前');
+    expect(warnings).not.toContain('来源不明');
+    expect(warnings).not.toContain('已被手工修改');
+    // The step is kept, and the reason shown next to the operation says why.
+    expect(result.nextState.steps.some((step) => step.id === 'legacy-judge')).toBe(true);
+    expect(result.operations.some((operation) => operation.reason.includes('状态级审查之前的配置'))).toBe(true);
+  });
+
+  test('normalization leaves a pre-protocol config untouched unless adoption is requested', () => {
+    const legacy = () => ({
+      workflow: {
+        name: 'legacy',
+        mode: 'state-machine',
+        states: [
+          {
+            name: '并行收尾',
+            isInitial: true,
+            isFinal: false,
+            steps: [
+              { name: '实现 A', agent: 'worker', task: 'A', parallelGroup: 'g' },
+              { name: '实现 B', agent: 'worker', task: 'B', parallelGroup: 'g' },
+            ],
+            transitions: [],
+          },
+          {
+            name: '旧对抗',
+            isInitial: false,
+            isFinal: false,
+            steps: [
+              { name: '产出', agent: 'worker', task: '产出', role: 'defender' },
+              { name: '挑战', agent: 'worker', task: '挑战', role: 'attacker' },
+              { name: '裁决', agent: 'worker', task: '裁决', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const kept = normalizeStateMachineWorkflowConfig(legacy(), { workflowKey: 'legacy.yaml' }) as any;
+    const [parallelState, adversarialState] = kept.workflow.states;
+    // No injected closer, no inferred policy, no rebound runtime identity and no
+    // lowered self-transition ceiling: the workflow executes exactly as before.
+    expect(parallelState.steps).toHaveLength(2);
+    expect(parallelState.reviewPolicy).toBeUndefined();
+    expect(parallelState.maxSelfTransitions).toBeUndefined();
+    expect(adversarialState.reviewPolicy).toBeUndefined();
+    expect(adversarialState.maxSelfTransitions).toBeUndefined();
+    expect(adversarialState.steps.map((step: any) => step.agentInstanceId)).toEqual([undefined, undefined, undefined]);
+    // Identity normalisation still happens — that is what lets it run at all.
+    expect(kept.workflow.states.every((state: any) => Boolean(state.id))).toBe(true);
+    expect(parallelState.steps.every((step: any) => Boolean(step.id) && step.provenance?.origin === 'legacy')).toBe(true);
+
+    const adopted = normalizeStateMachineWorkflowConfig(legacy(), {
+      workflowKey: 'legacy.yaml',
+      adoptLegacyPolicy: true,
+    }) as any;
+    expect(adopted.workflow.states[0].steps).toHaveLength(3);
+    expect(adopted.workflow.states[0].reviewPolicy?.mode).toBe('standard');
+    expect(adopted.workflow.states[1].reviewPolicy?.mode).toBe('adversarial');
+    expect(adopted.workflow.states[1].maxSelfTransitions).toBe(2);
+    expect(adopted.workflow.states[1].steps.every((step: any) => Boolean(step.agentInstanceId))).toBe(true);
+  });
+
   test('normalization adds a stable serial closer when a standard state ends in parallel', () => {
     const config = {
       workflow: {
@@ -309,7 +380,9 @@ describe('state review policy domain', () => {
     expect(result.blocked).toBe(false);
     expect(preserved).toMatchObject({ role: undefined, provenance: { origin: 'user' } });
     expect(preserved?.task).toContain('用户补充的审查范围');
-    expect(result.warnings.join('')).toContain('安全默认保留');
+    // A hand-edited managed step is reported as edited, not as "unknown origin".
+    expect(result.warnings.join('')).toContain('已被手工修改');
+    expect(result.warnings.join('')).not.toContain('状态级审查之前');
     expect(result.nextState.steps.some((step) => step.provenance?.managedRole === 'standard-closer')).toBe(true);
   });
 });

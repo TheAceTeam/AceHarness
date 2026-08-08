@@ -388,6 +388,13 @@ describe('run-level review plans', () => {
       expect(artifact.plan.states[0].effectiveMode).toBe('standard');
       expect(artifact.plan.states[0].warnings.join('\n')).toContain('配置中锁定的对抗模式已被本次运行的全局意愿覆盖');
       expect(artifact.plan.warnings.join('\n')).toContain('配置中锁定的对抗模式已被本次运行的全局意愿覆盖');
+      // The plan-level list is the per-state warning prefixed with the state name.
+      // The start dialog relies on that exact shape to drop warnings its cards
+      // already render, so pin the format here rather than in the UI.
+      const state = artifact.plan.states[0];
+      for (const warning of state.warnings) {
+        expect(artifact.plan.warnings).toContain(`${state.stateName}: ${warning}`);
+      }
     });
   });
 

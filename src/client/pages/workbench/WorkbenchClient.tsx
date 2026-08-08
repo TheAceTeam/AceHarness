@@ -1057,6 +1057,13 @@ type WorkflowStartContexts = {
   workingDirectory?: string;
 };
 
+const REVIEW_OPERATION_LABELS: Record<string, string> = {
+  insert: '新增',
+  delete: '删除',
+  retag: '调整标记',
+  convert: '转换',
+};
+
 type WorkflowStartReviewSelection = {
   planId: string;
   intent: WorkflowAdversarialIntent;
@@ -1596,6 +1603,12 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const taskInputFields = props.taskInputFields?.length ? props.taskInputFields : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
   const shortTaskInputFields = taskInputFields.filter((field) => field.type !== 'textarea');
   const longTaskInputFields = taskInputFields.filter((field) => field.type === 'textarea');
+  // Rebuilt exactly as the projection aggregates them, so the plan-level list can
+  // drop what the per-target cards already show without matching on substrings.
+  const cardScopedReviewWarnings = new Set([
+    ...(reviewPlan?.states || []).flatMap((state) => state.warnings.map((warning) => `${state.stateName}: ${warning}`)),
+    ...(reviewPlan?.workflows || []).flatMap((workflow) => workflow.warnings.map((warning) => `${workflow.workflowName}: ${warning}`)),
+  ]);
 
   useEffect(() => {
     setLocalGlobalDraft(props.globalDraft);
@@ -1884,7 +1897,23 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                     </div>
                   </div>
                   {state.suggestion?.rationale ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{state.suggestion.rationale}</p> : null}
-                  {state.operations.length ? <p className="mt-2 text-xs text-muted-foreground">本次快照将进行 {state.operations.length} 项安全协调。</p> : null}
+                  {state.operations.length ? (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                        本次快照将进行 {state.operations.length} 项安全协调
+                      </summary>
+                      <ul className="mt-2 space-y-1.5 border-l border-border pl-3">
+                        {state.operations.map((operation, index) => (
+                          <li key={`${state.stateId}-op-${index}`} className="leading-5">
+                            <span className="font-medium">{REVIEW_OPERATION_LABELS[operation.op] || operation.op}</span>
+                            <span className="text-muted-foreground">{' · '}{operation.stepName}</span>
+                            {operation.safe ? null : <Badge variant="outline" className="ml-1.5 text-[10px]">需确认</Badge>}
+                            <span className="block text-muted-foreground">{operation.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
                   {state.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}
                   {adversarialIntent === 'on-demand' ? (
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -1924,7 +1953,12 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               );
             })}
 
-            {reviewPlan.warnings.map((warning) => <div key={warning} className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{warning}</div>)}
+            {/* Per-target warnings are aggregated into plan.warnings with a name
+                prefix for callers without this UI. Showing them again here would
+                duplicate every card, so only plan-level notices remain. */}
+            {reviewPlan.warnings
+              .filter((warning) => !cardScopedReviewWarnings.has(warning))
+              .map((warning) => <div key={warning} className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{warning}</div>)}
             {reviewPlanningError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}
             {startupFlowEnabled ? (
               <section className="border-t border-border pt-5">

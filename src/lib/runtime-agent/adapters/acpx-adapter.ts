@@ -187,16 +187,32 @@ export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options:
   return getAcpxCommandAttemptsForRuntime(command, options)[0]?.command || '';
 }
 
+const acpxRegistryOverrideCache = new Map<string, string>();
+
+/** Test seam: the resolved paths are cached because a runtime is created per permission set. */
+export function clearAcpxAgentRegistryOverrideCache(): void {
+  acpxRegistryOverrideCache.clear();
+}
+
 export function getAcpxAgentRegistryOverrides(): Record<string, string> {
-  // acpx 0.13 accepts command strings here and performs its own Windows .cmd
-  // resolution. Passing argv arrays makes its registry call command.trim().
-  // Keep construction free of command discovery because this runs once per
-  // permission-specific runtime.
-  const configuredCodegenieCommand = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
+  // acpx 0.13 calls command.trim() on every override value, so these must be
+  // strings — passing an argv array throws inside registry.resolve(). Serialise
+  // the *discovered* command rather than a bare name: a CLI that only lives on
+  // an ACEHarness-configured search path would otherwise fail to launch, since
+  // the bare name is resolved against the server process PATH. Parts are joined
+  // without the cmd.exe wrapper because acpx does its own .cmd handling.
+  const resolve = (agentId: 'nga' | 'codeagent' | 'codegenie'): string => {
+    const cached = acpxRegistryOverrideCache.get(agentId);
+    if (cached) return cached;
+    const parts = buildAcpxCommandAttemptParts(resolveAcpxCommand(agentId), { agentId })[0]?.parts ?? [];
+    const command = formatCommandParts(parts);
+    if (command) acpxRegistryOverrideCache.set(agentId, command);
+    return command;
+  };
   return {
-    nga: 'ngagent --disable-update acp',
-    codeagent: 'codeagent acp',
-    codegenie: formatCommandParts([configuredCodegenieCommand || 'codegenie', 'acp']),
+    nga: resolve('nga'),
+    codeagent: resolve('codeagent'),
+    codegenie: resolve('codegenie'),
   };
 }
 

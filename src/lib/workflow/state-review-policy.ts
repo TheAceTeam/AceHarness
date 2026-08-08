@@ -260,12 +260,22 @@ function deterministicInstanceId(workflowKey: string, state: StateMachineState, 
   return `review-instance-${fnv1a64([workflowKey, state.id || state.name, step.role || 'step', step.id || index].join('/'))}`;
 }
 
+/**
+ * Identity normalisation (stable IDs, provenance) is safe everywhere and is what
+ * lets a pre-protocol config run at all. Adopting the review protocol is not:
+ * inferring a policy, defaulting `maxSelfTransitions`, binding runtime instances
+ * and repairing structure all change how an existing workflow executes and what
+ * it costs. So adoption is opt-in, and a state that already declares a
+ * `reviewPolicy` is treated as having opted in regardless of the flag.
+ */
 export function normalizeStateMachineWorkflowConfig<T>(
   input: T,
   options: {
     materializeIds?: boolean;
     workflowKey?: string;
     idFactory?: () => string;
+    /** Adopt the review protocol for states that do not declare a policy yet. */
+    adoptLegacyPolicy?: boolean;
   } = {},
 ): T {
   if (!input || typeof input !== 'object') return input;
@@ -312,6 +322,12 @@ export function normalizeStateMachineWorkflowConfig<T>(
       if (!step.provenance) step.provenance = { origin: 'legacy' };
       return step;
     });
+    // A state that has never declared a policy keeps its original execution
+    // shape unless the caller explicitly adopts the protocol. Without this the
+    // engine would silently add a closing step, rebind runtime instances and
+    // lower the self-transition ceiling on workflows authored before the
+    // protocol existed.
+    if (!rawState.reviewPolicy && !options.adoptLegacyPolicy) return state;
     state.reviewPolicy = normalizeReviewPolicy(state.reviewPolicy, state);
     if (state.isFinal) delete state.reviewPolicy;
     if (state.maxSelfTransitions === undefined) {
@@ -629,9 +645,19 @@ export function reconcileReviewPolicy(
 
   const originalSteps = state.steps || [];
   const kept: WorkflowStep[] = [];
-  let convertedUnsafe = false;
+  // Keeping a role step instead of deleting it happens for two very different
+  // reasons, and telling a user their own pre-protocol config is "of unknown
+  // origin" reads like a defect report. Track them apart.
+  let keptPreProtocolRoleStep = false;
+  let keptModifiedManagedStep = false;
   let convertedUnsafeTailJudge = false;
   let safeJudge: WorkflowStep | undefined;
+  const noteKeptStep = (step: WorkflowStep): boolean => {
+    const wasManaged = step.provenance?.origin === 'review-policy';
+    if (wasManaged) keptModifiedManagedStep = true;
+    else keptPreProtocolRoleStep = true;
+    return wasManaged;
+  };
   for (const [stepIndex, step] of originalSteps.entries()) {
     if (step.role === 'attacker') {
       const canDelete = step.provenance?.managedRole === 'attacker' && isManagedStepUnmodified(step);
@@ -640,8 +666,16 @@ export function reconcileReviewPolicy(
       } else {
         const converted = convertToUserStep(step);
         kept.push(converted);
-        convertedUnsafe = true;
-        addOperation(operations, 'convert', step, '步骤来源不明或已被修改，默认保留并转为标准验证步骤。', false, converted);
+        addOperation(
+          operations,
+          'convert',
+          step,
+          noteKeptStep(step)
+            ? '托管的对抗步骤已被修改，保留并转为标准验证步骤。'
+            : '步骤来自状态级审查之前的配置，保留并转为标准验证步骤。',
+          false,
+          converted,
+        );
       }
       continue;
     }
@@ -652,9 +686,17 @@ export function reconcileReviewPolicy(
       } else {
         const converted = convertToUserStep(step, 'standard-closer');
         kept.push(converted);
-        convertedUnsafe = true;
         convertedUnsafeTailJudge = stepIndex === originalSteps.length - 1 && isSerialStep(step);
-        addOperation(operations, 'convert', step, '裁决步骤来源不明或已被修改，默认保留为标准收口步骤。', false, converted);
+        addOperation(
+          operations,
+          'convert',
+          step,
+          noteKeptStep(step)
+            ? '托管的裁决步骤已被修改，保留为标准收口步骤。'
+            : '裁决步骤来自状态级审查之前的配置，保留为标准收口步骤。',
+          false,
+          converted,
+        );
       }
       continue;
     }
@@ -712,7 +754,12 @@ export function reconcileReviewPolicy(
   state.steps = kept;
   state.reviewPolicy = targetPolicy;
   if (state.maxSelfTransitions === undefined) state.maxSelfTransitions = 3;
-  if (convertedUnsafe) warnings.push('来源不明或已修改的对抗步骤已按安全默认保留；应用前请确认转换结果。');
+  if (keptPreProtocolRoleStep) {
+    warnings.push('这个状态里状态级审查之前配置的角色步骤已保留，并转为标准步骤；原工作流不变。');
+  }
+  if (keptModifiedManagedStep) {
+    warnings.push('托管的对抗步骤已被手工修改，已保留而不是删除；应用前请确认转换结果。');
+  }
   return {
     nextState: state,
     operations,

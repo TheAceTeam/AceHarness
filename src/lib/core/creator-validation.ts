@@ -32,6 +32,12 @@ export interface WorkflowValidationOptions {
   mode?: 'runtime' | 'portable';
   materializeIds?: boolean;
   workflowKey?: string;
+  /**
+   * Adopt the review protocol for states that carry no policy yet. Only paths
+   * where the user explicitly opted in should set this — validating or saving an
+   * existing workflow must not rewrite its execution shape.
+   */
+  adoptLegacyPolicy?: boolean;
 }
 
 function expandZodIssue(issue: ZodIssue, inheritedPath: string[] = []): ValidationIssue[] {
@@ -200,6 +206,7 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   const normalizedInput = normalizeStateMachineWorkflowConfig(input, {
     materializeIds: options.materializeIds,
     workflowKey: options.workflowKey,
+    adoptLegacyPolicy: options.adoptLegacyPolicy,
   });
   const parsed = unifiedWorkflowConfigSchema.safeParse(normalizedInput);
   if (!parsed.success) {
@@ -302,6 +309,11 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   if (finalCount < 1) {
     pushIssue(issues, 'error', ['workflow', 'states'], '状态机必须至少有一个终止状态（isFinal: true）。修复方法：添加一个 {"name": "完成", "isFinal": true, "steps": [], "transitions": []} 状态');
   }
+  // A config counts as having adopted state-level review when the caller asked
+  // for adoption, or when any non-final state already declares a policy — the
+  // latter keeps the guard active for workflows created under the protocol.
+  const protocolAdopted = Boolean(options.adoptLegacyPolicy)
+    || (workflowAny.states || []).some((state: any) => !state.isFinal && state.reviewPolicy);
   for (const state of workflowAny.states || []) {
     if (state.isFinal && Array.isArray(state.transitions) && state.transitions.length > 0) {
       pushIssue(issues, 'warning', ['workflow', 'states', state.name, 'transitions'], `终止状态 "${state.name}" 通常不应再配置转移规则`);
@@ -313,7 +325,12 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
 
     if (!isLightweightWorkflow) {
       if (!state.reviewPolicy) {
-        pushIssue(issues, 'error', ['workflow', 'states', state.name, 'reviewPolicy'], `非终态 "${state.name}" 必须包含 reviewPolicy`);
+        // Only a workflow that has adopted the protocol owes a policy on every
+        // non-final state. Demanding it from a pre-protocol config would make
+        // saving one impossible unless it were silently rewritten.
+        if (protocolAdopted) {
+          pushIssue(issues, 'error', ['workflow', 'states', state.name, 'reviewPolicy'], `非终态 "${state.name}" 必须包含 reviewPolicy`);
+        }
       } else if (state.reviewPolicy.mode === 'adversarial' && !isStrictAdversarialRoleSequence(state)) {
         pushIssue(
           issues,
