@@ -89,8 +89,13 @@ describe('runtime adapters', () => {
   test('uses command-string overrides accepted by the installed acpx registry', async () => {
     const overrides = getAcpxAgentRegistryOverrides();
 
-    expect(overrides.nga).toBe('ngagent --disable-update acp');
-    expect(overrides.codeagent).toBe('codeagent acp');
+    // The leading command is whatever discovery resolved — an absolute path on a
+    // machine where the CLI is installed, the bare name otherwise — so assert the
+    // serialised shape rather than a fixed string.
+    expect(typeof overrides.nga).toBe('string');
+    expect(overrides.nga.endsWith('--disable-update acp')).toBe(true);
+    expect(typeof overrides.codeagent).toBe('string');
+    expect(overrides.codeagent.endsWith('acp')).toBe(true);
     expect(overrides.codegenie).toContain('acp');
     expect(typeof overrides.codegenie).toBe('string');
 
