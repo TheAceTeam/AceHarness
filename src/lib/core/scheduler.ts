@@ -10,6 +10,8 @@ import { parse, stringify } from 'yaml';
 import { randomUUID } from 'crypto';
 import { getWorkspaceDataDir, getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getUserById, loadUsers, storeToken } from '@/lib/core/user-store';
+import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { inferBaselineAdversarialIntent } from '@/lib/workflow/state-review-policy';
 
 export interface ScheduleRunUser {
   id: string;
@@ -157,19 +159,49 @@ export class SchedulerService extends EventEmitter {
       const user = await this._resolveRunUser(job, runAsUser);
       const token = randomUUID();
       storeToken(token, user.id);
-      const res = await fetch(`${this._getInternalBaseUrl(options?.baseUrl)}/api/workflow/start`, {
+      const baseUrl = this._getInternalBaseUrl(options?.baseUrl);
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      };
+      const config = parse(await readFile(await getRuntimeWorkflowConfigPath(job.configFile), 'utf-8'));
+      // Scheduled runs cannot pause for the start dialog. Preserve the intent
+      // encoded in reviewed configs; legacy/lightweight configs have no encoded
+      // answer, so use the deterministic no-AI path instead of silently opting
+      // an unattended job into adversarial planning.
+      const adversarialIntent = inferBaselineAdversarialIntent(config) ?? 'disabled';
+      const planRes = await fetch(`${baseUrl}/api/workflow/start/plan`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ configFile: job.configFile }),
+        headers,
+        body: JSON.stringify({ configFile: job.configFile, intent: adversarialIntent }),
       });
-      const data = await this._readJsonResponse(res);
-      const runId = data.runId || (res.ok ? `run-${Date.now()}` : '');
+      const planData = await this._readJsonResponse(planRes);
+      const startPlanId = typeof planData?.plan?.id === 'string' ? planData.plan.id.trim() : '';
+
+      let responseOk = false;
+      let responseStatus = planRes.status;
+      let data = planData;
+      if (planRes.ok && !planData?.error && startPlanId) {
+        const startRes = await fetch(`${baseUrl}/api/workflow/start`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            configFile: job.configFile,
+            startPlanId,
+            adversarialIntent,
+          }),
+        });
+        data = await this._readJsonResponse(startRes);
+        responseStatus = startRes.status;
+        responseOk = startRes.ok && !data?.error;
+      } else if (planRes.ok && !planData?.error) {
+        data = { error: '运行方案接口未返回 plan.id' };
+      }
+
+      const runId = data.runId || (responseOk ? `run-${Date.now()}` : '');
       const now = new Date().toISOString();
-      const status = res.ok ? 'started' : 'failed';
-      const error = res.ok ? undefined : (data.error || data.message || `工作流启动接口返回 ${res.status}`);
+      const status = responseOk ? 'started' : 'failed';
+      const error = responseOk ? undefined : (data.error || data.message || `工作流启动接口返回 ${responseStatus}`);
       job.lastRunId = runId;
       job.lastRunTime = now;
       job.lastRunStatus = status;

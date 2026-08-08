@@ -11,8 +11,13 @@ declare module 'acpx/runtime' {
     save(record: unknown): Promise<void>;
   }
 
+  // Mirrors acpx's own dist/runtime.d.ts. acpx ships no `types` field and no
+  // types condition in its exports map, so TypeScript cannot see those
+  // declarations and this ambient copy stands in for them. Keep it in sync with
+  // the pinned acpx version: narrowing `string | string[]` to `string` here once
+  // made the compiler vouch for an override shape that throws on Windows.
   export interface AcpAgentRegistry {
-    resolve(agentName: string): string;
+    resolve(agentName: string): string | string[];
     list(): string[];
   }
 
@@ -123,7 +128,7 @@ declare module 'acpx/runtime' {
 
   export const AcpxRuntime: new (...args: any[]) => AcpRuntime;
   export function createAcpRuntime(options: AcpRuntimeOptions): AcpRuntime;
-  export function createAgentRegistry(input?: { overrides?: Record<string, string> }): AcpAgentRegistry;
+  export function createAgentRegistry(input?: { overrides?: Record<string, string | string[]> }): AcpAgentRegistry;
   export function createFileSessionStore(input: { stateDir: string }): AcpSessionStore;
   export function createRuntimeStore(input: { stateDir: string }): AcpSessionStore;
   export function encodeAcpxRuntimeHandleState(...args: any[]): unknown;

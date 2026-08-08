@@ -2,7 +2,7 @@ import { getBuiltinAgentDefinition } from '../agent-registry';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import { isWindows } from '@/lib/core/runtime-platform';
 import type {
   AcpRuntime,
@@ -187,27 +187,47 @@ export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options:
   return getAcpxCommandAttemptsForRuntime(command, options)[0]?.command || '';
 }
 
-const acpxRegistryOverrideCache = new Map<string, string>();
+type AcpxRegistryOverrideCacheEntry = {
+  fingerprint: string;
+  parts: string[];
+};
 
-/** Test seam: the resolved paths are cached because a runtime is created per permission set. */
+const acpxRegistryOverrideCache = new Map<string, AcpxRegistryOverrideCacheEntry>();
+
 export function clearAcpxAgentRegistryOverrideCache(): void {
   acpxRegistryOverrideCache.clear();
 }
 
-export function getAcpxAgentRegistryOverrides(): Record<string, string> {
-  // acpx 0.13 calls command.trim() on every override value, so these must be
-  // strings — passing an argv array throws inside registry.resolve(). Serialise
-  // the *discovered* command rather than a bare name: a CLI that only lives on
-  // an ACEHarness-configured search path would otherwise fail to launch, since
-  // the bare name is resolved against the server process PATH. Parts are joined
-  // without the cmd.exe wrapper because acpx does its own .cmd handling.
-  const resolve = (agentId: 'nga' | 'codeagent' | 'codegenie'): string => {
+export function getAcpxAgentRegistryOverrides(): Record<string, string[]> {
+  // Overrides must stay argv arrays. acpx 0.13 accepts `string | string[]`, but
+  // only the array form yields `agentArgv`; without it `resolveAgentCommandParts`
+  // throws on win32 ("Raw agent command strings are not supported on Windows").
+  // The 0.12 contract was the opposite — its `mergeAgentRegistry` called
+  // `command.trim()` and rejected arrays — so this shape is tied to the acpx
+  // major the lockfile pins, and a version guard test keeps a stale install from
+  // silently passing.
+  //
+  // Discovery has to stay as well: a bare name is resolved against the server
+  // process PATH, which misses a CLI installed only on an ACEHarness-configured
+  // search path. Parts are returned unwrapped because acpx does its own .cmd
+  // handling via buildSpawnCommandOptions.
+  const resolve = (agentId: 'nga' | 'codeagent' | 'codegenie'): string[] => {
+    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+    const explicitCommand = agentId === 'codegenie'
+      ? getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim() || ''
+      : '';
+    const fingerprint = JSON.stringify([explicitCommand, ...searchPaths]);
     const cached = acpxRegistryOverrideCache.get(agentId);
-    if (cached) return cached;
+    if (cached?.fingerprint === fingerprint) return [...cached.parts];
     const parts = buildAcpxCommandAttemptParts(resolveAcpxCommand(agentId), { agentId })[0]?.parts ?? [];
-    const command = formatCommandParts(parts);
-    if (command) acpxRegistryOverrideCache.set(agentId, command);
-    return command;
+    // Only cache a resolved absolute path. Falling back to a bare name means
+    // discovery failed, and the CLI may well be installed before the next call.
+    if (parts[0] && isAbsolute(parts[0])) {
+      acpxRegistryOverrideCache.set(agentId, { fingerprint, parts: [...parts] });
+    } else {
+      acpxRegistryOverrideCache.delete(agentId);
+    }
+    return [...parts];
   };
   return {
     nga: resolve('nga'),

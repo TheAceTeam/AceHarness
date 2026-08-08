@@ -42,6 +42,7 @@ import { useSaveConfigMutation } from '@/client/query/workflow-mutations';
 import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
 import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 import {
+  defaultMaxSelfTransitions,
   hashReviewStep,
   hashReviewState,
   reconcileReviewPolicy,
@@ -63,6 +64,10 @@ interface StateMachineDesignPanelProps {
   onOptimizeStep?: (stateIndex: number, stepIndex: number) => void;
   onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
   lightweightMetadata?: LightweightWorkflowDesignMetadata;
+  /** Whether this workflow runs state-level review. Pre-protocol workflows do not. */
+  protocolAdopted?: boolean;
+  /** Adopt the protocol for every non-final state at once. Absent hides the entry. */
+  onAdoptReviewProtocol?: (states: StateMachineState[]) => void;
 }
 
 type SubworkflowDrilldownState = {
@@ -93,6 +98,51 @@ type ReviewPolicyCandidate = {
   blocked: boolean;
   unsafeDeleteRepairSignature?: string;
 };
+
+export type ReviewProtocolAdoptionPreview = {
+  targetCount: number;
+  nextStates: StateMachineState[];
+  operations: ReviewPolicyOperation[];
+  warnings: string[];
+  blocked: boolean;
+};
+
+export function buildReviewProtocolAdoptionPreview(
+  states: StateMachineState[],
+  executableAgentNames: string[],
+  idFactory: () => string = () => crypto.randomUUID(),
+): ReviewProtocolAdoptionPreview | null {
+  const targets = states.filter((state) => !state.isFinal);
+  if (targets.length === 0) return null;
+  const operations: ReviewPolicyOperation[] = [];
+  const warnings: string[] = [];
+  let blocked = false;
+  const nextStates = states.map((state) => {
+    if (state.isFinal) return state;
+    const targetPolicy = state.reviewPolicy ?? {
+      mode: 'standard',
+      source: 'default',
+      locked: false,
+      confidence: 'medium',
+      riskSignals: [],
+      rationale: '启用状态级审查时按标准模式建立基线，可逐状态调整。',
+    } satisfies ReviewPolicy;
+    const result = reconcileReviewPolicy(state, targetPolicy, {
+      availableAgents: executableAgentNames,
+      fallbackAgent: executableAgentNames[0],
+      idFactory,
+    });
+    if (result.blocked) {
+      blocked = true;
+      warnings.push(...result.warnings.map((warning) => `${state.name}: ${warning}`));
+      return state;
+    }
+    operations.push(...result.operations);
+    warnings.push(...result.warnings.map((warning) => `${state.name}: ${warning}`));
+    return result.nextState;
+  });
+  return { targetCount: targets.length, nextStates, operations, warnings, blocked };
+}
 
 function isReviewStructureStep(step: WorkflowStep | undefined): boolean {
   return Boolean(step && (
@@ -1100,6 +1150,8 @@ export default function StateMachineDesignPanel({
   onOptimizeStep,
   onAgentSkillsChange,
   lightweightMetadata,
+  protocolAdopted = false,
+  onAdoptReviewProtocol,
 }: StateMachineDesignPanelProps) {
   const isLightweight = Boolean(lightweightMetadata) || hasLightweightWorkflowTopology(states);
   const workflowStepAgents = useMemo(
@@ -1151,6 +1203,14 @@ export default function StateMachineDesignPanel({
       .map((agent) => String(agent?.name || '').trim())
       .filter(Boolean)
   )), [executableAgents]);
+
+  // Adoption is all-or-nothing: once a workflow runs state-level review, every
+  // non-final state owes a policy, so enabling it state by state would leave the
+  // config unsavable in between.
+  const adoptionPreview = useMemo(() => {
+    if (protocolAdopted || !onAdoptReviewProtocol || isLightweight) return null;
+    return buildReviewProtocolAdoptionPreview(states, executableAgentNames);
+  }, [executableAgentNames, isLightweight, onAdoptReviewProtocol, protocolAdopted, states]);
 
   const requestReviewModeChange = useCallback((targetMode: 'standard' | 'adversarial') => {
     if (!selectedState || selectedState.isFinal) return;
@@ -1393,14 +1453,20 @@ export default function StateMachineDesignPanel({
       isInitial: states.length === 0,
       isFinal: false,
       maxSelfTransitions: 3,
-      reviewPolicy: {
-        mode: 'standard',
-        source: 'default',
-        locked: false,
-        confidence: 'medium',
-        riskSignals: [],
-        rationale: '手工新增状态默认采用标准模式，可在状态详情中调整。',
-      },
+      // Only a workflow that already runs state-level review gives its new states
+      // a policy. Attaching one here on a pre-protocol workflow would opt the
+      // whole thing in, and every other state would then fail validation for not
+      // declaring one.
+      ...(protocolAdopted ? {
+        reviewPolicy: {
+          mode: 'standard' as const,
+          source: 'default' as const,
+          locked: false,
+          confidence: 'medium' as const,
+          riskSignals: [],
+          rationale: '手工新增状态默认采用标准模式，可在状态详情中调整。',
+        },
+      } : {}),
     };
     onStatesChange([...states, newState]);
     setSelectedStateName(name);
@@ -1895,7 +1961,7 @@ export default function StateMachineDesignPanel({
                       type="number"
                       min={1}
                       max={100}
-                      value={selectedState.maxSelfTransitions ?? 3}
+                      value={selectedState.maxSelfTransitions ?? defaultMaxSelfTransitions(selectedState)}
                       disabled={Boolean(selectedState.reviewPolicy?.locked)}
                       onChange={(e) => updateState({
                         ...selectedState,
@@ -1939,7 +2005,7 @@ export default function StateMachineDesignPanel({
                     {selectedState.requireHumanApproval && <Badge variant="outline" className="text-xs py-0 bg-orange-100 dark:bg-orange-900 text-orange-600">人工审查</Badge>}
                     {selectedState.enableSpecRevisionOnComplete && <Badge variant="outline" className="text-xs py-0 bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300">Spec 修订</Badge>}
                     <Badge variant="outline" className="text-xs py-0">
-                      自循环上限 {selectedState.maxSelfTransitions ?? 3}
+                      自循环上限 {selectedState.maxSelfTransitions ?? defaultMaxSelfTransitions(selectedState)}
                     </Badge>
                   </div>
                   {selectedState.description && (
@@ -1967,6 +2033,46 @@ export default function StateMachineDesignPanel({
               </div>
             )}
           </div>
+
+          {!selectedState.isFinal && !selectedState.reviewPolicy && adoptionPreview ? (
+            <div className="rounded-xl border border-dashed border-border bg-card p-3 space-y-2">
+              <div className="text-sm font-medium">本工作流尚未启用状态级审查</div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                当前按原有编排运行，不会插入裁决步骤、不绑定隔离实例，也不改动自循环上限。
+                启用后会保留已有审查策略，并为缺少策略的状态建立标准模式基线；共覆盖
+                {' '}{adoptionPreview.targetCount} 个非终态，之后可逐状态调整。
+              </p>
+              {adoptionPreview.operations.length ? (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                    启用将进行 {adoptionPreview.operations.length} 项结构调整
+                  </summary>
+                  <ul className="mt-2 space-y-1.5 border-l border-border pl-3">
+                    {adoptionPreview.operations.map((operation, index) => (
+                      <li key={`adopt-op-${index}`} className="leading-5">
+                        <span className="font-medium">{operation.op}</span>
+                        <span className="text-muted-foreground">{' · '}{operation.stepName}</span>
+                        <span className="block text-muted-foreground">{operation.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+              {adoptionPreview.warnings.map((warning) => (
+                <p key={warning} className="text-xs text-amber-600 dark:text-amber-400">{warning}</p>
+              ))}
+              <Button
+                size="sm"
+                disabled={adoptionPreview.blocked}
+                onClick={() => onAdoptReviewProtocol?.(adoptionPreview.nextStates)}
+              >
+                启用状态级审查
+              </Button>
+              {adoptionPreview.blocked ? (
+                <p className="text-xs text-destructive">存在无法自动建立基线的状态，请先补齐可执行 Agent。</p>
+              ) : null}
+            </div>
+          ) : null}
 
           {!selectedState.isFinal && selectedState.reviewPolicy ? (
             <div className="rounded-xl border border-border bg-card p-3 space-y-3">

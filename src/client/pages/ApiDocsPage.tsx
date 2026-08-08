@@ -89,7 +89,22 @@ const API_DATA: ApiCategory[] = [
   {
     name: 'Workflow', icon: 'play_circle',
     endpoints: [
-      { method: 'POST', path: '/api/workflow/start', description: '启动工作流执行', requestBody: '{ configFile: string }', response: '{ success, message }' },
+      {
+        method: 'POST',
+        path: '/api/workflow/start/plan',
+        description: '创建一次性工作流启动方案',
+        requestBody: '{ configFile: string, intent: "disabled"|"on-demand", initialContexts?, rehearsal? }',
+        response: '{ plan: { id, intent, ... }, preflightPreview }',
+        notes: ['启动方案与当前用户、配置内容和上下文绑定，并且会过期；正式启动前必须先创建方案。'],
+      },
+      {
+        method: 'POST',
+        path: '/api/workflow/start',
+        description: '使用已确认的启动方案执行工作流',
+        requestBody: '{ configFile: string, startPlanId: string, adversarialIntent: "disabled"|"on-demand", initialContexts?, skipPreflight?, rehearsal? }',
+        response: '{ success, message, runId }',
+        notes: ['startPlanId 必须来自 /api/workflow/start/plan，且 adversarialIntent 必须与方案一致。'],
+      },
       { method: 'POST', path: '/api/workflow/stop', description: '停止运行中的工作流', response: '{ success, message }' },
       { method: 'GET', path: '/api/workflow/status?configFile=file', description: '获取当前工作流状态（可按 configFile 指定）', response: '{ status, runId, currentPhase, currentStep, agents, ... }' },
       {

@@ -35,7 +35,7 @@ export interface CreateAcpxRuntimeClientOptions {
 
 export interface AcpxRuntimeModule {
   createAcpRuntime(options: AcpRuntimeOptions): AcpRuntime;
-  createAgentRegistry(input?: { overrides?: Record<string, string> }): AcpRuntimeOptions['agentRegistry'];
+  createAgentRegistry(input?: { overrides?: Record<string, string | string[]> }): AcpRuntimeOptions['agentRegistry'];
   createRuntimeStore(input: { stateDir: string }): AcpRuntimeOptions['sessionStore'];
 }
 

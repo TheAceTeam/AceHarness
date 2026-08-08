@@ -11,6 +11,7 @@ import { getSubworkflowConfigFile, isSubworkflowStep, normalizeWorkflowConfigRef
 import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
 import {
   isStandardReviewStructure,
+  isStateLevelReviewAdopted,
   isStrictAdversarialRoleSequence,
   normalizeStateMachineWorkflowConfig,
 } from '@/lib/workflow/state-review-policy';
@@ -309,11 +310,11 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   if (finalCount < 1) {
     pushIssue(issues, 'error', ['workflow', 'states'], '状态机必须至少有一个终止状态（isFinal: true）。修复方法：添加一个 {"name": "完成", "isFinal": true, "steps": [], "transitions": []} 状态');
   }
-  // A config counts as having adopted state-level review when the caller asked
-  // for adoption, or when any non-final state already declares a policy — the
-  // latter keeps the guard active for workflows created under the protocol.
-  const protocolAdopted = Boolean(options.adoptLegacyPolicy)
-    || (workflowAny.states || []).some((state: any) => !state.isFinal && state.reviewPolicy);
+  // Adoption is a property of the workflow, not of whichever state happens to
+  // carry a policy: attaching one to a single new state must not make every
+  // pre-protocol state in the same config suddenly invalid. Once adopted, the
+  // guard keeps applying on every save, not only at the moment of adoption.
+  const protocolAdopted = Boolean(options.adoptLegacyPolicy) || isStateLevelReviewAdopted(input);
   for (const state of workflowAny.states || []) {
     if (state.isFinal && Array.isArray(state.transitions) && state.transitions.length > 0) {
       pushIssue(issues, 'warning', ['workflow', 'states', state.name, 'transitions'], `终止状态 "${state.name}" 通常不应再配置转移规则`);

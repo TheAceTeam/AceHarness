@@ -4260,6 +4260,49 @@ describe('state-level adversarial runtime', () => {
     expect(context).toContain('证据已截断');
   });
 
+  test('runtime evidence budgeting reserves raw output even when conclusions could consume each item budget', async () => {
+    const { formatRuntimeEvidenceContext } = await import('@/lib/state-machine/workflow-manager');
+    const evidence = Array.from({ length: 18 }, (_, index) => ({
+      stepId: `dense-${index}`,
+      stepName: `Dense ${index}`,
+      role: 'defender' as const,
+      agentInstanceId: `dense-instance-${index}`,
+      conclusion: `CONCLUSION-${index}-${'c'.repeat(4_000)}`,
+      output: `RAW-${index}-START-${'x'.repeat(12_000)}-RAW-${index}-TAIL`,
+      outputRef: `outputs/dense-${index}.md`,
+    }));
+
+    const context = formatRuntimeEvidenceContext(evidence);
+
+    expect(context.length).toBeLessThanOrEqual(32_000);
+    for (let index = 0; index < evidence.length; index++) {
+      expect(context).toContain(`stepId: dense-${index}`);
+      expect(context).toContain(`RAW-${index}-START`);
+    }
+  });
+
+  test('runtime evidence budgeting keeps conclusions when dense item budgets fall below the raw-output reserve', async () => {
+    const { formatRuntimeEvidenceContext } = await import('@/lib/state-machine/workflow-manager');
+    const evidence = Array.from({ length: 90 }, (_, index) => ({
+      stepId: `crowded-${index}`,
+      stepName: `Crowded ${index}`,
+      role: 'defender' as const,
+      agentInstanceId: `crowded-instance-${index}`,
+      conclusion: `CONCLUSION-${index}-START-${'c'.repeat(4_000)}`,
+      output: `RAW-${index}-START-${'x'.repeat(12_000)}`,
+      outputRef: `outputs/crowded-${index}.md`,
+    }));
+
+    const context = formatRuntimeEvidenceContext(evidence);
+
+    expect(context.length).toBeLessThanOrEqual(32_000);
+    for (let index = 0; index < evidence.length; index++) {
+      expect(context).toContain(`stepId: crowded-${index}`);
+      expect(context).toContain(`CONCLUSION-${index}-START`);
+      expect(context).toContain(`RAW-${index}-START`);
+    }
+  });
+
   test('adversarial structure validation rejects cross-role instance reuse and non-all defender joins', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const config = makeAdversarialConfig();

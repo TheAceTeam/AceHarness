@@ -153,6 +153,42 @@ describe('run-level review plans', () => {
     });
   });
 
+  test('surfaces normalization instance bindings in the run plan operations', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const configsDir = path.join(aceHome, 'configs');
+      await mkdir(configsDir, { recursive: true });
+      const config = stateMachineConfig('root', { adversarial: true });
+      for (const step of config.workflow.states[0].steps) {
+        delete step.agentInstanceId;
+      }
+      await writeFile(path.join(configsDir, 'root.yaml'), stringify(config), 'utf-8');
+      vi.resetModules();
+      const { createRunReviewPlanArtifact } = await import('@/lib/workflow/run-review-plan');
+      const artifact = await createRunReviewPlanArtifact({
+        rootConfigFile: 'root.yaml',
+        intent: 'on-demand',
+        evaluator: vi.fn(async () => ({
+          'root.yaml::root-work': {
+            kind: 'state' as const,
+            configFile: 'root.yaml',
+            stateId: 'root-work',
+            mode: 'adversarial' as const,
+            confidence: 'high' as const,
+            riskSignals: [],
+            rationale: 'keep the configured adversarial review',
+          },
+        })),
+      });
+
+      const plannedState = artifact.plan.states.find((state) => state.configFile === 'root.yaml')!;
+      expect(plannedState.operations).toEqual([
+        expect.objectContaining({ op: 'retag', stepName: 'Implement' }),
+        expect.objectContaining({ op: 'retag', stepName: 'Attack' }),
+        expect.objectContaining({ op: 'retag', stepName: 'Judge' }),
+      ]);
+    });
+  });
+
   test('lightweight disabled remains byte-identical and does not invoke the evaluator', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       const configsDir = path.join(aceHome, 'configs');
@@ -213,8 +249,15 @@ describe('run-level review plans', () => {
       const effective = parse(artifact.effectiveConfigContents['lightweight.yaml']) as any;
       expect(effective.workflow.profile).toBeUndefined();
       expect(effective.workflow.lightweight).toBeUndefined();
+      expect(effective.workflow.supervisor).toBeUndefined();
       expect(effective.workflow.states).toHaveLength(2);
       expect(effective.workflow.states[0].steps.map((step: any) => step.role)).toEqual(['defender', 'attacker', 'judge']);
+      expect(effective.workflow.states[0].steps[0].skills || []).not.toContain('aceharness-tasklist');
+      expect(artifact.plan.workflows[0].operations).toContainEqual(expect.objectContaining({
+        op: 'retag',
+        stepName: '执行任务',
+        reason: expect.stringContaining('aceharness-tasklist'),
+      }));
       expect(effective.workflow.states[1]).toMatchObject({ name: '完成', isFinal: true });
       const { stateMachineWorkflowSchema } = await import('@/lib/core/schemas');
       expect(stateMachineWorkflowSchema.safeParse(effective).success).toBe(true);

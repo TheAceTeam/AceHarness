@@ -104,7 +104,7 @@ import type {
   RunReviewPlan,
   WorkflowAdversarialIntent,
 } from '@/lib/workflow/run-review-types';
-import { inferBaselineAdversarialIntent } from '@/lib/workflow/state-review-policy';
+import { inferBaselineAdversarialIntent, isStateLevelReviewAdopted } from '@/lib/workflow/state-review-policy';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
 import { getStreamingAceProcessReadyContent, mergeAceProcessChunkItems, mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
@@ -1836,7 +1836,24 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                     </div>
                   </div>
                   {workflow.suggestion?.rationale ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{workflow.suggestion.rationale}</p> : null}
-                  {workflow.operations.length ? <p className="mt-2 text-xs text-muted-foreground">本次快照将进行 {workflow.operations.length} 项本地安全协调。</p> : null}
+                  {workflow.operations.length ? (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                        本次派生快照将进行 {workflow.operations.length} 项协调（含 lightweight 派生后果）
+                      </summary>
+                      <ul className="mt-2 space-y-1.5 border-l border-border pl-3">
+                        {workflow.operations.map((operation, index) => (
+                          <li key={`${workflow.configFile}-op-${index}`} className="leading-5">
+                            <span className="font-medium">{REVIEW_OPERATION_LABELS[operation.op] || operation.op}</span>
+                            <span className="text-muted-foreground">{' · '}{operation.stepName}</span>
+                            {operation.safe ? null : <Badge variant="outline" className="ml-1.5 text-[10px]">需确认</Badge>}
+                            <span className="block text-muted-foreground">{operation.reason}</span>
+                            {operation.after?.agent ? <span className="block text-muted-foreground">实际指派 Agent：{operation.after.agent}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
                   {workflow.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}
                   {adversarialIntent === 'on-demand' ? (
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -1909,6 +1926,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                             <span className="text-muted-foreground">{' · '}{operation.stepName}</span>
                             {operation.safe ? null : <Badge variant="outline" className="ml-1.5 text-[10px]">需确认</Badge>}
                             <span className="block text-muted-foreground">{operation.reason}</span>
+                            {operation.after?.agent ? <span className="block text-muted-foreground">实际指派 Agent：{operation.after.agent}</span> : null}
                           </li>
                         ))}
                       </ul>
@@ -10106,7 +10124,6 @@ export default function WorkbenchPage({
       return;
     }
     startLiveStream();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showLiveStream, selectedLiveStreamSource.runId, selectedLiveStreamSource.stepKey]);
 
   const sendLiveFeedback = async (interrupt?: boolean, existingFeedback?: InlineFeedback) => {
@@ -14442,6 +14459,13 @@ export default function WorkbenchPage({
                       onOptimizeState={handleOptimizeStateMachineState}
                       onOptimizeStep={handleOptimizeStateMachineStep}
                       onAgentSkillsChange={handleAgentSkillsChange}
+                      protocolAdopted={isStateLevelReviewAdopted(editingConfig)}
+                      onAdoptReviewProtocol={(states: any) => {
+                        const newConfig = JSON.parse(JSON.stringify(editingConfig));
+                        newConfig.workflow.reviewProtocol = 'state-level';
+                        newConfig.workflow.states = states;
+                        dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
+                      }}
                     />
                   </div>
                 </div>

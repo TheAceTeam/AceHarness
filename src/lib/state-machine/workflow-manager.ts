@@ -178,7 +178,7 @@ import {
   resolveLightweightTasklistDirectory,
 } from '@/lib/workflow/lightweight-runtime';
 import { formatWorkflowFailureReason } from '@/lib/workflow/error-summary';
-import { normalizeStateMachineWorkflowConfig } from '@/lib/workflow/state-review-policy';
+import { defaultMaxSelfTransitions, normalizeStateMachineWorkflowConfig } from '@/lib/workflow/state-review-policy';
 import type { RunReviewPlan } from '@/lib/workflow/run-review-types';
 
 export interface TokenUsage {
@@ -199,6 +199,7 @@ const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
 const RUNTIME_EVIDENCE_CONCLUSION_LIMIT = 2_000;
 const RUNTIME_EVIDENCE_OUTPUT_LIMIT = 8_000;
+const RUNTIME_EVIDENCE_OUTPUT_MIN = 200;
 const RUNTIME_EVIDENCE_STATE_LIMIT = 32_000;
 const RUNTIME_EVIDENCE_TRUNCATION_MARKER = '\n...[证据已截断，保留首尾片段]...\n';
 const DEFAULT_AGENT_PREWARM_CONCURRENCY = Math.max(
@@ -554,7 +555,17 @@ export function formatRuntimeEvidenceContext(items: RuntimeEvidenceItem[]): stri
     ];
     const labelsLength = '\n- truncated: false\n### step-conclusion\n\n### raw-output-summary\n'.length;
     const variableBudget = Math.max(0, itemBudget - metadata.join('\n').length - labelsLength);
-    const conclusionBudget = Math.min(cappedConclusion.text.length, variableBudget);
+    // A long conclusion must not consume the entire per-item allowance. Keep a
+    // small, explicit slice of raw output so attacker/judge roles can inspect
+    // source evidence instead of seeing only the producer's own summary. Cap the
+    // reserve at half of the variable allowance: once evidence becomes dense the
+    // fixed minimum must not flip priorities and evict the conclusion entirely.
+    const outputReserve = Math.min(
+      RUNTIME_EVIDENCE_OUTPUT_MIN,
+      cappedOutput.text.length,
+      Math.floor(variableBudget / 2),
+    );
+    const conclusionBudget = Math.min(cappedConclusion.text.length, Math.max(0, variableBudget - outputReserve));
     const outputBudget = Math.max(0, variableBudget - conclusionBudget);
     const renderedConclusion = truncateRuntimeEvidenceText(cappedConclusion.text, conclusionBudget);
     const renderedOutput = truncateRuntimeEvidenceText(cappedOutput.text, outputBudget);
@@ -5532,7 +5543,7 @@ try {
       // Check self-transition circuit breaker
       if (nextState === this.currentState) {
         const currentSelfCount = this.selfTransitionCounts.get(this.currentState!) || 0;
-        const maxSelfTransitions = stateConfig.maxSelfTransitions ?? 3;
+        const maxSelfTransitions = stateConfig.maxSelfTransitions ?? defaultMaxSelfTransitions(stateConfig);
         if (currentSelfCount >= maxSelfTransitions) {
           const fromState: string = this.currentState!;
           // Circuit breaker triggered - only follow an explicitly matching alternative route.

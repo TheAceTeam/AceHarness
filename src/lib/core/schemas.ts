@@ -788,6 +788,13 @@ export const stateMachineWorkflowSchema = z.object({
     mode: z.literal('state-machine'),
     profile: z.literal(LIGHTWEIGHT_WORKFLOW_PROFILE).optional(),
     lightweight: lightweightWorkflowConfigSchema.optional(),
+    /**
+     * Marks a workflow as having adopted state-level review. Absent means a
+     * pre-protocol workflow, which the engine leaves exactly as authored.
+     * Adoption is a deliberate act — creating a workflow, or enabling review on
+     * an existing one — never a side effect of editing or saving.
+     */
+    reviewProtocol: z.literal('state-level').optional(),
     states: z.array(stateMachineStateSchema).min(1, '至少需要一个状态'),
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50), // 最大状态转移次数，防止死循环

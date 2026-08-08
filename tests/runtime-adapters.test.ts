@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { createRuntimeAdapterRegistry, resolveRuntimeForAgent } from '@/lib/runtime-agent/adapters/adapter-registry';
 import {
   AcpxAdapter,
+  clearAcpxAgentRegistryOverrideCache,
   getAcpxAgentRegistryOverrides,
   normalizeAcpxRuntimeEvent,
   resolveAcpxCommand,
@@ -86,23 +87,56 @@ describe('runtime adapters', () => {
     });
   });
 
-  test('uses command-string overrides accepted by the installed acpx registry', async () => {
+  test('runs against the acpx major the override contract targets', () => {
+    // 0.12 required command strings and threw on arrays; 0.13 is the opposite and
+    // rejects raw strings on win32. A stale install would otherwise let the wrong
+    // override shape pass every test in this file.
+    const { version } = JSON.parse(
+      readFileSync(requireFromProject.resolve('acpx/package.json'), 'utf-8'),
+    ) as { version: string };
+    expect(version.startsWith('0.13.')).toBe(true);
+  });
+
+  test('uses argv overrides so acpx can launch on Windows', async () => {
     const overrides = getAcpxAgentRegistryOverrides();
 
-    // The leading command is whatever discovery resolved — an absolute path on a
-    // machine where the CLI is installed, the bare name otherwise — so assert the
-    // serialised shape rather than a fixed string.
-    expect(typeof overrides.nga).toBe('string');
-    expect(overrides.nga.endsWith('--disable-update acp')).toBe(true);
-    expect(typeof overrides.codeagent).toBe('string');
-    expect(overrides.codeagent.endsWith('acp')).toBe(true);
-    expect(overrides.codegenie).toContain('acp');
-    expect(typeof overrides.codegenie).toBe('string');
+    // The leading part is whatever discovery resolved — an absolute path where the
+    // CLI is installed, the bare name otherwise — so assert only the trailing args.
+    expect(overrides.nga.slice(1)).toEqual(['--disable-update', 'acp']);
+    expect(overrides.codeagent.at(-1)).toBe('acp');
+    expect(overrides.codegenie.at(-1)).toBe('acp');
 
     const { createAgentRegistry } = await import('acpx/runtime');
     const registry = createAgentRegistry({ overrides });
-    expect(registry.resolve('codegenie')).toBe(overrides.codegenie);
-    expect(registry.resolve('opencode')).toEqual(expect.any(String));
+    // The array form round-trips, and it is the only shape that makes acpx
+    // populate agentArgv — without it resolveAgentCommandParts throws on win32.
+    expect(registry.resolve('codegenie')).toEqual(overrides.codegenie);
+    expect(Array.isArray(registry.resolve('nga'))).toBe(true);
+  });
+
+  test('invalidates a discovered override when its configured command changes', async () => {
+    await withIsolatedAceHome(async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'aceh-acpx-override-cache-'));
+      const firstCommand = join(dir, 'codegenie-first');
+      const secondCommand = join(dir, 'codegenie-second');
+      writeFileSync(firstCommand, 'first');
+      writeFileSync(secondCommand, 'second');
+      const previousCommand = process.env.ACEH_CODEGENIE_COMMAND;
+
+      try {
+        clearAcpxAgentRegistryOverrideCache();
+        process.env.ACEH_CODEGENIE_COMMAND = firstCommand;
+        expect(getAcpxAgentRegistryOverrides().codegenie[0]).toBe(firstCommand);
+
+        process.env.ACEH_CODEGENIE_COMMAND = secondCommand;
+        expect(getAcpxAgentRegistryOverrides().codegenie[0]).toBe(secondCommand);
+      } finally {
+        clearAcpxAgentRegistryOverrideCache();
+        if (previousCommand === undefined) delete process.env.ACEH_CODEGENIE_COMMAND;
+        else process.env.ACEH_CODEGENIE_COMMAND = previousCommand;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   test('normalizes acpx events without exposing provider or acpx native ids in payload', () => {

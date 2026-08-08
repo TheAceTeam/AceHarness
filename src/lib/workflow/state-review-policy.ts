@@ -261,12 +261,57 @@ function deterministicInstanceId(workflowKey: string, state: StateMachineState, 
 }
 
 /**
+ * Whether a workflow has adopted state-level review.
+ *
+ * `workflow.reviewProtocol` is the durable answer and the only one written going
+ * forward. The per-state fallback covers configs created before that field
+ * existed: those configs put policies on every non-final state and must keep
+ * being governed by the protocol. A partial set is not enough — treating one
+ * policy as adoption would drag a whole pre-protocol workflow into the protocol.
+ */
+export function isStateLevelReviewAdopted(config: unknown): boolean {
+  const workflow = (config as any)?.workflow;
+  if (!workflow) return false;
+  if (workflow.reviewProtocol === 'state-level') return true;
+  const states = Array.isArray(workflow.states) ? workflow.states : [];
+  const nonFinalStates = states.filter((state: StateMachineState) => state && !state.isFinal);
+  return nonFinalStates.length > 0
+    && nonFinalStates.every((state: StateMachineState) => Boolean(state.reviewPolicy));
+}
+
+/**
+ * Persist the legacy all-state adoption signal as workflow metadata. The input is
+ * left untouched so callers can use this while building save or validation
+ * payloads without mutating their editor/runtime state.
+ */
+export function materializeStateLevelReviewAdoption<T>(input: T): T {
+  const workflow = (input as any)?.workflow;
+  if (!workflow || workflow.reviewProtocol === 'state-level' || !isStateLevelReviewAdopted(input)) return input;
+  return {
+    ...(input as any),
+    workflow: {
+      ...workflow,
+      reviewProtocol: 'state-level',
+    },
+  } as T;
+}
+
+/**
+ * Self-loop ceiling to use when a state does not pin one. Adversarial states get
+ * a tighter budget because each iteration costs a full defender/attacker/judge
+ * round. Every reader must go through this: the engine and the design panel
+ * disagreeing here would show one ceiling and enforce another.
+ */
+export function defaultMaxSelfTransitions(state: Pick<StateMachineState, 'reviewPolicy'> | undefined): number {
+  return state?.reviewPolicy?.mode === 'adversarial' ? 2 : 3;
+}
+
+/**
  * Identity normalisation (stable IDs, provenance) is safe everywhere and is what
  * lets a pre-protocol config run at all. Adopting the review protocol is not:
  * inferring a policy, defaulting `maxSelfTransitions`, binding runtime instances
  * and repairing structure all change how an existing workflow executes and what
- * it costs. So adoption is opt-in, and a state that already declares a
- * `reviewPolicy` is treated as having opted in regardless of the flag.
+ * it costs. So adoption is opt-in at the workflow level.
  */
 export function normalizeStateMachineWorkflowConfig<T>(
   input: T,
@@ -276,6 +321,8 @@ export function normalizeStateMachineWorkflowConfig<T>(
     idFactory?: () => string;
     /** Adopt the review protocol for states that do not declare a policy yet. */
     adoptLegacyPolicy?: boolean;
+    /** Receives the structural changes adoption made, keyed by state id or name. */
+    collectOperations?: (stateKey: string, operations: ReviewPolicyOperation[]) => void;
   } = {},
 ): T {
   if (!input || typeof input !== 'object') return input;
@@ -289,6 +336,7 @@ export function normalizeStateMachineWorkflowConfig<T>(
     });
     return source as T;
   }
+  const adoptProtocol = Boolean(options.adoptLegacyPolicy) || isStateLevelReviewAdopted(source);
   const workflowKey = options.workflowKey || source.workflow.name || 'state-machine-workflow';
   const deniedAgentNames = new Set((Array.isArray(source.roles) ? source.roles : [])
     .filter((role: any) => role?.roleType === 'supervisor' || role?.team === 'black-gold')
@@ -296,6 +344,7 @@ export function normalizeStateMachineWorkflowConfig<T>(
     .filter(Boolean));
   source.workflow.states = source.workflow.states.map((rawState: StateMachineState, stateIndex: number) => {
     let state = { ...rawState, steps: Array.isArray(rawState.steps) ? rawState.steps.map((step) => ({ ...step })) : [] } as StateMachineState;
+    const normalizationOperations: ReviewPolicyOperation[] = [];
     const shouldRepairLowStandard = !state.isFinal
       && state.reviewPolicy?.mode === 'standard'
       && state.reviewPolicy?.confidence === 'low';
@@ -322,20 +371,22 @@ export function normalizeStateMachineWorkflowConfig<T>(
       if (!step.provenance) step.provenance = { origin: 'legacy' };
       return step;
     });
-    // A state that has never declared a policy keeps its original execution
-    // shape unless the caller explicitly adopts the protocol. Without this the
-    // engine would silently add a closing step, rebind runtime instances and
-    // lower the self-transition ceiling on workflows authored before the
-    // protocol existed.
-    if (!rawState.reviewPolicy && !options.adoptLegacyPolicy) return state;
+    // A workflow that has not adopted the protocol keeps its original execution
+    // shape. Without this the engine would silently add a closing step, rebind
+    // runtime instances and lower the self-transition ceiling on workflows
+    // authored before the protocol existed.
+    if (!rawState.reviewPolicy && !adoptProtocol) return state;
     state.reviewPolicy = normalizeReviewPolicy(state.reviewPolicy, state);
     if (state.isFinal) delete state.reviewPolicy;
-    if (state.maxSelfTransitions === undefined) {
-      state.maxSelfTransitions = state.reviewPolicy?.mode === 'adversarial' ? 2 : 3;
-    }
+    // `maxSelfTransitions` is deliberately left unset. Writing the adversarial
+    // default here would freeze it: reconciliation only fills the field when it
+    // is undefined, so a state normalised as adversarial could never fall back
+    // to the standard ceiling after the user turns adversarial off for a run.
+    // Readers resolve the default from the effective policy instead.
     if (state.reviewPolicy?.mode === 'adversarial') {
       state.steps = state.steps.map((step, stepIndex) => {
         if (step.agentInstanceId) return step;
+        const before = cloneValue(step);
         const hadValidBaseline = isStepBaselineUnmodified(step);
         let next: WorkflowStep = {
           ...step,
@@ -344,6 +395,14 @@ export function normalizeStateMachineWorkflowConfig<T>(
         if (hadValidBaseline && ['ai-draft', 'review-policy'].includes(step.provenance?.origin || '')) {
           next = withReviewStepBaseline(next, step.provenance!.origin, step.provenance?.managedRole);
         }
+        addOperation(
+          normalizationOperations,
+          'retag',
+          before,
+          '为对抗角色绑定独立运行实例。',
+          true,
+          next,
+        );
         return next;
       });
     }
@@ -368,11 +427,20 @@ export function normalizeStateMachineWorkflowConfig<T>(
           .map((step) => step.agent)
           .filter((agent): agent is string => Boolean(agent) && !deniedAgentNames.has(agent!)),
       });
-      if (!repaired.blocked) state = repaired.nextState;
+      if (!repaired.blocked) {
+        state = repaired.nextState;
+        normalizationOperations.push(...repaired.operations);
+      }
+    }
+    // Adoption reshapes the state too — inserting a closer, rebinding instances,
+    // retagging roles. Surface both direct normalization mutations and the
+    // reconcile-phase operations so a start plan can show every change.
+    if (options.collectOperations && normalizationOperations.length > 0) {
+      options.collectOperations(state.id || state.name, normalizationOperations);
     }
     return state;
   });
-  return source as T;
+  return materializeStateLevelReviewAdoption(source) as T;
 }
 
 function roleInstanceId(state: StateMachineState, step: WorkflowStep, role: ReviewRole, index: number): string {
@@ -469,6 +537,10 @@ function repairStrictAdversarialExecutionContract(
 
 function chooseAgent(agents: string[], index: number): string {
   return agents[index % agents.length];
+}
+
+function chooseDistinctAgent(agents: string[], avoidedAgents: Set<string>, fallbackIndex: number): string {
+  return agents.find((agent) => !avoidedAgents.has(agent)) || chooseAgent(agents, fallbackIndex);
 }
 
 function managedStep(
@@ -592,7 +664,6 @@ export function reconcileReviewPolicy(
     if (existingStrict) {
       state.steps = repairStrictAdversarialExecutionContract(state, operations);
       state.reviewPolicy = targetPolicy;
-      if (state.maxSelfTransitions === undefined) state.maxSelfTransitions = 2;
       return {
         nextState: state,
         operations,
@@ -633,13 +704,15 @@ export function reconcileReviewPolicy(
         blocked: true,
       };
     }
-    const attacker = managedStep(state, 'attacker', chooseAgent(availableAgents, 1), defenderSteps.length, context.idFactory);
-    const judge = managedStep(state, 'judge', chooseAgent(availableAgents, 2), defenderSteps.length + 1, context.idFactory);
+    const defenderAgents = new Set(defenderSteps.map((step) => step.agent).filter((agent): agent is string => Boolean(agent)));
+    const attackerAgent = chooseDistinctAgent(availableAgents, defenderAgents, 1);
+    const judgeAgent = chooseDistinctAgent(availableAgents, new Set([...defenderAgents, attackerAgent]), 2);
+    const attacker = managedStep(state, 'attacker', attackerAgent, defenderSteps.length, context.idFactory);
+    const judge = managedStep(state, 'judge', judgeAgent, defenderSteps.length + 1, context.idFactory);
     addOperation(operations, 'insert', attacker, '新增独立攻击审查步骤。', true, attacker);
     addOperation(operations, 'insert', judge, '新增独立裁决步骤。', true, judge);
     state.steps = [...defenderSteps, attacker, judge];
     state.reviewPolicy = targetPolicy;
-    if (state.maxSelfTransitions === undefined) state.maxSelfTransitions = 2;
     return { nextState: state, operations, warnings, requiresConfirmation: operations.length > 0, blocked: false };
   }
 
@@ -753,7 +826,10 @@ export function reconcileReviewPolicy(
 
   state.steps = kept;
   state.reviewPolicy = targetPolicy;
-  if (state.maxSelfTransitions === undefined) state.maxSelfTransitions = 3;
+  // Reconciliation never pins the self-loop ceiling either. Writing it here would
+  // freeze the value chosen for whichever mode happened to be applied first, so a
+  // later switch to adversarial could not tighten it. An explicit value the user
+  // set is left untouched; the rest is resolved by defaultMaxSelfTransitions.
   if (keptPreProtocolRoleStep) {
     warnings.push('这个状态里状态级审查之前配置的角色步骤已保留，并转为标准步骤；原工作流不变。');
   }

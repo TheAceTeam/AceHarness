@@ -10,6 +10,7 @@ import {
   canonicalJson,
   fnv1a64,
   getReviewPolicyProtectedSlice,
+  isStateLevelReviewAdopted,
   reconcileReviewPolicy,
   withReviewStepBaseline,
 } from '@/lib/workflow/state-review-policy';
@@ -262,6 +263,9 @@ function restoreWorkflowReviewSlices(
   }
   const baseStates = Array.isArray(baseWorkflow.states) ? baseWorkflow.states : [];
   const candidateStates = Array.isArray(candidateWorkflow.states) ? candidateWorkflow.states : [];
+  // Read adoption from the base, never the candidate: the model's draft must not
+  // be able to opt a workflow into the protocol.
+  const protocolAdopted = isStateLevelReviewAdopted({ workflow: baseWorkflow });
   const usedBaseStates = new Set<Record<string, any>>();
   const findBaseState = (candidate: Record<string, any>) => {
     if (candidate?.id) {
@@ -279,7 +283,9 @@ function restoreWorkflowReviewSlices(
       if (!baseState) {
         const next = cloneValue(candidateState);
         next.id = createReviewEntityId();
-        if (next.isFinal) {
+        if (next.isFinal || !protocolAdopted) {
+          // A workflow that has not adopted state-level review must not acquire
+          // it because AI optimisation happened to add a state.
           delete next.reviewPolicy;
         } else {
           const requestedMode = next.reviewPolicy?.mode === 'adversarial' ? 'adversarial' : 'standard';
