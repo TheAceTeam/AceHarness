@@ -275,13 +275,13 @@ ACEHarness 支持多种 AI 引擎后端，可以根据需求选择不同的引�
 
 类型定义在：
 
-- [ai-process-blocks.ts](/C:/Users/Shawn/Desktop/ACEHarness/src/lib/chat/ai-process-blocks.ts)
+- [ai-process-blocks.ts](../chat/ai-process-blocks.ts)
 
 ### 共享 formatter
 
 wrapper 不应该自己再拼 `ace-process` JSON。统一入口在：
 
-- [ace-process-formatters.ts](/C:/Users/Shawn/Desktop/ACEHarness/src/lib/chat/ace-process-formatters.ts)
+- [ace-process-formatters.ts](../chat/ace-process-formatters.ts)
 
 当前共享的关键能力：
 
@@ -344,7 +344,7 @@ wrapper 不应该自己再拼 `ace-process` JSON。统一入口在：
 - `trae-cli-wrapper.ts`
 - `claude-code-acp-wrapper.ts`
 
-它们默认通过 [acp-wrapper-base.ts](/C:/Users/Shawn/Desktop/ACEHarness/src/lib/engines/acp-wrapper-base.ts) 继承这套统一逻辑。
+它们默认通过 [acp-wrapper-base.ts](./acp-wrapper-base.ts) 继承这套统一逻辑。
 
 ### Cursor 和 Codex 的额外说明
 
