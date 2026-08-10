@@ -692,7 +692,7 @@ class DefaultRuntimeOrchestrator implements RuntimeOrchestrator {
     const resolved = resolveModelRoute(this.options.db, {
       agentId,
       modelRouteId,
-      modelId: modelRouteId ? undefined : 'default',
+      modelId: modelRouteId ? undefined : undefined,
     });
     return toContractModelRoute(resolved);
   }

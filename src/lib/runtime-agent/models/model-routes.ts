@@ -259,9 +259,31 @@ export function resolveModelRoute(db: RuntimeSqliteDatabase, input: ResolveModel
     return resolvedRouteFromRow(explicit);
   }
 
+  // 新增：fallback - 有 agentId 但没有 modelId/modelRouteId 时，取第一个可用路由
+  if (input.agentId && !input.modelId && !input.modelRouteId) {
+    const fallbackRow = db.prepare(`
+      SELECT route.*, catalog.display_name
+      FROM model_routes AS route
+      JOIN model_catalog AS catalog ON catalog.id = route.model_id
+      WHERE route.agent_id = ?
+        AND route.status = 'active'
+      ORDER BY
+        route.is_default DESC,
+        route.priority ASC,
+        CASE WHEN route.verified_at IS NULL THEN 1 ELSE 0 END ASC,
+        route.verified_at DESC,
+        route.id ASC
+      LIMIT 1
+    `).get(input.agentId);
+
+    if (!fallbackRow) throw new Error(`No active model route for agentId=${input.agentId}`);
+    return resolvedRouteFromRow(fallbackRow);
+  }
+
+  // 原来的错误检查（保持不变）
   if (!input.agentId || !input.modelId) {
     throw new Error('resolveModelRoute requires modelRouteId or agentId + modelId');
-  }
+  }  
 
   const row = db.prepare(`
     SELECT route.*, catalog.display_name
