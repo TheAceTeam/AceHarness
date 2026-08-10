@@ -203,11 +203,11 @@ export async function requireRuntimeDatabaseGrant(request: Request): Promise<{ g
 export function buildRuntimeDatabaseEnv(grant: RuntimeDatabaseGrant | null | undefined, runtimeUrl?: string): Record<string, string> {
   if (!grant) return {};
   return {
-    ACEHARNESS_RUNTIME_URL: runtimeUrl || resolveRuntimeUrl(),
-    ACEHARNESS_RUNTIME_TOKEN: grant.token,
-    ACEHARNESS_RUN_ID: grant.runId || '',
-    ACEHARNESS_CHAT_SESSION_ID: grant.chatSessionId || '',
-    ACEHARNESS_WORKSPACE_ROOT: grant.workspaceRoot,
+    aceharness_runtime_url: runtimeUrl || resolveRuntimeUrl(),
+    aceharness_runtime_token: grant.token,
+    aceharness_run_id: grant.runId || '',
+    aceharness_chat_session_id: grant.chatSessionId || '',
+    aceharness_workspace_root: grant.workspaceRoot,
   };
 }
 
