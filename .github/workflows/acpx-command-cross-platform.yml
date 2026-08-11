@@ -1,0 +1,43 @@
+name: ACPX Command Cross-Platform
+
+on:
+  push:
+    paths:
+      - 'src/lib/core/**'
+      - 'src/lib/runtime-agent/**'
+      - 'src/server/api-routes/engine/**'
+      - 'src/client/query/engines.ts'
+      - 'src/client/pages/EnginesPage.tsx'
+      - 'tests/core-command-resolution.test.ts'
+      - 'tests/runtime-adapters.test.ts'
+      - 'tests/api-engine-availability.test.ts'
+      - 'tests/client-engine-availability.test.ts'
+      - '.github/workflows/acpx-command-cross-platform.yml'
+  pull_request:
+    paths:
+      - 'src/lib/core/**'
+      - 'src/lib/runtime-agent/**'
+      - 'src/server/api-routes/engine/**'
+      - 'src/client/query/engines.ts'
+      - 'src/client/pages/EnginesPage.tsx'
+      - 'tests/core-command-resolution.test.ts'
+      - 'tests/runtime-adapters.test.ts'
+      - 'tests/api-engine-availability.test.ts'
+      - 'tests/client-engine-availability.test.ts'
+      - '.github/workflows/acpx-command-cross-platform.yml'
+
+jobs:
+  command-contract:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run tests/core-command-resolution.test.ts tests/runtime-adapters.test.ts tests/api-engine-availability.test.ts tests/agent-registry.test.ts tests/client-engine-availability.test.ts tests/cli-environment-variables.test.ts

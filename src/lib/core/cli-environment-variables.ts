@@ -45,7 +45,9 @@ export const CLI_ENVIRONMENT_GROUPS = [
       { key: 'ACE_CODEGENIE_SDK_BASE_URL', label: 'CodeGenie 服务地址', description: 'CodeGenie SDK 使用的外部服务地址。' },
       { key: 'ACE_CODEGENIE_SDK_COMMAND', label: 'CodeGenie 启动命令', description: 'CodeGenie SDK 使用的启动命令。' },
       { key: 'ACE_CODEGENIE_BIN', label: 'CodeGenie 执行文件', description: 'CodeGenie SDK 使用的执行文件配置。' },
-      { key: 'ACEH_CODEGENIE_COMMAND', label: 'CodeGenie ACP 命令', description: 'CodeGenie ACP 适配器使用的启动命令。' },
+      { key: 'ACEH_NGA_COMMAND', label: 'NGA ACP 执行文件', description: 'NGA ACP 适配器使用的可执行文件路径或命令名。' },
+      { key: 'ACEH_CODEAGENT_COMMAND', label: 'CodeAgent ACP 执行文件', description: 'CodeAgent ACP 适配器使用的可执行文件路径或命令名。' },
+      { key: 'ACEH_CODEGENIE_COMMAND', label: 'CodeGenie ACP 执行文件', description: 'CodeGenie ACP 适配器使用的可执行文件路径或命令名。' },
     ],
   },
 ] as const;

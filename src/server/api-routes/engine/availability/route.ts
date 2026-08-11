@@ -7,14 +7,14 @@ import {
 import { normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
 import { openRuntimeSqliteDatabase } from '@/lib/runtime-agent/sqlite/database';
 import { RuntimeSqliteStore } from '@/lib/runtime-agent/sqlite/runtime-store';
-import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
 import {
   buildConfiguredProcessEnvSync,
   getConfiguredCliSearchPaths,
-  getConfiguredEnvValueSync,
 } from '@/lib/core/configured-env';
+import { probeCommand, resolveCommand, type CommandSpec } from '@/lib/core/resolved-command';
+import { getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { jsonError, jsonOk } from '@/server/api-route-runtime/request-utils';
-import { spawn } from 'node:child_process';
 
 /**
  * Migration-only availability route. Runtime readiness should converge
@@ -98,30 +98,44 @@ async function getRuntimeAgentAvailabilityReport(engine: string, options: { refr
 
 async function runAvailabilityProbe(agentId: string, probe: AvailabilityProbeSpec) {
   const checkedAt = new Date().toISOString();
-  const commands = uniqueStrings([
-    probe.resolver.primaryCommand,
-    probe.command,
-    ...probe.resolver.fallbackCommands,
-  ]);
+  const definition = getBuiltinAgentDefinition(agentId);
+  const commands = uniqueStrings([probe.resolver.primaryCommand, probe.command, ...probe.resolver.fallbackCommands]);
+  const spec: CommandSpec = {
+    id: agentId,
+    candidates: commands,
+    fixedArgs: [],
+    overrideEnvKey: definition?.commandOverrideEnv,
+  };
+  const env = buildConfiguredProcessEnvSync();
+  const resolution = resolveCommand(spec, {
+    env,
+    configuredSearchPaths: getConfiguredCliSearchPaths(getCommonCliSearchPaths()),
+  });
+  if (resolution.diagnostics.rejectedOverride) {
+    return {
+      status: 'error' as const,
+      checkedAt,
+      message: `${definition?.commandOverrideEnv || 'command override'} is invalid: ${resolution.diagnostics.rejectedOverride}`,
+    };
+  }
   const failures: string[] = [];
 
-  for (const command of commands) {
-    const executable = resolveAvailabilityExecutable(agentId, command);
-    const result = await runCommand(executable, probe.args, buildConfiguredProcessEnvSync());
+  for (const attempt of resolution.attempts) {
+    const result = await probeCommand({ ...attempt, args: [] }, { env, timeoutMs: 5_000 });
     if (result.ok) {
       return {
         status: 'available' as const,
         checkedAt,
-        message: firstOutputLine(result.output) || `${executable} is available`,
+        message: firstOutputLine(result.output) || `${attempt.executable} is available`,
       };
     }
 
     if (result.missing) {
-      failures.push(`${executable}: missing`);
+      failures.push(`${attempt.executable}: missing`);
       continue;
     }
 
-    failures.push(`${executable}: ${result.output || `exited with code ${result.exitCode ?? 'unknown'}`}`);
+    failures.push(`${attempt.executable}: ${result.output || `exited with code ${result.exitCode ?? 'unknown'}`}`);
   }
 
   const hasOnlyMissing = failures.length > 0 && failures.every((failure) => failure.endsWith(': missing'));
@@ -130,98 +144,6 @@ async function runAvailabilityProbe(agentId: string, probe: AvailabilityProbeSpe
     checkedAt,
     message: failures.join('; ') || 'availability probe failed',
   };
-}
-
-function resolveAvailabilityExecutable(agentId: string, command: string): string {
-  const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-  const explicit = agentId === 'codegenie'
-    ? getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim()
-    : undefined;
-  const candidate = explicit || command;
-  return findCommand(candidate, searchPaths) || candidate;
-}
-
-function runCommand(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<{
-  ok: boolean;
-  missing: boolean;
-  output: string;
-  exitCode?: number | null;
-}> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
-    const finish = (result: {
-      ok: boolean;
-      missing: boolean;
-      output: string;
-      exitCode?: number | null;
-    }) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolve(result);
-    };
-    const child = spawnAvailabilityCommand(command, args, env);
-    const chunks: Buffer[] = [];
-    timeout = setTimeout(() => {
-      child.kill();
-      finish({
-        ok: false,
-        missing: false,
-        output: 'availability probe timed out',
-        exitCode: null,
-      });
-    }, 5_000);
-
-    child.stdout?.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-    child.stderr?.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      finish({
-        ok: false,
-        missing: error.code === 'ENOENT',
-        output: error.message,
-        exitCode: null,
-      });
-    });
-    child.on('close', (code) => {
-      const output = Buffer.concat(chunks).toString('utf8').trim();
-      finish({
-        ok: code === 0,
-        missing: code === 127 || isMissingCommandOutput(output),
-        output,
-        exitCode: code,
-      });
-    });
-  });
-}
-
-function spawnAvailabilityCommand(command: string, args: string[], env: NodeJS.ProcessEnv) {
-  if (process.platform !== 'win32') {
-    return spawn(command, args, {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  }
-
-  const line = [command, ...args].map(quoteWindowsCmdToken).join(' ');
-  return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', line], {
-    env,
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-}
-
-function quoteWindowsCmdToken(token: string): string {
-  if (token === '') return '""';
-  if (!/[\s"]/u.test(token)) return token;
-  return `"${token.replace(/"/g, '""')}"`;
-}
-
-function isMissingCommandOutput(output: string) {
-  const normalized = output.toLowerCase();
-  return normalized.includes('is not recognized as an internal or external command')
-    || normalized.includes('command not found')
-    || normalized.includes('not found');
 }
 
 function firstOutputLine(output: string) {

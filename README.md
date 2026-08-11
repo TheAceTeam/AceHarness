@@ -178,6 +178,26 @@ ACEHarness 的界面围绕日常工程工作流组织：
 
 ACEHarness 的配置主要由启动向导、引擎管理页和环境变量共同决定。当前仓库支持 `claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli`、`magic-cli` 等本地执行后端；模型/引擎诊断台可验证连接、流式事件、结构化输出、代码、数学和推理能力。
 
+### ACP 执行文件覆盖
+
+NGA、CodeAgent 和 CodeGenie 的 ACP 适配器默认按各自的 CLI 名称从配置搜索路径和 `PATH` 中查找。需要使用非标准安装位置时，可设置下列变量覆盖对应的**可执行文件**：
+
+| 变量 | 适配器 | 默认候选 | 说明 |
+|------|--------|----------|------|
+| `ACEH_NGA_COMMAND` | NGA | `ngagent`，再回退 `nga` | NGA ACP CLI 可执行文件路径或 bare command name |
+| `ACEH_CODEAGENT_COMMAND` | CodeAgent | `codeagent` | CodeAgent ACP CLI 可执行文件路径或 bare command name |
+| `ACEH_CODEGENIE_COMMAND` | CodeGenie | `codegenie` | CodeGenie ACP CLI 可执行文件路径或 bare command name |
+
+显式覆盖优先级最高，设置后不会悄悄回退到其他候选命令；请传入单个文件路径或 bare command name，不能包含 `acp`、`--cwd` 或其他参数。路径包含空格时无需自行添加 shell 引号：
+
+```powershell
+$env:ACEH_NGA_COMMAND = 'C:\Program Files\NGA\ngagent.cmd'
+$env:ACEH_CODEAGENT_COMMAND = 'C:\Program Files\CodeAgent\codeagent.cmd'
+$env:ACEH_CODEGENIE_COMMAND = 'C:\Program Files\CodeGenie\codegenie.cmd'
+```
+
+这些变量只控制 ACP CLI 适配器，不影响 `ACE_NGA_SDK_COMMAND`、`ACE_NGA_BIN`、`ACE_CODEGENIE_SDK_COMMAND` 或 `ACE_CODEGENIE_BIN`。后四项属于 SDK 集成配置，不能替代 ACP 可执行文件覆盖。
+
 ### ACE Service
 
 `server.js` 会在启动时加载 `.env`、`.env.local` 以及当前模式对应的 `.env.development*` / `.env.production*`；shell、进程管理器或启动脚本里已存在的环境变量优先级更高，不会被文件覆盖。

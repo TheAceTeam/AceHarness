@@ -72,6 +72,7 @@ export interface AgentDefinition {
   command?: string;
   args?: string[];
   fallbackCommands?: string[];
+  commandOverrideEnv?: string;
   iconPath: string;
   tier: AgentTier;
   capabilities: AgentCapabilities;
@@ -118,6 +119,7 @@ export interface AgentRuntimeStateDto {
       | 'command'
       | 'args'
       | 'fallbackCommands'
+      | 'commandOverrideEnv'
       | 'iconPath'
       | 'capabilities'
       | 'envSchema'
@@ -212,6 +214,7 @@ function acpxAgent(input: {
   command: string;
   args?: string[];
   fallbackCommands?: string[];
+  commandOverrideEnv?: string;
   iconPath: string;
   family?: string;
   capabilities?: AgentCapabilities;
@@ -224,6 +227,7 @@ function acpxAgent(input: {
     command: input.command,
     args: input.args ?? ['acp'],
     fallbackCommands: input.fallbackCommands,
+    commandOverrideEnv: input.commandOverrideEnv,
     iconPath: input.iconPath,
     tier: input.tier,
     capabilities: input.capabilities ?? FULL_ACPX_CAPABILITIES,
@@ -295,8 +299,9 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
     displayName: 'NGA',
     tier: 'verified',
     command: 'ngagent',
-    args: ['acp'],
+    args: ['--disable-update', 'acp'],
     fallbackCommands: ['nga'],
+    commandOverrideEnv: 'ACEH_NGA_COMMAND',
     iconPath: AGENT_ICON_PATHS.nga,
     family: 'opencode-compatible',
     capabilities: OPENCODE_COMPATIBLE_CAPABILITIES,
@@ -307,6 +312,7 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
     tier: 'verified',
     command: 'codeagent',
     args: ['acp'],
+    commandOverrideEnv: 'ACEH_CODEAGENT_COMMAND',
     iconPath: AGENT_ICON_PATHS.codeagent,
     family: 'claude',
   }),
@@ -316,6 +322,7 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
     tier: 'verified',
     command: 'codegenie',
     args: ['acp'],
+    commandOverrideEnv: 'ACEH_CODEGENIE_COMMAND',
     iconPath: AGENT_ICON_PATHS.codegenie,
     family: 'opencode-compatible',
     capabilities: OPENCODE_COMPATIBLE_CAPABILITIES,
@@ -446,6 +453,7 @@ function createDiscoveredAgentEntry(runtimeState: AgentRuntimeStateDto): AgentRe
     command,
     args: runtimeState.override?.args ?? ['acp'],
     fallbackCommands: runtimeState.override?.fallbackCommands,
+    commandOverrideEnv: runtimeState.override?.commandOverrideEnv,
     iconPath: runtimeState.override?.iconPath ?? AGENT_ICON_PATHS.genericProvider,
     tier: 'hidden',
     capabilities: mergeCapabilities(

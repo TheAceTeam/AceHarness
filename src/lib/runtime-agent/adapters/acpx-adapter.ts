@@ -1,9 +1,8 @@
 import { getBuiltinAgentDefinition } from '../agent-registry';
-import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
-import { existsSync } from 'fs';
-import { isAbsolute, join } from 'path';
-import { isWindows } from '@/lib/core/runtime-platform';
+import { getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getConfiguredCliSearchPaths, buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
+import { resolveCommand, type CommandResolution, type CommandSpec } from '@/lib/core/resolved-command';
+import { isAbsolute } from 'node:path';
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -105,11 +104,6 @@ export interface AcpxCommandResolution {
   fallbackCommands: string[];
 }
 
-export interface AcpxRuntimeCommandAttempt {
-  command: string;
-  source: string;
-}
-
 export type AcpxRuntimeSessionBinding = Partial<Pick<RuntimeBinding, 'externalIds' | 'raw'>> & {
   handle?: AcpRuntimeHandle;
 };
@@ -181,10 +175,9 @@ export function formatAcpxCommandForRuntime(command: AcpxCommandResolution, opti
 }
 
 export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string } = {}): string {
-  if (shouldUseAcpxRegistryAgent(command, options.agentId)) {
-    return options.agentId || command.command;
-  }
-  return getAcpxCommandAttemptsForRuntime(command, options)[0]?.command || '';
+  // ACPX 0.13 rejects raw command strings on Windows. Built-in agents must be
+  // addressed by registry ID so the corresponding argv override is applied.
+  return options.agentId || command.command;
 }
 
 type AcpxRegistryOverrideCacheEntry = {
@@ -212,14 +205,20 @@ export function getAcpxAgentRegistryOverrides(): Record<string, string[]> {
   // search path. Parts are returned unwrapped because acpx does its own .cmd
   // handling via buildSpawnCommandOptions.
   const resolve = (agentId: 'nga' | 'codeagent' | 'codegenie'): string[] => {
+    const definition = getBuiltinAgentDefinition(agentId);
+    if (!definition?.command) throw new Error(`Missing ACPX command metadata for ${agentId}`);
+    const env = buildConfiguredProcessEnvSync();
     const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const explicitCommand = agentId === 'codegenie'
-      ? getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim() || ''
-      : '';
-    const fingerprint = JSON.stringify([explicitCommand, ...searchPaths]);
+    const explicitCommand = definition.commandOverrideEnv ? env[definition.commandOverrideEnv] || '' : '';
+    const fingerprint = JSON.stringify([process.platform, explicitCommand, env.PATH || env.Path || '', env.PATHEXT || '', ...searchPaths]);
     const cached = acpxRegistryOverrideCache.get(agentId);
     if (cached?.fingerprint === fingerprint) return [...cached.parts];
-    const parts = buildAcpxCommandAttemptParts(resolveAcpxCommand(agentId), { agentId })[0]?.parts ?? [];
+    const resolution = resolveAcpxAgentCommand(agentId, env, searchPaths);
+    if (resolution.diagnostics.rejectedOverride) {
+      throw new Error(`${definition.commandOverrideEnv} is invalid: ${resolution.diagnostics.rejectedOverride}`);
+    }
+    const selected = resolution.selected ?? resolution.attempts[0];
+    const parts = selected ? [selected.executable, ...selected.args] : [definition.command, ...(definition.args ?? ['acp'])];
     // Only cache a resolved absolute path. Falling back to a bare name means
     // discovery failed, and the CLI may well be installed before the next call.
     if (parts[0] && isAbsolute(parts[0])) {
@@ -246,100 +245,22 @@ export function shouldSkipOpencodeSafeCheck(agentId: string | undefined): boolea
   return OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS.has(String(agentId || '').trim().toLowerCase());
 }
 
-export function getAcpxCommandAttemptsForRuntime(
-  command: AcpxCommandResolution,
-  options: { cwd?: string; agentId?: string } = {},
-): AcpxRuntimeCommandAttempt[] {
-  const attempts = buildAcpxCommandAttemptParts(command, options).map((attempt) => ({
-    source: attempt.source,
-    command: formatCommandParts(wrapWindowsCmdShellParts(attempt.parts[0] || '', attempt.parts.slice(1))),
-  })).filter((attempt) => attempt.command);
-
-  const seen = new Set<string>();
-  return attempts.filter((attempt) => {
-    if (seen.has(attempt.command)) return false;
-    seen.add(attempt.command);
-    return true;
-  });
-}
-
-function buildAcpxCommandAttemptParts(
-  command: AcpxCommandResolution,
-  options: { cwd?: string; agentId?: string },
-): Array<{ source: string; parts: string[] }> {
-  if (options.agentId === 'codeagent') {
-    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const codeagent = resolveAcpxCommandPath('codeagent', searchPaths);
-    const args = ['acp'];
-    if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'codeagent', parts: [codeagent || 'codeagent', ...args] }];
+export function resolveAcpxAgentCommand(
+  agentId: string,
+  env = buildConfiguredProcessEnvSync(),
+  searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths()),
+): CommandResolution {
+  const definition = getBuiltinAgentDefinition(agentId);
+  if (!definition?.command || definition.runtime !== 'acpx') {
+    return resolveCommand({ id: agentId, candidates: [agentId], fixedArgs: ['acp'] }, { env, configuredSearchPaths: searchPaths });
   }
-  if (options.agentId === 'nga' || (!options.agentId && (command.command === 'ngagent' || command.command === 'nga'))) {
-    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const ngagent = resolveAcpxCommandPath('ngagent', searchPaths);
-    const args = ['--disable-update', 'acp'];
-    if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'ngagent', parts: [ngagent || 'ngagent', ...args] }];
-  }
-  if (options.agentId === 'codegenie' || command.command === 'codegenie') {
-    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
-    const explicit = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
-    const resolvedCommand = explicit
-      ? (findCommand(explicit, searchPaths) || explicit)
-      : resolveAcpxCommandPath('codegenie', searchPaths)
-      || command.command;
-    const args = ['acp'];
-    if (options.cwd) args.push('--cwd', options.cwd);
-    return [{ source: 'codegenie', parts: [resolvedCommand, ...args] }];
-  }
-  return [{ source: options.agentId || command.command, parts: [command.command, ...(command.args || [])] }];
-}
-
-function shouldUseAcpxRegistryAgent(command: AcpxCommandResolution, agentId?: string): boolean {
-  const id = String(agentId || '').trim();
-  if (!id) return false;
-  const definition = getBuiltinAgentDefinition(id);
-  if (!definition || definition.runtime !== 'acpx') return false;
-  return true;
-}
-
-function resolveWindowsCmdShim(command: string, searchPaths: string[]): string | null {
-  if (!isWindows()) return null;
-  for (const dir of searchPaths) {
-    if (!dir) continue;
-    const candidate = join(dir, `${command}.cmd`);
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-function resolveAcpxCommandPath(command: string, searchPaths: string[]): string | null {
-  return resolveWindowsCmdShim(command, searchPaths) || findCommand(command, searchPaths);
-}
-
-function wrapWindowsCmdShellParts(command: string, args: string[]): string[] {
-  if (!isWindows()) return [command, ...args];
-  const line = [command, ...args].map(quoteWindowsCmdToken).join(' ');
-  return ['cmd.exe', '/d', '/s', '/c', line];
-}
-
-function quoteWindowsCmdToken(token: string): string {
-  if (token === '') return '""';
-  if (!/[\s"]/u.test(token)) return token;
-  return `"${token.replace(/"/g, '""')}"`;
-}
-
-function formatCommandParts(parts: string[]): string {
-  return parts
-    .map((part) => String(part || '').trim())
-    .filter(Boolean)
-    .map(quoteCommandPart)
-    .join(' ');
-}
-
-function quoteCommandPart(part: string): string {
-  if (!/[\s"'`]/.test(part)) return part;
-  return `"${part.replace(/(["\\])/g, '\\$1')}"`;
+  const spec: CommandSpec = {
+    id: definition.id,
+    candidates: [definition.command, ...(definition.fallbackCommands ?? [])],
+    fixedArgs: definition.args ?? ['acp'],
+    overrideEnvKey: definition.commandOverrideEnv,
+  };
+  return resolveCommand(spec, { env, configuredSearchPaths: searchPaths });
 }
 
 export function missingTokenUsage(): TokenUsage {

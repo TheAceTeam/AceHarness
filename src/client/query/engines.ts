@@ -334,17 +334,17 @@ async function fetchRuntimeEngineConfig(): Promise<EngineConfig> {
   };
 }
 
-export function useEngineAvailabilityReportsQuery(options: { forceRefresh?: boolean; refreshToken?: number } = {}) {
+export function useEngineAvailabilityReportsQuery(options: { forceRefresh?: boolean } = {}) {
   return useQuery({
     queryKey: [
       ...queryKeys.engineAvailability(),
-      { reports: true, forceRefresh: options.forceRefresh ?? false, refreshToken: options.refreshToken ?? 0 },
+      { reports: true, forceRefresh: options.forceRefresh ?? false },
     ] as const,
     queryFn: async () => {
       const entries = await Promise.all(RUNTIME_AVAILABILITY_ENGINE_IDS.map(async (engine) => {
         try {
           const data = await apiRequest<EngineAvailabilityReport & { error?: string }>(
-            `/api/engine/availability?engine=${encodeURIComponent(engine)}${options.forceRefresh ? '&refresh=1' : ''}`,
+            engineAvailabilityRequestUrl(engine, options.forceRefresh),
             { authRedirect: false },
           );
           const normalizedEngine = normalizeRuntimeEngineId(data.engine) || engine;
@@ -367,6 +367,7 @@ export function useEngineAvailabilityReportsQuery(options: { forceRefresh?: bool
       return Object.fromEntries(entries) as Record<string, EngineAvailabilityReport>;
     },
     staleTime: 30 * 60_000,
+    refetchOnMount: options.forceRefresh ? 'always' : true,
   });
 }
 
@@ -383,24 +384,46 @@ export function useEngineAvailabilityQuery() {
 export function useRefreshEngineAvailabilityMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      const entries = await Promise.all(RUNTIME_AVAILABILITY_ENGINE_IDS.map(async (engine) => {
-        try {
-          const data = await apiRequest<EngineAvailabilityReport & { error?: string }>(
-            `/api/engine/availability?engine=${encodeURIComponent(engine)}&refresh=1`,
-            { authRedirect: false },
-          );
-          return [normalizeRuntimeEngineId(data.engine) || engine, Boolean(data.available)] as const;
-        } catch {
-          return [engine, false] as const;
-        }
-      }));
-      return Object.fromEntries(entries) as Record<string, boolean>;
+    mutationFn: async (engine: string): Promise<EngineAvailabilityReport> => {
+      const normalizedEngine = normalizeRuntimeEngineId(engine) || engine;
+      try {
+        const data = await apiRequest<EngineAvailabilityReport & { error?: string }>(
+          engineAvailabilityRequestUrl(normalizedEngine, true),
+          { authRedirect: false },
+        );
+        const status = data.diagnostics?.status;
+        return {
+          ...data,
+          engine: normalizeRuntimeEngineId(data.engine) || normalizedEngine,
+          available: status === 'unknown' ? undefined : Boolean(data.available),
+        };
+      } catch {
+        return {
+          engine: normalizedEngine,
+          available: false,
+          diagnostics: { error: 'availability request failed' },
+        };
+      }
     },
-    onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.engineAvailability(), data);
+    onSuccess: (report) => {
+      queryClient.setQueriesData<Record<string, EngineAvailabilityReport>>(
+        { queryKey: queryKeys.engineAvailability() },
+        (previous) => mergeEngineAvailabilityReport(previous, report),
+      );
     },
   });
+}
+
+export function engineAvailabilityRequestUrl(engine: string, refresh = false): string {
+  const normalizedEngine = normalizeRuntimeEngineId(engine) || engine;
+  return `/api/engine/availability?engine=${encodeURIComponent(normalizedEngine)}${refresh ? '&refresh=1' : ''}`;
+}
+
+export function mergeEngineAvailabilityReport(
+  previous: Record<string, EngineAvailabilityReport> | undefined,
+  report: EngineAvailabilityReport,
+): Record<string, EngineAvailabilityReport> {
+  return { ...(previous || {}), [report.engine]: report };
 }
 
 export function useSaveEngineConfigMutation() {

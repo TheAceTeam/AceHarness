@@ -1,6 +1,6 @@
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
-import { getAcpxAgentRegistryOverrides, getAcpxCommandAttemptsForRuntime, resolveAcpxCommand, resolveAcpxRuntimeAgent, shouldSkipOpencodeSafeCheck } from '@/lib/runtime-agent/adapters/acpx-adapter';
+import { getAcpxAgentRegistryOverrides, resolveAcpxCommand, resolveAcpxRuntimeAgent, shouldSkipOpencodeSafeCheck } from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
 
 export const dynamic = 'force-dynamic';
@@ -114,21 +114,10 @@ async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
   }
   const cwd = process.cwd();
   const command = resolveAcpxCommand(agentId);
+  // Built-in ACPX agents resolve through the registry override argv array.
+  // Passing the ID avoids ACPX's unsupported Windows raw-command-string path.
   const runtimeAgent = resolveAcpxRuntimeAgent(command, { agentId, cwd });
-  const attempts = runtimeAgent
-    ? [{ command: runtimeAgent, source: agentId }]
-    : getAcpxCommandAttemptsForRuntime(command, { agentId, cwd });
-  let lastError: unknown;
-
-  for (const [index, attempt] of attempts.entries()) {
-    try {
-      return await discoverViaAcpxCommand(agentId, attempt.command, attempt.source, index + 1, attempts.length, cwd);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error(errorMessage(lastError));
+  return await discoverViaAcpxCommand(agentId, runtimeAgent, agentId, 1, 1, cwd);
 }
 
 async function discoverViaAcpxCommand(

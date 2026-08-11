@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest';
 import {
   runtimeAgentsToEngineAvailabilityMap,
   runtimeAgentsToEngineAvailabilityReports,
+  engineAvailabilityRequestUrl,
+  mergeEngineAvailabilityReport,
   selectEngineDefaultModel,
   type RuntimeAgentListItem,
 } from '@/client/query/engines';
@@ -117,6 +119,25 @@ describe('client engine availability adapters', () => {
     expect(reports.kiro).toMatchObject({ engine: 'kiro', available: false });
     expect(reports['claude-code']).toBeUndefined();
     expect(reports['kiro-cli']).toBeUndefined();
+  });
+
+  test('builds a refresh request for one normalized engine only', () => {
+    expect(engineAvailabilityRequestUrl('claude-code', true)).toBe('/api/engine/availability?engine=claude&refresh=1');
+    expect(engineAvailabilityRequestUrl('codegenie')).toBe('/api/engine/availability?engine=codegenie');
+  });
+
+  test('merges one refreshed report without replacing other engine results', () => {
+    const reports = mergeEngineAvailabilityReport({
+      claude: { engine: 'claude', available: true },
+      codex: { engine: 'codex', available: false, diagnostics: { error: 'missing' } },
+    }, {
+      engine: 'claude',
+      available: false,
+      diagnostics: { error: 'refresh failed' },
+    });
+
+    expect(reports.claude).toMatchObject({ available: false, diagnostics: { error: 'refresh failed' } });
+    expect(reports.codex).toMatchObject({ available: false, diagnostics: { error: 'missing' } });
   });
 
   test('keeps a compatible default model when switching engines', () => {

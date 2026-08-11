@@ -9,7 +9,9 @@ import {
   clearAcpxAgentRegistryOverrideCache,
   getAcpxAgentRegistryOverrides,
   normalizeAcpxRuntimeEvent,
+  resolveAcpxAgentCommand,
   resolveAcpxCommand,
+  resolveAcpxRuntimeAgent,
 } from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { createAcpxRuntimeClient } from '@/lib/runtime-agent/adapters/acpx-runtime-client';
 import { getAcpxDebugTraceDirectory, writeAcpxDebugTrace } from '@/lib/runtime-agent/acpx-debug-trace';
@@ -73,7 +75,7 @@ describe('runtime adapters', () => {
   test('maps NGA and CodeGenie to independent acpx commands', () => {
     expect(resolveAcpxCommand('nga')).toEqual({
       command: 'ngagent',
-      args: ['acp'],
+      args: ['--disable-update', 'acp'],
       fallbackCommands: ['nga'],
     });
     expect(resolveAcpxCommand('codegenie')).toEqual({
@@ -112,6 +114,30 @@ describe('runtime adapters', () => {
     // populate agentArgv — without it resolveAgentCommandParts throws on win32.
     expect(registry.resolve('codegenie')).toEqual(overrides.codegenie);
     expect(Array.isArray(registry.resolve('nga'))).toBe(true);
+  });
+
+  test('uses the built-in agent ID for both ACPX session and model discovery launch paths', () => {
+    for (const agentId of ['nga', 'codeagent', 'codegenie']) {
+      expect(resolveAcpxRuntimeAgent(resolveAcpxCommand(agentId), { agentId, cwd: process.cwd() })).toBe(agentId);
+    }
+  });
+
+  test.each([
+    ['nga', 'ACEH_NGA_COMMAND', ['--disable-update', 'acp']],
+    ['codeagent', 'ACEH_CODEAGENT_COMMAND', ['acp']],
+    ['codegenie', 'ACEH_CODEGENIE_COMMAND', ['acp']],
+  ])('resolves %s override paths containing spaces as ACPX argv', (agentId, overrideKey, args) => {
+    const dir = mkdtempSync(join(tmpdir(), 'aceh acpx command with spaces-'));
+    const executable = join(dir, process.platform === 'win32' ? `${agentId}.cmd` : agentId);
+    writeFileSync(executable, process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n');
+
+    try {
+      const resolution = resolveAcpxAgentCommand(agentId, { [overrideKey]: executable }, []);
+      expect(resolution.selected).toMatchObject({ executable, args, source: 'explicit' });
+      expect(resolution.selected?.executable).not.toContain('"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('invalidates a discovered override when its configured command changes', async () => {
