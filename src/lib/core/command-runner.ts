@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'child_process';
-import { existsSync } from 'fs';
-import { basename, join } from 'path';
+import { basename } from 'path';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
-import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { launchCommand, resolveCommand, type CommandAttempt, type CommandResolution } from '@/lib/core/resolved-command';
 import { isWindows } from '@/lib/core/runtime-platform';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -17,34 +17,21 @@ export type CommandRunResult = {
 export type ResolvedConfiguredCommand = {
   command: string | null;
   env: NodeJS.ProcessEnv;
+  resolution: CommandResolution;
 };
 
 export function resolveConfiguredCommand(commandName: string, options?: { userId?: string }): ResolvedConfiguredCommand {
   const env = buildConfiguredProcessEnvSync(undefined, process.env, { userId: options?.userId });
   const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths(), { userId: options?.userId });
-  return {
-    command: findCommand(commandName, searchPaths),
+  const resolution = resolveCommand({ id: commandName, candidates: [commandName], fixedArgs: [] }, {
     env,
+    configuredSearchPaths: searchPaths,
+  });
+  return {
+    command: resolution.selected?.executable || null,
+    env,
+    resolution,
   };
-}
-
-function escapeWinCmdToken(value: string): string {
-  if (value === '') return '""';
-  if (/[\s"]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
-
-function resolveWindowsCmdShell(): string {
-  const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
-    .map((item) => item?.trim())
-    .filter(Boolean) as string[];
-  const candidates = [
-    process.env.ComSpec?.trim(),
-    ...roots.flatMap((root) => [join(root, 'System32', 'cmd.exe'), join(root, 'Sysnative', 'cmd.exe'), join(root, 'cmd.exe')]),
-    'C:\\Windows\\System32\\cmd.exe',
-    'cmd.exe',
-  ].filter(Boolean) as string[];
-  return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
 }
 
 function appendOutput(current: string, chunk: Buffer, outputLimit: number): string {
@@ -70,22 +57,24 @@ function closeProcessTree(child: ChildProcess): void {
   }, 3000);
 }
 
-function spawnCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): ChildProcess {
-  if (!isWindows()) {
-    return spawn(command, args, {
-      cwd,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  }
+function commandAttempt(command: string, args: string[]): CommandAttempt {
+  const extension = command.slice(command.lastIndexOf('.')).toLowerCase();
+  return {
+    executable: command,
+    args,
+    source: 'configured-path',
+    fileKind: extension === '.cmd' ? 'cmd' : extension === '.bat' ? 'bat' : extension === '.ps1' ? 'ps1' : 'native',
+    candidateName: command,
+    resolved: true,
+  };
+}
 
-  const line = [command, ...args].map(escapeWinCmdToken).join(' ');
-  return spawn(line, {
-    shell: resolveWindowsCmdShell(),
-    windowsHide: true,
+function spawnCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): ChildProcess {
+  return launchCommand(commandAttempt(command, args), {
     cwd,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
   });
 }
 

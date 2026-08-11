@@ -64,8 +64,9 @@ describe('runtime agent registry', () => {
     expect(nga?.id).toBe('nga');
     expect(nga?.family).toBe('opencode-compatible');
     expect(nga?.command).toBe('ngagent');
-    expect(nga?.args).toEqual(['acp']);
+    expect(nga?.args).toEqual(['--disable-update', 'acp']);
     expect(nga?.fallbackCommands).toEqual(['nga']);
+    expect(nga?.commandOverrideEnv).toBe('ACEH_NGA_COMMAND');
     expect(nga?.availabilityProbe).toMatchObject({
       kind: 'command',
       command: 'ngagent',
@@ -84,6 +85,8 @@ describe('runtime agent registry', () => {
       primaryCommand: 'codegenie',
       fallbackCommands: [],
     });
+    expect(codegenie?.commandOverrideEnv).toBe('ACEH_CODEGENIE_COMMAND');
+    expect(definitionsById.get('codeagent')?.commandOverrideEnv).toBe('ACEH_CODEAGENT_COMMAND');
     expect(nga?.capabilities.session).toBe('agent-scoped');
     expect(codegenie?.capabilities.session).toBe('agent-scoped');
   });
@@ -149,6 +152,9 @@ describe('runtime agent registry', () => {
     const entries = mergeAgentRuntimeState([
       {
         agentId: 'custom-acpx',
+        override: {
+          commandOverrideEnv: 'ACEH_CUSTOM_ACPX_COMMAND',
+        },
         discovery: {
           commandPath: 'custom-agent',
           version: '1.0.0',
@@ -160,6 +166,7 @@ describe('runtime agent registry', () => {
     expect(custom?.definition.tier).toBe('hidden');
     expect(custom?.runtimeState.hidden).toBe(true);
     expect(custom?.definition.iconPath).toBe('/engines/code-agent.svg');
+    expect(custom?.definition.commandOverrideEnv).toBe('ACEH_CUSTOM_ACPX_COMMAND');
     expect(custom?.sources.discovery).toBe('discovery');
   });
 

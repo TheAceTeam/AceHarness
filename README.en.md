@@ -167,6 +167,26 @@ Read the root-cause paths, execution data, and delivery results for all four cas
 
 ACEHarness configuration is driven by the startup wizard, the engine management page, and environment variables. This repository currently supports local execution backends including `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, and `magic-cli`; the model and engine diagnostics workbench can verify connectivity, streaming events, structured output, coding, math, and reasoning behavior.
 
+### ACP Executable Overrides
+
+The NGA, CodeAgent, and CodeGenie ACP adapters look up their CLI from configured search paths and `PATH` by default. Set one of the following variables when the CLI is installed in a non-standard location. Each value is an **executable** override:
+
+| Variable | Adapter | Default candidates | Description |
+|----------|---------|--------------------|-------------|
+| `ACEH_NGA_COMMAND` | NGA | `ngagent`, then fallback `nga` | NGA ACP CLI executable path or bare command name |
+| `ACEH_CODEAGENT_COMMAND` | CodeAgent | `codeagent` | CodeAgent ACP CLI executable path or bare command name |
+| `ACEH_CODEGENIE_COMMAND` | CodeGenie | `codegenie` | CodeGenie ACP CLI executable path or bare command name |
+
+An explicit override has highest precedence and does not silently fall back to another candidate. Provide one file path or bare command name only; do not include `acp`, `--cwd`, or other arguments. Do not add shell quotes yourself when the path contains spaces:
+
+```powershell
+$env:ACEH_NGA_COMMAND = 'C:\Program Files\NGA\ngagent.cmd'
+$env:ACEH_CODEAGENT_COMMAND = 'C:\Program Files\CodeAgent\codeagent.cmd'
+$env:ACEH_CODEGENIE_COMMAND = 'C:\Program Files\CodeGenie\codegenie.cmd'
+```
+
+These variables control only ACP CLI adapters. They do not affect `ACE_NGA_SDK_COMMAND`, `ACE_NGA_BIN`, `ACE_CODEGENIE_SDK_COMMAND`, or `ACE_CODEGENIE_BIN`, which remain SDK-integration settings and cannot replace an ACP executable override.
+
 ### ACE Service
 
 `server.js` loads `.env`, `.env.local`, and the mode-specific `.env.development*` / `.env.production*` files on startup. Values already present in the shell, process manager, or startup script take precedence and are not overwritten by env files.

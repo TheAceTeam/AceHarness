@@ -37,6 +37,7 @@ import type { EnginesSearch } from '@/routes/engines';
 import {
   useDetectEngineModelsMutation,
   useEngineAvailabilityReportsQuery,
+  useRefreshEngineAvailabilityMutation,
   useEngineConfigQuery,
   useModelsQuery,
   useSaveEngineConfigMutation,
@@ -312,11 +313,12 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
   useDocumentTitle('执行引擎');
   const engineConfigQuery = useEngineConfigQuery();
   const modelsQuery = useModelsQuery();
-  const [availabilityRefreshToken, setAvailabilityRefreshToken] = useState(1);
+  // A page mount deliberately performs one full availability sweep. Later
+  // refreshes are scoped to one engine through the mutation below.
   const availabilityQuery = useEngineAvailabilityReportsQuery({
-    forceRefresh: availabilityRefreshToken > 0,
-    refreshToken: availabilityRefreshToken,
+    forceRefresh: true,
   });
+  const refreshEngineAvailabilityMutation = useRefreshEngineAvailabilityMutation();
   const saveEngineConfigMutation = useSaveEngineConfigMutation();
   const saveModelsMutation = useSaveModelsMutation();
   const detectEngineModelsMutation = useDetectEngineModelsMutation();
@@ -325,8 +327,8 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
   const [defaultModel, setDefaultModel] = useState<string>('');
   const [models, setModels] = useState<ModelOption[]>([]);
   const [engineAvailability, setEngineAvailability] = useState<Record<string, EngineAvailabilityReport>>({});
-  const checkingAvailability = availabilityQuery.isFetching;
-  const refreshingAvailability = availabilityQuery.isFetching;
+  const [refreshingEngines, setRefreshingEngines] = useState<Set<string>>(() => new Set());
+  const checkingAvailability = availabilityQuery.isFetching || refreshingEngines.has(currentEngine);
   const engines = useMemo(() => PRODUCT_ENGINE_ORDER.map((id) => buildRuntimeEngineCard(id)), []);
 
   const broadcastEngineUpdated = () => {
@@ -383,12 +385,18 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
   const isEngineAvailable = (engineId: string): boolean | undefined =>
     getAvailabilityValue(engineAvailability[normalizeEngineId(engineId)]);
 
-  const checkEngineAvailability = async (forceRefresh = false) => {
-    if (forceRefresh) {
-      setAvailabilityRefreshToken((value) => value + 1);
-      return;
+  const checkEngineAvailability = async (engineId: string) => {
+    const normalizedEngine = normalizeEngineId(engineId);
+    setRefreshingEngines((current) => new Set(current).add(normalizedEngine));
+    try {
+      await refreshEngineAvailabilityMutation.mutateAsync(normalizedEngine);
+    } finally {
+      setRefreshingEngines((current) => {
+        const next = new Set(current);
+        next.delete(normalizedEngine);
+        return next;
+      });
     }
-    await availabilityQuery.refetch();
   };
 
   const handleSelectEngine = async (engineId: string) => {
@@ -584,17 +592,6 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
               <ThemeToggle />
             </>
           )}
-          primaryAction={(
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => checkEngineAvailability(true)}
-              disabled={refreshingAvailability}
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              {refreshingAvailability ? '检测中...' : '刷新状态'}
-            </Button>
-          )}
         />
       ) : null}
 
@@ -716,18 +713,18 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
                     variant="outline"
                     size="sm"
                     className="w-full"
-                    disabled={refreshingAvailability}
-                    onClick={() => checkEngineAvailability(true)}
+                    disabled={refreshingEngines.has(engine.id)}
+                    onClick={() => checkEngineAvailability(engine.id)}
                   >
                     <RefreshCw className="w-4 h-4 mr-2" />
-                    {refreshingAvailability ? '检测中...' : '刷新状态'}
+                    {refreshingEngines.has(engine.id) ? '检测中...' : '刷新状态'}
                   </Button>
                   {!isCurrentEngine && canUseEngineActions ? (
                     <Button
                       className="w-full"
                       variant="outline"
                       size="sm"
-                      disabled={refreshingAvailability}
+                      disabled={refreshingEngines.has(engine.id)}
                       onClick={() => handleSelectEngine(engine.id)}
                     >
                       <Zap className="w-4 h-4 mr-2" />
@@ -871,10 +868,10 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
             <Button
               variant="outline"
               size="sm"
-              onClick={() => checkEngineAvailability(true)}
-              disabled={refreshingAvailability}
+              onClick={() => checkEngineAvailability(currentEngine)}
+              disabled={refreshingEngines.has(currentEngine)}
             >
-              {refreshingAvailability ? '检查中...' : '刷新状态'}
+              {refreshingEngines.has(currentEngine) ? '检查中...' : '刷新状态'}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setSetupDrawerOpen(false)}>
               关闭
