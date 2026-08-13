@@ -666,6 +666,16 @@ function normalizeWorkflowStatusCode(status: unknown): string {
   return value;
 }
 
+export function shouldShowWorkbenchHumanAttention(input: {
+  workflowStatus: unknown;
+  hasPendingQuestion: boolean;
+  hasApproval: boolean;
+  isHumanReviewLocation: boolean;
+}): boolean {
+  if (isTerminalWorkflowStatus(normalizeWorkflowStatusCode(input.workflowStatus))) return false;
+  return input.hasPendingQuestion || input.hasApproval || input.isHumanReviewLocation;
+}
+
 export function getWorkflowStatusDotClass(status: unknown, isRunning: boolean): string {
   const value = normalizeWorkflowStatusCode(status);
   if (isRunning || value === 'running') return 'bg-blue-500';
@@ -5739,11 +5749,13 @@ export default function WorkbenchPage({
     if (pendingHumanQuestion.source?.type === 'parallel-manual-join') return '并发人工确认';
     return '人工审查';
   }, [pendingHumanQuestion]);
-  const pendingHumanAttentionTitle = pendingHumanQuestionKindLabel
-    ? `待${pendingHumanQuestionKindLabel} · ${workflowBaseTitle}`
-    : humanApprovalData
-      ? `待人工审查 · ${workflowBaseTitle}`
-      : null;
+  const pendingHumanAttentionTitle = isTerminalWorkflowStatus(normalizeWorkflowStatusCode(workflowStatus))
+    ? null
+    : pendingHumanQuestionKindLabel
+      ? `待${pendingHumanQuestionKindLabel} · ${workflowBaseTitle}`
+      : humanApprovalData
+        ? `待人工审查 · ${workflowBaseTitle}`
+        : null;
   const workflowTitle = useMemo(() => {
     if (pendingHumanAttentionTitle) return pendingHumanAttentionTitle;
     if (viewingHistoryRun) return `查看运行 · ${workflowBaseTitle}`;
@@ -13001,13 +13013,14 @@ export default function WorkbenchPage({
     });
   };
 
-  const humanAttentionActive = Boolean(
-    pendingHumanQuestion
-    || humanApprovalData
-    || currentPhase === '__human_approval__'
-    || currentStep === '__human_approval__'
-    || formatWorkflowLocation(currentPhase, currentStep, '').includes('人工审查')
-  );
+  const humanAttentionActive = shouldShowWorkbenchHumanAttention({
+    workflowStatus,
+    hasPendingQuestion: Boolean(pendingHumanQuestion),
+    hasApproval: Boolean(humanApprovalData),
+    isHumanReviewLocation: currentPhase === '__human_approval__'
+      || currentStep === '__human_approval__'
+      || formatWorkflowLocation(currentPhase, currentStep, '').includes('人工审查'),
+  });
 
   const renderHumanAttentionBanner = () => {
     if (!humanAttentionActive || showWorkbenchPreview) return null;
@@ -13048,7 +13061,13 @@ export default function WorkbenchPage({
               <div className="mt-2 grid gap-x-5 gap-y-2 text-xs leading-5 md:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.8fr)]">
                 <div className="min-w-0">
                   <div className="font-bold text-orange-950 dark:text-orange-50">审批事项：{title}</div>
-                  <div className="mt-0.5 whitespace-pre-wrap text-orange-800 dark:text-orange-100/85">{summary}</div>
+                  <div
+                    className="mt-0.5 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words pr-2 text-orange-800 dark:text-orange-100/85"
+                    aria-label="审批说明"
+                    tabIndex={0}
+                  >
+                    {summary}
+                  </div>
                 </div>
                 <div className="min-w-0 border-orange-200 md:border-l md:pl-5 dark:border-orange-400/20">
                   <div className="font-bold text-orange-950 dark:text-orange-50">需要决定</div>

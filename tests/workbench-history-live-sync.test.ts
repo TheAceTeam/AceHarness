@@ -17,6 +17,7 @@ import {
   resolveSoleConfiguredWorkflowStepName,
   resolveStartPreflightStrategy,
   resolveWorkbenchRuntimeWorkflowConfig,
+  shouldShowWorkbenchHumanAttention,
   buildWorkbenchRunDetailNavItems,
   resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
@@ -259,6 +260,28 @@ describe('Workbench stop progress', () => {
     const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
     expect(source).not.toContain('权威');
     expect(source).toContain('正在执行启动前检查并创建正式运行');
+  });
+
+  test('keeps long human-approval summaries inside a bounded scroll region', async () => {
+    const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('aria-label="审批说明"');
+    expect(source).toContain('max-h-48 overflow-y-auto overscroll-contain');
+  });
+
+  test('does not present stale human approval as actionable after a run stops', () => {
+    expect(shouldShowWorkbenchHumanAttention({
+      workflowStatus: 'stopped',
+      hasPendingQuestion: true,
+      hasApproval: false,
+      isHumanReviewLocation: true,
+    })).toBe(false);
+    expect(shouldShowWorkbenchHumanAttention({
+      workflowStatus: 'running',
+      hasPendingQuestion: true,
+      hasApproval: false,
+      isHumanReviewLocation: true,
+    })).toBe(true);
   });
 
   test('keeps only user-facing phases and discards ACP/session diagnostics', () => {
