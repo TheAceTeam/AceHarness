@@ -1,0 +1,22 @@
+name: Node 22.13 Compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - dev
+      - main
+
+jobs:
+  node-22-13:
+    name: Node 22.13 minimum runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit --pretty false
+      - run: npx vitest run tests/runtime-sqlite-schema.test.ts tests/runtime-database-capabilities.test.ts tests/workflow-event-store.test.ts tests/workflow-memory-store.test.ts tests/memory-v2-database.test.ts tests/chat-sqlite-persistence.test.ts tests/run-review-plan-store.test.ts
