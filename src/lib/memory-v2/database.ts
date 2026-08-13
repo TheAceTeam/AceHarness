@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, realpathSync } from 'fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'path';
-import Database from 'better-sqlite3';
+import { openSqliteDatabase, withImmediateTransaction, type SqliteDatabase } from '@/lib/sqlite/database';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import {
   MEMORY_V2_MIGRATIONS,
@@ -8,7 +8,7 @@ import {
   MEMORY_V2_SQLITE_PRAGMAS,
 } from './schema';
 
-export type MemoryV2Database = Database.Database;
+export type MemoryV2Database = SqliteDatabase;
 
 export interface OpenMemoryV2DatabaseOptions {
   /**
@@ -125,7 +125,7 @@ export function applyMemoryV2Migrations(db: MemoryV2Database): void {
   const appliedVersions = new Set(appliedRows.map((row) => Number(row.version)));
   for (const migration of MEMORY_V2_MIGRATIONS) {
     if (appliedVersions.has(migration.version)) continue;
-    const migrate = db.transaction(() => {
+    const migrate = () => withImmediateTransaction(db, () => {
       db.exec(migration.sql);
       db.prepare(`
         INSERT INTO memory_v2_schema_migrations (version, name, applied_at)
@@ -151,26 +151,11 @@ export function openMemoryV2Database(options: OpenMemoryV2DatabaseOptions = {}):
   const created = filename !== IN_MEMORY_DATABASE && !existsSync(filename);
   if (filename !== IN_MEMORY_DATABASE) mkdirSync(dirname(filename), { recursive: true });
 
-  const dbOptions: Database.Options = { timeout: options.timeoutMs ?? 5000 };
-  if (options.readonly !== undefined) dbOptions.readonly = options.readonly;
-  if (options.fileMustExist !== undefined) dbOptions.fileMustExist = options.fileMustExist;
-  const db = new Database(filename, dbOptions);
+  const db = openSqliteDatabase(filename, options);
   applyMemoryV2Migrations(db);
   return { db, filename, created };
 }
 
 export function withMemoryV2ImmediateTransaction<T>(db: MemoryV2Database, fn: () => T): T {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      // Preserve the operation failure when best-effort rollback also fails.
-    }
-    throw error;
-  }
+  return withImmediateTransaction(db, fn);
 }

@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { openSqliteDatabase, withImmediateTransaction, type SqliteDatabase } from '@/lib/sqlite/database';
 
 export type MemoryScope = 'role' | 'project' | 'workflow' | 'chat';
 export type MemoryKind = 'base' | 'summary' | 'experience' | 'review' | 'decision' | 'quality' | 'session';
@@ -27,17 +28,6 @@ interface MemoryBucket {
   updatedAt: string;
   entries: MemoryEntry[];
 }
-
-type SqliteDatabase = {
-  exec(sql: string): void;
-  prepare(sql: string): {
-    all(...params: unknown[]): any[];
-    get(...params: unknown[]): any;
-    run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
-  };
-  transaction<T extends (...args: any[]) => any>(fn: T): T;
-  close(): void;
-};
 
 const DB_PATH = getWorkspaceDataFile('memory', 'memory.sqlite');
 const MAX_BUCKET_ENTRIES = 60;
@@ -72,10 +62,8 @@ function normalizeText(value: unknown): string {
 }
 
 function openDb(): SqliteDatabase {
-  const nodeRequire = eval('require') as NodeRequire;
-  const BetterSqlite = nodeRequire('better-sqlite3') as any;
   mkdirSync(dirname(DB_PATH), { recursive: true });
-  const db = new BetterSqlite(DB_PATH) as SqliteDatabase;
+  const db = openSqliteDatabase(DB_PATH);
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
@@ -221,7 +209,7 @@ export async function replaceMemoryEntries(options: {
       createdAt: entry.createdAt || updatedAt,
     }));
 
-  const tx = db.transaction(() => {
+  const tx = () => withImmediateTransaction(db, () => {
     db.prepare('DELETE FROM memory_entries WHERE scope = ? AND key = ?').run(options.scope, options.key);
     for (const entry of entries) insertEntry(db, entry, updatedAt);
     pruneBucket(db, options.scope, options.key);
@@ -268,7 +256,7 @@ export async function appendMemoryEntries(
       createdAt: entry.createdAt || updatedAt,
     }));
 
-  const tx = db.transaction((items: MemoryEntry[]) => {
+  const tx = (items: MemoryEntry[]) => withImmediateTransaction(db, () => {
     const touched = new Set<string>();
     for (const entry of items) {
       insertEntry(db, entry, updatedAt);
