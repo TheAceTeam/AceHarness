@@ -128,6 +128,9 @@ describe('StateMachineDesignPanel: a固定的审查模式不限制用户操作',
     expect(screen.queryByText('lock')).toBeNull();
     expect(screen.queryByText(/用户锁定|交还 AI 判断|锁定当前模式/)).toBeNull();
     expect(screen.getByText('已固定')).toBeTruthy();
-    expect(screen.getByText('让 AI 重新评估')).toBeTruthy();
+    // Both AI entry points name what they act on; the mode one is the only route
+    // that may touch a pinned policy, so it must stay distinguishable by label.
+    expect(screen.getByText('AI 重新评估模式')).toBeTruthy();
+    expect(screen.getAllByText('AI 优化状态').length).toBeGreaterThan(0);
   });
 });

@@ -184,6 +184,15 @@ const REVIEW_MODE_OPTIONS = [
 ];
 
 /**
+ * Both AI entry points on a state read as "AI + vague verb", so the tooltips carry
+ * the part that actually matters: which one is allowed to touch a pinned review
+ * mode. Shared constants because the same optimise action is offered from two
+ * places, and a hint that drifts between them is worse than no hint.
+ */
+const OPTIMIZE_STATE_HINT = '调整步骤、Agent、人工审查与转移；不会改动已固定的审查模式';
+const REEVALUATE_MODE_HINT = '只重新判定标准 / 对抗；会临时解除固定，AI 给出建议后你确认才生效';
+
+/**
  * A low-confidence standard policy is silently upgraded to adversarial, and the
  * only trace is this sentence appended to the rationale. Matching it lets the
  * panel say so outright instead of leaving the user to wonder why the mode they
@@ -2027,7 +2036,7 @@ export default function StateMachineDesignPanel({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {onOptimizeState && selectedStateIndex >= 0 ? (
-                    <Button size="sm" variant="outline" onClick={() => onOptimizeState(selectedStateIndex)}>
+                    <Button size="sm" variant="outline" title={OPTIMIZE_STATE_HINT} onClick={() => onOptimizeState(selectedStateIndex)}>
                       <span className="material-symbols-outlined mr-1 text-sm">auto_fix_high</span>
                       AI 优化状态
                     </Button>
@@ -2062,13 +2071,14 @@ export default function StateMachineDesignPanel({
                       size="sm"
                       variant="ghost"
                       className="h-7 gap-1 px-2 text-xs opacity-80"
+                      title={OPTIMIZE_STATE_HINT}
                       onClick={(event) => {
                         event.stopPropagation();
                         onOptimizeState(selectedStateIndex);
                       }}
                     >
                       <span className="material-symbols-outlined text-[14px]">auto_fix_high</span>
-                      AI 优化
+                      AI 优化状态
                     </Button>
                   ) : null}
                   <span className="material-symbols-outlined text-sm text-muted-foreground opacity-0 group-hover:opacity-100">edit</span>
@@ -2170,10 +2180,10 @@ export default function StateMachineDesignPanel({
                       size="sm"
                       variant="ghost"
                       className="h-7 px-2 text-xs"
-                      title="AI 只提供建议，你确认后才会生效"
+                      title={REEVALUATE_MODE_HINT}
                       onClick={returnReviewPolicyToAi}
                     >
-                      让 AI 重新评估
+                      AI 重新评估模式
                     </Button>
                   ) : null}
                 </div>
