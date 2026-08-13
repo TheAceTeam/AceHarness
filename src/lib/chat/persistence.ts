@@ -8,15 +8,14 @@ import { EventEmitter } from 'events';
 import { mkdir, readFile, readdir, unlink } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import { createRequire } from 'module';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { openSqliteDatabase } from '@/lib/sqlite/database';
 import { extractLastChatPreview } from '@/lib/chat/message-preview';
 import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 import { normalizeSessionWorkbenchConversationMode, type HomeConversationMode } from '@/lib/chat/conversation-mode';
 
 const CHAT_DIR = getWorkspaceDataFile('chat-sessions');
 const CHAT_DB_PATH = getWorkspaceDataFile('chat-sessions.sqlite');
-const nodeRequire = createRequire(import.meta.url);
 const globalForChatSessionEvents = globalThis as unknown as {
   __chatSessionEvents?: EventEmitter;
   __chatSessionDb?: any;
@@ -170,11 +169,9 @@ function parseJson<T>(input: string | null | undefined): T | undefined {
 
 function getChatDb(): any {
   if (globalForChatSessionEvents.__chatSessionDb) return globalForChatSessionEvents.__chatSessionDb;
-  const BetterSqlite = nodeRequire('better-sqlite3') as any;
   mkdirSync(dirname(CHAT_DB_PATH), { recursive: true });
-  const db = new BetterSqlite(CHAT_DB_PATH, { timeout: 5000 });
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
+  const db = openSqliteDatabase(CHAT_DB_PATH, { timeoutMs: 5000 });
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,

@@ -19,7 +19,7 @@
 </p>
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
   
@@ -76,7 +76,7 @@ ACEHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工
 
 ### 前置条件
 
-- Node.js `>= 20` / npm `>= 9`：运行 Next.js 服务与 npm CLI 包
+- Node.js `>= 22.13.0` / npm `>= 9`：运行服务与 npm CLI 包
 - AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli`、`magic-cli` 等至少一种
 
 ### 安装与运行

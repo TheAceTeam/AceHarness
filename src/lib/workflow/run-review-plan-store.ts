@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { openSqliteDatabase, withImmediateTransaction, type SqliteDatabase } from '@/lib/sqlite/database';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
@@ -10,14 +10,13 @@ type StoredRunReviewPlanRow = {
   artifact_json: string;
 };
 
-function openStore(): Database.Database {
+function openStore(): SqliteDatabase {
   // Resolve this on every call so tests and multi-install deployments honour the
   // active ACE_HOME instead of pinning the path at module-import time.
   const filename = getWorkspaceDataFile('run-review-plans.sqlite');
   mkdirSync(dirname(filename), { recursive: true });
-  const db = new Database(filename, { timeout: 5_000 });
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
+  const db = openSqliteDatabase(filename, { timeoutMs: 5_000 });
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
   db.exec(`
     CREATE TABLE IF NOT EXISTS run_review_plans (
       owner_id TEXT NOT NULL,
@@ -35,7 +34,7 @@ function openStore(): Database.Database {
   return db;
 }
 
-function withStore<T>(fn: (db: Database.Database) => T): T {
+function withStore<T>(fn: (db: SqliteDatabase) => T): T {
   const db = openStore();
   try {
     return fn(db);
@@ -44,24 +43,12 @@ function withStore<T>(fn: (db: Database.Database) => T): T {
   }
 }
 
-function withImmediateTransaction<T>(db: Database.Database, fn: () => T): T {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
-}
-
-function pruneExpiredPlans(db: Database.Database): void {
+function pruneExpiredPlans(db: SqliteDatabase): void {
   db.prepare('DELETE FROM run_review_plans WHERE expires_at_ms <= ?').run(Date.now());
 }
 
 function parseArtifact(
-  db: Database.Database,
+  db: SqliteDatabase,
   ownerId: string,
   id: string,
   row: StoredRunReviewPlanRow | undefined,

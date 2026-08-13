@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { openSqliteDatabase, withImmediateTransaction } from '@/lib/sqlite/database';
 import { mkdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -88,7 +88,7 @@ function openDatabase(db: RuntimeSqliteDatabaseGrant, readonly = false) {
   if (!existsSync(db.absolutePath) && readonly) {
     throw new RuntimeSqliteError('SQLITE_DB_NOT_FOUND', 404);
   }
-  return new Database(db.absolutePath, { readonly });
+  return openSqliteDatabase(db.absolutePath, { readonly });
 }
 
 export async function listRuntimeSqliteDatabases(grant: RuntimeDatabaseGrant) {
@@ -108,9 +108,7 @@ export async function createRuntimeSqliteDatabase(grant: RuntimeDatabaseGrant, n
   await mkdir(path.dirname(dbGrant.absolutePath), { recursive: true });
   const db = openDatabase(dbGrant, false);
   try {
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.pragma('foreign_keys = ON');
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
   } finally {
     db.close();
   }
@@ -165,11 +163,11 @@ export async function transactionRuntimeSqlite(grant: RuntimeDatabaseGrant, inpu
   await mkdir(path.dirname(dbGrant.absolutePath), { recursive: true });
   const db = openDatabase(dbGrant, false);
   try {
-    const runAll = db.transaction(() => validated.map((statement) => {
+    const runAll = withImmediateTransaction(db, () => validated.map((statement) => {
       const info = db.prepare(statement.sql).run(...statement.params);
       return { changes: info.changes, lastInsertRowid: Number(info.lastInsertRowid || 0) };
     }));
-    return { results: runAll() };
+    return { results: runAll };
   } finally {
     db.close();
   }

@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile } from 'fs/promises';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { getWorkspaceDataFile, getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { openSqliteDatabase, withImmediateTransaction, type SqliteDatabase } from '@/lib/sqlite/database';
 
 export interface WorkflowEventRecord {
   seq: number;
@@ -127,13 +128,11 @@ class JsonlWorkflowEventStore implements WorkflowEventStore {
 }
 
 class SqliteWorkflowEventStore implements WorkflowEventStore {
-  private db: any;
+  private db: SqliteDatabase;
 
   constructor() {
-    const nodeRequire = eval('require') as NodeRequire;
-    const BetterSqlite = nodeRequire('better-sqlite3') as any;
     mkdirSync(dirname(DB_PATH), { recursive: true });
-    this.db = new BetterSqlite(DB_PATH);
+    this.db = openSqliteDatabase(DB_PATH);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
@@ -167,7 +166,7 @@ class SqliteWorkflowEventStore implements WorkflowEventStore {
   }
 
   async appendBatch(runId: string, events: Array<{ type: string; payload: any }>): Promise<WorkflowEventRecord[]> {
-    const tx = this.db.transaction((items: Array<{ type: string; payload: any }>) => {
+    const tx = (items: Array<{ type: string; payload: any }>) => withImmediateTransaction(this.db, () => {
       const records: WorkflowEventRecord[] = [];
       const seqRow = this.db.prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM workflow_events WHERE run_id = ?').get(runId);
       let seq = Number(seqRow?.seq || 1);

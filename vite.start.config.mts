@@ -58,7 +58,6 @@ export default defineConfig({
   ssr: {
     external: [
       '@cangjielang/napi-cj',
-      'better-sqlite3',
       'node-ssh-no-cpu-features',
       '@marsaud/smb2',
       'webdav',

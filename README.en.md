@@ -19,7 +19,7 @@ English | [中文](./README.md)
 </p>
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
 
@@ -67,7 +67,7 @@ ACEHarness organizes engineering tasks around planning, execution, collaboration
 
 ### Requirements
 
-- Node.js `>= 20` / npm `>= 9`
+- Node.js `>= 22.13.0` / npm `>= 9`
 - One AI execution engine: `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, or `magic-cli`
 
 ### Install and Run

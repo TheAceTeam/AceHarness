@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
 import { parse } from 'yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +17,7 @@ function resolveWorkspaceRoot() {
 }
 
 function ensureSchema(db) {
-  db.pragma('journal_mode = WAL');
+  db.exec('PRAGMA journal_mode = WAL;');
   db.exec(`
     CREATE TABLE IF NOT EXISTS model_catalog (
       id TEXT PRIMARY KEY,
@@ -141,8 +141,9 @@ const workspaceRoot = resolveWorkspaceRoot();
 const dbPath = path.join(workspaceRoot, 'data', 'runtime-agent.sqlite');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-const db = new Database(dbPath, { timeout: 5000 });
+const db = new DatabaseSync(dbPath);
 try {
+  db.exec('PRAGMA busy_timeout = 5000;');
   ensureSchema(db);
   const before = new Set(db.prepare('SELECT id FROM model_catalog').all().map((row) => String(row.id)));
   const now = new Date().toISOString();
@@ -205,7 +206,8 @@ try {
 
   const models = readCatalogModels();
   const seedModelIds = new Set(models.map((model) => model.id));
-  const tx = db.transaction(() => {
+  db.exec('BEGIN IMMEDIATE');
+  try {
     for (const modelId of bundledModelIds) {
       if (seedModelIds.has(modelId)) continue;
       db.prepare('DELETE FROM model_routes WHERE model_id = ?').run(modelId);
@@ -258,8 +260,15 @@ try {
         });
       }
     }
-  });
-  tx();
+    db.exec('COMMIT');
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Preserve the synchronization failure when rollback also fails.
+    }
+    throw error;
+  }
 
   const after = db.prepare('SELECT id FROM model_catalog ORDER BY id ASC').all().map((row) => String(row.id));
   const added = after.filter((id) => !before.has(id));

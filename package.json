@@ -1,6 +1,6 @@
 {
   "name": "@cangjielang/aceharness",
-  "version": "1.0.0-rc.11",
+  "version": "1.0.0-rc.12",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
@@ -59,7 +59,7 @@
   },
   "license": "Apache 2.0",
   "engines": {
-    "node": ">=22.12.0",
+    "node": ">=22.13.0",
     "npm": ">=9"
   },
   "publishConfig": {
@@ -141,7 +141,6 @@
     "ai": "^6.0.184",
     "ai-json-repair": "^1.0.4",
     "ansi-to-react": "^6.2.6",
-    "better-sqlite3": "^12.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -206,8 +205,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^20.0.0",
+    "@types/node": "^22.0.0",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
