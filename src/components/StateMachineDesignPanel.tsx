@@ -152,6 +152,38 @@ function isReviewStructureStep(step: WorkflowStep | undefined): boolean {
   ));
 }
 
+/**
+ * What the two modes mean in the terms the person choosing actually cares about:
+ * who judges this state, and what that costs. The mode names stay `标准`/`对抗`
+ * because they are also the step names, rationale wording and prompt vocabulary
+ * that get persisted into workflow configs — renaming only the buttons would put
+ * the panel out of step with everything the engine writes.
+ */
+const REVIEW_MODE_OPTIONS = [
+  {
+    mode: 'standard' as const,
+    name: '标准',
+    who: '执行者自己给结论',
+    cost: '不额外增加步骤，最省',
+  },
+  {
+    mode: 'adversarial' as const,
+    name: '对抗',
+    who: '另派 2 个 Agent 挑错并裁决',
+    cost: '新增「对抗审查」「独立裁决」两步，约 3 倍开销',
+  },
+];
+
+/**
+ * A low-confidence standard policy is silently upgraded to adversarial, and the
+ * only trace is this sentence appended to the rationale. Matching it lets the
+ * panel say so outright instead of leaving the user to wonder why the mode they
+ * picked is not the mode they got.
+ */
+function isForcedAdversarialRationale(rationale: string | undefined): boolean {
+  return String(rationale || '').includes('判断把握不足，按保守规则采用对抗模式');
+}
+
 function getReviewOperationFieldChanges(operation: ReviewPolicyOperation): Array<{ label: string; before: string; after: string }> {
   const fields: Array<{ key: keyof WorkflowStep; label: string }> = [
     { key: 'role', label: '角色' },
@@ -2088,32 +2120,21 @@ export default function StateMachineDesignPanel({
                       </Badge>
                     ) : null}
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    来源：{{ ai: 'AI 判断', user: '用户选择', legacy: '旧配置推断', default: '兼容默认' }[selectedState.reviewPolicy.source]}
-                    {' · '}置信度：{{ high: '高', medium: '中', low: '低' }[selectedState.reviewPolicy.confidence]}
+                  <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span>
+                      {selectedState.reviewPolicy.mode === 'adversarial'
+                        ? '这个状态的成果，由另外两个 Agent 挑错并裁决。'
+                        : '这个状态的成果，由执行者在最后一步自己给出结论。'}
+                    </span>
+                    <span
+                      className="material-symbols-outlined cursor-help text-[13px] leading-none"
+                      title={`来源：${{ ai: 'AI 判断', user: '用户选择', legacy: '旧配置推断', default: '兼容默认' }[selectedState.reviewPolicy.source]} · 置信度：${{ high: '高', medium: '中', low: '低' }[selectedState.reviewPolicy.confidence]}`}
+                    >
+                      info
+                    </span>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedState.reviewPolicy.mode === 'standard' ? 'default' : 'outline'}
-                    className="h-7 px-2.5 text-xs"
-                    disabled={selectedState.reviewPolicy.mode === 'standard'}
-                    onClick={() => requestReviewModeChange('standard')}
-                  >
-                    标准
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedState.reviewPolicy.mode === 'adversarial' ? 'default' : 'outline'}
-                    className="h-7 px-2.5 text-xs"
-                    disabled={selectedState.reviewPolicy.mode === 'adversarial'}
-                    onClick={() => requestReviewModeChange('adversarial')}
-                  >
-                    对抗
-                  </Button>
                   {!selectedState.reviewPolicy.locked ? (
                     <Button
                       type="button"
@@ -2140,6 +2161,49 @@ export default function StateMachineDesignPanel({
                   ) : null}
                 </div>
               </div>
+              {/* Two option cards instead of a pair of small buttons: the choice is
+                  "who judges this state and what does that cost", which needs more
+                  room than a label. The current option is marked, not disabled — a
+                  greyed-out button reads as unavailable rather than selected. */}
+              <div className="grid gap-2 sm:grid-cols-2">
+                {REVIEW_MODE_OPTIONS.map((option) => {
+                  const isCurrent = selectedState.reviewPolicy!.mode === option.mode;
+                  const ceiling = defaultMaxSelfTransitions({
+                    reviewPolicy: { ...selectedState.reviewPolicy!, mode: option.mode },
+                  });
+                  return (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      aria-pressed={isCurrent}
+                      className={`rounded-lg border p-2.5 text-left transition-colors ${
+                        isCurrent
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-primary/40 hover:bg-muted/40'
+                      }`}
+                      onClick={() => { if (!isCurrent) requestReviewModeChange(option.mode); }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold">{option.name}</span>
+                        {isCurrent
+                          ? <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">当前</Badge>
+                          : <span className="text-[10px] text-muted-foreground">点击切换</span>}
+                      </div>
+                      <div className="mt-1 text-[11px] leading-4 text-muted-foreground">{option.who}</div>
+                      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                        {option.cost}
+                        {selectedState.maxSelfTransitions === undefined ? ` · 自我重试上限 ${ceiling} 次` : ''}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {isForcedAdversarialRationale(selectedState.reviewPolicy.rationale) ? (
+                <div className="flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                  <span className="material-symbols-outlined mt-0.5 text-[14px] leading-none">warning</span>
+                  <span>系统对这个状态的判断把握不足，已按保守规则自动改用对抗模式。你可以手动切回标准。</span>
+                </div>
+              ) : null}
               <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5">
                 {selectedState.reviewPolicy.rationale || '暂无判断理由。'}
               </div>
