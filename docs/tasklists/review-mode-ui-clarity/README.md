@@ -4,7 +4,7 @@ Updated: 2026-08-13
 基线分支: `dev` @ `c716bdd6`
 建议工作分支: `fix/review-mode-ui-clarity`
 
-进度：Phase 1、1B、2 均已完成（含回归测试）。**Phase 3 仍阻塞**，等一个产品决策，见文末。
+进度：**全部完成**。Phase 1、1B、2 已实施并通过验证（含回归测试）；原 Phase 3 经评估后放弃，理由见文末。
 
 ## 0. 背景
 
@@ -29,7 +29,7 @@ rc.11 用户反馈，工作流设计面板的「状态审查模式」区域有�
 - **standard（标准）**——干活的人自己判。该状态最后一个串行步骤在交付成果的同时，在同一次输出末尾附上状态裁决 JSON（`pass` / `conditional_pass` / `fail`）。
 - **adversarial（对抗）**——另派两个角色来判。系统自动插入两个托管步骤：`对抗审查`（attacker，职责是主动寻找反例、边界、遗漏和错误假设，明确禁止复述 defender 结论）和 `独立裁决`（judge，看完双方证据后独立下判决）。三类角色绑定互相隔离的 agent 实例，防止串通。
 
-成本差异：对抗模式多跑两个 Agent，开销约 3 倍；且该状态的自循环上限从 3 降到 2（见 `defaultMaxSelfTransitions`，`src/lib/workflow/state-review-policy.ts:305`），因为每轮重试要跑完三个角色。
+成本差异：对抗模式在既有步骤后追加两个托管步骤，即 n → n+2——单步状态是 3 倍，四步状态只有 1.5 倍，**不存在固定倍数**；且该状态的自循环上限从 3 降到 2（见 `defaultMaxSelfTransitions`，`src/lib/workflow/state-review-policy.ts:305`），因为每轮重试要跑完三个角色。
 
 **用户真正在做的决定是"要不要额外花两个 Agent 的成本来挑错"**，而「标准/对抗」这两个词描述的是内部编排的形状。这是第 1 点困惑的根因。
 
@@ -60,9 +60,9 @@ locked: source === 'user' ? true : Boolean(base.locked),
 **推论（极其重要）**：只要 `source === 'user'`，任何把 `locked` 置为 `false` 的 UI 操作都会在下一次归一化时被悄悄改回 `true`。所以：
 
 - ❌ **不要**新增一个只写 `locked: false` 的「解锁」按钮——它看起来生效了，保存后就失效，比没有更糟。
-- ❌ **不要**在 Phase 1 里试图解耦 `source` 和 `locked`——那要改 `:250` 这行核心逻辑，会波及 `inferBaselineAdversarialIntent`（`:856-868`，启动对话框据此推断基线意图）和 `tests/state-review-policy.test.ts:19` 的测试夹具。这属于 Phase 3，需要单独决策。
+- ❌ **不要**在 Phase 1 里试图解耦 `source` 和 `locked`——那要改 `:250` 这行核心逻辑，会波及 `inferBaselineAdversarialIntent`（`:856-868`，启动对话框据此推断基线意图）和 `tests/state-review-policy.test.ts:19` 的测试夹具。这件事最终被评估后放弃，见文末「已放弃」一节。
 
-Phase 1 的解法是：**保留自动上锁的行为，但让锁不再限制用户**，并把现成的「让 AI 重新评估」按钮作为唯一的、语义正确的松绑出口（它走 `unlockForAi` 路径，是合法解锁）。
+Phase 1 的解法是：**保留自动上锁的行为，但让锁不再限制用户**，并把现成的「AI 重新评估模式」按钮作为唯一的、语义正确的松绑出口（它走 `unlockForAi` 路径，是合法解锁）。
 
 ### 2.3 不得改动的东西
 
@@ -80,7 +80,7 @@ Phase 1 的解法是：**保留自动上锁的行为，但让锁不再限制用�
 | Phase 1 | 解除对用户的误伤 + 锁/AI 相关文案 | 低，纯 UI，单文件 | **已完成** |
 | Phase 1B | 失败态红框裁剪 + 启动对话框默认值与位置 | 低到中 | **已完成** |
 | Phase 2 | 选项说明 + 后果预览 + 隐藏覆盖告知 + 术语行折叠 | 中 | **已完成（T8 方向已修正，见下）** |
-| Phase 3 | 解耦 `source` 与 `locked` | 高，改核心归一化逻辑 | **阻塞：等产品决策** |
+| ~~Phase 3~~ | 解耦 `source` 与 `locked` | 高，改核心归一化逻辑 | **已放弃**，见文末 |
 
 ### ⚠️ T8 的方向在实施时被推翻
 
@@ -231,6 +231,8 @@ grep -n "reviewPolicy?\.locked\|reviewPolicy\.locked" src/components/StateMachin
 
 ### T4. 统一「让 AI 重新评估」文案 ★
 
+> 📌 **后续变更**：这个名字在收尾阶段又改了一次，最终为「**AI 重新评估模式**」，并补上说明边界的 tooltip；同时标题栏的「AI 优化」统一为「AI 优化状态」。以代码为准，本节保留当时的记录。
+
 **位置**：`src/components/StateMachineDesignPanel.tsx:2126-2130`
 
 **现状**：
@@ -367,7 +369,7 @@ npx vitest run tests/components --environment jsdom
 2. 左侧列表该状态出现**图钉**图标（不是挂锁），悬停显示"已固定…"。
 3. 该状态的**删除按钮可用**，悬停显示「删除状态」，**点击后该状态确实从列表中消失**。← 本次改造的核心验收点
 4. 状态名称、「终止状态」勾选框、最大自循环次数三个控件**均可编辑**（T1c）。
-4. 卡片上徽章显示「已固定」，右侧按钮显示「让 AI 重新评估」。
+4. 卡片上徽章显示「已固定」，右侧按钮显示「AI 重新评估模式」（Phase 1 当时为「让 AI 重新评估」，后续已改名）。
 5. 悬停被禁用的托管步骤操作按钮，提示不含"锁定"字样。
 
 ---
@@ -514,25 +516,17 @@ CSS Overflow 规范规定：`overflow-x` 与 `overflow-y` 其中一个不是 `vi
 
 ---
 
-## Phase 3：解耦 `source` 与 `locked`（禁止未经决策实施）
+## 已放弃：解耦 `source` 与 `locked`
 
-**待决问题**：用户选一次模式是否应该自动上锁？
+**曾考虑**：用户选一次模式就自动固定（`source: 'user'` 在 `state-review-policy.ts:250` 强制 `locked: true`），且界面没有手动取消固定的按钮。是否应当解耦？
 
-现状是"是"（`StateMachineDesignPanel.tsx:1215-1227` 的 `requestReviewModeChange` 写死 `locked: true`，且 `state-review-policy.ts:250` 会强制维持）。若要改成"选模式只记录 `source: 'user'`，固定是独立一步"，必须一并处理：
+**决定：不做。** Phase 1 完成后这件事已无实际危害——
 
-1. `state-review-policy.ts:250` 改为尊重显式的 `locked: false`。
-2. 复查 `inferBaselineAdversarialIntent`（`:856-868`），它用 `mode === 'standard' && source === 'user' && locked === true` 判定启动对话框的 `disabled` 基线意图，解耦后该推断会变。
-3. 更新 `tests/state-review-policy.test.ts:19` 的夹具（`locked: source === 'user'`）及相关断言。
-4. 复查 `design-ai-optimization.ts` 中六处依赖 `locked` 的保护逻辑（`:202`、`:215`、`:246`、`:249`、`:493`、`:543`）是否仍成立。
+固定标记原本会禁用删除状态、状态名称、终止勾选和自循环次数，那才是真问题，Phase 1 已全部解除。现在它只剩一个作用：AI 优化时不改动用户选定的模式，也就是它本来的设计意图。想让 AI 重判，卡片上就有「AI 重新评估模式」按钮（唯一会临时解除固定的入口）。
 
-只有在 Phase 3 落地后，新增一个真正的「取消固定」按钮才有意义；在此之前新增该按钮会产生"点了没用、保存后回滚"的假象。
+剩下的只是「图钉自动出现、没有手动摘除按钮」这个语义问题，没有功能影响。而要改它就得动 `:250` 这行核心归一化逻辑，连带影响 `inferBaselineAdversarialIntent` 对启动对话框基线意图的推断、`design-ai-optimization.ts` 中六处依赖 `locked` 的保护逻辑，以及 `tests/state-review-policy.test.ts:19` 的夹具。为纯语义收益冒这个风险不划算。
 
-**两个选项，需要拍板后才能继续：**
-
-- **维持现状（自动固定）** —— 用户的选择立刻受 AI 保护；代价是「固定」是副作用产生的，用户没主动要求，也取消不掉。
-- **改为解耦** —— 语义干净，用户可自行取消固定；代价是要动 `state-review-policy.ts:250` 这行核心逻辑，波及上面列的四项，并改变启动对话框推断基线意图的行为。
-
-Phase 1、1B、2 已全部完成，这是本任务唯一的未决项。
+> 如果将来真要重开这个议题，先确认一件事：解耦之后，用户选定的模式还能不能可靠地挡住 AI 优化。那是 `locked` 存在的唯一理由。
 
 ---
 
@@ -542,7 +536,7 @@ Phase 1、1B、2 已全部完成，这是本任务唯一的未决项。
 - 不改对抗模式的角色职责、agent 实例隔离规则、自循环上限默认值。
 - 不改 `forceAdversarial` 的触发条件（只增加它的可见性）。
 - 不改工作流启动流程的运行时覆盖逻辑（`run-review-plan.ts`），Phase 2 只碰其中一句警告文案。
-- 不新增「取消固定」按钮（见 Phase 3）。
+- 不新增「取消固定」按钮（理由见文末「已放弃」一节）。
 
 ---
 
