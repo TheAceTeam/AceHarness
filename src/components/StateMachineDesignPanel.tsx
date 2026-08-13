@@ -163,14 +163,14 @@ const REVIEW_MODE_OPTIONS = [
   {
     mode: 'standard' as const,
     name: '标准',
-    who: '执行者自己给结论',
-    cost: '不额外增加步骤，最省',
+    who: '谁干的谁验收',
+    cost: '快，但容易看不见自己的问题',
   },
   {
     mode: 'adversarial' as const,
     name: '对抗',
-    who: '另派 2 个 Agent 挑错并裁决',
-    cost: '新增「对抗审查」「独立裁决」两步，约 3 倍开销',
+    who: '专人挑错 + 独立裁决',
+    cost: '更容易抓出漏洞和边界情况，约 3 倍开销',
   },
 ];
 
@@ -748,14 +748,20 @@ function SortableStateListItem({
           </div>
         ) : null}
       </div>
-      <div className="flex gap-0.5 ml-0.5 flex-shrink-0">
-        {errors && errors.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 self-center" title={errors.join('；')} /> : null}
-        {state.isInitial && <span className="w-1.5 h-1.5 rounded-full bg-green-400 self-center" title="初始状态" />}
-        {state.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-red-400 self-center" title="终止状态" />}
+      {/* Shape carries the meaning, not just hue: error, final and adversarial used
+          to be three near-identical reds, indistinguishable at 6px and invisible to
+          anyone with red-green colour blindness. Error is now an icon, a terminal
+          state a neutral square, and only the review mode stays a coloured dot. */}
+      <div className="flex items-center gap-0.5 ml-0.5 flex-shrink-0">
+        {errors && errors.length > 0 ? (
+          <span className="material-symbols-outlined text-[13px] leading-none text-red-500" title={errors.join('；')}>error</span>
+        ) : null}
+        {state.isInitial && <span className="h-1.5 w-1.5 rounded-full bg-green-500" title="初始状态" />}
+        {state.isFinal && <span className="h-1.5 w-1.5 rounded-[1px] bg-slate-400" title="终止状态" />}
         {!state.isFinal && state.reviewPolicy ? (
           <span
-            className={`h-1.5 w-1.5 rounded-full ${state.reviewPolicy.mode === 'adversarial' ? 'bg-rose-400' : 'bg-sky-400'}`}
-            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式' : '标准模式'}
+            className={`h-1.5 w-1.5 rounded-full ${state.reviewPolicy.mode === 'adversarial' ? 'bg-rose-500' : 'bg-sky-500'}`}
+            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式：专人挑错 + 独立裁决' : '标准模式：谁干的谁验收'}
           />
         ) : null}
         {!state.isFinal && state.reviewPolicy?.locked ? (
@@ -2123,8 +2129,8 @@ export default function StateMachineDesignPanel({
                   <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <span>
                       {selectedState.reviewPolicy.mode === 'adversarial'
-                        ? '这个状态的成果，由另外两个 Agent 挑错并裁决。'
-                        : '这个状态的成果，由执行者在最后一步自己给出结论。'}
+                        ? '这个状态的成果，会有专人挑错、再由第三方裁决。'
+                        : '这个状态的成果，由干活的人自己验收。'}
                     </span>
                     <span
                       className="material-symbols-outlined cursor-help text-[13px] leading-none"
