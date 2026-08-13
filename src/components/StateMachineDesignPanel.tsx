@@ -163,14 +163,14 @@ const REVIEW_MODE_OPTIONS = [
   {
     mode: 'standard' as const,
     name: '标准',
-    who: '谁干的谁验收',
-    cost: '快，但容易看不见自己的问题',
+    who: '由执行者自行验收',
+    cost: '成本最低，但不易发现自身盲区',
   },
   {
     mode: 'adversarial' as const,
     name: '对抗',
-    who: '专人挑错 + 独立裁决',
-    cost: '更容易抓出漏洞和边界情况，约 3 倍开销',
+    who: '独立审查并裁决',
+    cost: '更易发现缺陷与边界问题，开销约 3 倍',
   },
 ];
 
@@ -739,8 +739,13 @@ function SortableStateListItem({
         }}
       >
         <div className="font-medium truncate">{state.name}</div>
+        {/* 初始/终止 are structural facts you read once, so they belong in the
+            subtitle as plain words. The marker row is reserved for what changes
+            while you work: validation errors, review mode, and whether it is pinned. */}
         <div className={`text-xs ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
           {state.steps?.length ?? 0}步 · {state.transitions?.length ?? 0}转移
+          {state.isInitial ? ' · 初始' : ''}
+          {state.isFinal ? ' · 终止' : ''}
         </div>
         {errors && errors.length > 0 ? (
           <div className={`mt-1 text-[11px] ${isSelected ? 'text-primary-foreground/85' : 'text-red-500'}`}>
@@ -748,20 +753,17 @@ function SortableStateListItem({
           </div>
         ) : null}
       </div>
-      {/* Shape carries the meaning, not just hue: error, final and adversarial used
-          to be three near-identical reds, indistinguishable at 6px and invisible to
-          anyone with red-green colour blindness. Error is now an icon, a terminal
-          state a neutral square, and only the review mode stays a coloured dot. */}
+      {/* Error is an icon rather than a fourth coloured dot: it used to be one of
+          three near-identical reds, indistinguishable at 6px and invisible to anyone
+          with red-green colour blindness. Only the review mode stays a coloured dot. */}
       <div className="flex items-center gap-0.5 ml-0.5 flex-shrink-0">
         {errors && errors.length > 0 ? (
           <span className="material-symbols-outlined text-[13px] leading-none text-red-500" title={errors.join('；')}>error</span>
         ) : null}
-        {state.isInitial && <span className="h-1.5 w-1.5 rounded-full bg-green-500" title="初始状态" />}
-        {state.isFinal && <span className="h-1.5 w-1.5 rounded-[1px] bg-slate-400" title="终止状态" />}
         {!state.isFinal && state.reviewPolicy ? (
           <span
             className={`h-1.5 w-1.5 rounded-full ${state.reviewPolicy.mode === 'adversarial' ? 'bg-rose-500' : 'bg-sky-500'}`}
-            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式：专人挑错 + 独立裁决' : '标准模式：谁干的谁验收'}
+            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式：独立审查并裁决' : '标准模式：由执行者自行验收'}
           />
         ) : null}
         {!state.isFinal && state.reviewPolicy?.locked ? (
@@ -2129,8 +2131,8 @@ export default function StateMachineDesignPanel({
                   <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <span>
                       {selectedState.reviewPolicy.mode === 'adversarial'
-                        ? '这个状态的成果，会有专人挑错、再由第三方裁决。'
-                        : '这个状态的成果，由干活的人自己验收。'}
+                        ? '这个状态的成果经独立审查后裁决。'
+                        : '这个状态的成果由执行者自行验收。'}
                     </span>
                     <span
                       className="material-symbols-outlined cursor-help text-[13px] leading-none"
