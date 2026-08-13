@@ -559,7 +559,7 @@ function SortableStepRow({
   return (
     <div ref={setNodeRef} style={style} className={`group rounded-lg border px-3 py-2.5 transition-colors ${roleColor}`}>
       <div className="flex items-start gap-2.5">
-        <button {...attributes} {...listeners} disabled={dragLocked} title={dragLocked ? '当前审查结构已锁定' : '拖动排序'} className="mt-1 flex-shrink-0 cursor-grab rounded p-0.5 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40">
+        <button {...attributes} {...listeners} disabled={dragLocked} title={dragLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '拖动排序'} className="mt-1 flex-shrink-0 cursor-grab rounded p-0.5 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40">
           <GripVertical className="w-4 h-4" />
         </button>
         <div className="min-w-0 flex-1">
@@ -620,29 +620,29 @@ function SortableStepRow({
             </div>
             <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/75 p-0.5 text-muted-foreground shadow-sm opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {canGroupPrevious && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '与上一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '与上一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
                   <MergeIntoParallelIcon direction="previous" />
                 </Button>
               )}
               {canGroupNext && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '与下一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '与下一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
                   <MergeIntoParallelIcon direction="next" />
                 </Button>
               )}
               {isParallel && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '拆分并发组'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '拆分并发组'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
                   <span className="material-symbols-outlined text-[15px]">call_split</span>
                 </Button>
               )}
               {onOptimize ? (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '审查角色步骤由本地编排维护' : 'AI 优化'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '系统维护的审查步骤，内容由审查模式决定' : 'AI 优化'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
                   <span className="material-symbols-outlined text-[14px]">auto_fix_high</span>
                 </Button>
               ) : null}
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '审查角色步骤由本地编排维护' : '编辑'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '系统维护的审查步骤，内容由审查模式决定' : '编辑'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onEdit(); }}>
                 <span className="material-symbols-outlined text-[14px]">edit</span>
               </Button>
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" title={structureLocked ? '当前审查结构已锁定' : '删除'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '删除'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
                 <Trash2 className="w-3 h-3" />
               </Button>
             </div>
@@ -727,7 +727,7 @@ function SortableStateListItem({
           />
         ) : null}
         {!state.isFinal && state.reviewPolicy?.locked ? (
-          <span className="material-symbols-outlined text-[12px] leading-none" title="用户已锁定审查模式">lock</span>
+          <span className="material-symbols-outlined text-[12px] leading-none" title="已固定：AI 优化时不会改动这个状态的审查模式，你自己仍可随时调整">push_pin</span>
         ) : null}
       </div>
       <Button
@@ -741,8 +741,7 @@ function SortableStateListItem({
           e.stopPropagation();
           onDelete();
         }}
-        disabled={Boolean(state.reviewPolicy?.locked)}
-        title={state.reviewPolicy?.locked ? '请先将审查模式交还 AI 或解除锁定' : '删除状态'}
+        title="删除状态"
       >
         <Trash2 className="w-3 h-3" />
       </Button>
@@ -1473,8 +1472,6 @@ export default function StateMachineDesignPanel({
   };
 
   const handleDeleteState = (name: string) => {
-    const target = states.find((state) => state.name === name);
-    if (target?.reviewPolicy?.locked) return;
     onStatesChange(states.filter(s => s.name !== name));
     if (selectedStateName === name) {
       setSelectedStateName(states.find(s => s.name !== name)?.name ?? null);
@@ -1887,7 +1884,6 @@ export default function StateMachineDesignPanel({
                     <Input
                       className="h-8 text-sm"
                       value={selectedState.name}
-                      disabled={Boolean(selectedState.reviewPolicy?.locked)}
                       onChange={(e) => {
                         const newName = e.target.value;
                         const previousName = selectedState.name;
@@ -1907,7 +1903,6 @@ export default function StateMachineDesignPanel({
                     <label className="flex items-center gap-1.5 cursor-pointer">
                       <Checkbox
                         checked={selectedState.isFinal}
-                        disabled={Boolean(selectedState.reviewPolicy?.locked)}
                         onCheckedChange={(v) => {
                           const isFinal = !!v;
                           updateState({
@@ -1962,7 +1957,6 @@ export default function StateMachineDesignPanel({
                       min={1}
                       max={100}
                       value={selectedState.maxSelfTransitions ?? defaultMaxSelfTransitions(selectedState)}
-                      disabled={Boolean(selectedState.reviewPolicy?.locked)}
                       onChange={(e) => updateState({
                         ...selectedState,
                         maxSelfTransitions: Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)),
@@ -2089,7 +2083,9 @@ export default function StateMachineDesignPanel({
                       {selectedState.reviewPolicy.mode === 'adversarial' ? '对抗模式' : '标准模式'}
                     </Badge>
                     {selectedState.reviewPolicy.locked ? (
-                      <Badge variant="outline" className="gap-1 text-[10px]"><span className="material-symbols-outlined text-[12px]">lock</span>用户锁定</Badge>
+                      <Badge variant="outline" className="gap-1 text-[10px]" title="AI 优化时不会改动这个模式；你自己仍可随时切换">
+                        <span className="material-symbols-outlined text-[12px]">push_pin</span>已固定
+                      </Badge>
                     ) : null}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
@@ -2119,13 +2115,27 @@ export default function StateMachineDesignPanel({
                     对抗
                   </Button>
                   {!selectedState.reviewPolicy.locked ? (
-                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={lockCurrentReviewPolicy}>
-                      锁定当前模式
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      title="固定后，AI 优化不会改动这个模式；你自己仍可随时切换"
+                      onClick={lockCurrentReviewPolicy}
+                    >
+                      固定此模式
                     </Button>
                   ) : null}
                   {onOptimizeState ? (
-                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={returnReviewPolicyToAi}>
-                      {selectedState.reviewPolicy.locked ? '交还 AI 判断' : 'AI 重新评估'}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      title="AI 只提供建议，你确认后才会生效"
+                      onClick={returnReviewPolicyToAi}
+                    >
+                      让 AI 重新评估
                     </Button>
                   ) : null}
                 </div>
@@ -2402,7 +2412,7 @@ export default function StateMachineDesignPanel({
               <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
                 状态「{reviewPolicyCandidate.stateName}」将切换为
                 <span className="mx-1 font-semibold">{reviewPolicyCandidate.targetMode === 'adversarial' ? '对抗模式' : '标准模式'}</span>
-                ，确认后该选择会标记为用户来源并锁定。
+                。确认后这个选择会被固定，AI 优化时不会改动它；你自己仍可随时切换模式或删除该状态。
               </div>
               {reviewPolicyCandidate.warnings.length > 0 ? (
                 <div className="space-y-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
