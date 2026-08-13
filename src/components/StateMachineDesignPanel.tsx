@@ -163,13 +163,15 @@ const REVIEW_MODE_OPTIONS = [
   {
     mode: 'standard' as const,
     name: '标准',
-    who: '执行者在最后一步自己下结论',
+    who: '由执行 Agent 自行验收',
+    quality: '成本最低，但不易发现自身盲区',
     effect: (isCurrent: boolean) => (isCurrent ? '不额外增加步骤' : '不再单独设置审查与裁决步骤'),
   },
   {
     mode: 'adversarial' as const,
     name: '对抗',
     who: '另外两个 Agent：一个专找问题，一个下结论',
+    quality: '更易发现缺陷与边界问题',
     // Adversarial appends exactly two managed steps to whatever the state already
     // has, so the real cost is `n -> n + 2`, not a fixed multiple: a one-step state
     // triples, an eight-step state grows by a quarter. Quote the actual counts.
@@ -770,7 +772,7 @@ function SortableStateListItem({
         {!state.isFinal && state.reviewPolicy ? (
           <span
             className={`h-1.5 w-1.5 rounded-full ${state.reviewPolicy.mode === 'adversarial' ? 'bg-rose-500' : 'bg-sky-500'}`}
-            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式：另外两个 Agent 复查后裁决' : '标准模式：执行者自己下结论'}
+            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式：另外两个 Agent 复查后裁决' : '标准模式：由执行 Agent 自行验收'}
           />
         ) : null}
         {!state.isFinal && state.reviewPolicy?.locked ? (
@@ -2139,7 +2141,7 @@ export default function StateMachineDesignPanel({
                     <span>
                       {selectedState.reviewPolicy.mode === 'adversarial'
                         ? '这个状态的成果，由另外两个 Agent 复查后裁决。'
-                        : '这个状态的成果，由执行者自己下结论。'}
+                        : '这个状态的成果，由执行 Agent 自行验收。'}
                     </span>
                     <span
                       className="material-symbols-outlined cursor-help text-[13px] leading-none"
@@ -2205,7 +2207,8 @@ export default function StateMachineDesignPanel({
                           : <span className="text-[10px] text-muted-foreground">点击切换</span>}
                       </div>
                       <div className="mt-1 text-[11px] leading-4 text-muted-foreground">{option.who}</div>
-                      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{option.quality}</div>
+                      <div className="mt-1.5 text-[11px] leading-4 text-muted-foreground/85">
                         {option.effect(isCurrent, selectedState.steps?.length ?? 0)}
                         {selectedState.maxSelfTransitions === undefined ? ` · 自我重试上限 ${ceiling} 次` : ''}
                       </div>
