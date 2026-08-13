@@ -18,6 +18,7 @@ import {
   resolveStartPreflightStrategy,
   resolveWorkbenchRuntimeWorkflowConfig,
   shouldShowWorkbenchHumanAttention,
+  resolveInitialAdversarialIntent,
   buildWorkbenchRunDetailNavItems,
   resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
@@ -32,6 +33,16 @@ const initialStopSteps: WorkbenchStopProgressStep[] = [
 ];
 
 describe('Workbench historical run live sync', () => {
+  test('preselects a run review intent when the config carries no baseline', () => {
+    // Lightweight and pre-protocol configs report no baseline. Without a preselected
+    // option the start dialog's primary button is disabled by a choice that sits
+    // below the fold, so it reads as broken rather than blocked.
+    expect(resolveInitialAdversarialIntent(null)).toBe('disabled');
+    expect(resolveInitialAdversarialIntent(undefined)).toBe('disabled');
+    expect(resolveInitialAdversarialIntent('on-demand')).toBe('on-demand');
+    expect(resolveInitialAdversarialIntent('disabled')).toBe('disabled');
+  });
+
   test('uses consistent semantic colors for run status dots', () => {
     expect(getWorkflowStatusDotClass('running', true)).toBe('bg-blue-500');
     expect(getWorkflowStatusDotClass('completed', false)).toBe('bg-emerald-500');
