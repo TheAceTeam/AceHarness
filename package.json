@@ -40,6 +40,7 @@
     "check:acp": "node ./scripts/check-acp-connectivity.mjs",
     "office:stabilize-sprite": "node scripts/stabilize-office-agent-sprite.mjs",
     "prepack": "npm run build && npm run prune:package-maps",
+    "release:tag": "node scripts/release-tag.mjs",
     "publish:npm": "npm publish",
     "publish:beta": "npm publish --tag beta"
   },

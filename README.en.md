@@ -288,8 +288,11 @@ npm run test:components  # Run component tests in jsdom
 npm run lint             # Run Next.js lint
 npm run check:engines    # Check available local AI execution engines
 npm run clean            # Remove dist, .next, and dist-build
+npm run release:tag -- 1.0.0-rc.13 --dry-run  # Run the maintainer release preflight
 npm run publish:beta     # Build and publish the npm package with the beta tag
 ```
+
+Use the tag-based workflow in [`docs/releasing.md`](docs/releasing.md) for official npm + GitCode releases.
 
 CLI commands come from `src/cli.ts`.
 
