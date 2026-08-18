@@ -17,6 +17,8 @@ import {
   resolveSoleConfiguredWorkflowStepName,
   resolveStartPreflightStrategy,
   resolveWorkbenchRuntimeWorkflowConfig,
+  shouldShowWorkbenchHumanAttention,
+  resolveInitialAdversarialIntent,
   buildWorkbenchRunDetailNavItems,
   resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
@@ -31,6 +33,16 @@ const initialStopSteps: WorkbenchStopProgressStep[] = [
 ];
 
 describe('Workbench historical run live sync', () => {
+  test('preselects a run review intent when the config carries no baseline', () => {
+    // Lightweight and pre-protocol configs report no baseline. Without a preselected
+    // option the start dialog's primary button is disabled by a choice that sits
+    // below the fold, so it reads as broken rather than blocked.
+    expect(resolveInitialAdversarialIntent(null)).toBe('disabled');
+    expect(resolveInitialAdversarialIntent(undefined)).toBe('disabled');
+    expect(resolveInitialAdversarialIntent('on-demand')).toBe('on-demand');
+    expect(resolveInitialAdversarialIntent('disabled')).toBe('disabled');
+  });
+
   test('uses consistent semantic colors for run status dots', () => {
     expect(getWorkflowStatusDotClass('running', true)).toBe('bg-blue-500');
     expect(getWorkflowStatusDotClass('completed', false)).toBe('bg-emerald-500');
@@ -259,6 +271,28 @@ describe('Workbench stop progress', () => {
     const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
     expect(source).not.toContain('权威');
     expect(source).toContain('正在执行启动前检查并创建正式运行');
+  });
+
+  test('keeps long human-approval summaries inside a bounded scroll region', async () => {
+    const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('aria-label="审批说明"');
+    expect(source).toContain('max-h-48 overflow-y-auto overscroll-contain');
+  });
+
+  test('does not present stale human approval as actionable after a run stops', () => {
+    expect(shouldShowWorkbenchHumanAttention({
+      workflowStatus: 'stopped',
+      hasPendingQuestion: true,
+      hasApproval: false,
+      isHumanReviewLocation: true,
+    })).toBe(false);
+    expect(shouldShowWorkbenchHumanAttention({
+      workflowStatus: 'running',
+      hasPendingQuestion: true,
+      hasApproval: false,
+      isHumanReviewLocation: true,
+    })).toBe(true);
   });
 
   test('keeps only user-facing phases and discards ACP/session diagnostics', () => {

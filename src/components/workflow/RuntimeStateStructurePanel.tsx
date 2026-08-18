@@ -258,7 +258,10 @@ export default function RuntimeStateStructurePanel({
             <span className="text-xs text-muted-foreground">{(selectedState.steps || []).length} 个执行步骤</span>
           </div>
           {(selectedState.steps || []).length ? (
-            <div className="flex items-stretch gap-3 overflow-x-auto pb-2">
+            <div className="-mx-1 flex items-stretch gap-3 overflow-x-auto px-1 pb-3 pt-1">
+              {/* `overflow-x` makes the y axis clip too, so the padding above is what
+                  keeps a running/failed card's ring from being cut off at the edges;
+                  the negative margin cancels the horizontal half so alignment holds. */}
               {(selectedState.steps || []).map((step, index) => {
                 const status = resolveStepStatus(selectedState, step.name, index);
                 const tone = stepTone(step, index);

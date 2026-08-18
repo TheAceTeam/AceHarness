@@ -666,6 +666,31 @@ function normalizeWorkflowStatusCode(status: unknown): string {
   return value;
 }
 
+/**
+ * Configs with no state-level policy at all (lightweight, or authored before the
+ * protocol) report no baseline intent. Defaulting to `disabled` keeps them running
+ * the way they always have — no AI planning pass, no derived state machine, no
+ * extra cost nobody asked for — and, just as importantly, leaves the start dialog
+ * with a selected option so its primary button is never disabled for a reason the
+ * user cannot see. Both the initial state and the reset effect go through here so
+ * the two cannot drift apart.
+ */
+export function resolveInitialAdversarialIntent(
+  baselineIntent: WorkflowAdversarialIntent | null | undefined,
+): WorkflowAdversarialIntent {
+  return baselineIntent ?? 'disabled';
+}
+
+export function shouldShowWorkbenchHumanAttention(input: {
+  workflowStatus: unknown;
+  hasPendingQuestion: boolean;
+  hasApproval: boolean;
+  isHumanReviewLocation: boolean;
+}): boolean {
+  if (isTerminalWorkflowStatus(normalizeWorkflowStatusCode(input.workflowStatus))) return false;
+  return input.hasPendingQuestion || input.hasApproval || input.isHumanReviewLocation;
+}
+
 export function getWorkflowStatusDotClass(status: unknown, isRunning: boolean): string {
   const value = normalizeWorkflowStatusCode(status);
   if (isRunning || value === 'running') return 'bg-blue-500';
@@ -1582,7 +1607,7 @@ const AceAwareMarkdown = memo(function AceAwareMarkdown({
 function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const [planningStep, setPlanningStep] = useState<'contexts' | 'plan'>('contexts');
   const [adversarialIntent, setAdversarialIntent] = useState<WorkflowAdversarialIntent | null>(
-    props.runReviewPlanning?.baselineIntent ?? null,
+    resolveInitialAdversarialIntent(props.runReviewPlanning?.baselineIntent),
   );
   const [reviewPlan, setReviewPlan] = useState<RunReviewPlan | null>(null);
   const [reviewOverrides, setReviewOverrides] = useState<RunReviewOverride[]>([]);
@@ -1633,7 +1658,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
 
   useEffect(() => {
     setPlanningStep('contexts');
-    setAdversarialIntent(props.runReviewPlanning?.baselineIntent ?? null);
+    setAdversarialIntent(resolveInitialAdversarialIntent(props.runReviewPlanning?.baselineIntent));
     setReviewPlan(null);
     setReviewOverrides([]);
     setReviewPreflightPreview(null);
@@ -2029,6 +2054,36 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
           </section>
         ) : null}
 
+        {/* The only required decision in this dialog — everything else is optional —
+            so it sits up here rather than below the fold. It also gates the primary
+            button, which used to look broken when the choice was off screen. */}
+        {props.runReviewPlanning ? (
+          <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
+            <div>
+              <Label className="text-sm font-medium">本次运行是否使用对抗流程？</Label>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {props.runReviewPlanning.baselineIntent
+                  ? '已按工作流创建时的选择预选，可直接继续。'
+                  : '已预选「不开启对抗」，按需要改。'}
+                只影响本次运行，不写回原配置。
+              </p>
+            </div>
+            <div className="min-w-0">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button type="button" aria-pressed={adversarialIntent === 'disabled'} onClick={() => setAdversarialIntent('disabled')} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === 'disabled' ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
+                  <div className="font-medium">不开启对抗</div>
+                  <div className="mt-1 text-xs text-muted-foreground">零次 AI 评估；轻量保持原样，普通状态机全部使用标准模式。</div>
+                </button>
+                <button type="button" aria-pressed={adversarialIntent === 'on-demand'} onClick={() => setAdversarialIntent('on-demand')} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === 'on-demand' ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
+                  <div className="font-medium">按需开启</div>
+                  <div className="mt-1 text-xs text-muted-foreground">一次整体规划；轻量任务必要时只为本次运行派生状态机。</div>
+                </button>
+              </div>
+              {reviewPlanningError ? <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}
+            </div>
+          </section>
+        ) : null}
+
         <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
           <div>
             <Label className="text-sm font-medium">{props.workingDirectoryEditable ? '本次运行工作目录' : '当前运行工作目录'}</Label>
@@ -2160,27 +2215,6 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
           </section>
         ) : null}
 
-        {props.runReviewPlanning ? (
-          <section className="border-t border-border py-5">
-            <Label className="text-sm font-medium">本次运行是否允许使用对抗流程？</Label>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {props.runReviewPlanning.baselineIntent
-                ? `已按这个工作流创建时的选择预选「${props.runReviewPlanning.baselineIntent === 'disabled' ? '不开启对抗' : '按需开启'}」，可直接继续。本次修改只影响本次快照，不写回原配置。`
-                : '选择本次运行的做法；只影响本次有效快照，不写回原配置。'}
-            </p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <button type="button" onClick={() => setAdversarialIntent('disabled')} className={cn('rounded-lg border p-3 text-left', adversarialIntent === 'disabled' ? 'border-primary bg-primary/5' : 'hover:bg-muted/40')}>
-                <div className="font-medium">不开启对抗</div>
-                <div className="mt-1 text-xs text-muted-foreground">零次 AI 评估；轻量保持原样，普通状态机全部使用标准模式。</div>
-              </button>
-              <button type="button" onClick={() => setAdversarialIntent('on-demand')} className={cn('rounded-lg border p-3 text-left', adversarialIntent === 'on-demand' ? 'border-primary bg-primary/5' : 'hover:bg-muted/40')}>
-                <div className="font-medium">按需开启</div>
-                <div className="mt-1 text-xs text-muted-foreground">一次整体规划；轻量任务必要时只为本次运行派生状态机。</div>
-              </button>
-            </div>
-            {reviewPlanningError ? <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}
-          </section>
-        ) : null}
           </>
         )}
       </div>
@@ -2199,9 +2233,14 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               {planningStep === 'plan' ? '返回修改' : '取消'}
             </Button>
             {props.runReviewPlanning && planningStep === 'contexts' ? (
-              <Button onClick={() => void createRunReviewPlan()} disabled={props.actionDisabled || taskInputInvalid || !adversarialIntent || reviewPlanningBusy}>
-                {reviewPlanningBusy ? '正在生成本次方案...' : '下一步：确认本次运行方案'}
-              </Button>
+              <>
+                {!adversarialIntent ? (
+                  <span className="self-center text-xs text-muted-foreground">请先选择本次是否使用对抗流程</span>
+                ) : null}
+                <Button onClick={() => void createRunReviewPlan()} disabled={props.actionDisabled || taskInputInvalid || !adversarialIntent || reviewPlanningBusy}>
+                  {reviewPlanningBusy ? '正在生成本次方案...' : '下一步：确认本次运行方案'}
+                </Button>
+              </>
             ) : null}
             {startupFlowEnabled && props.onSkipPreflight && (!props.runReviewPlanning || planningStep === 'plan') ? (
               <Button
@@ -5739,11 +5778,13 @@ export default function WorkbenchPage({
     if (pendingHumanQuestion.source?.type === 'parallel-manual-join') return '并发人工确认';
     return '人工审查';
   }, [pendingHumanQuestion]);
-  const pendingHumanAttentionTitle = pendingHumanQuestionKindLabel
-    ? `待${pendingHumanQuestionKindLabel} · ${workflowBaseTitle}`
-    : humanApprovalData
-      ? `待人工审查 · ${workflowBaseTitle}`
-      : null;
+  const pendingHumanAttentionTitle = isTerminalWorkflowStatus(normalizeWorkflowStatusCode(workflowStatus))
+    ? null
+    : pendingHumanQuestionKindLabel
+      ? `待${pendingHumanQuestionKindLabel} · ${workflowBaseTitle}`
+      : humanApprovalData
+        ? `待人工审查 · ${workflowBaseTitle}`
+        : null;
   const workflowTitle = useMemo(() => {
     if (pendingHumanAttentionTitle) return pendingHumanAttentionTitle;
     if (viewingHistoryRun) return `查看运行 · ${workflowBaseTitle}`;
@@ -13001,13 +13042,14 @@ export default function WorkbenchPage({
     });
   };
 
-  const humanAttentionActive = Boolean(
-    pendingHumanQuestion
-    || humanApprovalData
-    || currentPhase === '__human_approval__'
-    || currentStep === '__human_approval__'
-    || formatWorkflowLocation(currentPhase, currentStep, '').includes('人工审查')
-  );
+  const humanAttentionActive = shouldShowWorkbenchHumanAttention({
+    workflowStatus,
+    hasPendingQuestion: Boolean(pendingHumanQuestion),
+    hasApproval: Boolean(humanApprovalData),
+    isHumanReviewLocation: currentPhase === '__human_approval__'
+      || currentStep === '__human_approval__'
+      || formatWorkflowLocation(currentPhase, currentStep, '').includes('人工审查'),
+  });
 
   const renderHumanAttentionBanner = () => {
     if (!humanAttentionActive || showWorkbenchPreview) return null;
@@ -13048,7 +13090,13 @@ export default function WorkbenchPage({
               <div className="mt-2 grid gap-x-5 gap-y-2 text-xs leading-5 md:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.8fr)]">
                 <div className="min-w-0">
                   <div className="font-bold text-orange-950 dark:text-orange-50">审批事项：{title}</div>
-                  <div className="mt-0.5 whitespace-pre-wrap text-orange-800 dark:text-orange-100/85">{summary}</div>
+                  <div
+                    className="mt-0.5 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words pr-2 text-orange-800 dark:text-orange-100/85"
+                    aria-label="审批说明"
+                    tabIndex={0}
+                  >
+                    {summary}
+                  </div>
                 </div>
                 <div className="min-w-0 border-orange-200 md:border-l md:pl-5 dark:border-orange-400/20">
                   <div className="font-bold text-orange-950 dark:text-orange-50">需要决定</div>

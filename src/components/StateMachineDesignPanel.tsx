@@ -152,6 +152,56 @@ function isReviewStructureStep(step: WorkflowStep | undefined): boolean {
   ));
 }
 
+/**
+ * What the two modes mean in the terms the person choosing actually cares about:
+ * who judges this state, and what that costs. The mode names stay `标准`/`对抗`
+ * because they are also the step names, rationale wording and prompt vocabulary
+ * that get persisted into workflow configs — renaming only the buttons would put
+ * the panel out of step with everything the engine writes.
+ */
+const REVIEW_MODE_OPTIONS = [
+  {
+    mode: 'standard' as const,
+    name: '标准',
+    who: '由执行 Agent 自行验收',
+    quality: '成本最低，但不易发现自身盲区',
+    effect: (isCurrent: boolean) => (isCurrent ? '不额外增加步骤' : '不再单独设置审查与裁决步骤'),
+  },
+  {
+    mode: 'adversarial' as const,
+    name: '对抗',
+    who: '另外两个 Agent：一个专找问题，一个下结论',
+    quality: '更易发现缺陷与边界问题',
+    // Adversarial appends exactly two managed steps to whatever the state already
+    // has, so the real cost is `n -> n + 2`, not a fixed multiple: a one-step state
+    // triples, an eight-step state grows by a quarter. Quote the actual counts.
+    effect: (isCurrent: boolean, stepCount: number) => (
+      isCurrent
+        ? '已包含对抗审查、独立裁决两步'
+        : `将新增 2 步（${stepCount} → ${stepCount + 2} 步）`
+    ),
+  },
+];
+
+/**
+ * Both AI entry points on a state read as "AI + vague verb", so the tooltips carry
+ * the part that actually matters: which one is allowed to touch a pinned review
+ * mode. Shared constants because the same optimise action is offered from two
+ * places, and a hint that drifts between them is worse than no hint.
+ */
+const OPTIMIZE_STATE_HINT = '调整步骤、Agent、人工审查与转移；不会改动已固定的审查模式';
+const REEVALUATE_MODE_HINT = '只重新判定标准 / 对抗；会临时解除固定，AI 给出建议后你确认才生效';
+
+/**
+ * A low-confidence standard policy is silently upgraded to adversarial, and the
+ * only trace is this sentence appended to the rationale. Matching it lets the
+ * panel say so outright instead of leaving the user to wonder why the mode they
+ * picked is not the mode they got.
+ */
+function isForcedAdversarialRationale(rationale: string | undefined): boolean {
+  return String(rationale || '').includes('判断把握不足，按保守规则采用对抗模式');
+}
+
 function getReviewOperationFieldChanges(operation: ReviewPolicyOperation): Array<{ label: string; before: string; after: string }> {
   const fields: Array<{ key: keyof WorkflowStep; label: string }> = [
     { key: 'role', label: '角色' },
@@ -559,7 +609,7 @@ function SortableStepRow({
   return (
     <div ref={setNodeRef} style={style} className={`group rounded-lg border px-3 py-2.5 transition-colors ${roleColor}`}>
       <div className="flex items-start gap-2.5">
-        <button {...attributes} {...listeners} disabled={dragLocked} title={dragLocked ? '当前审查结构已锁定' : '拖动排序'} className="mt-1 flex-shrink-0 cursor-grab rounded p-0.5 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40">
+        <button {...attributes} {...listeners} disabled={dragLocked} title={dragLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '拖动排序'} className="mt-1 flex-shrink-0 cursor-grab rounded p-0.5 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40">
           <GripVertical className="w-4 h-4" />
         </button>
         <div className="min-w-0 flex-1">
@@ -620,29 +670,29 @@ function SortableStepRow({
             </div>
             <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/75 p-0.5 text-muted-foreground shadow-sm opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {canGroupPrevious && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '与上一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '与上一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
                   <MergeIntoParallelIcon direction="previous" />
                 </Button>
               )}
               {canGroupNext && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '与下一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '与下一并发'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
                   <MergeIntoParallelIcon direction="next" />
                 </Button>
               )}
               {isParallel && (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '当前审查结构已锁定' : '拆分并发组'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '拆分并发组'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
                   <span className="material-symbols-outlined text-[15px]">call_split</span>
                 </Button>
               )}
               {onOptimize ? (
-                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '审查角色步骤由本地编排维护' : 'AI 优化'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '系统维护的审查步骤，内容由审查模式决定' : 'AI 优化'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
                   <span className="material-symbols-outlined text-[14px]">auto_fix_high</span>
                 </Button>
               ) : null}
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '审查角色步骤由本地编排维护' : '编辑'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title={editLocked ? '系统维护的审查步骤，内容由审查模式决定' : '编辑'} disabled={editLocked} onClick={(e) => { e.stopPropagation(); onEdit(); }}>
                 <span className="material-symbols-outlined text-[14px]">edit</span>
               </Button>
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" title={structureLocked ? '当前审查结构已锁定' : '删除'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" title={structureLocked ? '系统维护的审查步骤，切换审查模式即可调整' : '删除'} disabled={structureLocked} onClick={(e) => { e.stopPropagation(); onDelete(); }}>
                 <Trash2 className="w-3 h-3" />
               </Button>
             </div>
@@ -707,8 +757,13 @@ function SortableStateListItem({
         }}
       >
         <div className="font-medium truncate">{state.name}</div>
+        {/* 初始/终止 are structural facts you read once, so they belong in the
+            subtitle as plain words. The marker row is reserved for what changes
+            while you work: validation errors, review mode, and whether it is pinned. */}
         <div className={`text-xs ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
           {state.steps?.length ?? 0}步 · {state.transitions?.length ?? 0}转移
+          {state.isInitial ? ' · 初始' : ''}
+          {state.isFinal ? ' · 终止' : ''}
         </div>
         {errors && errors.length > 0 ? (
           <div className={`mt-1 text-[11px] ${isSelected ? 'text-primary-foreground/85' : 'text-red-500'}`}>
@@ -716,18 +771,21 @@ function SortableStateListItem({
           </div>
         ) : null}
       </div>
-      <div className="flex gap-0.5 ml-0.5 flex-shrink-0">
-        {errors && errors.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 self-center" title={errors.join('；')} /> : null}
-        {state.isInitial && <span className="w-1.5 h-1.5 rounded-full bg-green-400 self-center" title="初始状态" />}
-        {state.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-red-400 self-center" title="终止状态" />}
+      {/* Error is an icon rather than a fourth coloured dot: it used to be one of
+          three near-identical reds, indistinguishable at 6px and invisible to anyone
+          with red-green colour blindness. Only the review mode stays a coloured dot. */}
+      <div className="flex items-center gap-0.5 ml-0.5 flex-shrink-0">
+        {errors && errors.length > 0 ? (
+          <span className="material-symbols-outlined text-[13px] leading-none text-red-500" title={errors.join('；')}>error</span>
+        ) : null}
         {!state.isFinal && state.reviewPolicy ? (
           <span
-            className={`h-1.5 w-1.5 rounded-full ${state.reviewPolicy.mode === 'adversarial' ? 'bg-rose-400' : 'bg-sky-400'}`}
-            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式' : '标准模式'}
+            className={`h-1.5 w-1.5 rounded-full ${state.reviewPolicy.mode === 'adversarial' ? 'bg-rose-500' : 'bg-sky-500'}`}
+            title={state.reviewPolicy.mode === 'adversarial' ? '对抗模式：另外两个 Agent 复查后裁决' : '标准模式：由执行 Agent 自行验收'}
           />
         ) : null}
         {!state.isFinal && state.reviewPolicy?.locked ? (
-          <span className="material-symbols-outlined text-[12px] leading-none" title="用户已锁定审查模式">lock</span>
+          <span className="material-symbols-outlined text-[12px] leading-none" title="已固定：AI 优化时不会改动这个状态的审查模式，你自己仍可随时调整">push_pin</span>
         ) : null}
       </div>
       <Button
@@ -741,8 +799,7 @@ function SortableStateListItem({
           e.stopPropagation();
           onDelete();
         }}
-        disabled={Boolean(state.reviewPolicy?.locked)}
-        title={state.reviewPolicy?.locked ? '请先将审查模式交还 AI 或解除锁定' : '删除状态'}
+        title="删除状态"
       >
         <Trash2 className="w-3 h-3" />
       </Button>
@@ -1473,8 +1530,6 @@ export default function StateMachineDesignPanel({
   };
 
   const handleDeleteState = (name: string) => {
-    const target = states.find((state) => state.name === name);
-    if (target?.reviewPolicy?.locked) return;
     onStatesChange(states.filter(s => s.name !== name));
     if (selectedStateName === name) {
       setSelectedStateName(states.find(s => s.name !== name)?.name ?? null);
@@ -1887,7 +1942,6 @@ export default function StateMachineDesignPanel({
                     <Input
                       className="h-8 text-sm"
                       value={selectedState.name}
-                      disabled={Boolean(selectedState.reviewPolicy?.locked)}
                       onChange={(e) => {
                         const newName = e.target.value;
                         const previousName = selectedState.name;
@@ -1907,7 +1961,6 @@ export default function StateMachineDesignPanel({
                     <label className="flex items-center gap-1.5 cursor-pointer">
                       <Checkbox
                         checked={selectedState.isFinal}
-                        disabled={Boolean(selectedState.reviewPolicy?.locked)}
                         onCheckedChange={(v) => {
                           const isFinal = !!v;
                           updateState({
@@ -1962,7 +2015,6 @@ export default function StateMachineDesignPanel({
                       min={1}
                       max={100}
                       value={selectedState.maxSelfTransitions ?? defaultMaxSelfTransitions(selectedState)}
-                      disabled={Boolean(selectedState.reviewPolicy?.locked)}
                       onChange={(e) => updateState({
                         ...selectedState,
                         maxSelfTransitions: Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)),
@@ -1984,7 +2036,7 @@ export default function StateMachineDesignPanel({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {onOptimizeState && selectedStateIndex >= 0 ? (
-                    <Button size="sm" variant="outline" onClick={() => onOptimizeState(selectedStateIndex)}>
+                    <Button size="sm" variant="outline" title={OPTIMIZE_STATE_HINT} onClick={() => onOptimizeState(selectedStateIndex)}>
                       <span className="material-symbols-outlined mr-1 text-sm">auto_fix_high</span>
                       AI 优化状态
                     </Button>
@@ -2019,13 +2071,14 @@ export default function StateMachineDesignPanel({
                       size="sm"
                       variant="ghost"
                       className="h-7 gap-1 px-2 text-xs opacity-80"
+                      title={OPTIMIZE_STATE_HINT}
                       onClick={(event) => {
                         event.stopPropagation();
                         onOptimizeState(selectedStateIndex);
                       }}
                     >
                       <span className="material-symbols-outlined text-[14px]">auto_fix_high</span>
-                      AI 优化
+                      AI 优化状态
                     </Button>
                   ) : null}
                   <span className="material-symbols-outlined text-sm text-muted-foreground opacity-0 group-hover:opacity-100">edit</span>
@@ -2089,47 +2142,96 @@ export default function StateMachineDesignPanel({
                       {selectedState.reviewPolicy.mode === 'adversarial' ? '对抗模式' : '标准模式'}
                     </Badge>
                     {selectedState.reviewPolicy.locked ? (
-                      <Badge variant="outline" className="gap-1 text-[10px]"><span className="material-symbols-outlined text-[12px]">lock</span>用户锁定</Badge>
+                      <Badge variant="outline" className="gap-1 text-[10px]" title="AI 优化时不会改动这个模式；你自己仍可随时切换">
+                        <span className="material-symbols-outlined text-[12px]">push_pin</span>已固定
+                      </Badge>
                     ) : null}
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    来源：{{ ai: 'AI 判断', user: '用户选择', legacy: '旧配置推断', default: '兼容默认' }[selectedState.reviewPolicy.source]}
-                    {' · '}置信度：{{ high: '高', medium: '中', low: '低' }[selectedState.reviewPolicy.confidence]}
+                  <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span>
+                      {selectedState.reviewPolicy.mode === 'adversarial'
+                        ? '这个状态的成果，由另外两个 Agent 复查后裁决。'
+                        : '这个状态的成果，由执行 Agent 自行验收。'}
+                    </span>
+                    <span
+                      className="material-symbols-outlined cursor-help text-[13px] leading-none"
+                      title={`来源：${{ ai: 'AI 判断', user: '用户选择', legacy: '旧配置推断', default: '兼容默认' }[selectedState.reviewPolicy.source]} · 置信度：${{ high: '高', medium: '中', low: '低' }[selectedState.reviewPolicy.confidence]}`}
+                    >
+                      info
+                    </span>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedState.reviewPolicy.mode === 'standard' ? 'default' : 'outline'}
-                    className="h-7 px-2.5 text-xs"
-                    disabled={selectedState.reviewPolicy.mode === 'standard'}
-                    onClick={() => requestReviewModeChange('standard')}
-                  >
-                    标准
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedState.reviewPolicy.mode === 'adversarial' ? 'default' : 'outline'}
-                    className="h-7 px-2.5 text-xs"
-                    disabled={selectedState.reviewPolicy.mode === 'adversarial'}
-                    onClick={() => requestReviewModeChange('adversarial')}
-                  >
-                    对抗
-                  </Button>
                   {!selectedState.reviewPolicy.locked ? (
-                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={lockCurrentReviewPolicy}>
-                      锁定当前模式
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      title="固定后，AI 优化不会改动这个模式；你自己仍可随时切换"
+                      onClick={lockCurrentReviewPolicy}
+                    >
+                      固定此模式
                     </Button>
                   ) : null}
                   {onOptimizeState ? (
-                    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={returnReviewPolicyToAi}>
-                      {selectedState.reviewPolicy.locked ? '交还 AI 判断' : 'AI 重新评估'}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      title={REEVALUATE_MODE_HINT}
+                      onClick={returnReviewPolicyToAi}
+                    >
+                      AI 重新评估模式
                     </Button>
                   ) : null}
                 </div>
               </div>
+              {/* Two option cards instead of a pair of small buttons: the choice is
+                  "who judges this state and what does that cost", which needs more
+                  room than a label. The current option is marked, not disabled — a
+                  greyed-out button reads as unavailable rather than selected. */}
+              <div className="grid gap-2 sm:grid-cols-2">
+                {REVIEW_MODE_OPTIONS.map((option) => {
+                  const isCurrent = selectedState.reviewPolicy!.mode === option.mode;
+                  const ceiling = defaultMaxSelfTransitions({
+                    reviewPolicy: { ...selectedState.reviewPolicy!, mode: option.mode },
+                  });
+                  return (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      aria-pressed={isCurrent}
+                      className={`rounded-lg border p-2.5 text-left transition-colors ${
+                        isCurrent
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-primary/40 hover:bg-muted/40'
+                      }`}
+                      onClick={() => { if (!isCurrent) requestReviewModeChange(option.mode); }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold">{option.name}</span>
+                        {isCurrent
+                          ? <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">当前</Badge>
+                          : <span className="text-[10px] text-muted-foreground">点击切换</span>}
+                      </div>
+                      <div className="mt-1 text-[11px] leading-4 text-muted-foreground">{option.who}</div>
+                      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{option.quality}</div>
+                      <div className="mt-1.5 text-[11px] leading-4 text-muted-foreground/85">
+                        {option.effect(isCurrent, selectedState.steps?.length ?? 0)}
+                        {selectedState.maxSelfTransitions === undefined ? ` · 自我重试上限 ${ceiling} 次` : ''}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {isForcedAdversarialRationale(selectedState.reviewPolicy.rationale) ? (
+                <div className="flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                  <span className="material-symbols-outlined mt-0.5 text-[14px] leading-none">warning</span>
+                  <span>系统对这个状态的判断把握不足，已按保守规则自动改用对抗模式。你可以手动切回标准。</span>
+                </div>
+              ) : null}
               <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5">
                 {selectedState.reviewPolicy.rationale || '暂无判断理由。'}
               </div>
@@ -2402,7 +2504,7 @@ export default function StateMachineDesignPanel({
               <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
                 状态「{reviewPolicyCandidate.stateName}」将切换为
                 <span className="mx-1 font-semibold">{reviewPolicyCandidate.targetMode === 'adversarial' ? '对抗模式' : '标准模式'}</span>
-                ，确认后该选择会标记为用户来源并锁定。
+                。确认后这个选择会被固定，AI 优化时不会改动它；你自己仍可随时切换模式或删除该状态。
               </div>
               {reviewPolicyCandidate.warnings.length > 0 ? (
                 <div className="space-y-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">

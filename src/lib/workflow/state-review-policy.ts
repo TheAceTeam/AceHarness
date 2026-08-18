@@ -242,11 +242,22 @@ function normalizeReviewPolicy(policy: ReviewPolicy | undefined, state: StateMac
   const confidence = ['high', 'medium', 'low'].includes(base.confidence) ? base.confidence : 'medium';
   const requestedMode = base.mode === 'adversarial' ? 'adversarial' : 'standard';
   const source = ['ai', 'user', 'legacy', 'default'].includes(base.source) ? base.source : 'default';
+  // Low confidence overrides an explicit `standard` request. The only trace is
+  // the sentence appended to `rationale` below, so a user who picked standard
+  // gets adversarial back and reads it as a defect. Any surface confirming a
+  // mode change must render the normalized mode, not the requested one.
   const forceAdversarial = confidence === 'low' && requestedMode === 'standard';
   const rationale = String(base.rationale || '').trim();
   return {
     mode: forceAdversarial ? 'adversarial' : requestedMode,
     source,
+    // Design lock: `locked` constrains the AI, never the user. It exists so
+    // design-time optimization will not rewrite a mode the user chose; it must
+    // not gate the user's own edits — deleting the state, renaming it, toggling
+    // final, changing the self-loop ceiling. `source: 'user'` implies it, so a
+    // UI writing `locked: false` while source stays `'user'` is silently
+    // reverted here on the next normalization. Hand the policy back to the AI
+    // instead; that is the only supported way to release it.
     locked: source === 'user' ? true : Boolean(base.locked),
     confidence,
     riskSignals: Array.from(new Set((base.riskSignals || []).map((item) => String(item).trim()).filter(Boolean))),
