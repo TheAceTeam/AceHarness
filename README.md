@@ -215,6 +215,9 @@ $env:ACE_HOST="127.0.0.1"
 $env:ACE_PORT="3000"
 npm run dev
 ```
+
+| 变量 | 说明 | 默认值 |
+|------|------|-----------------|
 | `ACE_INSTALL_ROOT` | 安装根目录；用于定位 `server.js`、`configs/`、`dist/` 等安装内容 | 未设置时由启动器自动设为当前安装目录 |
 | `ACE_LOCALE` | ACE CLI 与服务默认语言 | 优先级高于 `LANG` / `LC_ALL` |
 | `LANG` | 语言回退变量 | 在 `ACE_LOCALE` 未设置时参与解析 |
