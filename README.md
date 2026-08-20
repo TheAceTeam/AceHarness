@@ -299,8 +299,11 @@ npm run test:components  # 使用 jsdom 环境运行组件测试
 npm run lint             # 运行 Next.js lint
 npm run check:engines    # 检测本机可用 AI 执行引擎
 npm run clean            # 清理 dist、.next、dist-build
+npm run release:tag -- 1.0.0-rc.13 --dry-run  # 维护者执行完整发布预演
 npm run publish:beta     # 构建并以 beta tag 发布 npm 包
 ```
+
+正式 npm + GitCode 发布统一使用 [`docs/releasing.md`](docs/releasing.md) 中的 tag 发行流程。
 
 CLI 命令来源：`src/cli.ts`。
 
