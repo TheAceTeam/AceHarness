@@ -8,6 +8,18 @@ const endpoints = [
 ];
 
 test.describe('Start production smoke', () => {
+  test('client bundle hydrates without uncaught runtime errors', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error.stack || error.message));
+
+    const response = await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    expect(response?.ok()).toBe(true);
+    await expect(page.locator('body')).not.toBeEmpty();
+    await page.waitForTimeout(1_500);
+    expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
+  });
+
   for (const endpoint of endpoints) {
     test(`${endpoint} is served by the production Start app`, async ({ request }) => {
       const response = await request.get(endpoint);

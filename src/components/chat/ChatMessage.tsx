@@ -31,7 +31,7 @@ import {
   type AceToolCallPayload,
   type AceToolResultPayload,
 } from '@/lib/chat/ai-process-blocks';
-import { getAceToolTitle } from '@/lib/chat/ace-process-formatters';
+import { getAceToolTitle } from '@/lib/chat/ace-tool-titles';
 import { workspaceApi } from '@/lib/core/api';
 import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
 import type { BundledLanguage } from 'shiki';

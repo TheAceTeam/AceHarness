@@ -1256,6 +1256,65 @@ describe('runtime adapters', () => {
     });
   });
 
+  test('preserves uppercase ACPX environment names through the persisted session store', async () => {
+    const configuredEnv = {
+      ANTHROPIC_AUTH_TOKEN: 'secret-token',
+      ANTHROPIC_BASE_URL: 'https://provider.example.test',
+    };
+    let persistedRecord: unknown;
+    const backingStore = {
+      load: vi.fn(async () => persistedRecord),
+      save: vi.fn(async (record: unknown) => {
+        persistedRecord = record;
+      }),
+    };
+    const client = createAcpxRuntimeClient({
+      loadConfiguredEnv: async () => configuredEnv,
+      importRuntime: async () => ({
+        createAcpRuntime(options: AcpRuntimeOptions) {
+          return {
+            ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => {
+              const record = {
+                acpxRecordId: 'record-env-policy',
+                acpx: { session_options: { env: input.sessionOptions?.env } },
+              };
+              await options.sessionStore.save(record);
+              const restored = await options.sessionStore.load(record.acpxRecordId);
+              expect((restored as typeof record | undefined)?.acpx?.session_options?.env).toEqual(configuredEnv);
+              return {
+                sessionKey: input.sessionKey,
+                backend: 'acpx',
+                runtimeSessionName: input.sessionKey,
+                acpxRecordId: record.acpxRecordId,
+              };
+            }),
+            startTurn: vi.fn(),
+            cancel: vi.fn(async () => undefined),
+            close: vi.fn(async () => undefined),
+          } satisfies AcpRuntime;
+        },
+        createAgentRegistry: () => ({
+          resolve: (agentName: string) => agentName,
+          list: () => [],
+        }),
+        createRuntimeStore: () => backingStore,
+      }),
+    });
+
+    await client.ensureSession?.({
+      session: createSessionInput('runtime-session-env-policy', 'opencode', 'acpx'),
+      command: resolveAcpxCommand('opencode'),
+    });
+
+    const persistedEnv = (persistedRecord as {
+      acpx?: { session_options?: { env?: Record<string, string> } };
+    } | undefined)?.acpx?.session_options?.env;
+    expect(persistedEnv).toBeDefined();
+    expect(persistedEnv).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+    expect(Object.keys(persistedEnv || {})).toHaveLength(2);
+    expect(Object.keys(persistedEnv || {}).every((key) => /^[a-z][a-z0-9_]*$/.test(key))).toBe(true);
+  });
+
   test('recovers ACPX request token usage from persisted failed terminal turns', async () => {
     const previousAceHome = process.env.ACE_HOME;
     const aceHome = mkdtempSync(join(tmpdir(), 'ace-acpx-terminal-usage-'));

@@ -7,6 +7,7 @@ import type {
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimeOptions,
+  AcpSessionStore,
   AcpRuntimeSessionMode,
   AcpRuntimeTurn,
 } from 'acpx/runtime';
@@ -49,6 +50,8 @@ type AcpxMcpServers = Array<{
 
 const DEFAULT_ACPX_SESSION_MODE: AcpRuntimeSessionMode = 'oneshot';
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
+const ACPX_PERSISTED_ENV_KEY_PREFIX = 'ace_env_';
+const ACPX_PERSISTED_SNAKE_CASE_KEY = /^[a-z][a-z0-9_]*$/;
 
 interface ActiveAcpxTurn {
   handle: AcpRuntimeHandle;
@@ -845,11 +848,12 @@ async function createRuntime(
   mcpServers: AcpxMcpServers,
 ): Promise<AcpRuntime> {
   const module = await (options.importRuntime?.() ?? import('acpx/runtime'));
+  const sessionStore = module.createRuntimeStore({
+    stateDir: options.stateDir ?? getWorkspaceDataFile('acpx-runtime'),
+  });
   return module.createAcpRuntime({
     cwd: options.cwd ?? process.cwd(),
-    sessionStore: module.createRuntimeStore({
-      stateDir: options.stateDir ?? getWorkspaceDataFile('acpx-runtime'),
-    }),
+    sessionStore: createAcpxCompatibleSessionStore(sessionStore),
     agentRegistry: module.createAgentRegistry({
       overrides: getAcpxAgentRegistryOverrides(),
     }),
@@ -857,6 +861,56 @@ async function createRuntime(
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     ...permissionConfig,
   });
+}
+
+/**
+ * acpx 0.13.0 validates every persisted object key as snake_case, including
+ * environment-variable maps whose keys must retain their original spelling.
+ * Encode only the on-disk keys and restore them immediately after loading so
+ * agent processes still receive names such as ANTHROPIC_AUTH_TOKEN unchanged.
+ */
+function createAcpxCompatibleSessionStore(store: AcpSessionStore): AcpSessionStore {
+  return {
+    async load(sessionId) {
+      const record = await store.load(sessionId);
+      return record ? remapPersistedEnvKeys(record, decodePersistedEnvKey) : undefined;
+    },
+    async save(record) {
+      await store.save(remapPersistedEnvKeys(record, encodePersistedEnvKey));
+    },
+  };
+}
+
+function remapPersistedEnvKeys(
+  record: unknown,
+  mapKey: (key: string) => string,
+): unknown {
+  if (!isRecord(record) || !isRecord(record.acpx)) return record;
+  const sessionOptions = record.acpx.session_options;
+  if (!isRecord(sessionOptions) || !isRecord(sessionOptions.env)) return record;
+
+  return {
+    ...record,
+    acpx: {
+      ...record.acpx,
+      session_options: {
+        ...sessionOptions,
+        env: Object.fromEntries(Object.entries(sessionOptions.env).map(([key, value]) => [mapKey(key), value])),
+      },
+    },
+  };
+}
+
+function encodePersistedEnvKey(key: string): string {
+  if (ACPX_PERSISTED_SNAKE_CASE_KEY.test(key)) return key;
+  return `${ACPX_PERSISTED_ENV_KEY_PREFIX}${Buffer.from(key, 'utf8').toString('hex')}`;
+}
+
+function decodePersistedEnvKey(key: string): string {
+  if (!key.startsWith(ACPX_PERSISTED_ENV_KEY_PREFIX)) return key;
+  const encoded = key.slice(ACPX_PERSISTED_ENV_KEY_PREFIX.length);
+  if (encoded.length === 0 || encoded.length % 2 !== 0 || !/^[a-f0-9]+$/.test(encoded)) return key;
+  return Buffer.from(encoded, 'hex').toString('utf8');
 }
 
 async function abortTurn(turn: AcpRuntimeTurn, reason: string, timeoutMs: number): Promise<void> {

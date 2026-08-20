@@ -1,6 +1,6 @@
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
-import { createLogger, defineConfig } from 'vite';
+import { createLogger, defineConfig, type Plugin } from 'vite';
 
 const rawBase = process.env.BASEURL || process.env.BASE_URL || '/';
 const base = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
@@ -9,10 +9,11 @@ const rawPort = process.env.ACE_PORT || process.env.PORT;
 const devPort = rawPort ? Number.parseInt(rawPort, 10) : undefined;
 const devTimeoutMs = Number.parseInt(process.env.VITE_DEV_TIMEOUT_MS || '180000', 10);
 const logger = createLogger();
+const BROWSER_EXTERNALIZATION_WARNING = 'has been externalized for browser compatibility';
+const NODE_ONLY_CLIENT_PACKAGES = ['iconv-lite', 'safer-buffer'] as const;
 
 function shouldMuteBuildWarning(message: string): boolean {
   return [
-    'has been externalized for browser compatibility',
     'INEFFECTIVE_DYNAMIC_IMPORT',
     'Use of direct `eval` function is strongly discouraged',
     'Some chunks are larger than',
@@ -31,6 +32,28 @@ const customLogger = {
     logger.warnOnce(message, options);
   },
 };
+
+function rejectNodeOnlyClientModules(): Plugin {
+  return {
+    name: 'reject-node-only-client-modules',
+    apply: 'build',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      const nodeOnlyModules = new Set<string>();
+      for (const output of Object.values(bundle)) {
+        if (output.type !== 'chunk') continue;
+        for (const moduleId of Object.keys(output.modules)) {
+          for (const packageName of NODE_ONLY_CLIENT_PACKAGES) {
+            if (moduleId.includes(`/node_modules/${packageName}/`)) nodeOnlyModules.add(packageName);
+          }
+        }
+      }
+      if (nodeOnlyModules.size > 0) {
+        this.error(`Client bundle contains Node-only dependencies: ${[...nodeOnlyModules].sort().join(', ')}`);
+      }
+    },
+  };
+}
 
 export default defineConfig({
   base,
@@ -75,6 +98,9 @@ export default defineConfig({
       onwarn(warning, defaultHandler) {
         const code = typeof warning.code === 'string' ? warning.code : '';
         const message = typeof warning.message === 'string' ? warning.message : String(warning);
+        if (message.includes(BROWSER_EXTERNALIZATION_WARNING)) {
+          throw new Error(`Client bundle contains a Node-only dependency: ${message}`);
+        }
         if (code === 'INEFFECTIVE_DYNAMIC_IMPORT' || shouldMuteBuildWarning(message)) return;
         defaultHandler(warning);
       },
@@ -83,6 +109,7 @@ export default defineConfig({
   plugins: [
     tanstackStart(),
     react(),
+    rejectNodeOnlyClientModules(),
   ],
   resolve: {
     alias: {
