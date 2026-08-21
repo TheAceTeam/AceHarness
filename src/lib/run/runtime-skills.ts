@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
+import { cp, lstat, mkdir, readdir, rm, stat, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { execSync } from 'child_process';
@@ -17,6 +17,21 @@ interface SeedOptions {
 }
 
 async function copyBundledEntry(src: string, dst: string, options: { replaceExisting: boolean }): Promise<void> {
+  // A dangling symlink reports existsSync()===false but still makes fs.cp throw
+  // ERR_FS_CP_DIR_TO_NON_DIR when copying a directory onto it. Detect & remove
+  // only dangling symlinks (target missing) so the bundled entry copies fresh.
+  // Valid symlinks are left untouched.
+  try {
+    if ((await lstat(dst)).isSymbolicLink()) {
+      try {
+        await stat(dst);
+      } catch {
+        await rm(dst, { force: true, maxRetries: 3 });
+      }
+    }
+  } catch {
+    /* dst absent — nothing to clean */
+  }
   if (existsSync(dst)) {
     if (!options.replaceExisting) return;
     await rm(dst, { recursive: true, force: true, maxRetries: 3 });
@@ -41,7 +56,11 @@ async function copyMissingBundledSkills(srcDir: string, dstDir: string): Promise
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    await copyMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
+    try {
+      await copyMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
+    } catch (error) {
+      console.warn(`[runtime-skills] Skipping bundled skill "${entry.name}" (copy failed):`, error instanceof Error ? error.message : error);
+    }
   }
 }
 
@@ -49,7 +68,11 @@ async function refreshBundledSkills(srcDir: string, dstDir: string): Promise<voi
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
+    try {
+      await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
+    } catch (error) {
+      console.warn(`[runtime-skills] Skipping bundled skill "${entry.name}" (refresh failed):`, error instanceof Error ? error.message : error);
+    }
   }
 }
 
