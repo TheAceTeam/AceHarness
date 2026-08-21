@@ -16,22 +16,37 @@ interface SeedOptions {
   refreshAceHarnessBuiltins?: boolean;
 }
 
-async function copyBundledEntry(src: string, dst: string, options: { replaceExisting: boolean }): Promise<void> {
-  // A dangling symlink reports existsSync()===false but still makes fs.cp throw
-  // ERR_FS_CP_DIR_TO_NON_DIR when copying a directory onto it. Detect & remove
-  // only dangling symlinks (target missing) so the bundled entry copies fresh.
-  // Valid symlinks are left untouched.
+/**
+ * A dangling symlink reports existsSync()===false but still occupies the path,
+ * so fs.cp throws ERR_FS_CP_DIR_TO_NON_DIR when copying a directory onto it.
+ *
+ * Removal is deliberately narrow: only a symlink whose target is provably gone
+ * (ENOENT) or unresolvable in a loop (ELOOP) is cleared. Any other failure —
+ * EACCES/EPERM on a restricted target, transient I/O on a network path — must
+ * propagate rather than be read as "target missing", otherwise a valid user
+ * link would be deleted on a temporary error.
+ */
+async function removeDanglingLink(dst: string): Promise<void> {
+  let entry;
   try {
-    if ((await lstat(dst)).isSymbolicLink()) {
-      try {
-        await stat(dst);
-      } catch {
-        await rm(dst, { force: true, maxRetries: 3 });
-      }
-    }
-  } catch {
-    /* dst absent — nothing to clean */
+    entry = await lstat(dst);
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return; // nothing at dst — nothing to clean
+    throw error;
   }
+  if (!entry.isSymbolicLink()) return;
+
+  try {
+    await stat(dst);
+    return; // target resolves — a valid link, leave it alone
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ELOOP') throw error;
+  }
+  await rm(dst, { force: true, maxRetries: 3 });
+}
+
+async function copyBundledEntry(src: string, dst: string, options: { replaceExisting: boolean }): Promise<void> {
+  await removeDanglingLink(dst);
   if (existsSync(dst)) {
     if (!options.replaceExisting) return;
     await rm(dst, { recursive: true, force: true, maxRetries: 3 });
@@ -56,11 +71,7 @@ async function copyMissingBundledSkills(srcDir: string, dstDir: string): Promise
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    try {
-      await copyMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
-    } catch (error) {
-      console.warn(`[runtime-skills] Skipping bundled skill "${entry.name}" (copy failed):`, error instanceof Error ? error.message : error);
-    }
+    await copyMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
   }
 }
 
@@ -68,11 +79,7 @@ async function refreshBundledSkills(srcDir: string, dstDir: string): Promise<voi
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    try {
-      await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
-    } catch (error) {
-      console.warn(`[runtime-skills] Skipping bundled skill "${entry.name}" (refresh failed):`, error instanceof Error ? error.message : error);
-    }
+    await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
   }
 }
 
