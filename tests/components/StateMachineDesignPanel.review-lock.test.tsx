@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import StateMachineDesignPanel from '@/components/StateMachineDesignPanel';
 import type { StateMachineState } from '@/lib/core/schemas';
 
@@ -88,6 +88,10 @@ function renderPanel(onStatesChange = vi.fn()) {
 }
 
 describe('StateMachineDesignPanel: a固定的审查模式不限制用户操作', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   test('固定审查模式的状态仍可删除', () => {
     const { onStatesChange } = renderPanel();
 
@@ -132,5 +136,59 @@ describe('StateMachineDesignPanel: a固定的审查模式不限制用户操作',
     // that may touch a pinned policy, so it must stay distinguishable by label.
     expect(screen.getByText('AI 重新评估模式')).toBeTruthy();
     expect(screen.getAllByText('AI 优化状态').length).toBeGreaterThan(0);
+  });
+
+  test('完整显式审查链只显示只读说明，不提供状态级迁移入口', () => {
+    const states = [{
+      id: 'state-review',
+      name: '审查',
+      isInitial: true,
+      isFinal: false,
+      steps: [
+        { id: 'defender', name: 'Defender', agent: 'developer', task: '实现', role: 'defender' },
+        { id: 'attacker', name: 'Attacker', agent: 'developer', task: '挑战', role: 'attacker' },
+        { id: 'judge', name: 'Judge', agent: 'developer', task: '裁决', role: 'judge' },
+      ],
+      transitions: [],
+    }] as StateMachineState[];
+
+    render(
+      <StateMachineDesignPanel
+        states={states}
+        onStatesChange={vi.fn()}
+        availableAgents={[{ name: 'developer', roleType: 'worker' }]}
+        onAdoptReviewProtocol={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('已配置显式审查链，无需启用状态级审查')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '迁移并启用状态级审查' })).toBeNull();
+  });
+
+  test('迁移提醒可关闭，并在下次打开设计页时保持关闭', () => {
+    const states = [{
+      id: 'state-work',
+      name: '执行',
+      isInitial: true,
+      isFinal: false,
+      steps: [{ id: 'work', name: '执行', agent: 'developer', task: '实现' }],
+      transitions: [],
+    }] as StateMachineState[];
+    const props = {
+      states,
+      onStatesChange: vi.fn(),
+      availableAgents: [{ name: 'developer', roleType: 'worker' }],
+      onAdoptReviewProtocol: vi.fn(),
+    };
+    const first = render(<StateMachineDesignPanel {...props} />);
+
+    expect(screen.getByText('状态级审查迁移（可选）')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '关闭状态级审查迁移提醒' }));
+    expect(screen.queryByText('状态级审查迁移（可选）')).toBeNull();
+    expect(window.localStorage.getItem('aceharness:state-review-adoption-notice-dismissed:v1')).toBe('true');
+
+    first.unmount();
+    render(<StateMachineDesignPanel {...props} />);
+    expect(screen.queryByText('状态级审查迁移（可选）')).toBeNull();
   });
 });

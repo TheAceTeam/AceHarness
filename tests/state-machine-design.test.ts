@@ -3,6 +3,7 @@ import type { StateMachineState } from '@/lib/core/schemas';
 import {
   buildReviewProtocolAdoptionPreview,
   buildWorkflowStepFromEditData,
+  getReviewProtocolAdoptionGuidance,
 } from '@/components/StateMachineDesignPanel';
 import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
 
@@ -135,5 +136,49 @@ describe('state machine design updates', () => {
     expect(preview!.nextStates[0].steps.map((step) => step.role)).toEqual(['defender', 'attacker', 'judge']);
     expect(preview!.nextStates[1].reviewPolicy?.mode).toBe('standard');
     expect(states[1].reviewPolicy).toBeUndefined();
+  });
+
+  test('only treats a complete strict legacy review chain as not needing protocol adoption', () => {
+    const strict = [{
+      name: '审查',
+      isInitial: true,
+      isFinal: false,
+      steps: [
+        { name: 'Defender', agent: 'worker', task: 'implement', role: 'defender' },
+        { name: 'Attacker', agent: 'reviewer', task: 'challenge', role: 'attacker' },
+        { name: 'Judge', agent: 'judge', task: 'decide', role: 'judge' },
+      ],
+      transitions: [],
+    }] as StateMachineState[];
+    const partial = [...strict, {
+      name: '收尾',
+      isInitial: false,
+      isFinal: false,
+      steps: [{ name: '孤立裁决', agent: 'judge', task: 'summarize', role: 'judge' }],
+      transitions: [],
+    }] as StateMachineState[];
+    const plain = [{
+      name: '执行',
+      isInitial: true,
+      isFinal: false,
+      steps: [{ name: '执行', agent: 'worker', task: 'implement' }],
+      transitions: [],
+    }] as StateMachineState[];
+
+    expect(getReviewProtocolAdoptionGuidance(strict)).toMatchObject({
+      kind: 'explicit-chain',
+      explicitStateNames: ['审查'],
+      unresolvedStateNames: [],
+    });
+    expect(getReviewProtocolAdoptionGuidance(partial)).toMatchObject({
+      kind: 'partial-or-ambiguous-chain',
+      explicitStateNames: ['审查'],
+      unresolvedStateNames: ['收尾'],
+    });
+    expect(getReviewProtocolAdoptionGuidance(plain)).toMatchObject({
+      kind: 'no-explicit-chain',
+      explicitStateNames: [],
+      unresolvedStateNames: ['执行'],
+    });
   });
 });

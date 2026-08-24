@@ -30,7 +30,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw, X } from 'lucide-react';
 import EditNodeModal from './EditNodeModal';
 import LightweightWorkflowDesignPanel, {
   hasLightweightWorkflowTopology,
@@ -45,6 +45,7 @@ import {
   defaultMaxSelfTransitions,
   hashReviewStep,
   hashReviewState,
+  isStrictAdversarialRoleSequence,
   reconcileReviewPolicy,
   type ReviewPolicyOperation,
 } from '@/lib/workflow/state-review-policy';
@@ -106,6 +107,43 @@ export type ReviewProtocolAdoptionPreview = {
   warnings: string[];
   blocked: boolean;
 };
+
+export type ReviewProtocolAdoptionGuidance = {
+  kind: 'explicit-chain' | 'partial-or-ambiguous-chain' | 'no-explicit-chain';
+  explicitStateNames: string[];
+  unresolvedStateNames: string[];
+};
+
+/**
+ * A legacy role label is not enough to promise that no migration is needed.
+ * Only a strict Defender -> Attacker -> Judge chain on every non-final state
+ * preserves the workflow's existing review semantics without adopting the
+ * state-level protocol. Partial and non-strict role arrangements need the
+ * migration preview because reconciliation may retag or insert steps.
+ */
+export function getReviewProtocolAdoptionGuidance(
+  states: StateMachineState[],
+): ReviewProtocolAdoptionGuidance {
+  const targets = states.filter((state) => !state.isFinal);
+  const explicitStateNames = targets
+    .filter((state) => isStrictAdversarialRoleSequence(state))
+    .map((state) => state.name);
+  const unresolvedStateNames = targets
+    .filter((state) => !isStrictAdversarialRoleSequence(state))
+    .map((state) => state.name);
+
+  if (targets.length > 0 && unresolvedStateNames.length === 0) {
+    return { kind: 'explicit-chain', explicitStateNames, unresolvedStateNames };
+  }
+  if (explicitStateNames.length > 0 || targets.some((state) => (
+    state.steps || []
+  ).some((step) => ['defender', 'attacker', 'judge'].includes(String(step.role || ''))))) {
+    return { kind: 'partial-or-ambiguous-chain', explicitStateNames, unresolvedStateNames };
+  }
+  return { kind: 'no-explicit-chain', explicitStateNames, unresolvedStateNames };
+}
+
+const REVIEW_PROTOCOL_ADOPTION_NOTICE_DISMISSED_KEY = 'aceharness:state-review-adoption-notice-dismissed:v1';
 
 export function buildReviewProtocolAdoptionPreview(
   states: StateMachineState[],
@@ -1223,6 +1261,14 @@ export default function StateMachineDesignPanel({
   const [subworkflowDrilldown, setSubworkflowDrilldown] = useState<SubworkflowDrilldownState | null>(null);
   const [reviewPolicyCandidate, setReviewPolicyCandidate] = useState<ReviewPolicyCandidate | null>(null);
   const [reviewPolicyUnsafeDeletes, setReviewPolicyUnsafeDeletes] = useState<Set<string>>(new Set());
+  const [reviewProtocolAdoptionNoticeDismissed, setReviewProtocolAdoptionNoticeDismissed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem(REVIEW_PROTOCOL_ADOPTION_NOTICE_DISMISSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const subworkflowConfigFile = subworkflowDrilldown?.configFile || '';
   const subworkflowConfigQuery = useWorkflowConfigQuery(subworkflowConfigFile);
   const saveSubworkflowConfigMutation = useSaveConfigMutation(subworkflowConfigFile);
@@ -1268,6 +1314,19 @@ export default function StateMachineDesignPanel({
     if (protocolAdopted || !onAdoptReviewProtocol || isLightweight) return null;
     return buildReviewProtocolAdoptionPreview(states, executableAgentNames);
   }, [executableAgentNames, isLightweight, onAdoptReviewProtocol, protocolAdopted, states]);
+  const adoptionGuidance = useMemo(
+    () => getReviewProtocolAdoptionGuidance(states),
+    [states],
+  );
+  const dismissReviewProtocolAdoptionNotice = useCallback(() => {
+    setReviewProtocolAdoptionNoticeDismissed(true);
+    try {
+      window.localStorage.setItem(REVIEW_PROTOCOL_ADOPTION_NOTICE_DISMISSED_KEY, 'true');
+    } catch {
+      // Persistence is a convenience only; a restricted browser must still let
+      // the person hide the notice for the current editor session.
+    }
+  }, []);
 
   const requestReviewModeChange = useCallback((targetMode: 'standard' | 'adversarial') => {
     if (!selectedState || selectedState.isFinal) return;
@@ -2087,45 +2146,84 @@ export default function StateMachineDesignPanel({
             )}
           </div>
 
-          {!selectedState.isFinal && !selectedState.reviewPolicy && adoptionPreview ? (
-            <div className="rounded-xl border border-dashed border-border bg-card p-3 space-y-2">
-              <div className="text-sm font-medium">本工作流尚未启用状态级审查</div>
+          {!selectedState.isFinal && !selectedState.reviewPolicy && adoptionPreview && adoptionGuidance.kind === 'explicit-chain' ? (
+            <div className="rounded-xl border border-border bg-card p-3 space-y-1.5">
+              <div className="text-sm font-medium">已配置显式审查链，无需启用状态级审查</div>
               <p className="text-xs leading-5 text-muted-foreground">
-                当前按原有编排运行，不会插入裁决步骤、不绑定隔离实例，也不改动自循环上限。
-                启用后会保留已有审查策略，并为缺少策略的状态建立标准模式基线；共覆盖
-                {' '}{adoptionPreview.targetCount} 个非终态，之后可逐状态调整。
+                所有非终态均使用 Defender → Attacker → Judge 严格执行链。将继续按现有步骤和执行语义运行，不会写入
+                {' '}<code>reviewProtocol: state-level</code> 或迁移角色步骤。
               </p>
-              {adoptionPreview.operations.length ? (
-                <details className="text-xs">
-                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                    启用将进行 {adoptionPreview.operations.length} 项结构调整
-                  </summary>
-                  <ul className="mt-2 space-y-1.5 border-l border-border pl-3">
-                    {adoptionPreview.operations.map((operation, index) => (
-                      <li key={`adopt-op-${index}`} className="leading-5">
-                        <span className="font-medium">{operation.op}</span>
-                        <span className="text-muted-foreground">{' · '}{operation.stepName}</span>
-                        <span className="block text-muted-foreground">{operation.reason}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
-              {adoptionPreview.warnings.map((warning) => (
-                <p key={warning} className="text-xs text-amber-600 dark:text-amber-400">{warning}</p>
-              ))}
-              <Button
-                size="sm"
-                disabled={adoptionPreview.blocked}
-                onClick={() => onAdoptReviewProtocol?.(adoptionPreview.nextStates)}
-              >
-                启用状态级审查
-              </Button>
-              {adoptionPreview.blocked ? (
-                <p className="text-xs text-destructive">存在无法自动建立基线的状态，请先补齐可执行 Agent。</p>
-              ) : null}
             </div>
           ) : null}
+
+          {!selectedState.isFinal && !selectedState.reviewPolicy && adoptionPreview
+            && adoptionGuidance.kind !== 'explicit-chain' && !reviewProtocolAdoptionNoticeDismissed ? (
+              <div className="rounded-xl border border-dashed border-border bg-card p-3 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-sm font-medium">状态级审查迁移（可选）</div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="-mr-1 -mt-1 h-7 w-7 text-muted-foreground"
+                    title="关闭此提醒"
+                    aria-label="关闭状态级审查迁移提醒"
+                    onClick={dismissReviewProtocolAdoptionNotice}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  当前未声明 <code>reviewProtocol: state-level</code>。启用会写入该协议，并补全审查角色、绑定隔离实例；
+                  这会改变角色步骤与执行语义，不只是打开一个显示选项。
+                </p>
+                {adoptionGuidance.kind === 'partial-or-ambiguous-chain' ? (
+                  <p className="text-xs leading-5 text-amber-600 dark:text-amber-400">
+                    检测到部分或非严格的角色编排：{adoptionGuidance.unresolvedStateNames.join('、')}。无法可靠判定其原有审查意图，
+                    请先核对下方迁移摘要。
+                  </p>
+                ) : (
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    未检测到覆盖全部非终态的显式 Defender → Attacker → Judge 链；迁移摘要列出将要发生的实际调整。
+                  </p>
+                )}
+                <div className="rounded-lg bg-muted/50 px-2.5 py-2 text-xs leading-5 text-muted-foreground">
+                  变更摘要：覆盖 {adoptionPreview.targetCount} 个非终态；
+                  {adoptionPreview.operations.length
+                    ? ` 将执行 ${adoptionPreview.operations.length} 项角色/步骤调整。`
+                    : ' 将补写状态级审查配置。'}
+                </div>
+                {adoptionPreview.operations.length ? (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                      查看具体角色和步骤变更
+                    </summary>
+                    <ul className="mt-2 space-y-1.5 border-l border-border pl-3">
+                      {adoptionPreview.operations.map((operation, index) => (
+                        <li key={`adopt-op-${index}`} className="leading-5">
+                          <span className="font-medium">{operation.op}</span>
+                          <span className="text-muted-foreground">{' · '}{operation.stepName}</span>
+                          <span className="block text-muted-foreground">{operation.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+                {adoptionPreview.warnings.map((warning) => (
+                  <p key={warning} className="text-xs text-amber-600 dark:text-amber-400">{warning}</p>
+                ))}
+                <Button
+                  size="sm"
+                  disabled={adoptionPreview.blocked}
+                  onClick={() => onAdoptReviewProtocol?.(adoptionPreview.nextStates)}
+                >
+                  迁移并启用状态级审查
+                </Button>
+                {adoptionPreview.blocked ? (
+                  <p className="text-xs text-destructive">存在无法自动建立基线的状态，请先补齐可执行 Agent。</p>
+                ) : null}
+              </div>
+            ) : null}
 
           {!selectedState.isFinal && selectedState.reviewPolicy ? (
             <div className="rounded-xl border border-border bg-card p-3 space-y-3">
