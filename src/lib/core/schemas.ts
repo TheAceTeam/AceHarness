@@ -369,12 +369,22 @@ export const workflowTaskInputConfigSchema = z.object({
   fields: z.array(workflowTaskInputFieldSchema).default([]).optional(),
 }).optional();
 
+/**
+ * Commands allowed before a run starts.  Unlike step.preCommands these are
+ * deliberately scoped to a read-only startup contract and never inherit from
+ * future workflow states.
+ */
+export const workflowPreflightConfigSchema = z.object({
+  commands: z.array(z.string().min(1)).max(16).default([]).optional(),
+}).optional();
+
 // 上下文配置 Schema
 export const contextConfigSchema = z.object({
   projectRoot: z.string().optional(),
   workspaceMode: z.enum(['isolated-copy', 'in-place']).optional(),
   requirements: z.string().optional(),
   taskInput: workflowTaskInputConfigSchema,
+  preflight: workflowPreflightConfigSchema,
   codebase: z.string().optional(),
   timeoutMinutes: z.number().min(1).optional(),
   segmentDelayMs: z.number().int().min(0).max(30000).optional(),
@@ -407,6 +417,7 @@ export type CapabilitySkillsConfig = z.infer<typeof capabilitySkillsSchema>;
 export type SqliteCapabilityDatabase = z.infer<typeof sqliteCapabilityDatabaseSchema>;
 export type WorkflowTaskInputFieldConfig = z.infer<typeof workflowTaskInputFieldSchema>;
 export type WorkflowTaskInputConfig = z.infer<typeof workflowTaskInputConfigSchema>;
+export type WorkflowPreflightConfig = z.infer<typeof workflowPreflightConfigSchema>;
 export type ContextConfig = z.infer<typeof contextConfigSchema>;
 
 // 新建配置表单 Schema

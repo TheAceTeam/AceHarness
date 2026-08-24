@@ -53,14 +53,56 @@ async function buildResponse(
   artifact: Awaited<ReturnType<typeof createRunReviewPlanArtifact>>,
   personalDir: string,
   workingDirectory?: string,
+  onProgress?: (stage: 'preflight-preview') => void,
+  startedAt = Date.now(),
 ) {
+  onProgress?.('preflight-preview');
+  const preflightStartedAt = Date.now();
   const preflightPreview = await getWorkflowPreflightPlan(
     artifact.plan.rootConfigFile,
     personalDir,
     workingDirectory,
     { configContents: artifact.effectiveConfigContents },
   );
-  return { plan: artifact.plan, preflightPreview };
+  return {
+    plan: artifact.plan,
+    preflightPreview,
+    diagnostics: {
+      ...artifact.diagnostics,
+      preflightPreviewMs: Date.now() - preflightStartedAt,
+      totalMs: Date.now() - startedAt,
+    },
+  };
+}
+
+const PROGRESS_MESSAGES = {
+  'config-graph': '正在读取并校验工作流与子工作流配置',
+  'ai-evaluation': '正在评估本次需要调整的审查模式',
+  projection: '正在生成本次运行快照',
+  'preflight-preview': '正在生成启动前只读检查预览',
+} as const;
+
+function eventStreamResponse(run: (emit: (stage: keyof typeof PROGRESS_MESSAGES) => void) => Promise<unknown>) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      const send = (event: string, data: unknown) => controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      try {
+        const result = await run((stage) => send('progress', { stage, message: PROGRESS_MESSAGES[stage] }));
+        send('complete', result);
+      } catch (error: any) {
+        send('error', { error: '无法生成本次运行方案', message: error?.message || String(error) });
+      } finally {
+        controller.close();
+      }
+    },
+  }), {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    },
+  });
 }
 
 export async function POST(request: Request) {
@@ -75,15 +117,28 @@ export async function POST(request: Request) {
       return jsonOk({ error: '必须选择不开启对抗或按需开启' }, { status: 400 });
     }
     const initialContexts = normalizeInitialContexts(body?.initialContexts);
-    const artifact = await createRunReviewPlanArtifact({
-      rootConfigFile: configFile,
-      intent,
-      initialContexts,
-      rehearsal: Boolean(body?.rehearsal),
-      userId: user.id,
-    });
-    saveRunReviewPlanArtifact(user.id, artifact);
-    return jsonOk(await buildResponse(artifact, user.personalDir || '', initialContexts.workingDirectory));
+    const createResponse = async (onProgress?: (stage: keyof typeof PROGRESS_MESSAGES) => void) => {
+      const ensureNotAborted = () => {
+        if (request.signal.aborted) throw new Error('方案生成已取消');
+      };
+      const startedAt = Date.now();
+      ensureNotAborted();
+      const artifact = await createRunReviewPlanArtifact({
+        rootConfigFile: configFile,
+        intent,
+        initialContexts,
+        rehearsal: Boolean(body?.rehearsal),
+        userId: user.id,
+        onProgress,
+      });
+      ensureNotAborted();
+      saveRunReviewPlanArtifact(user.id, artifact);
+      const response = await buildResponse(artifact, user.personalDir || '', initialContexts.workingDirectory, onProgress, startedAt);
+      ensureNotAborted();
+      return response;
+    };
+    if (body?.streamProgress === true) return eventStreamResponse(createResponse);
+    return jsonOk(await createResponse());
   } catch (error: any) {
     return jsonOk(
       { error: '无法生成本次运行方案', message: error?.message || String(error) },

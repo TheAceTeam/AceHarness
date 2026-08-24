@@ -1618,6 +1618,10 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const [reviewPreflightPreview, setReviewPreflightPreview] = useState<Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null>(null);
   const [reviewPlanningBusy, setReviewPlanningBusy] = useState(false);
   const [reviewPlanningError, setReviewPlanningError] = useState('');
+  const [reviewPlanningProgress, setReviewPlanningProgress] = useState<{ stage: string; message: string; elapsedMs: number } | null>(null);
+  const [reviewPlanDiagnostics, setReviewPlanDiagnostics] = useState<any>(null);
+  const [showAllRunReviewStates, setShowAllRunReviewStates] = useState(false);
+  const reviewPlanAbortRef = useRef<AbortController | null>(null);
   const effectivePreflightPreview = reviewPreflightPreview || props.preflightPreview;
   const startupFlowEnabled = (!props.runReviewPlanning || planningStep === 'plan')
     && (effectivePreflightPreview?.commands?.length || 0) > 0;
@@ -1649,6 +1653,18 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     ...(reviewPlan?.states || []).flatMap((state) => state.warnings.map((warning) => `${state.stateName}: ${warning}`)),
     ...(reviewPlan?.workflows || []).flatMap((workflow) => workflow.warnings.map((warning) => `${workflow.workflowName}: ${warning}`)),
   ]);
+  const stateNeedsRunReviewAttention = (state: RunReviewPlan['states'][number]) => (
+    state.manualSelectionRequired
+    || state.source === 'user'
+    || (!state.configLocked && Boolean(state.suggestion)
+      && (state.suggestedMode !== state.baseMode || state.suggestion?.confidence === 'low'))
+  );
+  const reviewAttentionStates = (reviewPlan?.states || []).filter(stateNeedsRunReviewAttention);
+  const inheritedReviewStates = (reviewPlan?.states || []).filter((state) => !stateNeedsRunReviewAttention(state));
+  const visibleReviewStates = (reviewPlan?.states || []).filter((state) => (
+    !state.configLocked && (showAllRunReviewStates || stateNeedsRunReviewAttention(state))
+  ));
+  const explicitChainStates = inheritedReviewStates.filter((state) => state.explicitReviewChain);
 
   useEffect(() => {
     setLocalGlobalDraft(props.globalDraft);
@@ -1684,11 +1700,23 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     setReviewOverrides([]);
     setReviewPreflightPreview(null);
     setReviewPlanningError('');
+    setReviewPlanningProgress(null);
+    setReviewPlanDiagnostics(null);
+    setShowAllRunReviewStates(false);
+    reviewPlanAbortRef.current?.abort();
   }, [
     props.runReviewPlanning?.configFile,
     props.runReviewPlanning?.rehearsal,
     props.runReviewPlanning?.baselineIntent,
   ]);
+
+  useEffect(() => {
+    if (!reviewPlanningBusy) return;
+    const interval = window.setInterval(() => {
+      setReviewPlanningProgress((current) => current ? { ...current, elapsedMs: current.elapsedMs + 500 } : current);
+    }, 500);
+    return () => window.clearInterval(interval);
+  }, [reviewPlanningBusy]);
 
   const updateTaskInputField = (fieldId: string, value: string) => {
     setLocalTaskInput((current) => setWorkflowTaskInputFieldValue(current, fieldId, value));
@@ -1715,25 +1743,48 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
 
   const createRunReviewPlan = async () => {
     if (!props.runReviewPlanning || !adversarialIntent) return;
+    reviewPlanAbortRef.current?.abort();
+    const controller = new AbortController();
+    reviewPlanAbortRef.current = controller;
+    const startedAt = Date.now();
     setReviewPlanningBusy(true);
     setReviewPlanningError('');
+    setReviewPlanningProgress({ stage: 'config-graph', message: '正在读取并校验工作流与子工作流配置', elapsedMs: 0 });
     try {
       const response = await workflowApi.createStartPlan({
         configFile: props.runReviewPlanning.configFile,
         intent: adversarialIntent,
         initialContexts: buildContexts(),
         rehearsal: props.runReviewPlanning.rehearsal,
+      }, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (reviewPlanAbortRef.current !== controller) return;
+          setReviewPlanningProgress({ ...progress, elapsedMs: Date.now() - startedAt });
+        },
       });
+      if (reviewPlanAbortRef.current !== controller) return;
       setReviewPlan(response.plan);
       props.onReviewPlanIdChange?.(response.plan.id);
       setReviewOverrides([]);
       setReviewPreflightPreview((response.preflightPreview || null) as Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null);
+      setReviewPlanDiagnostics(response.diagnostics || null);
       setPlanningStep('plan');
     } catch (error: any) {
-      setReviewPlanningError(error?.message || '无法生成本次运行方案');
+      if (reviewPlanAbortRef.current === controller) {
+        setReviewPlanningError(error?.name === 'AbortError' ? '已取消生成方案；原工作流和运行配置均未变化。' : (error?.message || '无法生成本次运行方案'));
+      }
     } finally {
-      setReviewPlanningBusy(false);
+      if (reviewPlanAbortRef.current === controller) {
+        reviewPlanAbortRef.current = null;
+        setReviewPlanningBusy(false);
+        setReviewPlanningProgress(null);
+      }
     }
+  };
+
+  const cancelRunReviewPlanGeneration = () => {
+    reviewPlanAbortRef.current?.abort();
   };
 
   const discardRunReviewPlan = async () => {
@@ -1741,6 +1792,8 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     setReviewPlan(null);
     setReviewOverrides([]);
     setReviewPreflightPreview(null);
+    setReviewPlanDiagnostics(null);
+    setShowAllRunReviewStates(false);
     props.onReviewPlanIdChange?.(null);
     if (planId) await workflowApi.discardStartPlan(planId).catch(() => {});
   };
@@ -1850,6 +1903,23 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               </div>
             </div>
 
+            <div className="rounded-lg border border-primary/15 bg-primary/[0.025] p-3 text-xs leading-5">
+              <div className="font-medium text-foreground">本次默认沿用工作流设计</div>
+              <div className="mt-1 text-muted-foreground">
+                {explicitChainStates.length > 0 ? `其中 ${explicitChainStates.length} 个状态已配置 Defender / Attacker / Judge 显式审查链，作为设计决策只读继承。` : '设计中已锁定的审查策略会只读继承。'}
+                {reviewAttentionStates.length > 0 ? ` 仅 ${reviewAttentionStates.length} 个状态需要你确认或存在本次建议差异。` : ' 本次没有需要逐状态确认的差异。'}
+              </div>
+              {inheritedReviewStates.length > 0 ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">查看按设计执行的 {inheritedReviewStates.length} 个状态</summary>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {inheritedReviewStates.map((state) => <Badge key={`${state.configFile}:${state.stateId}`} variant="outline" className="text-[10px]">{state.stateName}{state.explicitReviewChain ? ' · 显式审查链' : ''}</Badge>)}
+                  </div>
+                </details>
+              ) : null}
+              {reviewPlanDiagnostics ? <div className="mt-2 text-[11px] text-muted-foreground">方案生成：配置 {reviewPlanDiagnostics.configGraphMs}ms · AI {reviewPlanDiagnostics.aiEvaluationMs}ms · 投影 {reviewPlanDiagnostics.projectionMs}ms · 检查预览 {reviewPlanDiagnostics.preflightPreviewMs}ms</div> : null}
+            </div>
+
             {reviewPlan.evaluationError ? (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-800 dark:text-amber-200">
                 {reviewPlan.workflows.some((workflow) => workflow.manualSelectionRequired)
@@ -1939,7 +2009,12 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               );
             })}
 
-            {reviewPlan.states.map((state) => {
+            {visibleReviewStates.length === 0 ? (
+              <div className="rounded-lg border border-dashed bg-muted/15 px-4 py-5 text-sm text-muted-foreground">
+                本次没有需要调整的状态，已沿用工作流设计。
+              </div>
+            ) : null}
+            {visibleReviewStates.map((state) => {
               const stateOverride = reviewOverrides.find((item) => item.kind !== 'lightweight' && item.configFile === state.configFile && item.stateId === state.stateId);
               const hasOverride = Boolean(stateOverride);
               const selectedMode = stateOverride?.kind !== 'lightweight' ? stateOverride?.mode : null;
@@ -1979,7 +2054,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                     </details>
                   ) : null}
                   {state.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}
-                  {adversarialIntent === 'on-demand' ? (
+                  {adversarialIntent === 'on-demand' && !state.configLocked ? (
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
                         type="button"
@@ -2016,6 +2091,12 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                 </div>
               );
             })}
+
+            {adversarialIntent === 'on-demand' && (reviewPlan.states || []).some((state) => !state.configLocked && !stateNeedsRunReviewAttention(state)) ? (
+              <Button type="button" variant="outline" size="sm" onClick={() => setShowAllRunReviewStates((current) => !current)} disabled={reviewPlanningBusy}>
+                {showAllRunReviewStates ? '收起按设计执行的其他可调整状态' : '为本次调整其他未锁定状态'}
+              </Button>
+            ) : null}
 
             {/* Per-target warnings are aggregated into plan.warnings with a name
                 prefix for callers without this UI. Showing them again here would
@@ -2131,6 +2212,37 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                 </button>
               </div>
               {reviewPlanningError ? <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}
+            </div>
+          </section>
+        ) : null}
+
+        {props.runReviewPlanning && reviewPlanningBusy && planningStep === 'contexts' ? (
+          <section className="border-b border-border py-5">
+            <div className="rounded-lg border border-primary/20 bg-primary/[0.025] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">正在生成本次运行方案</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{reviewPlanningProgress?.message || '正在准备方案'}</div>
+                </div>
+                <Badge variant="outline">已等待 {Math.floor((reviewPlanningProgress?.elapsedMs || 0) / 1000)} 秒</Badge>
+              </div>
+              <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                {[
+                  ['config-graph', '读取工作流配置'],
+                  ['ai-evaluation', '按需评估未锁定状态'],
+                  ['projection', '生成本次运行快照'],
+                  ['preflight-preview', '预览只读启动检查'],
+                ].map(([stage, label]) => {
+                  const order = ['config-graph', 'ai-evaluation', 'projection', 'preflight-preview'];
+                  const currentIndex = order.indexOf(reviewPlanningProgress?.stage || 'config-graph');
+                  const index = order.indexOf(stage);
+                  return <div key={stage} className={cn('rounded-md border px-3 py-2', index < currentIndex && 'border-emerald-500/25 bg-emerald-500/5', index === currentIndex && 'border-primary/30 bg-background')}>
+                    <span className="font-medium">{index < currentIndex ? '完成 · ' : index === currentIndex ? '进行中 · ' : '等待 · '}</span>{label}
+                  </div>;
+                })}
+              </div>
+              {(reviewPlanningProgress?.elapsedMs || 0) >= 10_000 ? <div className="mt-3 text-xs leading-5 text-amber-700 dark:text-amber-300">仍在 {reviewPlanningProgress?.message || '生成方案'}；此过程不会执行构建、测试或步骤命令。若持续无响应，可取消后重试，并检查服务端模型或工作流依赖日志。</div> : null}
+              <Button type="button" size="sm" variant="outline" className="mt-3" onClick={cancelRunReviewPlanGeneration}>取消生成</Button>
             </div>
           </section>
         ) : null}
@@ -2299,12 +2411,14 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
           <div className="flex flex-wrap justify-end gap-2">
             <Button
               variant="outline"
-              onClick={planningStep === 'plan'
+              onClick={reviewPlanningBusy && planningStep === 'contexts'
+                ? cancelRunReviewPlanGeneration
+                : planningStep === 'plan'
                 ? () => { void discardRunReviewPlan(); setPlanningStep('contexts'); }
                 : () => { void discardRunReviewPlan(); props.onCancel(); }}
-              disabled={props.actionBusy || reviewPlanningBusy}
+              disabled={props.actionBusy || (reviewPlanningBusy && planningStep === 'plan')}
             >
-              {planningStep === 'plan' ? '返回修改' : '取消'}
+              {reviewPlanningBusy && planningStep === 'contexts' ? '取消生成' : planningStep === 'plan' ? '返回修改' : '取消'}
             </Button>
             {props.runReviewPlanning && planningStep === 'contexts' ? (
               <>
@@ -6306,20 +6420,11 @@ export default function WorkbenchPage({
     (sum: number, state: any) => sum + (state.steps?.length ?? 0), 0
   ) ?? 0;
   const editingPreflightSummary = useMemo(() => {
-    const workflow = editingConfig?.workflow;
-    if (!workflow) {
-      return { configuredSteps: 0, totalCommands: 0 };
-    }
-    const steps = (workflow.states || []).flatMap((state: any) => state?.steps || []);
-    return steps.reduce((summary: { configuredSteps: number; totalCommands: number }, step: any) => {
-      const commandCount = Array.isArray(step?.preCommands) ? step.preCommands.filter((item: any) => typeof item === 'string' && item.trim()).length : 0;
-      if (commandCount > 0) {
-        summary.configuredSteps += 1;
-        summary.totalCommands += commandCount;
-      }
-      return summary;
-    }, { configuredSteps: 0, totalCommands: 0 });
-  }, [editingConfig?.workflow]);
+    const commands = Array.isArray((editingConfig as any)?.context?.preflight?.commands)
+      ? (editingConfig as any).context.preflight.commands.filter((item: unknown) => typeof item === 'string' && item.trim())
+      : [];
+    return { totalCommands: commands.length };
+  }, [editingConfig]);
 
   const resolveRuntimeRunId = useCallback((payload?: any, fallbackRunId?: string) => {
     const rawRunId = payload?.runId
@@ -14559,9 +14664,9 @@ export default function WorkbenchPage({
                           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>auto_fix_high</span>
                           生成优化建议
                         </Button>
-                        {editingPreflightSummary.configuredSteps > 0 ? (
+                        {editingPreflightSummary.totalCommands > 0 ? (
                           <Badge variant="outline" className="text-[10px]">
-                            已配置 {editingPreflightSummary.configuredSteps} 个步骤 / {editingPreflightSummary.totalCommands} 条命令
+                            已配置 {editingPreflightSummary.totalCommands} 条只读检查
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="text-[10px]">暂未配置 preflight</Badge>
@@ -15057,11 +15162,10 @@ export default function WorkbenchPage({
       <WorkflowPreflightManagerDialog
         open={preflightManagerOpen}
         onOpenChange={setPreflightManagerOpen}
-        workflow={editingConfig?.workflow}
-        onSave={(workflow) => {
+        config={editingConfig as any}
+        onSave={(config) => {
           if (!editingConfig) return;
-          const nextConfig = JSON.parse(JSON.stringify(editingConfig));
-          nextConfig.workflow = workflow;
+          const nextConfig = JSON.parse(JSON.stringify(config));
           dispatch({ type: 'SET_EDITING_CONFIG', payload: nextConfig });
         }}
       />

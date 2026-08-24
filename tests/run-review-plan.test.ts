@@ -121,6 +121,30 @@ describe('run-level review plans', () => {
     });
   });
 
+  test('reports real generation stages and timing diagnostics', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await setup(aceHome);
+      vi.resetModules();
+      const { createRunReviewPlanArtifact } = await import('@/lib/workflow/run-review-plan');
+      const stages: string[] = [];
+      const artifact = await createRunReviewPlanArtifact({
+        rootConfigFile: 'root.yaml',
+        intent: 'on-demand',
+        onProgress: (stage) => stages.push(stage),
+        evaluator: vi.fn(async (candidates: any[]) => Object.fromEntries(candidates.map((candidate) => [
+          `${candidate.configFile}::${candidate.stateId}`,
+          { kind: 'state' as const, configFile: candidate.configFile, stateId: candidate.stateId, mode: 'standard' as const, confidence: 'high' as const, riskSignals: [], rationale: 'normal risk' },
+        ]))),
+      });
+
+      expect(stages).toEqual(['config-graph', 'ai-evaluation', 'projection']);
+      expect(artifact.diagnostics).toMatchObject({ configCount: 2, aiTargetCount: 1 });
+      expect(artifact.diagnostics.configGraphMs).toBeGreaterThanOrEqual(0);
+      expect(artifact.diagnostics.aiEvaluationMs).toBeGreaterThanOrEqual(0);
+      expect(artifact.diagnostics.projectionMs).toBeGreaterThanOrEqual(0);
+    });
+  });
+
   test('on-demand batches unlocked states once and applies user overrides only to the run projection', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await setup(aceHome);
@@ -138,7 +162,14 @@ describe('run-level review plans', () => {
       });
 
       expect(evaluator).toHaveBeenCalledTimes(1);
-      expect(evaluator.mock.calls[0][0]).toHaveLength(2);
+      // The root state has an authored Defender/Attacker/Judge chain and is
+      // inherited as design intent; only the unlocked child is re-evaluated.
+      expect(evaluator.mock.calls[0][0]).toHaveLength(1);
+      expect(artifact.plan.states.find((state) => state.configFile === 'root.yaml')).toMatchObject({
+        configLocked: true,
+        explicitReviewChain: true,
+        source: 'config-lock',
+      });
       const child = artifact.plan.states.find((state) => state.configFile === 'child.yaml')!;
       const overridden = await applyRunReviewPlanOverrides({
         artifact,
@@ -277,7 +308,8 @@ describe('run-level review plans', () => {
       });
 
       expect(artifact.plan).toMatchObject({ blocked: true, evaluationError: 'planner unavailable' });
-      expect(artifact.plan.states.every((state) => state.manualSelectionRequired)).toBe(true);
+      expect(artifact.plan.states.filter((state) => !state.configLocked).every((state) => state.manualSelectionRequired)).toBe(true);
+      expect(artifact.plan.states.filter((state) => state.configLocked).every((state) => !state.manualSelectionRequired)).toBe(true);
       const partiallyResolved = await applyRunReviewPlanOverrides({
         artifact,
         overrides: [{
@@ -376,7 +408,7 @@ describe('run-level review plans', () => {
     });
   });
 
-  test('evaluates config-locked states so on-demand stays a real choice, and lets a user override the lock', async () => {
+  test('inherits config-locked states without AI replanning, and still lets a user override the lock', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       const configsDir = path.join(aceHome, 'configs');
       await mkdir(configsDir, { recursive: true });
@@ -393,15 +425,14 @@ describe('run-level review plans', () => {
         evaluator,
       });
 
-      expect(evaluator.mock.calls[0][0]).toHaveLength(1);
-      // The lock still decides, but the AI read is visible instead of hidden.
+      expect(evaluator).not.toHaveBeenCalled();
+      // The lock is the design baseline and is not re-evaluated at run start.
       expect(artifact.plan.states[0]).toMatchObject({
         effectiveMode: 'standard',
-        suggestedMode: 'adversarial',
         source: 'config-lock',
         configLocked: true,
       });
-      expect(artifact.plan.states[0].suggestion?.mode).toBe('adversarial');
+      expect(artifact.plan.states[0].suggestion).toBeUndefined();
 
       const overridden = await applyRunReviewPlanOverrides({
         artifact,

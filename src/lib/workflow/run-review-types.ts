@@ -39,6 +39,8 @@ export interface RunReviewStatePlan extends RunReviewStateKey {
   source: 'global' | 'ai' | 'config-lock' | 'user';
   locked: boolean;
   configLocked: boolean;
+  /** The authored state already contains a Defender/Attacker/Judge chain. */
+  explicitReviewChain?: boolean;
   suggestion?: RunReviewStateSuggestion;
   operations: ReviewPolicyOperation[];
   warnings: string[];
@@ -110,4 +112,13 @@ export interface CreateRunReviewPlanInput {
 export interface RunReviewPlanResponse {
   plan: RunReviewPlan;
   preflightPreview?: unknown;
+  diagnostics?: {
+    configGraphMs: number;
+    aiEvaluationMs: number;
+    projectionMs: number;
+    preflightPreviewMs: number;
+    totalMs: number;
+    configCount: number;
+    aiTargetCount: number;
+  };
 }

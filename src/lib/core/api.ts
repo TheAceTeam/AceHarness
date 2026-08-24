@@ -1872,12 +1872,49 @@ export const workflowApi = {
       workingDirectory?: string;
     };
     rehearsal?: boolean;
+  }, options?: {
+    signal?: AbortSignal;
+    onProgress?: (progress: {
+      stage: 'config-graph' | 'ai-evaluation' | 'projection' | 'preflight-preview';
+      message: string;
+    }) => void;
   }): Promise<import('@/lib/workflow/run-review-types').RunReviewPlanResponse> {
     const response = await authFetch(`${API_BASE}/workflow/start/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, streamProgress: Boolean(options?.onProgress) }),
+      signal: options?.signal,
     });
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream') && response.body) {
+      if (!response.ok) throw new Error('无法生成本次运行方案');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let completed: import('@/lib/workflow/run-review-types').RunReviewPlanResponse | null = null;
+      const consume = (record: string) => {
+        const event = record.match(/^event:\s*(.+)$/m)?.[1]?.trim() || 'message';
+        const raw = record.match(/^data:\s*([\s\S]*)$/m)?.[1] || '{}';
+        const data = JSON.parse(raw);
+        if (event === 'progress') options?.onProgress?.(data);
+        if (event === 'complete') completed = data;
+        if (event === 'error') throw new Error(data?.message ? `${data.error}: ${data.message}` : (data?.error || '无法生成本次运行方案'));
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary >= 0) {
+          consume(buffer.slice(0, boundary));
+          buffer = buffer.slice(boundary + 2);
+          boundary = buffer.indexOf('\n\n');
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) consume(buffer);
+      if (!completed) throw new Error('方案生成连接已结束，但未收到结果');
+      return completed;
+    }
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data?.error) {
       throw new Error(data?.message ? `${data.error}: ${data.message}` : (data?.error || '无法生成本次运行方案'));

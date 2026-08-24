@@ -45,6 +45,7 @@ type StateReviewCandidate = {
   description: string;
   baseMode: WorkflowReviewMode;
   configLocked: boolean;
+  explicitReviewChain: boolean;
   stepSummaries: Array<{ name: string; task: string; agent: string }>;
   /** Structural changes adoption made while normalising, so the plan can show them. */
   adoptionOperations: ReviewPolicyOperation[];
@@ -67,6 +68,13 @@ export interface RunReviewPlanArtifact {
   effectiveConfigContents: Record<string, string>;
   originalConfigContents: Record<string, string>;
   suggestions: Record<string, RunReviewSuggestion>;
+  diagnostics: {
+    configGraphMs: number;
+    aiEvaluationMs: number;
+    projectionMs: number;
+    configCount: number;
+    aiTargetCount: number;
+  };
 }
 
 export type RunReviewBatchEvaluator = (
@@ -94,6 +102,11 @@ function candidateKey(candidate: ReviewCandidate): string {
   return candidate.kind === 'lightweight'
     ? lightweightKey(candidate.configFile)
     : stateKey(candidate.configFile, candidate.stateId);
+}
+
+function hasExplicitReviewChain(state: StateMachineState): boolean {
+  const roles = new Set((state.steps || []).map((step) => String(step.role || '').trim()));
+  return roles.has('defender') && roles.has('attacker') && roles.has('judge');
 }
 
 function computeBaseConfigHash(graph: WorkflowConfigDependencyGraphWithContent): string {
@@ -284,6 +297,7 @@ function buildCandidates(graph: WorkflowConfigDependencyGraphWithContent): {
       if (state.isFinal) continue;
       const id = String(state.id || '').trim();
       if (!id) throw new Error(`状态缺少稳定 ID: ${entry.file}/${state.name}`);
+      const explicitReviewChain = hasExplicitReviewChain(state);
       stateCandidates.push({
         kind: 'state',
         configFile: entry.file,
@@ -292,7 +306,10 @@ function buildCandidates(graph: WorkflowConfigDependencyGraphWithContent): {
         stateName: state.name,
         description: String(state.description || ''),
         baseMode: state.reviewPolicy?.mode === 'adversarial' ? 'adversarial' : 'standard',
-        configLocked: Boolean(state.reviewPolicy?.locked),
+        // A manually authored Defender/Attacker/Judge chain is already an
+        // explicit design decision. Keep it out of run-level AI replanning.
+        configLocked: Boolean(state.reviewPolicy?.locked) || explicitReviewChain,
+        explicitReviewChain,
         stepSummaries: (state.steps || []).map((step) => ({
           name: step.name,
           task: String(step.task || ''),
@@ -609,6 +626,7 @@ function projectPlan(input: {
         source,
         locked,
         configLocked: candidate.configLocked,
+        explicitReviewChain: candidate.explicitReviewChain,
         ...(suggestion ? { suggestion } : {}),
         // Adoption reshaped the state before reconciliation ran, so both sets of
         // changes belong to what this run is about to do.
@@ -637,20 +655,26 @@ export async function createRunReviewPlanArtifact(input: {
   rehearsal?: boolean;
   userId?: string;
   evaluator?: RunReviewBatchEvaluator;
+  onProgress?: (stage: 'config-graph' | 'ai-evaluation' | 'projection') => void;
 }): Promise<RunReviewPlanArtifact> {
   if (!['disabled', 'on-demand'].includes(input.intent)) throw new Error('必须选择本次运行的全局对抗意愿');
+  input.onProgress?.('config-graph');
+  const graphStartedAt = Date.now();
   const graph = await resolveWorkflowConfigDependencyGraphWithContent(input.rootConfigFile);
+  const configGraphMs = Date.now() - graphStartedAt;
   const { normalizedConfigs, stateCandidates, lightweightCandidates } = buildCandidates(graph);
-  // Locked states are evaluated too. The lock still decides the effective mode,
-  // but hiding the AI's read would leave "on-demand" a dead option on a
-  // workflow created with adversarial review switched off.
+  // A locked policy (including an authored Defender/Attacker/Judge chain) is
+  // already a design decision. Only unlocked states need a run-level AI read.
   const targets: ReviewCandidate[] = input.intent === 'on-demand'
-    ? [...lightweightCandidates, ...stateCandidates]
+    ? [...lightweightCandidates, ...stateCandidates.filter((candidate) => !candidate.configLocked)]
     : [];
   const evaluator = input.evaluator || evaluateRunReviewCandidatesWithAi;
   let suggestions: Record<string, RunReviewSuggestion> = {};
   let evaluationError = '';
+  let aiEvaluationMs = 0;
   if (input.intent === 'on-demand' && targets.length > 0) {
+    input.onProgress?.('ai-evaluation');
+    const evaluationStartedAt = Date.now();
     try {
       const rawSuggestions = await evaluator(targets, {
         initialContexts: input.initialContexts,
@@ -661,7 +685,10 @@ export async function createRunReviewPlanArtifact(input: {
     } catch (error) {
       evaluationError = error instanceof Error ? error.message : String(error);
     }
+    aiEvaluationMs = Date.now() - evaluationStartedAt;
   }
+  input.onProgress?.('projection');
+  const projectionStartedAt = Date.now();
   const projection = projectPlan({
     graph,
     normalizedConfigs,
@@ -670,6 +697,7 @@ export async function createRunReviewPlanArtifact(input: {
     intent: input.intent,
     suggestions,
   });
+  const projectionMs = Date.now() - projectionStartedAt;
   const createdAt = new Date();
   const plan: RunReviewPlan = {
     id: `start-plan-${randomUUID()}`,
@@ -690,6 +718,13 @@ export async function createRunReviewPlanArtifact(input: {
     effectiveConfigContents: projection.effectiveConfigContents,
     originalConfigContents: Object.fromEntries(graph.configs.map((entry) => [entry.file, entry.content])),
     suggestions,
+    diagnostics: {
+      configGraphMs,
+      aiEvaluationMs,
+      projectionMs,
+      configCount: graph.configs.length,
+      aiTargetCount: targets.length,
+    },
   };
 }
 

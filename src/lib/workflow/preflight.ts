@@ -6,6 +6,8 @@ import { parse } from 'yaml';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import type { PersistedQualityCheck, PersistedQualityCommandResult } from '@/lib/run/state-persistence';
+import { getUnsafePreflightCommandReason } from '@/lib/workflow/preflight-policy';
+export { getUnsafePreflightCommandReason } from '@/lib/workflow/preflight-policy';
 
 const execAsync = promisify(exec);
 const EXEC_TIMEOUT_MS = 10 * 60 * 1000;
@@ -35,6 +37,13 @@ type PreflightCommand = {
   cwd?: string;
 };
 
+type RejectedPreflightCommand = {
+  command: string;
+  reason: string;
+  configFile?: string;
+  cwd?: string;
+};
+
 type PreflightOptions = {
   configContent?: string;
   /** Exact run-owned contents for the root workflow and every referenced subworkflow. */
@@ -54,6 +63,7 @@ export async function getWorkflowPreflightPlan(
     allowOnWarning: boolean;
     inferredCommandCount: number;
   };
+  rejectedCommands: RejectedPreflightCommand[];
 }> {
   if (options.configContents) {
     const orderedFiles = [
@@ -67,6 +77,7 @@ export async function getWorkflowPreflightPlan(
       { configContent: options.configContents?.[file] },
     )));
     const commands: PreflightCommand[] = [];
+    const rejectedCommands: RejectedPreflightCommand[] = [];
     const seen = new Set<string>();
     for (let index = 0; index < plans.length; index += 1) {
       const plan = plans[index];
@@ -77,6 +88,11 @@ export async function getWorkflowPreflightPlan(
         seen.add(key);
         commands.push({ ...item, configFile: file, cwd: plan.cwd });
       }
+      rejectedCommands.push(...plan.rejectedCommands.map((item) => ({
+        ...item,
+        configFile: file,
+        cwd: plan.cwd,
+      })));
     }
     return {
       cwd: plans[0]?.cwd || resolveProjectRoot(personalDir, workingDirectory),
@@ -86,13 +102,14 @@ export async function getWorkflowPreflightPlan(
         allowOnWarning: true,
         inferredCommandCount: commands.filter((command) => command.origin === 'inferred').length,
       },
+      rejectedCommands,
     };
   }
 
   const raw = options.configContent ?? await readFile(await getRuntimeWorkflowConfigPath(configFile), 'utf-8');
   const config = parse(raw) as any;
   const cwd = resolveProjectRoot(personalDir, workingDirectory || config?.context?.projectRoot);
-  const commands = await collectPreflightCommands(config, cwd);
+  const { commands, rejectedCommands } = await collectPreflightCommands(config, cwd);
   return {
     cwd,
     commands,
@@ -101,6 +118,7 @@ export async function getWorkflowPreflightPlan(
       allowOnWarning: true,
       inferredCommandCount: commands.filter((command) => command.origin === 'inferred').length,
     },
+    rejectedCommands,
   };
 }
 
@@ -124,7 +142,8 @@ async function inferProjectPreflightCommands(cwd: string): Promise<PreflightComm
 
   if (hasScript('lint')) add('npm run lint');
   if (hasScript('typecheck')) add('npm run typecheck');
-  else if (hasScript('build')) add('npm run build');
+  // Build/test scripts may create artifacts or mutate caches. They belong to
+  // the reached workflow step, never to the startup safety boundary.
   else {
     try {
       await readFile(resolve(cwd, 'tsconfig.json'), 'utf-8');
@@ -133,42 +152,37 @@ async function inferProjectPreflightCommands(cwd: string): Promise<PreflightComm
       // ignore
     }
   }
-  if (hasScript('test')) add('npm run test');
-
-  try {
-    await readFile(resolve(cwd, 'cjpm.toml'), 'utf-8');
-    add('cjpm build');
-  } catch {
-    try {
-      await readFile(resolve(cwd, 'cjpm.yaml'), 'utf-8');
-      add('cjpm build');
-    } catch {
-      // ignore
-    }
-  }
-
   return commands.slice(0, 4);
 }
 
-async function collectPreflightCommands(config: any, cwd: string): Promise<PreflightCommand[]> {
-  const steps = Array.isArray(config?.workflow?.states)
-    ? config.workflow.states.flatMap((state: any) => state?.steps || [])
+async function collectPreflightCommands(config: any, cwd: string): Promise<{
+  commands: PreflightCommand[];
+  rejectedCommands: RejectedPreflightCommand[];
+}> {
+  // Deliberately never read workflow.states[*].steps[*].preCommands here.
+  // They are step-local runtime actions and may target a future state.
+  const configured = Array.isArray(config?.context?.preflight?.commands)
+    ? config.context.preflight.commands
     : [];
+  const source = configured.length > 0
+    ? configured.map((command: unknown) => ({ command: String(command || ''), origin: 'workflow' as const }))
+    : await inferProjectPreflightCommands(cwd);
 
-  const commands = new Set<string>();
-  const collected: PreflightCommand[] = [];
-  for (const step of steps) {
-    for (const command of Array.isArray(step?.preCommands) ? step.preCommands : []) {
-      const normalized = String(command || '').trim();
-      if (normalized && !commands.has(normalized)) {
-        commands.add(normalized);
-        collected.push({ command: normalized, origin: 'workflow' });
-      }
+  const commands: PreflightCommand[] = [];
+  const rejectedCommands: RejectedPreflightCommand[] = [];
+  const seen = new Set<string>();
+  for (const item of source) {
+    const command = item.command.trim();
+    if (!command || seen.has(command)) continue;
+    seen.add(command);
+    const reason = getUnsafePreflightCommandReason(command);
+    if (reason) {
+      rejectedCommands.push({ command, reason });
+      continue;
     }
+    commands.push({ command, origin: item.origin });
   }
-
-  if (collected.length > 0) return collected;
-  return inferProjectPreflightCommands(cwd);
+  return { commands, rejectedCommands };
 }
 
 export async function runWorkflowPreflight(
@@ -187,8 +201,9 @@ export async function runWorkflowPreflight(
     allowOnWarning: boolean;
     inferredCommandCount: number;
   };
+  rejectedCommands: RejectedPreflightCommand[];
 }> {
-  const { cwd, commands, policy } = await getWorkflowPreflightPlan(configFile, personalDir, workingDirectory, options);
+  const { cwd, commands, policy, rejectedCommands } = await getWorkflowPreflightPlan(configFile, personalDir, workingDirectory, options);
 
   if (commands.length === 0) {
     return {
@@ -198,6 +213,7 @@ export async function runWorkflowPreflight(
       failedCount: 0,
       warningCount: 0,
       policy,
+      rejectedCommands,
     };
   }
 
@@ -266,5 +282,6 @@ export async function runWorkflowPreflight(
     failedCount,
     warningCount,
     policy,
+    rejectedCommands,
   };
 }

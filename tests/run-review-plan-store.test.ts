@@ -26,6 +26,13 @@ function artifact(id: string, expiresAt = new Date(Date.now() + 60_000).toISOStr
     effectiveConfigContents: {},
     originalConfigContents: {},
     suggestions: {},
+    diagnostics: {
+      configGraphMs: 0,
+      aiEvaluationMs: 0,
+      projectionMs: 0,
+      configCount: 0,
+      aiTargetCount: 0,
+    },
   };
 }
 
