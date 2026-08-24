@@ -861,14 +861,21 @@ export function reconcileReviewPolicy(
  * dialog can preselect it instead of asking the same question twice. Creating
  * with `disabled` locks every non-final state to a user-sourced standard
  * policy; anything else means per-state decisions are still in play. Returns
- * null when the config carries no state-level policy at all (lightweight, or
- * pre-protocol configs), where the baseline is genuinely unknown.
+ * null when the config carries neither a state-level policy nor an explicit
+ * legacy Defender → Attacker → Judge chain, where the baseline is genuinely
+ * unknown.
  */
 export function inferBaselineAdversarialIntent(config: unknown): 'disabled' | 'on-demand' | null {
   const states = (config as any)?.workflow?.states;
   if (!Array.isArray(states)) return null;
   const targets = (states as StateMachineState[]).filter((state) => state && !state.isFinal);
-  if (targets.length === 0 || targets.every((state) => !state.reviewPolicy)) return null;
+  if (targets.length === 0) return null;
+  // Pre-protocol workflows can still express a deliberate adversarial design
+  // through an authored Defender → Attacker → Judge chain. Treat that as a
+  // baseline rather than falling back to the start dialog's "no extra review"
+  // default, which would otherwise describe an existing design as disabled.
+  const carriesExplicitAdversarialChain = targets.some((state) => isStrictAdversarialRoleSequence(state));
+  if (!carriesExplicitAdversarialChain && targets.every((state) => !state.reviewPolicy)) return null;
   return targets.every((state) => (
     state.reviewPolicy?.mode === 'standard'
     && state.reviewPolicy?.source === 'user'

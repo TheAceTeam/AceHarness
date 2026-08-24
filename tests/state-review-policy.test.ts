@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ReviewPolicy, StateMachineState, WorkflowStep } from '@/lib/core/schemas';
 import {
   defaultMaxSelfTransitions,
+  inferBaselineAdversarialIntent,
   hashReviewStep,
   inferLegacyReviewPolicy,
   isManagedStepUnmodified,
@@ -40,6 +41,22 @@ function state(steps: WorkflowStep[], reviewPolicy: ReviewPolicy = policy('stand
 }
 
 describe('state review policy domain', () => {
+  test('treats an authored legacy adversarial chain as a run-start baseline', () => {
+    expect(inferBaselineAdversarialIntent({
+      workflow: {
+        states: [{
+          name: '审查',
+          isFinal: false,
+          steps: [
+            { name: '执行', role: 'defender' },
+            { name: '质疑', role: 'attacker' },
+            { name: '裁决', role: 'judge' },
+          ],
+        }],
+      },
+    })).toBe('on-demand');
+  });
+
   test('lightweight fixed state never carries state-level reviewPolicy', () => {
     const input = {
       workflow: {

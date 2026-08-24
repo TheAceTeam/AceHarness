@@ -684,6 +684,45 @@ export function resolveInitialAdversarialIntent(
   return baselineIntent ?? 'disabled';
 }
 
+export function getRunReviewIntentPresentation(
+  baselineIntent: WorkflowAdversarialIntent | null | undefined,
+  selectedIntent: WorkflowAdversarialIntent,
+): {
+  followsDesign: boolean;
+  title: string;
+  description: string;
+} {
+  const inheritedIntent = resolveInitialAdversarialIntent(baselineIntent);
+  const followsDesign = selectedIntent === inheritedIntent;
+  const designIncludesAdversarialReview = baselineIntent === 'on-demand';
+  if (followsDesign) {
+    return designIncludesAdversarialReview
+      ? {
+        followsDesign,
+        title: '按工作流设计执行（含对抗审查）',
+        description: '保留设计中的对抗审查与显式角色链；只对未锁定状态按设计进行必要评估。',
+      }
+      : {
+        followsDesign,
+        title: '按工作流设计执行',
+        description: baselineIntent === 'disabled'
+          ? '沿用设计中的标准审查策略，不额外生成对抗审查。'
+          : '保留现有步骤，不额外生成审查角色。',
+      };
+  }
+  return designIncludesAdversarialReview
+    ? {
+      followsDesign,
+      title: '本次临时改为标准审查',
+      description: '仅本次运行覆盖设计中的对抗审查；原工作流配置不变。',
+    }
+    : {
+      followsDesign,
+      title: '本次按需评估审查',
+      description: '仅本次评估未锁定状态；必要时派生对抗审查，原工作流配置不变。',
+    };
+}
+
 export function shouldShowWorkbenchHumanAttention(input: {
   workflowStatus: unknown;
   hasPendingQuestion: boolean;
@@ -1725,6 +1764,19 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     ? getMissingRequiredWorkflowTaskInputFields(localTaskInput, taskInputFields)
     : [];
   const taskInputInvalid = missingRequiredTaskFields.length > 0 || projectSourceInvalid;
+  const inheritedReviewIntent = resolveInitialAdversarialIntent(props.runReviewPlanning?.baselineIntent);
+  const alternateReviewIntent: WorkflowAdversarialIntent = inheritedReviewIntent === 'on-demand' ? 'disabled' : 'on-demand';
+  const inheritedReviewPresentation = getRunReviewIntentPresentation(
+    props.runReviewPlanning?.baselineIntent,
+    inheritedReviewIntent,
+  );
+  const alternateReviewPresentation = getRunReviewIntentPresentation(
+    props.runReviewPlanning?.baselineIntent,
+    alternateReviewIntent,
+  );
+  const selectedReviewPresentation = adversarialIntent
+    ? getRunReviewIntentPresentation(props.runReviewPlanning?.baselineIntent, adversarialIntent)
+    : null;
 
   const buildContexts = (): WorkflowStartContexts => ({
     globalContext: localGlobalDraft,
@@ -1897,8 +1949,8 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                   <h3 className="font-medium">确认本次运行方案</h3>
                   <p className="mt-1 text-xs text-muted-foreground">只影响这一次 run；原工作流 YAML 不变，也不会创建副本。</p>
                 </div>
-                <Badge variant={adversarialIntent === 'disabled' ? 'outline' : 'secondary'}>
-                  {adversarialIntent === 'disabled' ? '全局：不开启对抗' : '全局：按需开启'}
+                <Badge variant={selectedReviewPresentation?.followsDesign ? 'secondary' : 'outline'}>
+                  {selectedReviewPresentation?.followsDesign ? '本次：按设计执行' : '本次：临时覆盖设计'}
                 </Badge>
               </div>
             </div>
@@ -2186,29 +2238,25 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
           </section>
         ) : null}
 
-        {/* The only required decision in this dialog — everything else is optional —
-            so it sits up here rather than below the fold. It also gates the primary
-            button, which used to look broken when the choice was off screen. */}
+        {/* The selected run policy is visible before optional input, so the user can
+            see whether this run inherits the design or deliberately overrides it. */}
         {props.runReviewPlanning ? (
           <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
             <div>
-              <Label className="text-sm font-medium">本次运行是否使用对抗流程？</Label>
+              <Label className="text-sm font-medium">本次审查策略</Label>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {props.runReviewPlanning.baselineIntent
-                  ? '已按工作流创建时的选择预选，可直接继续。'
-                  : '已预选「不开启对抗」，按需要改。'}
-                只影响本次运行，不写回原配置。
+                默认继承工作流设计；只有选择下方另一项时才会覆盖本次运行。不会写回原配置。
               </p>
             </div>
             <div className="min-w-0">
               <div className="grid gap-2 sm:grid-cols-2">
-                <button type="button" aria-pressed={adversarialIntent === 'disabled'} onClick={() => setAdversarialIntent('disabled')} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === 'disabled' ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
-                  <div className="font-medium">不开启对抗</div>
-                  <div className="mt-1 text-xs text-muted-foreground">零次 AI 评估；轻量保持原样，普通状态机全部使用标准模式。</div>
+                <button type="button" aria-pressed={adversarialIntent === inheritedReviewIntent} onClick={() => setAdversarialIntent(inheritedReviewIntent)} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === inheritedReviewIntent ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
+                  <div className="font-medium">{inheritedReviewPresentation.title}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{inheritedReviewPresentation.description}</div>
                 </button>
-                <button type="button" aria-pressed={adversarialIntent === 'on-demand'} onClick={() => setAdversarialIntent('on-demand')} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === 'on-demand' ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
-                  <div className="font-medium">按需开启</div>
-                  <div className="mt-1 text-xs text-muted-foreground">一次整体规划；轻量任务必要时只为本次运行派生状态机。</div>
+                <button type="button" aria-pressed={adversarialIntent === alternateReviewIntent} onClick={() => setAdversarialIntent(alternateReviewIntent)} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === alternateReviewIntent ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
+                  <div className="font-medium">{alternateReviewPresentation.title}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{alternateReviewPresentation.description}</div>
                 </button>
               </div>
               {reviewPlanningError ? <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}

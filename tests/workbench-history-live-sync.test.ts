@@ -19,6 +19,7 @@ import {
   resolveWorkbenchRuntimeWorkflowConfig,
   shouldShowWorkbenchHumanAttention,
   resolveInitialAdversarialIntent,
+  getRunReviewIntentPresentation,
   buildWorkbenchRunDetailNavItems,
   resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
@@ -41,6 +42,17 @@ describe('Workbench historical run live sync', () => {
     expect(resolveInitialAdversarialIntent(undefined)).toBe('disabled');
     expect(resolveInitialAdversarialIntent('on-demand')).toBe('on-demand');
     expect(resolveInitialAdversarialIntent('disabled')).toBe('disabled');
+  });
+
+  test('names an adversarial design as inherited instead of asking to enable it again', () => {
+    expect(getRunReviewIntentPresentation('on-demand', 'on-demand')).toMatchObject({
+      followsDesign: true,
+      title: '按工作流设计执行（含对抗审查）',
+    });
+    expect(getRunReviewIntentPresentation('on-demand', 'disabled')).toMatchObject({
+      followsDesign: false,
+      title: '本次临时改为标准审查',
+    });
   });
 
   test('uses consistent semantic colors for run status dots', () => {
