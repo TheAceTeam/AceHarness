@@ -108,6 +108,36 @@ describe('workflow task input', () => {
     });
   });
 
+  test('migrates legacy Issue-first required fields to optional run-time discovery inputs', () => {
+    const fields = resolveWorkflowTaskInputFields({
+      fields: [
+        { id: 'title', label: '任务标题', required: true },
+        { id: 'issueUrl', label: '问题单链接', type: 'url', required: true },
+        { id: 'targetBranch', label: '目标分支', required: true },
+        { id: 'reproductionContract', label: '复现契约', type: 'textarea', required: true },
+        { id: 'validationCommands', label: '构建与验证命令', type: 'textarea', required: true },
+        { id: 'deliveryPolicy', label: 'PR 与门禁规约', type: 'textarea', required: true },
+        { id: 'gateContract', label: '门禁契约', type: 'textarea', required: true },
+      ],
+    });
+
+    expect(fields.filter((field) => field.required).map((field) => field.id)).toEqual(['issueUrl']);
+    expect(getMissingRequiredWorkflowTaskInputFields({ issueUrl: 'https://example.test/issues/42' }, fields)).toEqual([]);
+    expect(partitionWorkflowStartTaskInputFields(fields)).toMatchObject({
+      primary: [
+        { id: 'issueUrl', required: true },
+        { id: 'targetBranch', required: false },
+      ],
+      optionalKnown: [
+        { id: 'title', required: false },
+        { id: 'reproductionContract', required: false },
+        { id: 'validationCommands', required: false },
+        { id: 'deliveryPolicy', required: false },
+        { id: 'gateContract', required: false },
+      ],
+    });
+  });
+
   test('requires a run-level project source only for unresolved template projects', () => {
     expect(requiresWorkflowRunProjectSource('')).toBe(true);
     expect(requiresWorkflowRunProjectSource('{project_root}')).toBe(true);

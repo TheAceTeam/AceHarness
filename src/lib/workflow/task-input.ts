@@ -161,7 +161,25 @@ export function normalizeWorkflowTaskInputFieldDefinitions(input: unknown): Work
 
 export function resolveWorkflowTaskInputFields(input: unknown): WorkflowTaskInputFieldDefinition[] {
   const configured = normalizeWorkflowTaskInputFieldDefinitions(input);
-  return configured.length > 0 ? configured : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
+  if (configured.length === 0) return DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
+  // Issue-first manifests created before the minimal-launch migration can still
+  // persist every discovery contract as `required: true`.  Do the migration at
+  // read time so existing YAML remains compatible while launch requires only
+  // the issue link (the project source is validated separately).
+  const issueFirstContractFields = new Set([
+    'targetBranch',
+    'reproductionContract',
+    'validationCommands',
+    'deliveryPolicy',
+    'gateContract',
+  ]);
+  const isLegacyIssueFirst = configured.some((field) => field.id === 'issueUrl')
+    && configured.some((field) => issueFirstContractFields.has(field.id));
+  if (!isLegacyIssueFirst) return configured;
+  return configured.map((field) => ({
+    ...field,
+    required: field.id === 'issueUrl',
+  }));
 }
 
 /**
