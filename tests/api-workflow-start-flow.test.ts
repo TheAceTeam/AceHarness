@@ -171,6 +171,40 @@ describe('workflow start flow', () => {
     expect(json.error).toContain('配置文件');
   });
 
+  test('rejects a run that omits task input fields required by its workflow config', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    const { parse } = await import('yaml');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
+    (parse as any).mockReturnValue({
+      workflow: { name: '联合 PR 缺陷修复', mode: 'state-machine' },
+      context: {
+        taskInput: {
+          fields: [
+            { id: 'title', label: '本次缺陷标题', required: true },
+            { id: 'description', label: '本次缺陷说明', type: 'textarea', required: true },
+          ],
+        },
+      },
+    });
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: {
+        configFile: 'test.yaml',
+        skipPreflight: true,
+        initialContexts: { taskInput: { title: '仅填写标题' } },
+      },
+    }));
+
+    const json = await assertErrorResponse(response, 400);
+    expect(json).toMatchObject({
+      error: '请补齐本次运行任务输入',
+      code: 'WORKFLOW_TASK_INPUT_REQUIRED',
+      fields: [{ id: 'description', label: '本次缺陷说明' }],
+    });
+  });
+
   test('rejects an unplanned legacy start unless the compatibility flag is explicitly enabled', async () => {
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });

@@ -46,6 +46,7 @@ export const workflowTemplateParameterSchema = z.object({
   id: z.string().min(1).max(64).regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/),
   label: z.string().min(1).max(80),
   description: z.string().max(300).optional(),
+  purpose: z.enum(['configuration', 'default-task-background']).optional(),
   type: z.enum(['string', 'text', 'directory', 'enum', 'boolean', 'number']),
   bind: jsonPointerSchema,
   required: z.boolean().default(false),

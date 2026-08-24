@@ -61,6 +61,7 @@ describe('workflow templates', () => {
           values: {
             workflowName: '交付实例',
             projectRoot: workspace,
+            requirements: '默认背景：交付接口兼容性评估能力。',
           },
           agentMappings: {},
         };
@@ -74,6 +75,7 @@ describe('workflow templates', () => {
         const config = parse(await readFile(path.join(aceHome, 'configs', input.filename), 'utf8'));
         expect(config.workflow.name).toBe('交付实例');
         expect(config.context.projectRoot).toBe(workspace);
+        expect(config.context.requirements).toBe('默认背景：交付接口兼容性评估能力。');
         expect(config.workflow.mode).toBe('state-machine');
         expect(config.workflow.states).toHaveLength(4);
         expect(config.templateRef).toBeUndefined();
@@ -96,6 +98,31 @@ describe('workflow templates', () => {
         const duplicateBody = await assertErrorResponse(duplicate, 409);
         expect(duplicateBody.code).toBe('WORKFLOW_CONFIG_EXISTS');
       });
+    });
+  });
+
+  test('ships the joint PR fix template with optional default background and required run input', async () => {
+    await withIsolatedAceHome(async () => {
+      const { token } = await createAuthToken();
+      vi.resetModules();
+      const { GET } = await import('@/server/api-routes/workflow-templates/route');
+
+      const response = await GET(makeRequest('/api/workflow-templates?source=builtin&id=issue-fix&version=1.0.0', { token }));
+      expect(response.status).toBe(200);
+      const body = await responseJson<any>(response);
+      expect(body.template).toMatchObject({ name: '联合 PR 缺陷修复' });
+      expect(body.template.manifest.spec.parameters).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'requirements',
+          label: '默认任务背景（可选）',
+          purpose: 'default-task-background',
+          required: false,
+        }),
+      ]));
+      expect(body.template.workflow.context.taskInput.fields).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'title', required: true }),
+        expect.objectContaining({ id: 'description', required: true }),
+      ]));
     });
   });
 

@@ -129,6 +129,7 @@ import {
 import {
   attachWorkflowTaskInputFieldLabels,
   DEFAULT_WORKFLOW_TASK_INPUT_FIELDS,
+  getMissingRequiredWorkflowTaskInputFields,
   getWorkflowTaskInputFieldValue,
   getWorkflowTaskInputTitle,
   hasWorkflowTaskInput,
@@ -1673,7 +1674,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
     setLocalTaskInput((current) => setWorkflowTaskInputFieldValue(current, fieldId, value));
   };
   const missingRequiredTaskFields = props.taskInputEditable
-    ? taskInputFields.filter((field) => field.required && !getWorkflowTaskInputFieldValue(localTaskInput, field.id).trim())
+    ? getMissingRequiredWorkflowTaskInputFields(localTaskInput, taskInputFields)
     : [];
   const taskInputInvalid = missingRequiredTaskFields.length > 0;
 
@@ -2033,9 +2034,9 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
         {props.taskInputEditable ? (
           <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
             <div>
-              <Label className="text-sm font-medium">本次任务</Label>
+              <Label className="text-sm font-medium">本次运行任务输入</Label>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                每次启动单独填写，写入当前 run；默认均为选填。
+                每次启动单独填写，写入当前 run 快照；不会修改工作流配置或模板。
               </p>
             </div>
             <div className="min-w-0 space-y-3">
@@ -16213,8 +16214,8 @@ export default function WorkbenchPage({
         <DialogContent className="w-fit max-w-[96vw] overflow-visible border-0 bg-transparent p-0 shadow-none" overlayClassName="bg-foreground/10">
           {pendingStartRequest ? (
             <ContextWorkspaceDialog
-              title={pendingStartRequest.mode === 'rehearsal' ? '设置演练上下文' : '设置启动上下文'}
-              description={`补齐本次运行的全局背景和${startContextScopeLabel}约束；确认后会直接带着这些上下文进入${pendingStartRequest.mode === 'rehearsal' ? '演练' : '启动'}流程。`}
+              title={pendingStartRequest.mode === 'rehearsal' ? '设置本次演练输入' : '设置本次运行输入'}
+              description={`补齐本次运行任务输入、全局背景和${startContextScopeLabel}约束；确认后会创建独立运行实例并进入${pendingStartRequest.mode === 'rehearsal' ? '演练' : '启动'}流程。`}
               modeLabel={
                 pendingStartRequest.mode === 'rehearsal'
                   ? '演练'

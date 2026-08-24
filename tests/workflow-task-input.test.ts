@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   attachWorkflowTaskInputFieldLabels,
   formatWorkflowTaskInputForPrompt,
+  getMissingRequiredWorkflowTaskInputFields,
   getWorkflowTaskInputFieldValue,
   getWorkflowTaskInputTitle,
   hasWorkflowTaskInput,
@@ -63,6 +64,23 @@ describe('workflow task input', () => {
       { id: 'reviewFocus', label: '评审重点', type: 'textarea', required: false, placeholder: undefined, description: undefined },
       { id: 'badid', label: '无效', type: 'text', required: false, placeholder: undefined, description: undefined },
     ]);
+  });
+
+  test('reports only configured required fields that are absent from one run input', () => {
+    const fields = resolveWorkflowTaskInputFields({
+      fields: [
+        { id: 'title', label: '本次缺陷标题', required: true },
+        { id: 'description', label: '本次缺陷说明', type: 'textarea', required: true },
+        { id: 'issueUrl', label: '问题单 / PR 链接', type: 'url' },
+      ],
+    });
+
+    expect(getMissingRequiredWorkflowTaskInputFields({ title: '修复登录失败' }, fields))
+      .toMatchObject([{ id: 'description', label: '本次缺陷说明' }]);
+    expect(getMissingRequiredWorkflowTaskInputFields({
+      title: '修复登录失败',
+      description: '稳定复现后修复并回归验证',
+    }, fields)).toEqual([]);
   });
 
   test('formats custom task input fields for agent prompt', () => {

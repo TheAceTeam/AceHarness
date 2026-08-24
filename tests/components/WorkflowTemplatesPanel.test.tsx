@@ -59,6 +59,7 @@ const detail = {
       parameters: [
         { id: 'workflowName', label: '工作流名称', type: 'string', bind: '/workflow/name', required: true, default: '软件交付' },
         { id: 'projectRoot', label: '工作目录', type: 'directory', bind: '/context/projectRoot', required: true },
+        { id: 'requirements', label: '默认任务背景（可选）', description: '不绑定本次运行。', purpose: 'default-task-background', type: 'text', bind: '/context/requirements', default: '' },
       ],
       dependencies: summary.dependencies,
     },
@@ -120,18 +121,21 @@ describe('WorkflowTemplatesPanel', () => {
     expect(developerLink.getAttribute('target')).toBe('_blank');
 
     fireEvent.click(screen.getByRole('button', { name: /使用模板/ }));
-    expect(await screen.findByRole('heading', { name: '从模板新建工作流' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '从模板创建工作流配置' })).toBeInTheDocument();
+    expect(screen.getAllByText('默认任务背景（可选）')).toHaveLength(2);
+    expect(screen.getByText(/不会创建运行实例/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('配置文件名'), { target: { value: 'delivery.yaml' } });
     fireEvent.change(await screen.findByLabelText(/工作流名称/), { target: { value: '交付实例' } });
     fireEvent.change(screen.getByLabelText('工作目录选择'), { target: { value: '/tmp/project' } });
-    fireEvent.click(screen.getByRole('button', { name: /创建工作流/ }));
+    fireEvent.change(screen.getByLabelText('默认任务背景（可选）'), { target: { value: '默认交付背景' } });
+    fireEvent.click(screen.getByRole('button', { name: /创建工作流配置/ }));
 
     await waitFor(() => expect(onInstantiated).toHaveBeenCalledWith('delivery.yaml'));
     const instantiateCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes('/api/workflow-templates/instantiate'));
     expect(instantiateCall).toBeTruthy();
     expect(JSON.parse(String(instantiateCall?.[1]?.body))).toMatchObject({
       filename: 'delivery.yaml',
-      values: { workflowName: '交付实例', projectRoot: '/tmp/project' },
+      values: { workflowName: '交付实例', projectRoot: '/tmp/project', requirements: '默认交付背景' },
     });
   });
 });

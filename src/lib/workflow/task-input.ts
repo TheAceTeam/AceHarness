@@ -154,6 +154,14 @@ export function resolveWorkflowTaskInputFields(input: unknown): WorkflowTaskInpu
   return configured.length > 0 ? configured : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
 }
 
+export function getMissingRequiredWorkflowTaskInputFields(
+  input: WorkflowTaskInput | null | undefined,
+  fieldDefinitions?: WorkflowTaskInputFieldDefinition[] | null,
+): WorkflowTaskInputFieldDefinition[] {
+  const fields = fieldDefinitions?.length ? fieldDefinitions : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
+  return fields.filter((field) => field.required && !getWorkflowTaskInputFieldValue(input, field.id).trim());
+}
+
 export function getWorkflowTaskInputFieldValue(input: WorkflowTaskInput | null | undefined, fieldId: string): string {
   const normalized = normalizeWorkflowTaskInput(input);
   const id = normalizeId(fieldId);

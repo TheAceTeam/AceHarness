@@ -1,6 +1,6 @@
 workflow:
-  name: 缺陷定位与修复
-  description: 完成问题复现、根因分析、修复和回归验证
+  name: 联合 PR 缺陷修复
+  description: 协同定位关联 PR 的缺陷并完成修复和回归验证
   mode: state-machine
   maxTransitions: 30
   supervisor:
@@ -78,16 +78,18 @@ context:
   taskInput:
     fields:
       - id: title
-        label: 问题标题
+        label: 本次缺陷标题
         type: text
+        required: true
         placeholder: "例如：Issue #1234 编译失败"
       - id: issueUrl
-        label: 问题单 / 需求链接
+        label: 问题单 / PR 链接
         type: url
         placeholder: 粘贴本次问题单、需求或任务链接
       - id: description
-        label: 问题描述
+        label: 本次缺陷说明
         type: textarea
+        required: true
         placeholder: 粘贴问题现象、复现步骤、期望行为和关键约束
       - id: targetBranch
         label: 目标分支

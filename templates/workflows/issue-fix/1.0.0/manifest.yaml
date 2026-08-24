@@ -3,8 +3,8 @@ kind: WorkflowTemplate
 metadata:
   id: issue-fix
   version: 1.0.0
-  name: 缺陷定位与修复
-  description: 从稳定复现开始，经根因分析、修复评审和回归验证完成问题闭环。
+  name: 联合 PR 缺陷修复
+  description: 面向关联多个 PR 的缺陷，从稳定复现开始，经根因分析、修复评审和回归验证完成闭环。
   category: 软件研发
   tags: [缺陷修复, 根因分析]
   featured: false
@@ -14,8 +14,8 @@ spec:
   compatibility:
     aceharness: ">=1.0.0-rc.8 <2.0.0"
   parameters:
-    - { id: workflowName, label: 工作流名称, type: string, bind: /workflow/name, required: true, default: 缺陷定位与修复 }
-    - { id: description, label: 工作流描述, type: text, bind: /workflow/description, default: 完成问题复现、根因分析、修复和回归验证 }
+    - { id: workflowName, label: 工作流名称, type: string, bind: /workflow/name, required: true, default: 联合 PR 缺陷修复 }
+    - { id: description, label: 工作流描述, type: text, bind: /workflow/description, default: 协同定位关联 PR 的缺陷并完成修复和回归验证 }
     - { id: projectRoot, label: 工作目录, type: directory, bind: /context/projectRoot, required: true }
     - id: workspaceMode
       label: 工作区模式
@@ -26,7 +26,13 @@ spec:
       options:
         - { label: 原目录执行, value: in-place }
         - { label: 隔离副本, value: isolated-copy }
-    - { id: requirements, label: 问题描述, type: text, bind: /context/requirements, required: true, default: "" }
+    - id: requirements
+      label: 默认任务背景（可选）
+      description: 可记录长期背景、关联范围或通用约束；不会绑定某一次运行。
+      purpose: default-task-background
+      type: text
+      bind: /context/requirements
+      default: ""
   dependencies:
     agents: [default-supervisor, issue-reproducer, architect, code-hunter, code-judge, developer, tester, stress-tester, documentation-writer]
     skills: []

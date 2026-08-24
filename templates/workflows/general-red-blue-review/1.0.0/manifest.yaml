@@ -26,7 +26,13 @@ spec:
       options:
         - { label: 原目录执行, value: in-place }
         - { label: 隔离副本, value: isolated-copy }
-    - { id: requirements, label: 本次需求, type: text, bind: /context/requirements, default: "" }
+    - id: requirements
+      label: 默认任务背景（可选）
+      description: 用于复用工作流时保留的背景；每次启动仍需填写独立的本次任务输入。
+      purpose: default-task-background
+      type: text
+      bind: /context/requirements
+      default: ""
   dependencies:
     agents: [default-supervisor, architect, solution-breaker, design-judge, developer, code-hunter, code-judge, tester, stress-tester, documentation-writer]
     skills: []

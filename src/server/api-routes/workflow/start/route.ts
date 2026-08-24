@@ -40,8 +40,10 @@ import {
 } from '@/lib/workflow/runtime-transcript';
 import type { StateMachineWorkflowManager } from '@/lib/state-machine/workflow-manager';
 import {
+  getMissingRequiredWorkflowTaskInputFields,
   getWorkflowTaskInputTitle,
   normalizeWorkflowTaskInput,
+  resolveWorkflowTaskInputFields,
   type WorkflowTaskInput,
 } from '@/lib/workflow/task-input';
 
@@ -414,6 +416,17 @@ export async function POST(request: Request) {
       runReviewArtifact?.effectiveConfigContents[configFile]
         ?? await readFile(configPath, 'utf-8'),
     ) as any;
+    const missingTaskInputFields = getMissingRequiredWorkflowTaskInputFields(
+      initialContexts.taskInput,
+      resolveWorkflowTaskInputFields(config?.context?.taskInput),
+    );
+    if (missingTaskInputFields.length > 0) {
+      return jsonOk({
+        error: '请补齐本次运行任务输入',
+        code: 'WORKFLOW_TASK_INPUT_REQUIRED',
+        fields: missingTaskInputFields.map((field) => ({ id: field.id, label: field.label })),
+      }, { status: 400 });
+    }
     const boundCreationSession = typeof creationSessionId === 'string'
       ? await loadCreationSession(creationSessionId).catch(() => null)
       : await loadLatestCreationSessionByFilename(configFile).catch(() => null);

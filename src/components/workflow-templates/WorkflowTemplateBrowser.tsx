@@ -134,6 +134,10 @@ function initializeValues(template: WorkflowTemplateDetail): Record<string, stri
   ]));
 }
 
+function isDefaultTaskBackgroundParameter(parameter: WorkflowTemplateParameter) {
+  return parameter.purpose === 'default-task-background' || parameter.bind === '/context/requirements';
+}
+
 function ParameterField({
   parameter,
   value,
@@ -359,7 +363,7 @@ function WorkflowTemplateDetailPanel({
   const parameterPanel = (
     <div>
       <div className="flex items-center justify-between gap-3">
-        <h4 className="text-sm font-medium">创建时需要填写</h4>
+        <h4 className="text-sm font-medium">创建工作流配置时需要填写</h4>
         <span className="text-xs text-muted-foreground">{parameters.length} 项</span>
       </div>
       <div className="mt-2 space-y-2">
@@ -467,6 +471,10 @@ function WorkflowTemplateInstantiateForm({
     template.manifest.spec.dependencies.agents.filter((name) => !availableAgentNames.has(name))
   ), [availableAgentNames, template]);
   const supervisorAgent = String((template.workflow?.workflow as any)?.supervisor?.agent || '');
+  const configurationParameters = template.manifest.spec.parameters.filter(
+    (parameter) => !isDefaultTaskBackgroundParameter(parameter),
+  );
+  const defaultTaskBackgroundParameters = template.manifest.spec.parameters.filter(isDefaultTaskBackgroundParameter);
   const getReplacementAgents = (missingAgent: string) => availableAgents.filter((agent) => (
     missingAgent === supervisorAgent ? agent.roleType === 'supervisor' : agent.roleType !== 'supervisor'
   ));
@@ -489,7 +497,7 @@ function WorkflowTemplateInstantiateForm({
         values,
         agentMappings,
       });
-      toast('success', `已从模板创建 ${result.filename}`);
+      toast('success', `已从模板创建工作流配置 ${result.filename}`);
       onInstantiated(result.filename);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : '模板实例化失败');
@@ -505,7 +513,7 @@ function WorkflowTemplateInstantiateForm({
         onClick={() => void handleInstantiate()}
       >
         {instantiateMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WandSparkles className="mr-2 h-4 w-4" />}
-        创建工作流
+        创建工作流配置
       </Button>
     </>
   );
@@ -514,21 +522,26 @@ function WorkflowTemplateInstantiateForm({
     <div className={cn('space-y-4', embedded && 'rounded-lg border bg-background p-4')}>
       {embedded ? (
         <div className="space-y-1">
-          <h3 className="text-base font-semibold">从模板新建工作流</h3>
-          <p className="text-sm text-muted-foreground">{template.name} · v{template.version}</p>
+          <h3 className="text-base font-semibold">从模板创建工作流配置</h3>
+          <p className="text-sm text-muted-foreground">{template.name} · v{template.version}。启动时再填写本次任务输入，创建独立运行实例。</p>
         </div>
       ) : (
         <DialogHeader>
-          <DialogTitle>从模板新建工作流</DialogTitle>
-          <DialogDescription>{template.name} · v{template.version}</DialogDescription>
+          <DialogTitle>从模板创建工作流配置</DialogTitle>
+          <DialogDescription>{template.name} · v{template.version}。配置可复用；每次启动会创建独立运行实例。</DialogDescription>
         </DialogHeader>
       )}
       <div className="space-y-2">
         <Label htmlFor="template-instance-filename">配置文件名</Label>
         <Input id="template-instance-filename" value={filename} onChange={(event) => setFilename(event.target.value)} />
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        {template.manifest.spec.parameters.map((parameter) => (
+      <section className="space-y-3 border-t pt-4">
+        <div>
+          <h4 className="text-sm font-medium">工作流配置</h4>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">这些内容会保存到新建配置，可在设计页继续调整。</p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+        {configurationParameters.map((parameter) => (
           <div key={parameter.id} className={parameter.type === 'text' || parameter.type === 'directory' ? 'space-y-2 sm:col-span-2' : 'space-y-2'}>
             <Label htmlFor={`template-param-${parameter.id}`}>
               {parameter.label}{parameter.required ? <span className="ml-1 text-destructive">*</span> : null}
@@ -541,7 +554,29 @@ function WorkflowTemplateInstantiateForm({
             {parameter.description ? <p className="text-xs text-muted-foreground">{parameter.description}</p> : null}
           </div>
         ))}
-      </div>
+        </div>
+      </section>
+      {defaultTaskBackgroundParameters.length > 0 ? (
+        <section className="space-y-3 rounded-lg border border-dashed bg-muted/20 p-4">
+          <div>
+            <h4 className="text-sm font-medium">默认任务背景（可选）</h4>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">为可复用配置提供默认背景；不会创建运行实例，也不会替代启动时必填的本次任务输入。</p>
+          </div>
+          {defaultTaskBackgroundParameters.map((parameter) => (
+            <div key={parameter.id} className="space-y-2">
+              <Label htmlFor={`template-param-${parameter.id}`}>
+                {parameter.label}{parameter.required ? <span className="ml-1 text-destructive">*</span> : null}
+              </Label>
+              <ParameterField
+                parameter={parameter}
+                value={values[parameter.id]}
+                onChange={(value) => setValues((current) => ({ ...current, [parameter.id]: value }))}
+              />
+              {parameter.description ? <p className="text-xs text-muted-foreground">{parameter.description}</p> : null}
+            </div>
+          ))}
+        </section>
+      ) : null}
       {missingAgents.length > 0 ? (
         <div className="space-y-3 border-t pt-4">
           <div>
