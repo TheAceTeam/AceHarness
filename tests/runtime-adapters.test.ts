@@ -1000,6 +1000,72 @@ describe('runtime adapters', () => {
     }));
   });
 
+  test('reapplies the selected OpenCode model when ACP reports its default model after session initialization', async () => {
+    let currentModel = 'opencode/big-pickle';
+    const ensureSession = vi.fn(async () => ({
+      sessionKey: 'runtime-session-opencode-model',
+      backend: 'acpx',
+      runtimeSessionName: 'runtime-session-opencode-model',
+      cwd: process.cwd(),
+    }));
+    const setConfigOption = vi.fn(async ({ key, value }: { key: string; value: string }) => {
+      if (key === 'model') currentModel = value;
+    });
+    const runtime = {
+      ensureSession,
+      setConfigOption,
+      getStatus: vi.fn(async () => ({
+        models: { currentModelId: currentModel },
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-opencode-model',
+        events: eventStream([]),
+        result: Promise.resolve({ status: 'completed', stopReason: 'end_turn' }),
+        cancel: vi.fn(async () => undefined),
+        closeStream: vi.fn(async () => undefined),
+      })),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput('runtime-session-opencode-model', 'opencode', 'acpx');
+    session.modelRoute = {
+      ...session.modelRoute,
+      providerModel: 'volcengine/GLM-5.2',
+    };
+
+    const handle = await client.ensureSession?.({
+      session,
+      command: resolveAcpxCommand('opencode'),
+    });
+
+    expect(setConfigOption).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'model',
+      value: 'volcengine/GLM-5.2',
+    }));
+    expect(runtime.getStatus).toHaveBeenCalledTimes(2);
+
+    // One-shot ACP transports reconnect before a turn. Simulate OpenCode
+    // returning to its default during that reconnect and verify the adapter
+    // reasserts the selected model immediately before prompting it.
+    currentModel = 'opencode/big-pickle';
+    await collect(client.runTurn!({
+      id: 'binding-opencode-model',
+      runtimeSessionId: session.runtimeSessionId,
+      runtime: 'acpx',
+      role: 'primary',
+      generation: 1,
+      externalIds: {},
+      raw: { handle },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }, {
+      ...createTurnInput(),
+      profileSnapshot: session.profileSnapshot,
+    }));
+    expect(setConfigOption).toHaveBeenCalledTimes(2);
+  });
+
   test('acpx runtime client exposes ACP session initialization diagnostics', async () => {
     const ensureSession = vi.fn(async () => {
       throw Object.assign(new Error('Internal error'), {

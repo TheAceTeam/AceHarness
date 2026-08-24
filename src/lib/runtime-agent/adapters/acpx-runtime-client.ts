@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { loadConfiguredEnvObject } from '@/lib/core/configured-env';
 import { toAcpMcpServers } from '@/lib/mcp/registry';
+import { resolveRuntimeModelRoute } from '@/lib/runtime-agent/models/model-routes-api';
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -67,6 +68,7 @@ interface AcpxModelSelection {
 export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions = {}): AcpxRuntimeClient {
   const runtimePromises = new Map<string, Promise<AcpRuntime>>();
   const runtimeKeyBySessionKey = new Map<string, string>();
+  const selectedModelBySessionKey = new Map<string, string>();
   const activeTurns = new Map<string, ActiveAcpxTurn>();
   const closedSessionKeys = new Set<string>();
   const pendingRuntimeCloses = new Map<string, Promise<void>>();
@@ -148,6 +150,8 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
           }
           await runtime.setConfigOption({ handle, ...config });
         }
+        await ensureOpenCodeSelectedModel(runtime, handle, agentId, modelSelection.model);
+        selectedModelBySessionKey.set(handle.sessionKey, modelSelection.model);
 
         runtimeKeyBySessionKey.set(
           handle.sessionKey,
@@ -186,6 +190,13 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       runtimeKeyBySessionKey.set(
         handle.sessionKey,
         runtimeCacheKey(resolveAcpxPermissionConfig(input.profileSnapshot.permissionPolicyId), resolveRuntimeMcpServers(input.profileSnapshot)),
+      );
+      await ensureOpenCodeSelectedModel(
+        runtime,
+        handle,
+        input.profileSnapshot.agentId,
+        selectedModelBySessionKey.get(handle.sessionKey) || resolveProfileSnapshotProviderModel(input.profileSnapshot),
+        { force: true },
       );
       let beforeUsage: AcpxCumulativeUsageSnapshot | undefined;
       try {
@@ -1435,6 +1446,49 @@ async function resolveEnv(
     }
   }
   return Object.keys(env).length > 0 ? env : undefined;
+}
+
+/**
+ * OpenCode advertises model selection through the ACP `model` config option.
+ * Some ACP reconnect paths retain the requested session option but reopen on
+ * OpenCode's default model.  That is especially dangerous when the default
+ * provider is unavailable: the UI still labels the run with the requested
+ * model while the provider failure appears unrelated.  Re-read the negotiated
+ * model and make the selection durable through the same ACP config channel.
+ */
+async function ensureOpenCodeSelectedModel(
+  runtime: AcpRuntime,
+  handle: AcpRuntimeHandle,
+  agentId: string,
+  requestedModel: string,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  if (String(agentId || '').trim().toLowerCase() !== 'opencode') return;
+  if (!requestedModel || !runtime.getStatus || !runtime.setConfigOption) return;
+
+  const currentModel = readCurrentAcpModel(await runtime.getStatus({ handle }));
+  if (!options.force && (!currentModel || currentModel === requestedModel)) return;
+
+  await runtime.setConfigOption({ handle, key: 'model', value: requestedModel });
+  const verifiedModel = readCurrentAcpModel(await runtime.getStatus({ handle }));
+  if (verifiedModel && verifiedModel !== requestedModel) {
+    throw new Error(`OpenCode ACP 未采用所选模型「${requestedModel}」，当前仍为「${verifiedModel}」`);
+  }
+}
+
+function resolveProfileSnapshotProviderModel(profileSnapshot: RuntimeProfileSnapshot): string {
+  try {
+    return resolveRuntimeModelRoute({ modelRouteId: profileSnapshot.modelRouteId })?.providerModel || '';
+  } catch {
+    return '';
+  }
+}
+
+function readCurrentAcpModel(status: unknown): string | undefined {
+  if (!isRecord(status)) return undefined;
+  const models = isRecord(status.models) ? status.models : undefined;
+  const currentModel = models?.currentModelId;
+  return typeof currentModel === 'string' && currentModel.trim() ? currentModel.trim() : undefined;
 }
 
 function createFreshAcpSessionKey(runtimeSessionId: string): string {
