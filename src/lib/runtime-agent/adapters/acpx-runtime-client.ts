@@ -1451,8 +1451,10 @@ function isAcpResumeUnavailableError(error: unknown): boolean {
   if (!diagnostic) return false;
   if (diagnostic.includes('no rollout found')) return true;
   if (/\bpersistent acp session\b.*\bcould not be resumed\b/u.test(diagnostic)) return true;
+  const isNotFound = /\b(resource not found|not found|does not exist|unknown session|missing session)\b/u.test(diagnostic);
+  if (isNotFound) return true;
   const mentionsResume = /\b(resume|resumed|session\/resume|session\/load|thread id)\b/u.test(diagnostic);
-  return mentionsResume && /\b(resource not found|not found|does not exist|unknown session|missing session)\b/u.test(diagnostic);
+  return mentionsResume && isNotFound;
 }
 
 function applyProcessEnvForAgent(agentId: string | undefined): void {
