@@ -17,21 +17,31 @@ interface SeedOptions {
 }
 
 /**
- * A dangling symlink reports existsSync()===false but still occupies the path,
- * so fs.cp throws ERR_FS_CP_DIR_TO_NON_DIR when copying a directory onto it.
- *
- * Removal is deliberately narrow: only a symlink whose target is provably gone
- * (ENOENT) or unresolvable in a loop (ELOOP) is cleared. Any other failure —
- * EACCES/EPERM on a restricted target, transient I/O on a network path — must
- * propagate rather than be read as "target missing", otherwise a valid user
- * link would be deleted on a temporary error.
+ * stat() failures that mean the link target is genuinely unresolvable — not
+ * that we merely failed to look at it:
+ *   ENOENT  target is gone
+ *   ENOTDIR a path component is not a directory, e.g. an upgrade replaced a
+ *           directory with a regular file (POSIX; Windows surfaces this same
+ *           scenario as ENOENT)
+ *   ELOOP   the link chain never terminates
+ * Anything else — EACCES/EPERM on a restricted target, transient I/O on a
+ * network path — must propagate. Deleting a valid user link because of a
+ * temporary error is unrecoverable.
+ */
+const UNRESOLVABLE_LINK_TARGET_CODES = new Set(['ENOENT', 'ENOTDIR', 'ELOOP']);
+
+/**
+ * A symlink with an unresolvable target reports existsSync()===false but still
+ * occupies the path, so fs.cp throws ERR_FS_CP_DIR_TO_NON_DIR when copying a
+ * directory onto it. Clear only those; valid links are left untouched.
  */
 async function removeDanglingLink(dst: string): Promise<void> {
   let entry;
   try {
     entry = await lstat(dst);
   } catch (error: any) {
-    if (error?.code === 'ENOENT') return; // nothing at dst — nothing to clean
+    // Nothing addressable at dst — nothing to clean.
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return;
     throw error;
   }
   if (!entry.isSymbolicLink()) return;
@@ -40,7 +50,7 @@ async function removeDanglingLink(dst: string): Promise<void> {
     await stat(dst);
     return; // target resolves — a valid link, leave it alone
   } catch (error: any) {
-    if (error?.code !== 'ENOENT' && error?.code !== 'ELOOP') throw error;
+    if (!UNRESOLVABLE_LINK_TARGET_CODES.has(error?.code)) throw error;
   }
   await rm(dst, { force: true, maxRetries: 3 });
 }
