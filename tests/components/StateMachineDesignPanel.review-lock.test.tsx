@@ -191,4 +191,36 @@ describe('StateMachineDesignPanel: a固定的审查模式不限制用户操作',
     render(<StateMachineDesignPanel {...props} />);
     expect(screen.queryByText('状态级审查迁移（可选）')).toBeNull();
   });
+
+  test('恢复默认路径前明确确认会删除的高级规则', () => {
+    const states = createStates();
+    states[0].transitions = [
+      { to: '完成', condition: { verdict: 'pass' }, priority: 10 },
+      { to: '执行', condition: { verdict: 'conditional_pass' }, priority: 20 },
+      { to: '完成', condition: { verdict: 'fail' }, priority: 30 },
+      { to: '完成', condition: { verdict: 'fail', severities: ['critical'] }, priority: 1 },
+    ];
+    const onStatesChange = vi.fn();
+
+    render(
+      <StateMachineDesignPanel
+        states={states}
+        onStatesChange={onStatesChange}
+        availableAgents={[{ name: 'developer', roleType: 'worker' }]}
+        protocolAdopted
+      />,
+    );
+
+    expect(screen.getAllByText('默认跳转到').length).toBe(3);
+    expect(screen.getAllByText('跳转备注（不影响判定）').length).toBe(3);
+    fireEvent.click(screen.getByRole('button', { name: '恢复默认三条路径' }));
+    expect(screen.getByText('恢复默认三条路径？')).toBeTruthy();
+    expect(screen.getByText(/会删除当前状态中 1 条额外转移规则/)).toBeTruthy();
+    expect(onStatesChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '删除额外规则' }));
+    expect(onStatesChange).toHaveBeenCalledTimes(1);
+    const nextStates = onStatesChange.mock.calls[0][0] as StateMachineState[];
+    expect(nextStates[0].transitions).toHaveLength(3);
+  });
 });

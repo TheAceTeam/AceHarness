@@ -10,6 +10,7 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Checkbox } from './ui/checkbox';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
+import ConfirmDialog from './ConfirmDialog';
 import { ComboboxPortalProvider, SingleCombobox } from '@/components/ui/combobox';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
@@ -55,6 +56,10 @@ interface StateMachineDesignPanelProps {
   onStatesChange: (states: StateMachineState[]) => void;
   availableAgents: any[];
   availableSkills?: { name: string; description: string }[];
+  availableMcpServers?: { name: string; command?: string }[];
+  mcpRegistryStatus?: 'loading' | 'ready' | 'unavailable';
+  workflowSkills?: string[];
+  workflowMcpServers?: string[];
   specTasks?: { id: string; title: string; phaseTitle?: string; ownerAgents?: string[] }[];
   onOptimizeState?: (
     stateIndex: number,
@@ -64,6 +69,7 @@ interface StateMachineDesignPanelProps {
   ) => void;
   onOptimizeStep?: (stateIndex: number, stepIndex: number) => void;
   onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
+  onAgentMcpServersChange?: (agentName: string, servers: string[]) => void | Promise<void>;
   lightweightMetadata?: LightweightWorkflowDesignMetadata;
   /** Whether this workflow runs state-level review. Pre-protocol workflows do not. */
   protocolAdopted?: boolean;
@@ -560,6 +566,20 @@ function getAdvancedVerdictTransitions(verdict: VerdictTransition, transitions: 
   });
 }
 
+export function getVerdictTransitionResetImpact(transitions: StateTransition[] = []): { removedCount: number } {
+  const retainedFallbacks = new Set<VerdictTransition>();
+  let retainedCount = 0;
+  for (const transition of transitions) {
+    const verdict = transition.condition?.verdict as VerdictTransition | undefined;
+    if (!verdict || !REQUIRED_VERDICTS.includes(verdict) || hasAdvancedTransitionFilters(transition) || retainedFallbacks.has(verdict)) {
+      continue;
+    }
+    retainedFallbacks.add(verdict);
+    retainedCount += 1;
+  }
+  return { removedCount: Math.max(0, transitions.length - retainedCount) };
+}
+
 function getStateNodeErrors(state: StateMachineState, states: StateMachineState[]): string[] {
   if (state.isFinal) return [];
 
@@ -991,7 +1011,7 @@ function AdvancedVerdictTransitionsModal({
                     </div>
                     <div className="grid gap-3 md:grid-cols-3">
                       <div className="space-y-1.5">
-                        <Label className="text-xs">跳转目标</Label>
+                        <Label className="text-xs">命中后跳转到</Label>
                         <SingleCombobox
                           value={transition.to}
                           onValueChange={(value) => updateTransition(index, { to: value })}
@@ -1002,7 +1022,7 @@ function AdvancedVerdictTransitionsModal({
                         />
                       </div>
                       <div className="space-y-1.5">
-                        <Label className="text-xs">路径说明</Label>
+                        <Label className="text-xs">跳转备注（不影响判定）</Label>
                         <Input
                           className="h-9 text-sm"
                           value={transition.label || ''}
@@ -1135,7 +1155,7 @@ function VerdictTransitionCard({
       ? `${advancedRuleCount > 0 ? `${advancedRuleCount} 条高级规则 · ` : ''}${duplicateFallbackCount} 条待修复`
       : advancedRuleCount > 0
         ? `${advancedRuleCount} 条高级规则`
-        : '仅使用基础兜底路径'
+        : '无高级规则'
   );
 
   return (
@@ -1154,13 +1174,20 @@ function VerdictTransitionCard({
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline" className={`border-0 ${preset.badgeTone}`}>{preset.title}</Badge>
-                  <span className="text-sm font-semibold text-foreground">{transition.to || '请选择目标状态'}</span>
+                  <span className="text-sm font-semibold text-foreground">
+                    {transition.to ? `默认跳转：${transition.to}` : '尚未设置默认跳转'}
+                  </span>
                   {!transition.to ? <Badge variant="destructive" className="text-[10px]">未配置</Badge> : null}
                   {duplicateFallbackCount > 0 ? (
                     <Badge variant="destructive" className="text-[10px]">发现 {duplicateFallbackCount} 条重复兜底</Badge>
                   ) : null}
                 </div>
                 <div className="text-xs text-muted-foreground">{preset.description}</div>
+                <div className="text-xs leading-5 text-muted-foreground">
+                  {transition.to
+                    ? `先检查高级规则；未命中时跳转到「${transition.to}」。`
+                    : '先检查高级规则；未命中时尚无默认跳转目标。'}
+                </div>
                 {!transition.to ? (
                   <div className="text-xs text-red-500">该路径还没有配置跳转目标，当前状态将无法通过保存校验。</div>
                 ) : null}
@@ -1172,7 +1199,7 @@ function VerdictTransitionCard({
 
             <div className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
               <div className="space-y-1.5">
-                <Label className="text-xs">基础兜底目标</Label>
+                <Label className="text-xs">默认跳转到</Label>
                 <SingleCombobox
                   value={transition.to}
                   onValueChange={(value) => onChange({ ...transition, to: value })}
@@ -1181,15 +1208,17 @@ function VerdictTransitionCard({
                   triggerClassName="h-9 bg-background/90"
                   searchable={false}
                 />
+                <p className="text-[11px] leading-4 text-muted-foreground">没有高级规则命中时使用。</p>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">路径说明</Label>
+                <Label className="text-xs">跳转备注（不影响判定）</Label>
                 <Input
                   className="h-9 bg-background/90 text-sm"
                   value={transition.label || ''}
                   onChange={(e) => onChange({ ...transition, label: e.target.value })}
                   placeholder={preset.defaultLabel}
                 />
+                <p className="text-[11px] leading-4 text-muted-foreground">仅供阅读和运行记录展示，不参与跳转匹配。</p>
               </div>
             </div>
           </div>
@@ -1240,10 +1269,15 @@ export default function StateMachineDesignPanel({
   onStatesChange,
   availableAgents,
   availableSkills = [],
+  availableMcpServers = [],
+  mcpRegistryStatus = 'ready',
+  workflowSkills = [],
+  workflowMcpServers = [],
   specTasks = [],
   onOptimizeState,
   onOptimizeStep,
   onAgentSkillsChange,
+  onAgentMcpServersChange,
   lightweightMetadata,
   protocolAdopted = false,
   onAdoptReviewProtocol,
@@ -1261,6 +1295,7 @@ export default function StateMachineDesignPanel({
   const [subworkflowDrilldown, setSubworkflowDrilldown] = useState<SubworkflowDrilldownState | null>(null);
   const [reviewPolicyCandidate, setReviewPolicyCandidate] = useState<ReviewPolicyCandidate | null>(null);
   const [reviewPolicyUnsafeDeletes, setReviewPolicyUnsafeDeletes] = useState<Set<string>>(new Set());
+  const [resetVerdictTransitionsConfirmOpen, setResetVerdictTransitionsConfirmOpen] = useState(false);
   const [reviewProtocolAdoptionNoticeDismissed, setReviewProtocolAdoptionNoticeDismissed] = useState(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -1295,6 +1330,10 @@ export default function StateMachineDesignPanel({
   const selectedStateVerdictTransitions = useMemo(
     () => (selectedState && !selectedState.isFinal ? buildVerdictTransitions(selectedState, states, selectedState.transitions) : []),
     [selectedState, states]
+  );
+  const verdictTransitionResetImpact = useMemo(
+    () => getVerdictTransitionResetImpact(selectedState?.transitions || []),
+    [selectedState?.transitions],
   );
   const updateState = useCallback((updated: StateMachineState) => {
     onStatesChange(states.map((s, i) => i === selectedStateIndex ? updated : s));
@@ -1751,9 +1790,19 @@ export default function StateMachineDesignPanel({
     });
   };
 
-  const handleResetVerdictTransitions = () => {
+  const resetVerdictTransitions = () => {
     if (!selectedState || selectedState.isFinal) return;
     updateState({ ...selectedState, transitions: buildVerdictTransitions(selectedState, states) });
+    setResetVerdictTransitionsConfirmOpen(false);
+  };
+
+  const handleResetVerdictTransitions = () => {
+    if (!selectedState || selectedState.isFinal) return;
+    if (verdictTransitionResetImpact.removedCount > 0) {
+      setResetVerdictTransitionsConfirmOpen(true);
+      return;
+    }
+    resetVerdictTransitions();
   };
 
   const handleUpdateVerdictTransition = (verdict: VerdictTransition, transition: StateTransition) => {
@@ -1932,8 +1981,13 @@ export default function StateMachineDesignPanel({
               onStatesChange={handleChildStatesChange}
               availableAgents={availableAgents}
               availableSkills={availableSkills}
+              availableMcpServers={availableMcpServers}
+              mcpRegistryStatus={mcpRegistryStatus}
+              workflowSkills={workflowSkills}
+              workflowMcpServers={workflowMcpServers}
               specTasks={specTasks}
               onAgentSkillsChange={onAgentSkillsChange}
+              onAgentMcpServersChange={onAgentMcpServersChange}
               lightweightMetadata={childLightweightMetadata}
             />
           ) : (
@@ -2505,12 +2559,12 @@ export default function StateMachineDesignPanel({
             <div className="mb-2 flex items-center justify-between">
               <div>
                 <span className="text-sm font-semibold">状态转移规则</span>
-                <p className="mt-0.5 text-xs text-muted-foreground">默认要求每个非终止状态都完整填写 pass / conditional_pass / fail 三条路径。</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">状态完成后返回通过、需补充或失败；每种结果先匹配高级规则，未命中时走默认跳转。</p>
               </div>
               {!selectedState.isFinal ? (
                 <Button size="sm" variant="outline" className="h-8 gap-1.5 px-3 text-xs" onClick={handleResetVerdictTransitions}>
                   <RotateCcw className="h-3.5 w-3.5" />
-                  恢复标准三路
+                  恢复默认三条路径
                 </Button>
               ) : null}
             </div>
@@ -2523,7 +2577,7 @@ export default function StateMachineDesignPanel({
                 <div className="rounded-2xl border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                   <div className="flex items-start gap-2">
                     <ArrowRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
-                    <span>系统会按 verdict 固定识别三条基础路径。每条路径都必须保留一个兜底目标；更细的场景覆盖放到高级状态转移设置里，并按优先级命中。</span>
+                    <span>结果 → 高级规则（如有）→ 默认跳转。默认跳转始终保留；更细的场景放到高级规则中，并按优先级先后命中。</span>
                   </div>
                 </div>
                 {selectedStateVerdictTransitions.map((transition) => {
@@ -2575,6 +2629,10 @@ export default function StateMachineDesignPanel({
           } : editingStepData}
           roles={workflowStepAgents}
           availableSkills={availableSkills}
+          availableMcpServers={availableMcpServers}
+          mcpRegistryStatus={mcpRegistryStatus}
+          workflowSkills={workflowSkills}
+          workflowMcpServers={workflowMcpServers}
           specTasks={specTasks}
           initialSection={editingStep.focusSpec ? 'spec' : undefined}
           isNew={editingStep.isNew}
@@ -2582,6 +2640,7 @@ export default function StateMachineDesignPanel({
           onClose={() => setEditingStep(null)}
           onSave={handleSaveStep}
           onAgentSkillsChange={onAgentSkillsChange}
+          onAgentMcpServersChange={onAgentMcpServersChange}
           onDelete={editingStep.isNew ? undefined : () => handleDeleteStep(editingStep.index)}
         />
       )}
@@ -2693,6 +2752,16 @@ export default function StateMachineDesignPanel({
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={resetVerdictTransitionsConfirmOpen}
+        title="恢复默认三条路径？"
+        description={`会删除当前状态中 ${verdictTransitionResetImpact.removedCount} 条额外转移规则（高级规则、重复默认路径或未绑定结果的路径），并保留通过、有条件通过、失败三条默认跳转。`}
+        confirmLabel="删除额外规则"
+        cancelLabel="保留现有规则"
+        onConfirm={resetVerdictTransitions}
+        onCancel={() => setResetVerdictTransitionsConfirmOpen(false)}
+      />
 
     </div>
   );

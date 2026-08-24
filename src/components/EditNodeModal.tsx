@@ -76,6 +76,31 @@ const normalizeSkillNames = (value: unknown) => Array.from(new Set(
     .map((skill) => skill.trim())
     .filter(Boolean),
 ));
+const normalizeMcpServerNames = (value: unknown) => Array.from(new Set(
+  (Array.isArray(value) ? value : [])
+    .map((server) => typeof server === 'string' ? server : (server as any)?.name)
+    .filter((server): server is string => typeof server === 'string')
+    .map((server) => server.trim())
+    .filter(Boolean),
+));
+
+export type StepCapabilitySources = {
+  step: string[];
+  agent: string[];
+  workflow: string[];
+  effective: string[];
+};
+
+export function getStepCapabilitySources(input: {
+  step?: unknown;
+  agent?: unknown;
+  workflow?: unknown;
+}): StepCapabilitySources {
+  const step = normalizeMcpServerNames(input.step);
+  const agent = normalizeMcpServerNames(input.agent);
+  const workflow = normalizeMcpServerNames(input.workflow);
+  return { step, agent, workflow, effective: Array.from(new Set([...workflow, ...agent, ...step])) };
+}
 
 interface RoleOption {
   name: string;
@@ -227,6 +252,51 @@ function AgentSelectedContent({ role, fallbackName }: { role?: RoleOption; fallb
   );
 }
 
+function CapabilitySourceSummary({
+  title,
+  sources,
+  stepEmptyText,
+  registryUnavailable = false,
+}: {
+  title: string;
+  sources: StepCapabilitySources;
+  stepEmptyText: string;
+  registryUnavailable?: boolean;
+}) {
+  const rows = [
+    { label: '步骤专属', values: sources.step, tone: 'bg-primary/10 text-primary' },
+    { label: 'Agent 继承', values: sources.agent, tone: 'bg-blue-500/10 text-blue-700 dark:text-blue-300' },
+    { label: '工作流继承', values: sources.workflow, tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' },
+  ];
+  return (
+    <section className="rounded-xl border border-border/70 bg-muted/20 p-3" aria-label={`${title}能力来源`}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-sm font-semibold">有效 {title}</div>
+        <span className="text-[11px] text-muted-foreground">运行时合并 {sources.effective.length} 项</span>
+      </div>
+      <div className="mt-2 space-y-2 text-xs">
+        {rows.map((row) => (
+          <div key={row.label} className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className={`border-0 text-[10px] ${row.tone}`}>{row.label}</Badge>
+            {row.values.length ? row.values.map((value) => (
+              <Badge key={`${row.label}-${value}`} variant="secondary" className="text-[10px] font-normal">{value}</Badge>
+            )) : row.label === '步骤专属' ? (
+              <span className="text-muted-foreground">{stepEmptyText}</span>
+            ) : (
+              <span className="text-muted-foreground">未配置</span>
+            )}
+          </div>
+        ))}
+      </div>
+      {registryUnavailable ? (
+        <p className="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+          注册表未加载，以上已绑定名称会保留；运行前需校验。
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 interface EditNodeModalProps {
   [key: string]: unknown;
   isOpen: boolean;
@@ -234,7 +304,10 @@ interface EditNodeModalProps {
   roles?: RoleOption[];
   availableSkills?: SkillOption[];
   availableMcpServers?: McpServerOption[];
+  mcpRegistryStatus?: 'loading' | 'ready' | 'unavailable';
   availableKnowledgeBases?: KnowledgeBaseOption[];
+  workflowSkills?: string[];
+  workflowMcpServers?: string[];
   isNew?: boolean;
   type: string;
   existingSteps?: any[];
@@ -253,7 +326,10 @@ export default function EditNodeModal({
   roles = [],
   availableSkills = [],
   availableMcpServers = [],
+  mcpRegistryStatus = 'ready',
   availableKnowledgeBases = [],
+  workflowSkills = [],
+  workflowMcpServers = [],
   isNew = false,
   existingSteps = [],
   specTasks = [],
@@ -330,6 +406,27 @@ export default function EditNodeModal({
   const selectedSkillNames = Array.isArray(watch('skills')) ? watch('skills') as string[] : [];
   const selectedMcpServers = Array.isArray(watch('mcpServers')) ? watch('mcpServers') as string[] : [];
   const selectedRagKnowledgeBases = Array.isArray(watch('ragKnowledgeBases')) ? watch('ragKnowledgeBases') as string[] : [];
+  const [mcpBindingsDirty, setMcpBindingsDirty] = useState(false);
+  const agentSkillNames = normalizeSkillNames(selectedAgent?.skills);
+  const workflowSkillNames = normalizeSkillNames(workflowSkills);
+  const agentMcpServerNames = normalizeMcpServerNames(selectedAgent?.mcpServers);
+  const workflowMcpServerNames = normalizeMcpServerNames(workflowMcpServers);
+  const skillSources = getStepCapabilitySources({
+    step: selectedSkillNames,
+    agent: agentSkillNames,
+    workflow: workflowSkillNames,
+  });
+  const mcpSources = getStepCapabilitySources({
+    // Agent steps do not persist an MCP field. Keeping this empty makes the
+    // summary honest instead of implying that changing the Agent binding is a
+    // step-local override.
+    step: [],
+    // Before the user edits the picker, show the persisted Agent binding. Once
+    // it is edited, including an intentional clear, reflect the pending value.
+    agent: mcpBindingsDirty ? selectedMcpServers : agentMcpServerNames,
+    workflow: workflowMcpServerNames,
+  });
+  const mcpRegistryAvailable = mcpRegistryStatus === 'ready';
   const handleRagKnowledgeBasesChange = (value: string[]) => {
     setValue('ragKnowledgeBases', value);
     if (value.length > 0 && !selectedSkillNames.includes('aceharness-rag')) {
@@ -369,6 +466,20 @@ export default function EditNodeModal({
     }
     return Array.from(byName.values());
   }, [effectiveSkills, selectedSkillNames]);
+  const mcpOptions = useMemo(() => {
+    const registry = new Map(availableMcpServers.map((server) => [server.name, server]));
+    const names = Array.from(new Set([
+      ...availableMcpServers.map((server) => server.name),
+      ...agentMcpServerNames,
+      ...selectedMcpServers,
+      ...workflowMcpServerNames,
+    ]));
+    return names.map((name) => ({
+      value: name,
+      label: name,
+      description: registry.get(name)?.command || (mcpRegistryAvailable ? '' : '已配置，注册表未加载，运行前需校验'),
+    }));
+  }, [agentMcpServerNames, availableMcpServers, mcpRegistryAvailable, selectedMcpServers, workflowMcpServerNames]);
 
   useEffect(() => {
     if (!selectedAgentName) return;
@@ -378,6 +489,7 @@ export default function EditNodeModal({
     const preRuntimeStepRag = selectedAgentName === data?.agent && Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : [];
     setValue('mcpServers', Array.isArray(agentMcpServers) ? agentMcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean) : preRuntimeStepMcp);
     setValue('ragKnowledgeBases', Array.isArray(agentRagKnowledgeBases) ? agentRagKnowledgeBases : preRuntimeStepRag);
+    setMcpBindingsDirty(false);
   }, [data?.agent, data?.mcpServers, data?.ragKnowledgeBases, selectedAgent?.mcpServers, selectedAgent?.ragKnowledgeBases, selectedAgentName, setValue]);
 
   const handleCopyFrom = (sourceName: string) => {
@@ -438,7 +550,12 @@ export default function EditNodeModal({
     }
     if (formData.type !== 'subworkflow' && onAgentMcpServersChange && formData.agent) {
       try {
-        await onAgentMcpServersChange(formData.agent, Array.isArray(formData.mcpServers) ? formData.mcpServers : []);
+        // A missing registry must not turn an untouched inherited Agent binding
+        // into an empty write merely because the picker had no options to show.
+        const mcpServersToSave = !mcpRegistryAvailable && !mcpBindingsDirty
+          ? agentMcpServerNames
+          : normalizeMcpServerNames(formData.mcpServers);
+        await onAgentMcpServersChange(formData.agent, mcpServersToSave);
       } catch (error: any) {
         alert(error?.message || '保存 Agent MCP Servers 失败');
         return;
@@ -704,8 +821,33 @@ export default function EditNodeModal({
                       />
                     </div>
 
+                    <div className="space-y-3 border-t border-border/60 pt-4">
+                      <div>
+                        <div className="text-sm font-semibold">本步骤的能力来源</div>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          Skills 与 MCP 会按步骤、Agent、工作流三个层级合并；这里展示本步骤实际会继承到的能力。
+                        </p>
+                      </div>
+                      <CapabilitySourceSummary
+                        title="Skills"
+                        sources={skillSources}
+                        stepEmptyText={skillSources.agent.length || skillSources.workflow.length
+                          ? '未额外绑定，仍继承下方 Agent / 工作流 Skills'
+                          : '未额外绑定'}
+                      />
+                      <CapabilitySourceSummary
+                        title="MCP"
+                        sources={mcpSources}
+                        stepEmptyText={mcpSources.agent.length || mcpSources.workflow.length
+                          ? '未额外绑定，仍继承下方 Agent / 工作流 MCP'
+                          : '未额外绑定；当前没有可继承 MCP'}
+                        registryUnavailable={!mcpRegistryAvailable}
+                      />
+                    </div>
+
                     <div className="space-y-2">
-                      <Label>步骤 Skills</Label>
+                      <Label>步骤专属 Skills</Label>
+                      <p className="text-xs leading-5 text-muted-foreground">仅为本步骤新增的 Skills；未选择时仍会继承 Agent 和工作流 Skills。</p>
                       <MultiCombobox
                         value={watch('skills') || []}
                         onValueChange={(v) => setValue('skills', v)}
@@ -714,24 +856,25 @@ export default function EditNodeModal({
                           label: skill.name,
                           description: skill.description,
                         }))}
-                        placeholder={skillOptions.length > 0 ? '选择 Skills...' : '当前没有可用 Skills'}
+                        placeholder={skillOptions.length > 0 ? '选择步骤专属 Skills...' : '未额外绑定，仍按上方来源继承'}
                       />
                     </div>
 
                     <div className="space-y-2">
-                      <Label>Agent MCP Servers</Label>
+                      <Label>Agent MCP 绑定</Label>
                       <p className="text-xs leading-5 text-muted-foreground">
-                        跟随所选 Agent；保存后写入 Agent 配置。
+                        该设置属于所选 Agent，保存后写入 Agent 配置；工作流 MCP 会在运行时额外合并。
                       </p>
                       <MultiCombobox
                         value={selectedMcpServers}
-                        onValueChange={(v) => setValue('mcpServers', v)}
-                        options={availableMcpServers.map((server) => ({
-                          value: server.name,
-                          label: server.name,
-                          description: server.command || '',
-                        }))}
-                        placeholder={availableMcpServers.length > 0 ? '选择 MCP Servers...' : '当前没有可用 MCP Servers'}
+                        onValueChange={(v) => {
+                          setMcpBindingsDirty(true);
+                          setValue('mcpServers', v);
+                        }}
+                        options={mcpOptions}
+                        placeholder={mcpRegistryAvailable
+                          ? '选择 Agent MCP Servers...'
+                          : '注册表未加载；保留已有绑定，运行前需校验'}
                       />
                     </div>
 

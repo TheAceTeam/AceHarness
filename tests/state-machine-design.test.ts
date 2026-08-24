@@ -4,6 +4,7 @@ import {
   buildReviewProtocolAdoptionPreview,
   buildWorkflowStepFromEditData,
   getReviewProtocolAdoptionGuidance,
+  getVerdictTransitionResetImpact,
 } from '@/components/StateMachineDesignPanel';
 import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
 
@@ -180,5 +181,18 @@ describe('state machine design updates', () => {
       explicitStateNames: [],
       unresolvedStateNames: ['执行'],
     });
+  });
+
+  test('reports every supplemental route that restoring default verdict routes would remove', () => {
+    const impact = getVerdictTransitionResetImpact([
+      { to: 'next', condition: { verdict: 'pass' }, priority: 10 },
+      { to: 'retry', condition: { verdict: 'conditional_pass' }, priority: 20 },
+      { to: 'archive', condition: { verdict: 'fail' }, priority: 30 },
+      { to: 'security', condition: { verdict: 'fail', severities: ['critical'] }, priority: 1 },
+      { to: 'duplicate', condition: { verdict: 'pass' }, priority: 11 },
+      { to: 'legacy', condition: {}, priority: 50 },
+    ] as any);
+
+    expect(impact.removedCount).toBe(3);
   });
 });

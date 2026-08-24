@@ -2513,6 +2513,7 @@ export default function WorkbenchPage({
   const [saving, setSaving] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
   const [availableMcpServers, setAvailableMcpServers] = useState<ManagedMcpServer[]>([]);
+  const [mcpRegistryStatus, setMcpRegistryStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
   const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<{ id: string; name: string; description?: string; chunkCount?: number }[]>([]);
   const [startRequesting, setStartRequesting] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -3137,11 +3138,14 @@ export default function WorkbenchPage({
       /* ignore */
     }
     try {
+      setMcpRegistryStatus('loading');
       const mcpRes = await fetch('/api/mcp');
+      if (!mcpRes.ok) throw new Error(`MCP 注册表加载失败 (${mcpRes.status})`);
       const mcpData = await mcpRes.json();
       setAvailableMcpServers(Array.isArray(mcpData.servers) ? mcpData.servers : []);
+      setMcpRegistryStatus('ready');
     } catch {
-      /* ignore */
+      setMcpRegistryStatus('unavailable');
     }
     try {
       const ragRes = await fetch('/api/rag/knowledge-bases', { headers: getAuthHeaders() });
@@ -7951,10 +7955,13 @@ export default function WorkbenchPage({
         setAvailableSkills(skillsData.skills?.map((s: any) => ({ name: s.name, description: s.description })) || []);
       } catch { /* ignore */ }
       try {
+        setMcpRegistryStatus('loading');
         const mcpRes = await fetch('/api/mcp');
+        if (!mcpRes.ok) throw new Error(`MCP 注册表加载失败 (${mcpRes.status})`);
         const mcpData = await mcpRes.json();
         setAvailableMcpServers(Array.isArray(mcpData.servers) ? mcpData.servers : []);
-      } catch { /* ignore */ }
+        setMcpRegistryStatus('ready');
+      } catch { setMcpRegistryStatus('unavailable'); }
       try {
         const ragRes = await fetch('/api/rag/knowledge-bases', { headers: getAuthHeaders() });
         const ragData = await ragRes.json();
@@ -14504,10 +14511,15 @@ export default function WorkbenchPage({
                       }}
                       availableAgents={agentConfigs}
                       availableSkills={availableSkills}
+                      availableMcpServers={availableMcpServers}
+                      mcpRegistryStatus={mcpRegistryStatus}
+                      workflowSkills={skills}
+                      workflowMcpServers={mcpServers}
                       specTasks={designOptimizationSpecTaskOptions}
                       onOptimizeState={handleOptimizeStateMachineState}
                       onOptimizeStep={handleOptimizeStateMachineStep}
                       onAgentSkillsChange={handleAgentSkillsChange}
+                      onAgentMcpServersChange={handleAgentMcpServersChange}
                       protocolAdopted={isStateLevelReviewAdopted(editingConfig)}
                       onAdoptReviewProtocol={(states: any) => {
                         const newConfig = JSON.parse(JSON.stringify(editingConfig));
