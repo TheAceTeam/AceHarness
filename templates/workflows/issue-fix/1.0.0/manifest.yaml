@@ -4,7 +4,7 @@ metadata:
   id: issue-fix
   version: 1.0.0
   name: 联合 PR 缺陷修复
-  description: 面向关联多个 PR 的缺陷，从稳定复现开始，经根因分析、修复评审和回归验证完成闭环。
+  description: 面向关联多个 PR 的缺陷；启动时只需问题单链接，其余复现、验证和门禁信息在运行中发现并形成可追溯证据。
   category: 软件研发
   tags: [缺陷修复, 根因分析]
   featured: false

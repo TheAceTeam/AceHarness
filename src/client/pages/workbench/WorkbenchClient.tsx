@@ -134,6 +134,8 @@ import {
   getWorkflowTaskInputTitle,
   hasWorkflowTaskInput,
   normalizeWorkflowTaskInput,
+  partitionWorkflowStartTaskInputFields,
+  requiresWorkflowRunProjectSource,
   resolveWorkflowTaskInputFields,
   setWorkflowTaskInputFieldValue,
   type WorkflowTaskInputFieldDefinition,
@@ -1108,6 +1110,7 @@ type ContextWorkspaceDialogProps = {
   taskInputFields?: WorkflowTaskInputFieldDefinition[];
   workingDirectoryDraft?: string;
   workingDirectoryEditable?: boolean;
+  projectSourceRequired?: boolean;
   footerText: string;
   actionLabel: string;
   actionBusyLabel: string;
@@ -1622,13 +1625,24 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const [localPhaseDrafts, setLocalPhaseDrafts] = useState<Record<string, string>>(props.phaseDrafts);
   const [localTaskInput, setLocalTaskInput] = useState<WorkflowTaskInput>(() => normalizeWorkflowTaskInput(props.taskInputDraft));
   const [localWorkingDirectory, setLocalWorkingDirectory] = useState(props.workingDirectoryDraft || '');
+  const [advancedContextOpen, setAdvancedContextOpen] = useState(false);
   const [expandedTarget, setExpandedTarget] = useState(() => (
     props.startContextTargets.find((name) => (props.phaseDrafts[name] || '').trim()) || ''
   ));
   const previewCommands = effectivePreflightPreview?.commands || [];
   const taskInputFields = props.taskInputFields?.length ? props.taskInputFields : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
-  const shortTaskInputFields = taskInputFields.filter((field) => field.type !== 'textarea');
-  const longTaskInputFields = taskInputFields.filter((field) => field.type === 'textarea');
+  const taskInputFieldGroups = partitionWorkflowStartTaskInputFields(taskInputFields);
+  const issueDrivenTaskInput = taskInputFieldGroups.issueDriven;
+  const primaryTaskInputFields = taskInputFieldGroups.primary;
+  const optionalKnownTaskInputFields = taskInputFieldGroups.optionalKnown;
+  const primaryShortTaskInputFields = primaryTaskInputFields.filter((field) => field.type !== 'textarea');
+  const primaryLongTaskInputFields = primaryTaskInputFields.filter((field) => field.type === 'textarea');
+  const projectSourceInvalid = Boolean(
+    props.projectSourceRequired
+      && props.workingDirectoryEditable
+      && !localWorkingDirectory.trim()
+      && !props.projectRoot?.trim(),
+  );
   // Rebuilt exactly as the projection aggregates them, so the plan-level list can
   // drop what the per-target cards already show without matching on substrings.
   const cardScopedReviewWarnings = new Set([
@@ -1658,6 +1672,12 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   }, [props.workingDirectoryDraft]);
 
   useEffect(() => {
+    setAdvancedContextOpen(Boolean(
+      props.globalDraft.trim() || Object.values(props.phaseDrafts).some((value) => value.trim()),
+    ));
+  }, [props.globalDraft, props.phaseDrafts]);
+
+  useEffect(() => {
     setPlanningStep('contexts');
     setAdversarialIntent(resolveInitialAdversarialIntent(props.runReviewPlanning?.baselineIntent));
     setReviewPlan(null);
@@ -1676,7 +1696,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const missingRequiredTaskFields = props.taskInputEditable
     ? getMissingRequiredWorkflowTaskInputFields(localTaskInput, taskInputFields)
     : [];
-  const taskInputInvalid = missingRequiredTaskFields.length > 0;
+  const taskInputInvalid = missingRequiredTaskFields.length > 0 || projectSourceInvalid;
 
   const buildContexts = (): WorkflowStartContexts => ({
     globalContext: localGlobalDraft,
@@ -2040,15 +2060,45 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               </p>
             </div>
             <div className="min-w-0 space-y-3">
-              {shortTaskInputFields.length ? (
-                <div className="grid gap-3 md:grid-cols-2">
-                  {shortTaskInputFields.map(renderTaskInputField)}
-                </div>
-              ) : null}
-              {longTaskInputFields.map(renderTaskInputField)}
+              {issueDrivenTaskInput ? (
+                <>
+                  <div className="rounded-lg border border-primary/20 bg-primary/[0.03] px-3 py-2.5 text-xs leading-5 text-muted-foreground">
+                    <span className="font-medium text-foreground">启动只需要问题单链接。</span>
+                    任务标题会在「上下文固化」从问题单推导；目标分支留空时，优先从 Issue 元数据或项目默认分支探测。
+                  </div>
+                  {primaryShortTaskInputFields.length ? (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {primaryShortTaskInputFields.map(renderTaskInputField)}
+                    </div>
+                  ) : null}
+                  {primaryLongTaskInputFields.map(renderTaskInputField)}
+                  {optionalKnownTaskInputFields.length ? (
+                    <details className="rounded-lg border border-border bg-muted/[0.16] px-3 py-2.5">
+                      <summary className="cursor-pointer text-sm font-medium">可选已知信息和覆盖项</summary>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        留空时会在「上下文固化」「最小化用例」「描述与门禁」中自动发现、校验；无法确认时才会请求补充。
+                      </p>
+                      <div className="mt-3 space-y-3">
+                        {optionalKnownTaskInputFields.map(renderTaskInputField)}
+                      </div>
+                    </details>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  {primaryShortTaskInputFields.length ? (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {primaryShortTaskInputFields.map(renderTaskInputField)}
+                    </div>
+                  ) : null}
+                  {primaryLongTaskInputFields.map(renderTaskInputField)}
+                </>
+              )}
               {taskInputInvalid ? (
                 <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive">
-                  请补齐必填项：{missingRequiredTaskFields.map((field) => field.label).join('、')}
+                  {missingRequiredTaskFields.length
+                    ? `请补齐必填项：${missingRequiredTaskFields.map((field) => field.label).join('、')}`
+                    : '请先选择本次运行的项目 / 仓库来源。'}
                 </div>
               ) : null}
             </div>
@@ -2087,9 +2137,17 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
 
         <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
           <div>
-            <Label className="text-sm font-medium">{props.workingDirectoryEditable ? '本次运行工作目录' : '当前运行工作目录'}</Label>
+            <Label className="text-sm font-medium">
+              {props.workingDirectoryEditable
+                ? props.projectSourceRequired ? '项目 / 仓库来源（本地目录）' : '本次运行工作目录'
+                : '当前运行工作目录'}
+            </Label>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {props.workingDirectoryEditable ? '不选择时使用工作流配置。' : '运行开始后不支持切换。'}
+              {props.workingDirectoryEditable
+                ? props.projectSourceRequired
+                  ? '此工作流未配置项目目录；请选择本次运行使用的本地项目目录，写入运行快照但不修改工作流。'
+                  : '不选择时使用工作流配置。'
+                : '运行开始后不支持切换。'}
             </p>
           </div>
           <div className="min-w-0">
@@ -2100,11 +2158,13 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                   value={localWorkingDirectory}
                   onChange={setLocalWorkingDirectory}
                   disabled={props.actionBusy}
-                  emptyDisplayValue="使用工作流默认"
+                  emptyDisplayValue={props.projectSourceRequired ? '请选择本次项目目录' : '使用工作流默认'}
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span className="min-w-0 break-all">
-                    {localWorkingDirectory ? '仅覆盖本次运行，不修改工作流配置。' : `默认：${props.projectRoot || '工作流配置目录'}`}
+                    {localWorkingDirectory
+                      ? '仅覆盖本次运行，不修改工作流配置。'
+                      : props.projectSourceRequired ? '需要选择本地项目目录后才能启动。' : `默认：${props.projectRoot || '工作流配置目录'}`}
                   </span>
                   {localWorkingDirectory ? (
                     <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setLocalWorkingDirectory('')} disabled={props.actionBusy}>
@@ -2118,76 +2178,89 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                 {localWorkingDirectory || props.projectRoot || '未设置'}
               </div>
             )}
+            {projectSourceInvalid ? (
+              <div className="mt-2 text-xs text-destructive">请选择本次运行的项目 / 仓库来源。</div>
+            ) : null}
           </div>
         </section>
 
-        <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[170px_minmax(0,1fr)]">
-          <div>
-            <Label className="text-sm font-medium">全局上下文</Label>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">所有步骤共享。</p>
-          </div>
-          <Textarea
-            value={localGlobalDraft}
-            onChange={(event) => setLocalGlobalDraft(event.target.value)}
-            placeholder="输入本次运行共享的背景、约束或交付要求"
-            rows={4}
-            className="min-h-[104px] resize-y text-sm leading-6"
-          />
-        </section>
+        <details
+          className="border-b border-border py-5"
+          open={advancedContextOpen}
+          onToggle={(event) => setAdvancedContextOpen(event.currentTarget.open)}
+        >
+          <summary className="cursor-pointer text-sm font-medium">高级运行上下文（可选）</summary>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">仅在需要覆盖默认背景或为特定状态补充约束时填写；留空不影响启动。</p>
+          <div className="mt-4 space-y-5">
+            <section className="grid gap-3 sm:grid-cols-[170px_minmax(0,1fr)]">
+              <div>
+                <Label className="text-sm font-medium">全局上下文</Label>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">所有步骤共享。</p>
+              </div>
+              <Textarea
+                value={localGlobalDraft}
+                onChange={(event) => setLocalGlobalDraft(event.target.value)}
+                placeholder="输入本次运行共享的背景、约束或交付要求"
+                rows={4}
+                className="min-h-[104px] resize-y text-sm leading-6"
+              />
+            </section>
 
-        <section className="py-5">
-          <div className="mb-1 flex items-center justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-medium">{props.startContextScopeLabel}上下文</h3>
-              <p className="mt-1 text-xs text-muted-foreground">内容只注入对应{props.startContextScopeLabel}。</p>
-            </div>
-            <Badge variant="outline">{props.startContextTargets.length} 项</Badge>
-          </div>
+            <section>
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">{props.startContextScopeLabel}上下文</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">内容只注入对应{props.startContextScopeLabel}。</p>
+                </div>
+                <Badge variant="outline">{props.startContextTargets.length} 项</Badge>
+              </div>
 
-          {props.startContextTargets.length ? (
-            <div className="mt-3 overflow-hidden rounded-md border border-border">
-              {props.startContextTargets.map((name, index) => {
-                const value = localPhaseDrafts[name] || '';
-                const filled = value.trim().length > 0;
-                const open = expandedTarget === name;
-                return (
-                  <Collapsible key={`context-target-${name}`} open={open} onOpenChange={(nextOpen) => setExpandedTarget(nextOpen ? name : '')}>
-                    <CollapsibleTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex min-h-11 w-full items-center gap-3 border-b border-border px-3 text-left last:border-b-0 hover:bg-muted/35"
-                      >
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-muted text-[11px] font-medium text-muted-foreground">{index + 1}</span>
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
-                        <span className={`text-xs ${filled ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
-                          {filled ? '已填写' : '未填写'}
-                        </span>
-                        <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
-                      </button>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="border-b border-border bg-muted/15 px-3 pb-3 pt-2 last:border-b-0">
-                      <Textarea
-                        id={`context-target-input-${index}`}
-                        value={value}
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setLocalPhaseDrafts((current) => ({ ...current, [name]: nextValue }));
-                        }}
-                        placeholder={`输入仅对「${name}」生效的上下文`}
-                        rows={4}
-                        className="min-h-[96px] resize-y bg-background text-sm leading-6"
-                      />
-                    </CollapsibleContent>
-                  </Collapsible>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="mt-3 rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-              当前工作流没有可设置的{props.startContextScopeLabel}。
-            </div>
-          )}
-        </section>
+              {props.startContextTargets.length ? (
+                <div className="mt-3 overflow-hidden rounded-md border border-border">
+                  {props.startContextTargets.map((name, index) => {
+                    const value = localPhaseDrafts[name] || '';
+                    const filled = value.trim().length > 0;
+                    const open = expandedTarget === name;
+                    return (
+                      <Collapsible key={`context-target-${name}`} open={open} onOpenChange={(nextOpen) => setExpandedTarget(nextOpen ? name : '')}>
+                        <CollapsibleTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex min-h-11 w-full items-center gap-3 border-b border-border px-3 text-left last:border-b-0 hover:bg-muted/35"
+                          >
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-muted text-[11px] font-medium text-muted-foreground">{index + 1}</span>
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+                            <span className={`text-xs ${filled ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                              {filled ? '已填写' : '未填写'}
+                            </span>
+                            <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+                          </button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="border-b border-border bg-muted/15 px-3 pb-3 pt-2 last:border-b-0">
+                          <Textarea
+                            id={`context-target-input-${index}`}
+                            value={value}
+                            onChange={(event) => {
+                              const nextValue = event.target.value;
+                              setLocalPhaseDrafts((current) => ({ ...current, [name]: nextValue }));
+                            }}
+                            placeholder={`输入仅对「${name}」生效的上下文`}
+                            rows={4}
+                            className="min-h-[96px] resize-y bg-background text-sm leading-6"
+                          />
+                        </CollapsibleContent>
+                      </Collapsible>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-3 rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+                  当前工作流没有可设置的{props.startContextScopeLabel}。
+                </div>
+              )}
+            </section>
+          </div>
+        </details>
 
         {!props.runReviewPlanning && startupFlowEnabled ? (
           <section className="border-t border-border py-5">
@@ -16227,7 +16300,7 @@ export default function WorkbenchPage({
           {pendingStartRequest ? (
             <ContextWorkspaceDialog
               title={pendingStartRequest.mode === 'rehearsal' ? '设置本次演练输入' : '设置本次运行输入'}
-              description={`补齐本次运行任务输入、全局背景和${startContextScopeLabel}约束；确认后会创建独立运行实例并进入${pendingStartRequest.mode === 'rehearsal' ? '演练' : '启动'}流程。`}
+              description={`填写最小启动输入；可选背景和${startContextScopeLabel}约束收在高级选项中。确认后会创建独立运行实例并进入${pendingStartRequest.mode === 'rehearsal' ? '演练' : '启动'}流程。`}
               modeLabel={
                 pendingStartRequest.mode === 'rehearsal'
                   ? '演练'
@@ -16242,6 +16315,11 @@ export default function WorkbenchPage({
               taskInputFields={workflowTaskInputFields}
               workingDirectoryDraft={startWorkingDirectoryDraft}
               workingDirectoryEditable
+              projectSourceRequired={Boolean(
+                workflowConfig?.context
+                && Object.prototype.hasOwnProperty.call(workflowConfig.context, 'projectRoot')
+                && requiresWorkflowRunProjectSource(workflowConfig.context.projectRoot),
+              )}
               footerText={pendingStartRequest.preflightPreview?.commands?.length
                 ? '先补齐本次启动上下文，再在下一步确认检查命令并启动。'
                 : '留空的项会沿用当前已保存内容；这里只覆盖你本次确认后提交的文本。'}

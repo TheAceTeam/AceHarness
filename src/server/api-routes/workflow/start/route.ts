@@ -43,6 +43,7 @@ import {
   getMissingRequiredWorkflowTaskInputFields,
   getWorkflowTaskInputTitle,
   normalizeWorkflowTaskInput,
+  requiresWorkflowRunProjectSource,
   resolveWorkflowTaskInputFields,
   type WorkflowTaskInput,
 } from '@/lib/workflow/task-input';
@@ -425,6 +426,18 @@ export async function POST(request: Request) {
         error: '请补齐本次运行任务输入',
         code: 'WORKFLOW_TASK_INPUT_REQUIRED',
         fields: missingTaskInputFields.map((field) => ({ id: field.id, label: field.label })),
+      }, { status: 400 });
+    }
+    const explicitlyUnresolvedProjectSource = Boolean(
+      config?.context
+      && Object.prototype.hasOwnProperty.call(config.context, 'projectRoot')
+      && requiresWorkflowRunProjectSource(config.context.projectRoot),
+    );
+    if (explicitlyUnresolvedProjectSource && !initialContexts.workingDirectory) {
+      return jsonOk({
+        error: '请提供本次运行的项目 / 仓库来源',
+        code: 'WORKFLOW_PROJECT_SOURCE_REQUIRED',
+        fields: [{ id: 'workingDirectory', label: '项目 / 仓库来源（本地目录）' }],
       }, { status: 400 });
     }
     const boundCreationSession = typeof creationSessionId === 'string'

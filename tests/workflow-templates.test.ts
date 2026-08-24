@@ -101,7 +101,7 @@ describe('workflow templates', () => {
     });
   });
 
-  test('ships the joint PR fix template with optional default background and required run input', async () => {
+  test('ships the joint PR fix template with optional default background and minimal issue-driven run input', async () => {
     await withIsolatedAceHome(async () => {
       const { token } = await createAuthToken();
       vi.resetModules();
@@ -120,9 +120,25 @@ describe('workflow templates', () => {
         }),
       ]));
       expect(body.template.workflow.context.taskInput.fields).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'title', required: true }),
-        expect.objectContaining({ id: 'description', required: true }),
+        expect.objectContaining({ id: 'issueUrl', required: true }),
+        expect.objectContaining({ id: 'targetBranch', required: false }),
+        expect.objectContaining({ id: 'reproductionContract', required: false }),
+        expect.objectContaining({ id: 'validationCommands', required: false }),
+        expect.objectContaining({ id: 'deliveryPolicy', required: false }),
+        expect.objectContaining({ id: 'gateContract', required: false }),
       ]));
+      expect(body.template.workflow.context.taskInput.fields.filter((field: any) => field.required)).toEqual([
+        expect.objectContaining({ id: 'issueUrl' }),
+      ]);
+      expect(body.template.workflow.workflow.states.map((state: any) => state.name)).toEqual(expect.arrayContaining([
+        '上下文固化',
+        '最小化用例',
+        '描述与门禁',
+      ]));
+      expect(body.template.workflow.context.taskInput.fields.find((field: any) => field.id === 'gateContract'))
+        .toMatchObject({ required: false, description: expect.stringContaining('conditional_pass') });
+      expect(body.template.workflow.workflow.states.find((state: any) => state.name === '描述与门禁')?.steps[0].task)
+        .toContain('不能直接提交 PR');
     });
   });
 

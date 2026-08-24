@@ -205,6 +205,38 @@ describe('workflow start flow', () => {
     });
   });
 
+  test('requires a per-run project source when the workflow leaves projectRoot unresolved', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    const { parse } = await import('yaml');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
+    (parse as any).mockReturnValue({
+      workflow: { name: '联合 PR 缺陷修复', mode: 'state-machine' },
+      context: {
+        projectRoot: '',
+        taskInput: {
+          fields: [{ id: 'issueUrl', label: '问题单 / PR 链接', type: 'url', required: true }],
+        },
+      },
+    });
+
+    const { POST } = await import('@/server/api-routes/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: {
+        configFile: 'test.yaml',
+        skipPreflight: true,
+        initialContexts: { taskInput: { issueUrl: 'https://example.test/issues/42' } },
+      },
+    }));
+
+    const json = await assertErrorResponse(response, 400);
+    expect(json).toMatchObject({
+      error: '请提供本次运行的项目 / 仓库来源',
+      code: 'WORKFLOW_PROJECT_SOURCE_REQUIRED',
+      fields: [{ id: 'workingDirectory', label: '项目 / 仓库来源（本地目录）' }],
+    });
+  });
+
   test('rejects an unplanned legacy start unless the compatibility flag is explicitly enabled', async () => {
     const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });

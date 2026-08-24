@@ -7,6 +7,8 @@ import {
   getWorkflowTaskInputTitle,
   hasWorkflowTaskInput,
   normalizeWorkflowTaskInput,
+  partitionWorkflowStartTaskInputFields,
+  requiresWorkflowRunProjectSource,
   resolveWorkflowTaskInputFields,
   setWorkflowTaskInputFieldValue,
 } from '@/lib/workflow/task-input';
@@ -81,6 +83,35 @@ describe('workflow task input', () => {
       title: '修复登录失败',
       description: '稳定复现后修复并回归验证',
     }, fields)).toEqual([]);
+  });
+
+  test('keeps issue launch minimal while grouping known contracts as optional overrides', () => {
+    const fields = resolveWorkflowTaskInputFields({
+      fields: [
+        { id: 'issueUrl', label: '问题单 / PR 链接', type: 'url', required: true },
+        { id: 'targetBranch', label: '目标分支（可选覆盖）' },
+        { id: 'reproductionContract', label: '复现契约', type: 'textarea' },
+        { id: 'gateContract', label: 'Gate 契约', type: 'textarea' },
+      ],
+    });
+
+    expect(partitionWorkflowStartTaskInputFields(fields)).toMatchObject({
+      issueDriven: true,
+      primary: [
+        { id: 'issueUrl', required: true },
+        { id: 'targetBranch', required: false },
+      ],
+      optionalKnown: [
+        { id: 'reproductionContract', required: false },
+        { id: 'gateContract', required: false },
+      ],
+    });
+  });
+
+  test('requires a run-level project source only for unresolved template projects', () => {
+    expect(requiresWorkflowRunProjectSource('')).toBe(true);
+    expect(requiresWorkflowRunProjectSource('{project_root}')).toBe(true);
+    expect(requiresWorkflowRunProjectSource('/workspace/project')).toBe(false);
   });
 
   test('formats custom task input fields for agent prompt', () => {

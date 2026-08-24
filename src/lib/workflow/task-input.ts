@@ -121,6 +121,16 @@ export function getWorkflowTaskInputTitle(input?: WorkflowTaskInput | null): str
   return '';
 }
 
+/**
+ * A portable template may intentionally leave its project directory unresolved.
+ * In that case the selected directory belongs to this run's input snapshot, not
+ * to the workflow configuration. Placeholders are treated as unresolved too.
+ */
+export function requiresWorkflowRunProjectSource(projectRoot?: unknown): boolean {
+  const normalized = typeof projectRoot === 'string' ? projectRoot.trim() : '';
+  return !normalized || normalized === '{project_root}';
+}
+
 export function normalizeWorkflowTaskInputFieldDefinitions(input: unknown): WorkflowTaskInputFieldDefinition[] {
   const rawFields: unknown[] = Array.isArray(input)
     ? input
@@ -152,6 +162,29 @@ export function normalizeWorkflowTaskInputFieldDefinitions(input: unknown): Work
 export function resolveWorkflowTaskInputFields(input: unknown): WorkflowTaskInputFieldDefinition[] {
   const configured = normalizeWorkflowTaskInputFieldDefinitions(input);
   return configured.length > 0 ? configured : DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
+}
+
+/**
+ * Issue-driven workflows have a deliberately small launch surface: issue URL
+ * (and an optional branch override) stay visible, while known contracts remain
+ * available as expandable overrides. Other/legacy workflows retain their field
+ * order and required-field behavior unchanged.
+ */
+export function partitionWorkflowStartTaskInputFields(
+  fields: WorkflowTaskInputFieldDefinition[],
+): {
+  issueDriven: boolean;
+  primary: WorkflowTaskInputFieldDefinition[];
+  optionalKnown: WorkflowTaskInputFieldDefinition[];
+} {
+  const issueDriven = fields.some((field) => field.id === 'issueUrl');
+  if (!issueDriven) return { issueDriven: false, primary: fields, optionalKnown: [] };
+  const primary = fields.filter((field) => field.required || field.id === 'issueUrl' || field.id === 'targetBranch');
+  return {
+    issueDriven: true,
+    primary,
+    optionalKnown: fields.filter((field) => !primary.includes(field)),
+  };
 }
 
 export function getMissingRequiredWorkflowTaskInputFields(
