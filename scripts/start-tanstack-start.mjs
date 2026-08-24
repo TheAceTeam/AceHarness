@@ -441,10 +441,56 @@ if (!fs.existsSync(serverEntry)) {
   process.exit(1);
 }
 
-const startServer = await import(pathToFileURL(serverEntry).href);
-const fetchHandler = startServer.default?.fetch;
-if (typeof fetchHandler !== 'function') {
-  console.error('[ACEHarness] TanStack Start server entry does not export a fetch handler.');
+let fetchHandler = null;
+let loadedServerEntryMtimeMs = -1;
+let reloadPromise = null;
+
+function serverEntryMtimeMs() {
+  try {
+    return fs.statSync(serverEntry).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
+
+async function refreshFetchHandler({ required = false } = {}) {
+  const mtimeMs = serverEntryMtimeMs();
+  if (mtimeMs < 0) {
+    if (required) {
+      throw new Error(`TanStack Start server entry is unavailable: ${serverEntry}`);
+    }
+    return;
+  }
+  if (fetchHandler && mtimeMs === loadedServerEntryMtimeMs) return;
+  if (reloadPromise) return reloadPromise;
+
+  reloadPromise = (async () => {
+    // A running local Start server can outlive `npm run build:start`. Bust the
+    // Node ESM entry cache so its SSR manifest and dist/client asset hashes
+    // advance together, instead of rendering an HTML document that references
+    // chunks removed by the rebuild.
+    const entryUrl = pathToFileURL(serverEntry);
+    entryUrl.searchParams.set('build', String(mtimeMs));
+    const startServer = await import(entryUrl.href);
+    const nextFetchHandler = startServer.default?.fetch;
+    if (typeof nextFetchHandler !== 'function') {
+      throw new Error('TanStack Start server entry does not export a fetch handler.');
+    }
+    fetchHandler = nextFetchHandler;
+    loadedServerEntryMtimeMs = mtimeMs;
+  })();
+
+  try {
+    await reloadPromise;
+  } finally {
+    reloadPromise = null;
+  }
+}
+
+try {
+  await refreshFetchHandler({ required: true });
+} catch (error) {
+  console.error('[ACEHarness] Failed to load TanStack Start server entry:', error);
   process.exit(1);
 }
 
@@ -458,6 +504,7 @@ const server = http.createServer(async (req, res) => {
   req.once('aborted', abortStartRequest);
   res.once('close', abortStartRequest);
   try {
+    await refreshFetchHandler();
     const requestUrl = new URL(req.url || '/', `http://${req.headers.host || `${host}:${port}`}`);
     const staticPath = safeStaticPath(requestUrl.pathname);
     if (staticPath && fs.existsSync(staticPath) && fs.statSync(staticPath).isFile()) {
