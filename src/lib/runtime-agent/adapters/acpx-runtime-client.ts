@@ -43,7 +43,7 @@ export interface AcpxRuntimeModule {
   createRuntimeStore(input: { stateDir: string }): AcpRuntimeOptions['sessionStore'];
 }
 
-type AcpxPermissionConfig = Pick<AcpRuntimeOptions, 'permissionMode' | 'nonInteractivePermissions'>;
+type AcpxPermissionConfig = Partial<Pick<AcpRuntimeOptions, 'permissionMode' | 'nonInteractivePermissions'>>;
 type AcpxMcpServers = Array<{
   name: string;
   command: string;
@@ -80,7 +80,10 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
 
   async function getRuntime(profileSnapshot?: RuntimeProfileSnapshot): Promise<AcpRuntime> {
     if (options.runtime) return options.runtime;
-    const permissionConfig = resolveAcpxPermissionConfig(profileSnapshot?.permissionPolicyId);
+    const permissionConfig = resolveAcpxPermissionConfig(
+      profileSnapshot?.permissionPolicyId,
+      profileSnapshot?.agentId,
+    );
     const mcpServers = resolveRuntimeMcpServers(profileSnapshot);
     const cacheKey = runtimeCacheKey(permissionConfig, mcpServers);
     let runtimePromise = runtimePromises.get(cacheKey);
@@ -159,7 +162,10 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
 
         runtimeKeyBySessionKey.set(
           handle.sessionKey,
-          runtimeCacheKey(resolveAcpxPermissionConfig(session.profileSnapshot.permissionPolicyId), resolveRuntimeMcpServers(session.profileSnapshot)),
+          runtimeCacheKey(
+            resolveAcpxPermissionConfig(session.profileSnapshot.permissionPolicyId, session.profileSnapshot.agentId),
+            resolveRuntimeMcpServers(session.profileSnapshot),
+          ),
         );
         return handle;
       } catch (error) {
@@ -193,7 +199,10 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       closedSessionKeys.delete(sessionCloseKey);
       runtimeKeyBySessionKey.set(
         handle.sessionKey,
-        runtimeCacheKey(resolveAcpxPermissionConfig(input.profileSnapshot.permissionPolicyId), resolveRuntimeMcpServers(input.profileSnapshot)),
+        runtimeCacheKey(
+          resolveAcpxPermissionConfig(input.profileSnapshot.permissionPolicyId, input.profileSnapshot.agentId),
+          resolveRuntimeMcpServers(input.profileSnapshot),
+        ),
       );
       await ensureOpenCodeSelectedModel(
         runtime,
@@ -876,7 +885,10 @@ async function createRuntime(
   const sessionStore = module.createRuntimeStore({
     stateDir: options.stateDir ?? getWorkspaceDataFile('acpx-runtime'),
   });
-  return module.createAcpRuntime({
+  // ACPX's TypeScript declaration marks permissionMode as required even though
+  // the runtime intentionally supports its own default when the option is
+  // omitted. OpenCode needs that default for ACEHarness's unrestricted policy.
+  const runtimeOptions = {
     cwd: options.cwd ?? process.cwd(),
     sessionStore: createAcpxCompatibleSessionStore(sessionStore),
     agentRegistry: module.createAgentRegistry({
@@ -884,8 +896,16 @@ async function createRuntime(
     }),
     ...(mcpServers.length > 0 ? { mcpServers: mcpServers as AcpRuntimeOptions['mcpServers'] } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-    ...permissionConfig,
-  });
+    ...(permissionConfig.permissionMode
+      ? {
+        permissionMode: permissionConfig.permissionMode,
+        ...(permissionConfig.nonInteractivePermissions
+          ? { nonInteractivePermissions: permissionConfig.nonInteractivePermissions }
+          : {}),
+      }
+      : {}),
+  } as AcpRuntimeOptions;
+  return module.createAcpRuntime(runtimeOptions);
 }
 
 /**
@@ -993,7 +1013,22 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
-function resolveAcpxPermissionConfig(permissionPolicyId: RuntimePermissionPolicyId | undefined): AcpxPermissionConfig {
+function resolveAcpxPermissionConfig(
+  permissionPolicyId: RuntimePermissionPolicyId | undefined,
+  agentId?: string,
+): AcpxPermissionConfig {
+  // OpenCode ACP treats an explicit `approve-all` + non-interactive deny pair
+  // differently from its own unrestricted default.  The explicit pair can
+  // stall the provider request even though the same local OpenCode CLI and
+  // model work.  The ACEHarness `unrestricted` policy has the same intended
+  // semantics as that default, so leave OpenCode's ACP options unset.  Every
+  // restrictive policy is still forwarded below.
+  if (
+    String(agentId || '').trim().toLowerCase() === 'opencode'
+    && (permissionPolicyId === 'unrestricted' || permissionPolicyId === undefined)
+  ) {
+    return {};
+  }
   switch (permissionPolicyId) {
     case 'deny-all':
       return { permissionMode: 'deny-all', nonInteractivePermissions: 'deny' };

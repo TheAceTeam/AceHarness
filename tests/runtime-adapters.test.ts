@@ -1167,6 +1167,37 @@ describe('runtime adapters', () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  test('leaves OpenCode unrestricted ACP permissions at the agent default', async () => {
+    const createdOptions: AcpRuntimeOptions[] = [];
+    const client = createAcpxRuntimeClient({
+      loadConfiguredEnv: async () => ({}),
+      importRuntime: async () => ({
+        createAcpRuntime(runtimeOptions) {
+          createdOptions.push(runtimeOptions);
+          return {
+            ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+              sessionKey: input.sessionKey,
+              backend: 'acpx',
+              runtimeSessionName: input.sessionKey,
+            })),
+            startTurn: vi.fn(),
+            cancel: vi.fn(async () => undefined),
+            close: vi.fn(async () => undefined),
+          } satisfies AcpRuntime;
+        },
+        createAgentRegistry: () => ({ resolve: (agentName: string) => agentName, list: () => [] }),
+        createRuntimeStore: () => ({ load: vi.fn(async () => undefined), save: vi.fn(async () => undefined) }),
+      }),
+    });
+
+    const session = createSessionInput('runtime-session-opencode-unrestricted', 'opencode', 'acpx', 'unrestricted');
+    await client.ensureSession?.({ session, command: resolveAcpxCommand('opencode') });
+
+    expect(createdOptions).toHaveLength(1);
+    expect(createdOptions[0]).not.toHaveProperty('permissionMode');
+    expect(createdOptions[0]).not.toHaveProperty('nonInteractivePermissions');
+  });
+
   test('acpx runtime client forwards profile MCP servers to acpx runtime options and keys runtime cache by MCP config', async () => {
     const createdOptions: AcpRuntimeOptions[] = [];
     const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
