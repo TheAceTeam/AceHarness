@@ -517,25 +517,10 @@ export async function POST(request: Request) {
               contentLength: String(evt.content || '').length,
             },
           });
-          if (baseLiveSession && liveAssistantMessageId) {
-            const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
-              if (!session) return session;
-              const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
-              if (!currentAssistant) return session;
-              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), String(evt.content || ''));
-              return {
-                ...session,
-                updatedAt: Date.now(),
-                messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
-                  ...message,
-                  rawContent: nextRawContent,
-                  engine: configuredEngine || message.engine,
-                  model: useModel || message.model,
-                })),
-              };
-            });
-            saveLiveSessionSnapshot(nextLiveSession);
-          }
+          // Provider reasoning is useful as an ephemeral progress signal, but
+          // it is not assistant output. Keeping it out of the persisted raw
+          // stream prevents a completed answer (or a later page refresh) from
+          // exposing internal thoughts before the visible reply.
           engineStreamEvents.emit(chatId, { type: 'thinking', content: evt.content });
         } else if (evt?.type === 'error' && evt.content) {
           const stateAtError = getEngineStream(chatId);

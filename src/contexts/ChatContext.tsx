@@ -1165,7 +1165,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
             const content = String(parseSseJsonEventData(e.data).content || '');
-            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
             const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
               chatId: streamState.chatId,
               sessionId: recoveredSession.runtimeSessionId,
@@ -1173,13 +1172,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               streamScope: 'chat-recovery',
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-            setActiveSession(prev => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, rawContent: accumulatedRawStream } : m),
-              };
-            });
           });
 
           es.addEventListener('done', (e) => {
@@ -2745,7 +2737,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
           activeEventSourceRef.current = es;
           resetInactivityTimer();
-          let accumulatedRawContent = '';
           let accumulatedRawStream = '';
           let hasConnected = false;
 
@@ -2758,8 +2749,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             if (!hasConnected) return;
             resetInactivityTimer();
             const content = String(parseSseJsonEventData(e.data).content || '');
-            accumulatedRawContent = appendStreamChunk(accumulatedRawContent, content);
-            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
             const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
               chatId,
               provider: resolvedEngine,
@@ -2769,9 +2758,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               streamScope: 'chat-message',
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-            void applyToTargetSession(s => ({
-              ...s, messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, rawContent: accumulatedRawStream } : m),
-            }));
           });
 
           es.addEventListener('session', (e) => {

@@ -8,6 +8,7 @@ import { getRuntimeSkillPath, getRuntimeSkillsDirPath } from '@/lib/run/runtime-
 import { getRepoRoot, getWorkspaceRoot } from '@/lib/core/app-paths';
 
 const CODE = '```';
+const INLINE_SKILL_REFERENCE_LIMIT = 12;
 const CARD_USAGE_RULES = '## 对话卡片规则\n\n当用户要求列出/查看/统计配置、工作流、Agent、模型、运行记录、状态或其他 API 查询结果时，优先把结果整理为 `kind="card"` 的结构化卡片。尤其是 `config.list`、`agent.list`、`model.list`、`runs.list`、`workflow.status`、`schedule.list` 这类只读查询，拿到结果后应输出简短说明，并在回复末尾输出 `<result>{"kind":"card","payload":{...}}</result>`；列表优先用 table，摘要用 badges/info/status，操作建议用 actions。不要只用纯文本复述长列表。';
 
 const CORE_PROMPT = [
@@ -100,10 +101,19 @@ async function buildDashboardPromptContext(
 
   if (!enabledSkills || enabledSkills.length === 0) return envInfo;
 
-  const refs = await Promise.all([...new Set(enabledSkills)].map((skill) => buildSkillReference(skill)));
   const modeRule = creationAssistantEnabled
     ? '首页对话必须通过 chat 回复推进。创建 Agent 时，必须在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON，并在需要打开创建弹窗时设置 `shouldOpenModal:true`；工作流只能从一等工作流 UI 创建。'
     : '按普通工程对话推进，不要使用 workflow creator Skill，也不要输出创建弹窗的 `home_sidebar`。';
+  const uniqueSkills = [...new Set(enabledSkills)];
+  // A large enabled-skill catalogue should stay discoverable, but serializing
+  // every reference into the first model turn causes a sizeable cold-start
+  // context tax. The agent already receives the runtime skills directory, so
+  // it can list that directory and read only the matching SKILL.md on demand.
+  if (uniqueSkills.length > INLINE_SKILL_REFERENCE_LIMIT) {
+    return `${envInfo}\n\n## 当前启用的 Skills\n\n当前已启用 ${uniqueSkills.length} 个 Skills。先根据用户请求在 \`${runtimeSkillsDir}\` 中查找匹配目录，再只读取所需 Skill 的 \`SKILL.md\`；普通问候或无需 Skill 的问题不要加载 Skill。\n\n${modeRule}`;
+  }
+
+  const refs = await Promise.all(uniqueSkills.map((skill) => buildSkillReference(skill)));
   return `${envInfo}\n\n## 当前启用的 Skills\n\n${refs.join('\n')}\n\n${modeRule}`;
 }
 

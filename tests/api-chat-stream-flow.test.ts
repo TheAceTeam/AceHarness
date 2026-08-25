@@ -154,6 +154,53 @@ describe('chat stream flow', () => {
     expect(json.chatId).toMatch(/^chat-/);
   });
 
+  test('does not persist provider thought chunks as assistant output', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async () => {
+      engine.emitThought('internal reasoning');
+      engine.emitStream('Visible reply');
+      return { success: true, output: 'Visible reply', sessionId: 'runtime-session-thinking' };
+    };
+    const liveSession = {
+      id: 'front-thinking',
+      title: 'Thinking test',
+      model: 'model-a',
+      createdAt: 1,
+      updatedAt: 1,
+      messages: [
+        { id: 'user-1', role: 'user' as const, content: 'hello', timestamp: 1 },
+        { id: 'assistant-1', role: 'assistant' as const, content: '', rawContent: '', timestamp: 2 },
+      ],
+    };
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
+    const { loadChatSession } = await import('@/lib/chat/persistence');
+    const { updateEngineStreamLiveSession } = await import('@/lib/chat/stream-state');
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
+    (loadChatSession as any).mockResolvedValue(liveSession);
+    (updateEngineStreamLiveSession as any).mockImplementation((_chatId: string, updater: any) => {
+      const next = updater(liveSession);
+      Object.assign(liveSession, next);
+      return liveSession;
+    });
+
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
+    const response = await POST(makeRequest('/api/chat/stream', {
+      json: {
+        message: 'hello',
+        mode: 'dashboard',
+        frontendSessionId: 'front-thinking',
+        userMessageId: 'user-1',
+        assistantMessageId: 'assistant-1',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const assistant = liveSession.messages.find((message) => message.id === 'assistant-1');
+    expect(String(assistant?.rawContent || '')).not.toContain('internal reasoning');
+    expect(assistant?.content).toContain('Visible reply');
+  });
+
   test('POST selects the regular conversation prompt when creation assistant is disabled', async () => {
     const engine = new MockEngine({ success: true, output: 'Hello!' });
     const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
