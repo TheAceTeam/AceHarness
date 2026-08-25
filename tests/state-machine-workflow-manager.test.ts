@@ -1323,6 +1323,17 @@ describe('engine-level failure detection', () => {
     expect(isEngineLevelFailure('request failed with statusCode 403')).toBe(true);
   });
 
+  test('classifies provider rate limits as transient engine failures with bounded backoff', async () => {
+    const { getRateLimitRetryDelayMs, isEngineLevelFailure, isRateLimitFailure } = await import('@/lib/state-machine/workflow-manager');
+    const message = 'Internal error: Error from provider (Console): Rate limit exceeded. Please try again later.';
+
+    expect(isRateLimitFailure(message)).toBe(true);
+    expect(isEngineLevelFailure(message)).toBe(true);
+    expect(getRateLimitRetryDelayMs(message, 1)).toBe(30_000);
+    expect(getRateLimitRetryDelayMs('HTTP 429: retry after 45 seconds', 1)).toBe(45_000);
+    expect(getRateLimitRetryDelayMs('HTTP 429: retry after 900 seconds', 1)).toBe(120_000);
+  });
+
   test('does not treat markdown line numbers as HTTP auth failures', async () => {
     const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
     expect(isEngineLevelFailure([

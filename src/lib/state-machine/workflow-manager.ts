@@ -209,6 +209,9 @@ const DEFAULT_AGENT_PREWARM_CONCURRENCY = Math.max(
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
 const TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS = 2;
+const RATE_LIMIT_ENGINE_RETRY_MAX_ATTEMPTS = 3;
+const RATE_LIMIT_RETRY_BASE_DELAY_MS = 30_000;
+const RATE_LIMIT_RETRY_MAX_DELAY_MS = 120_000;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_PARENT = 8;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_USER = 16;
 const MAX_SUBWORKFLOW_RUNS_PER_ROOT = 64;
@@ -816,12 +819,32 @@ function isModelCapacityFailure(message: string): boolean {
   return /\b(?:selected\s+)?model\s+is\s+at\s+capacity\b/i.test(String(message || ''));
 }
 
+export function isRateLimitFailure(message: string): boolean {
+  return /\brate[\s-]?limit(?:ed)?\b|too many requests|\b429\b|请求(?:过于)?频繁|限流/i.test(String(message || ''));
+}
+
+export function getRateLimitRetryDelayMs(message: string, attempt: number): number {
+  const normalized = String(message || '');
+  const retryAfter = normalized.match(/retry(?:\s+again)?\s+after\s+(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)/i);
+  if (retryAfter) {
+    const retryAfterMs = Math.round(Number(retryAfter[1]) * 1_000);
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+      return Math.min(RATE_LIMIT_RETRY_MAX_DELAY_MS, Math.max(RATE_LIMIT_RETRY_BASE_DELAY_MS, retryAfterMs));
+    }
+  }
+  return Math.min(
+    RATE_LIMIT_RETRY_MAX_DELAY_MS,
+    RATE_LIMIT_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
+  );
+}
+
 export function isEngineLevelFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
   if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
   if (/工具调用[「"][^」"]+[」"]的权限请求被拒绝/.test(normalized)) return false;
   if (isStepToolFailure(normalized)) return false;
+  if (isRateLimitFailure(normalized)) return true;
 
   return /acp\s+connection\s+closed/i.test(normalized)
     || /apierror/i.test(normalized)
@@ -850,6 +873,7 @@ function isTransientEngineFailure(message: string): boolean {
   if (/context window limit|maximum context length|prompt is too long/i.test(normalized)) return false;
 
   return /acp\s+connection\s+closed/i.test(normalized)
+    || isRateLimitFailure(normalized)
     || isModelCapacityFailure(normalized)
     || /SDK API retry limit/i.test(normalized)
     || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
@@ -8851,6 +8875,7 @@ try {
     let accumulatedDuration = 0;
     let autoRecoveryAttempts = 0;
     let transientEngineRetryAttempts = 0;
+    let rateLimitEngineRetryAttempts = 0;
     let humanHelpStreamInterrupted = false;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
     const snapshotTerminalUsage = (output = accumulatedOutput || accumulatedStreamPreview): AgentStepExecutionResult => ({
@@ -9203,13 +9228,24 @@ try {
 
       if (result.is_error) {
         const errorMsg = result.result || '引擎执行失败（无输出）';
-        if (isTransientEngineFailure(errorMsg) && transientEngineRetryAttempts < TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS) {
-          transientEngineRetryAttempts += 1;
-          const retryDelayMs = 1000 * transientEngineRetryAttempts;
+        const rateLimited = isRateLimitFailure(errorMsg);
+        const retryAttempts = rateLimited ? rateLimitEngineRetryAttempts : transientEngineRetryAttempts;
+        const retryMaxAttempts = rateLimited ? RATE_LIMIT_ENGINE_RETRY_MAX_ATTEMPTS : TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS;
+        if (isTransientEngineFailure(errorMsg) && retryAttempts < retryMaxAttempts) {
+          const retryAttempt = retryAttempts + 1;
+          if (rateLimited) {
+            rateLimitEngineRetryAttempts = retryAttempt;
+          } else {
+            transientEngineRetryAttempts = retryAttempt;
+          }
+          const retryDelayMs = rateLimited
+            ? getRateLimitRetryDelayMs(errorMsg, retryAttempt)
+            : 1000 * retryAttempt;
+          const retryReason = rateLimited ? '提供方限流' : '临时引擎异常';
           this.emit('log', {
             agent: runtimeAgentName,
             level: 'warning',
-            message: `步骤 "${streamStepName}" 出现临时引擎异常，${retryDelayMs}ms 后重试 ${transientEngineRetryAttempts}/${TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS}: ${errorMsg}`,
+            message: `步骤 "${streamStepName}" 出现${retryReason}，保留当前会话并在 ${Math.ceil(retryDelayMs / 1000)} 秒后重试 ${retryAttempt}/${retryMaxAttempts}: ${errorMsg}`,
           });
           await new Promise((resolveRetry) => setTimeout(resolveRetry, retryDelayMs));
           currentProcessId = stepId || currentProcessId;
@@ -9268,6 +9304,9 @@ try {
       }
       if (transientEngineRetryAttempts > 0) {
         transientEngineRetryAttempts = 0;
+      }
+      if (rateLimitEngineRetryAttempts > 0) {
+        rateLimitEngineRetryAttempts = 0;
       }
       const roundOutput = result.result || '';
       const humanHelpRequests = this.parseHumanHelpRequests(roundOutput, config);
