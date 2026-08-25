@@ -2894,6 +2894,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             // the server-side retry can complete in the same chat session.
             if (data?.recoverable) {
               resetInactivityTimer();
+              const notice = String(data.message || '模型提供方暂时限流，正在自动重试。');
+              void applyToTargetSession(s => ({
+                ...s,
+                messages: s.messages.map(m => m.id === assistantMsgId && !accumulated
+                  ? { ...m, content: notice, rawContent: notice }
+                  : m),
+              }));
               return;
             }
             if (inactivityTimer) clearTimeout(inactivityTimer);
