@@ -1017,17 +1017,17 @@ function resolveAcpxPermissionConfig(
   permissionPolicyId: RuntimePermissionPolicyId | undefined,
   agentId?: string,
 ): AcpxPermissionConfig {
-  // OpenCode ACP treats an explicit `approve-all` + non-interactive deny pair
-  // differently from its own unrestricted default.  The explicit pair can
-  // stall the provider request even though the same local OpenCode CLI and
-  // model work.  The ACEHarness `unrestricted` policy has the same intended
-  // semantics as that default, so leave OpenCode's ACP options unset.  Every
-  // restrictive policy is still forwarded below.
+  // ACPX defaults to `approve-reads`; that still forwards some OpenCode tool
+  // confirmations to its non-interactive resolver, which rejects them. The
+  // ACEHarness `unrestricted` policy must therefore explicitly use
+  // `approve-all`. Deliberately leave nonInteractivePermissions unset: there
+  // should be no remaining prompt under approve-all, and pairing it with a
+  // forced deny changes OpenCode's session behavior.
   if (
     String(agentId || '').trim().toLowerCase() === 'opencode'
     && (permissionPolicyId === 'unrestricted' || permissionPolicyId === undefined)
   ) {
-    return {};
+    return { permissionMode: 'approve-all' };
   }
   switch (permissionPolicyId) {
     case 'deny-all':

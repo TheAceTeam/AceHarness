@@ -1167,7 +1167,7 @@ describe('runtime adapters', () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
-  test('leaves OpenCode unrestricted ACP permissions at the agent default', async () => {
+  test('sets OpenCode unrestricted ACP permissions to approve-all without a forced prompt denial', async () => {
     const createdOptions: AcpRuntimeOptions[] = [];
     const client = createAcpxRuntimeClient({
       loadConfiguredEnv: async () => ({}),
@@ -1194,7 +1194,7 @@ describe('runtime adapters', () => {
     await client.ensureSession?.({ session, command: resolveAcpxCommand('opencode') });
 
     expect(createdOptions).toHaveLength(1);
-    expect(createdOptions[0]).not.toHaveProperty('permissionMode');
+    expect(createdOptions[0]).toHaveProperty('permissionMode', 'approve-all');
     expect(createdOptions[0]).not.toHaveProperty('nonInteractivePermissions');
   });
 
