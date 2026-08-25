@@ -1007,6 +1007,7 @@ describe('runtime adapters', () => {
     });
 
     expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'oneshot',
       sessionOptions: {
         model: 'gpt-5.5',
       },
@@ -1056,6 +1057,9 @@ describe('runtime adapters', () => {
       command: resolveAcpxCommand('opencode'),
     });
 
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'persistent',
+    }));
     expect(setConfigOption).toHaveBeenCalledWith(expect.objectContaining({
       key: 'model',
       value: 'volcengine/GLM-5.2',

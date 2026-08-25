@@ -118,10 +118,11 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
         const createEnsureInput = (sessionKey: string, resumeId?: string) => ({
           sessionKey,
           agent: runtimeAgent,
-          // A persistent ACP client keeps npm exec/shell/agent processes alive between turns.
-          // ACEHarness persists the session record and reconnects on the next turn, so the
-          // transport itself must be one-shot by default.
-          mode: options.sessionMode ?? DEFAULT_ACPX_SESSION_MODE,
+          // OpenCode does not retain its selected model when ACPX reconnects a saved
+          // session. Keeping the client alive means the connection that receives the
+          // model config is also the one that prompts the provider. Other ACP agents
+          // retain the existing one-shot behavior.
+          mode: resolveAcpxSessionMode(agentId, options.sessionMode),
           cwd: session.profileSnapshot.cwd,
           ...(resumeId ? { resumeSessionId: resumeId } : {}),
           sessionOptions: {
@@ -1469,6 +1470,16 @@ function resolveResumeSessionId(handle: AcpRuntimeHandle | undefined): string | 
     : typeof agentSessionId === 'string'
       ? agentSessionId
       : undefined;
+}
+
+function resolveAcpxSessionMode(
+  agentId: string,
+  configuredMode: AcpRuntimeSessionMode | undefined,
+): AcpRuntimeSessionMode {
+  if (configuredMode) return configuredMode;
+  return String(agentId || '').trim().toLowerCase() === 'opencode'
+    ? 'persistent'
+    : DEFAULT_ACPX_SESSION_MODE;
 }
 
 async function resolveEnv(
