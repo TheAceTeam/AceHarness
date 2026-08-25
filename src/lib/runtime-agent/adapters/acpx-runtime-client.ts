@@ -32,6 +32,8 @@ export interface CreateAcpxRuntimeClientOptions {
   sessionMode?: AcpRuntimeSessionMode;
   timeoutMs?: number;
   cleanupTimeoutMs?: number;
+  /** Maximum time to wait for a terminal result after ACP has ended its event stream. */
+  resultTimeoutMs?: number;
   loadConfiguredEnv?: (options?: { userId?: string }) => Promise<Record<string, string>>;
 }
 
@@ -51,6 +53,7 @@ type AcpxMcpServers = Array<{
 
 const DEFAULT_ACPX_SESSION_MODE: AcpRuntimeSessionMode = 'oneshot';
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
+const DEFAULT_TURN_RESULT_TIMEOUT_MS = 30_000;
 const ACPX_PERSISTED_ENV_KEY_PREFIX = 'ace_env_';
 const ACPX_PERSISTED_SNAKE_CASE_KEY = /^[a-z][a-z0-9_]*$/;
 
@@ -73,6 +76,7 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
   const closedSessionKeys = new Set<string>();
   const pendingRuntimeCloses = new Map<string, Promise<void>>();
   const cleanupTimeoutMs = normalizeTimeout(options.cleanupTimeoutMs, DEFAULT_CLEANUP_TIMEOUT_MS);
+  const turnResultTimeoutMs = normalizeTimeout(options.resultTimeoutMs, DEFAULT_TURN_RESULT_TIMEOUT_MS);
 
   async function getRuntime(profileSnapshot?: RuntimeProfileSnapshot): Promise<AcpRuntime> {
     if (options.runtime) return options.runtime;
@@ -245,7 +249,17 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
           }
           yield event;
         }
-        const result = await turn.result;
+        // ACP agents can occasionally close their event stream after a tool
+        // has completed yet never settle `result` (OpenCode oneshot is one
+        // observed case). Without a bound here the orchestrator retains a
+        // running turn forever, even after its process has exited. This timer
+        // starts only after the event stream has ended, so long-running tools
+        // may continue to stream normally without being cut off.
+        const result = await withTimeout(
+          turn.result,
+          turnResultTimeoutMs,
+          'ACP runtime ended its event stream without a terminal result',
+        );
         resultSettled = true;
         writeAcpxDebugTrace({
           stage: 'acpx.turn_result',

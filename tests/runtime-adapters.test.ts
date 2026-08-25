@@ -2213,6 +2213,46 @@ describe('runtime adapters', () => {
     }));
   });
 
+  test('fails and closes an ACP turn when its event stream ends without a terminal result', async () => {
+    const cancel = vi.fn(async () => undefined);
+    const closeStream = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const runtime = {
+      ensureSession: vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+        sessionKey: input.sessionKey,
+        backend: 'acpx',
+        runtimeSessionName: input.sessionKey,
+        acpxRecordId: 'record-missing-terminal-result',
+      })),
+      startTurn: vi.fn((): AcpRuntimeTurn => ({
+        requestId: 'request-missing-terminal-result',
+        events: eventStream([{ type: 'tool_updated', payload: { status: 'completed' } }]),
+        result: new Promise(() => {}),
+        cancel,
+        closeStream,
+      })),
+      cancel: vi.fn(async () => undefined),
+      close,
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({
+      runtime,
+      resultTimeoutMs: 10,
+      cleanupTimeoutMs: 20,
+    });
+    const adapter = new AcpxAdapter(client);
+    const binding = await adapter.createOrLoadSession(createSessionInput('runtime-session-missing-terminal-result', 'codex', 'acpx'));
+
+    await expect(collect(client.runTurn!(binding, createTurnInput()))).rejects.toThrow(
+      'ACP runtime ended its event stream without a terminal result',
+    );
+    expect(cancel).toHaveBeenCalledWith({ reason: 'acpx turn consumer detached or failed' });
+    expect(closeStream).toHaveBeenCalledWith({ reason: 'acpx turn consumer detached or failed' });
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'aceharness-runtime-turn-aborted',
+      discardPersistentState: false,
+    }));
+  });
+
   test('closes the acpx runtime when startTurn throws', async () => {
     const close = vi.fn(async () => undefined);
     const runtime = {
