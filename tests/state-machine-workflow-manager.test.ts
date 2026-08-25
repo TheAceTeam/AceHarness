@@ -1417,6 +1417,39 @@ describe('engine-level failure detection', () => {
     expect(engine.calls[1].options.prompt).toContain('ENOENT');
   });
 
+  test('recovers a completed turn that ended after a rejected PowerShell tool without a final answer', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = vi.fn()
+      .mockImplementationOnce(async () => {
+        (engine as any).emit('stream', {
+          type: 'tool',
+          tool: {
+            id: 'tool-powershell-1',
+            toolName: 'powershell',
+            title: '执行命令',
+            status: 'failed',
+            result: { error: 'The user rejected permission to use this specific tool call.' },
+          },
+        });
+        return { success: true, output: '', sessionId: 'same-session' };
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"recovered after using bash"}\n```\nRecovered with the available evidence.',
+        sessionId: 'same-session',
+      });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls).toHaveLength(2);
+    expect(engine.calls[1].options.sessionId).toBe('same-session');
+    expect(engine.calls[1].options.prompt).toContain('工具调用「powershell」的权限请求被拒绝');
+    expect(engine.calls[1].options.prompt).toContain('绝不能调用 powershell');
+  });
+
   test('counts automatic recovery failures consecutively after a successful recovery response', async () => {
     const engine = new MockEngine();
     let manager: any;
@@ -1924,6 +1957,27 @@ describe('state machine live feedback', () => {
     expect(context).toContain('- pass: 进入 "完成"');
     expect(context).toContain('- fail: 进入 "设计"');
     expect(context).not.toContain('# 可选的下一状态');
+  });
+
+  test('tells non-Windows workflow agents not to use PowerShell or cmd', async () => {
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig();
+    const context = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Build a feature',
+    );
+
+    if (process.platform === 'win32') {
+      expect(context).toContain('当前宿主是 Windows');
+    } else {
+      expect(context).toContain(`当前宿主是 ${process.platform === 'darwin' ? 'macOS' : 'Unix-like'}`);
+      expect(context).toContain('只使用 POSIX shell（bash/sh）');
+      expect(context).toContain('不要调用 powershell、pwsh、cmd');
+    }
   });
 
   test('injects current state verdict transitions even when roadmap memo is reused', async () => {

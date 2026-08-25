@@ -389,6 +389,38 @@ function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): bool
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
 }
 
+function isRejectedToolPermission(message: string | undefined): boolean {
+  const normalized = String(message || '').trim();
+  return /(?:the user rejected permission|permission request (?:was )?rejected|权限请求被拒绝|用户拒绝(?:了)?权限)/i.test(normalized);
+}
+
+function buildEmptyRuntimeTurnError(lastFailedTool?: { toolName?: string; result?: { error?: string } }): string {
+  const toolName = String(lastFailedTool?.toolName || '').trim();
+  const toolError = String(lastFailedTool?.result?.error || '').trim();
+  if (toolName && isRejectedToolPermission(toolError)) {
+    return `运行时回合未生成最终答复：工具调用「${toolName}」的权限请求被拒绝。请改用当前平台可用的替代工具，并在本回合输出步骤结论。`;
+  }
+  if (toolName) {
+    return `运行时回合未生成最终答复：工具调用「${toolName}」失败。请检查该工具结果，改用可用替代工具，并在本回合输出步骤结论。`;
+  }
+  return '运行时回合已结束，但未生成最终答复。请继续当前步骤并输出步骤结论。';
+}
+
+function buildHostShellGuidance(platform = process.platform): string {
+  if (platform === 'win32') {
+    return [
+      '\n# 宿主命令环境',
+      '当前宿主是 Windows。需要执行命令时使用 PowerShell 或 cmd，并使用 Windows 路径语义。',
+    ].join('\n');
+  }
+  const host = platform === 'darwin' ? 'macOS' : 'Unix-like';
+  return [
+    '\n# 宿主命令环境',
+    `当前宿主是 ${host}。需要执行命令时只使用 POSIX shell（bash/sh）和 Unix 路径语义。`,
+    '不要调用 powershell、pwsh、cmd 或 Windows 批处理命令；即使工具列表中出现它们也不要使用。',
+  ].join('\n');
+}
+
 function isAceHarnessSkillName(skillName: string): boolean {
   return skillName.toLowerCase().startsWith('aceharness-');
 }
@@ -788,6 +820,7 @@ export function isEngineLevelFailure(message: string): boolean {
   const normalized = String(message || '');
   if (!normalized.trim()) return false;
   if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
+  if (/工具调用[「"][^」"]+[」"]的权限请求被拒绝/.test(normalized)) return false;
   if (isStepToolFailure(normalized)) return false;
 
   return /acp\s+connection\s+closed/i.test(normalized)
@@ -858,6 +891,7 @@ function buildStepAutoRecoveryPrompt(input: {
   maxAttempts: number;
   error: string;
 }) {
+  const toolPermissionRejected = /工具调用[「"][^」"]+[」"]的权限请求被拒绝/.test(input.error);
   return [
     `## 系统自动恢复（第 ${input.attempt}/${input.maxAttempts} 次）`,
     '',
@@ -876,6 +910,15 @@ function buildStepAutoRecoveryPrompt(input: {
     '- 不要假设失败路径一定存在；必要时先列目录或搜索相关文件，再继续。',
     '- 如果某个文件确实不存在，请说明替代依据，并继续完成当前步骤能完成的部分。',
     '- 最终仍需按当前步骤原始要求输出结论或交付物。',
+    ...(toolPermissionRejected
+      ? [
+          '- 上一轮有工具权限请求被拒绝：不要重复请求同一个工具；优先使用已成功获得的证据，必要时改用当前平台允许的等价工具。',
+          process.platform === 'win32'
+            ? '- 当前是 Windows；使用 PowerShell/cmd 的可用替代命令。'
+            : '- 当前是 macOS/Unix；只能使用 bash/sh 与 Unix 命令，绝不能调用 powershell、pwsh 或 cmd。',
+          '- 即使不再执行工具，也必须给出当前步骤要求的最终文本、JSON 和步骤结论。',
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -4836,6 +4879,7 @@ try {
       const memoryV2Execution = options.memoryV2Execution as WorkflowMemoryV2AiExecution | undefined;
       let fullTranscript = '';
       let streamedTextContent = '';
+      let lastFailedTool: { toolName?: string; result?: { error?: string } } | undefined;
 
       const appendTranscriptSegment = (content: string) => {
         const segment = String(content || '');
@@ -4865,6 +4909,9 @@ try {
 
         if (event.type === 'tool') {
           const tool = event.tool;
+          if (tool.status === 'failed') {
+            lastFailedTool = tool;
+          }
           appendTranscriptSegment(formatAceRuntimeToolEvent(tool));
           processManager.upsertToolEvent(processId, tool);
           if (options.runId) {
@@ -4965,6 +5012,14 @@ try {
               true,
             );
           }
+        }
+
+        if (result.success && !hasMeaningfulAiOutput(visibleOutput)) {
+          result = {
+            ...result,
+            success: false,
+            error: buildEmptyRuntimeTurnError(lastFailedTool),
+          };
         }
 
         // Mark process as completed with only cleaned V2 text. This prevents
@@ -8440,6 +8495,7 @@ try {
     if (config.context?.projectRoot) {
       parts.push(`\n# 项目路径\n${config.context.projectRoot}`);
     }
+    parts.push(buildHostShellGuidance());
 
     const conclusionScope = isLastStepInState
       ? `当前步骤是状态 "${state.name}" 的最后一个步骤。`
