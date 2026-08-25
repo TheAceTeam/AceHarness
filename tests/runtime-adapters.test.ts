@@ -340,6 +340,21 @@ describe('runtime adapters', () => {
     }));
   });
 
+  test('marks OpenCode provider rate limits as retryable even when ACP omits the flag', () => {
+    const failed = normalizeAcpxRuntimeEvent({
+      type: 'turn.failed',
+      error: {
+        message: 'Internal error: Error from provider (Console): Rate limit exceeded. Please try again later.',
+        retryable: false,
+      },
+    });
+
+    expect(failed.error).toMatchObject({
+      retryable: true,
+      message: expect.stringContaining('Rate limit exceeded'),
+    });
+  });
+
   test('keeps ACPX file-edit metadata while omitting the file body', () => {
     const fileBody = 'line one\nline two';
     const tool = normalizeAcpxRuntimeEvent({

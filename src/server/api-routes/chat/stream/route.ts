@@ -563,6 +563,18 @@ export async function POST(request: Request) {
         onContextReset: () => {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
         },
+        providerRateLimit: {
+          maxAttempts: 2,
+          baseDelayMs: 30_000,
+          maxDelayMs: 60_000,
+          onRetry: ({ attempt, maxAttempts, delayMs }) => {
+            engineStreamEvents.emit(chatId, {
+              type: 'engine_error',
+              content: `模型提供方暂时限流，${Math.ceil(delayMs / 1000)} 秒后自动重试（${attempt}/${maxAttempts}）；请勿重复发送。`,
+              recoverable: true,
+            });
+          },
+        },
       }).then((result) => {
         if (isChatRuntimeTimingDebug()) {
           console.log(
@@ -914,7 +926,11 @@ export async function GET(request: Request) {
           send('thinking', { content: evt.content });
         } else if (evt.type === 'engine_error') {
           const state = getEngineStream(chatId);
-          send('engine_error', { message: evt.content || '执行失败', runtimeSessionId: state?.runtimeSessionId || null });
+          send('engine_error', {
+            message: evt.content || '执行失败',
+            runtimeSessionId: state?.runtimeSessionId || null,
+            recoverable: Boolean(evt.recoverable),
+          });
         }
       };
 

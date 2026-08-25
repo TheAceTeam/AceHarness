@@ -850,10 +850,15 @@ function normalizeError(value: unknown): AdapterRuntimeEvent['error'] {
     return undefined;
   }
 
+  const message = redactNativeIdText(asString(value.message) ?? 'Adapter event reported an error.');
+
   return {
     code: 'ADAPTER_FAILED',
-    message: redactNativeIdText(asString(value.message) ?? 'Adapter event reported an error.'),
-    retryable: Boolean(value.retryable),
+    message,
+    // OpenCode's ACP error does not currently set `retryable` for provider
+    // throttling. Preserve an explicit native value, but classify the stable
+    // provider wording as retryable so callers can offer a real recovery path.
+    retryable: Boolean(value.retryable) || isProviderRateLimitError(message),
     redacted: true,
     cause: asString(value.code)
       ? {
@@ -862,6 +867,10 @@ function normalizeError(value: unknown): AdapterRuntimeEvent['error'] {
         }
       : undefined,
   };
+}
+
+export function isProviderRateLimitError(value: string): boolean {
+  return /\brate[\s-]?limit(?:ed)?\b|too many requests|\b429\b|请求(?:过于)?频繁|限流/i.test(String(value || ''));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

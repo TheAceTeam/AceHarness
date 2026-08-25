@@ -154,6 +154,31 @@ describe('chat stream flow', () => {
     expect(json.chatId).toMatch(/^chat-/);
   });
 
+  test('POST configures bounded automatic recovery for provider rate limits', async () => {
+    const engine = new MockEngine({ success: true, output: 'Hello!' });
+    const { getOrCreateChatRuntimeEngine, executeChatRuntimeWithContextRecovery } = await import('@/lib/chat/chat-engine-runtime');
+    (getOrCreateChatRuntimeEngine as any).mockResolvedValue(engine);
+
+    const { POST } = await import('@/server/api-routes/chat/stream/route');
+    const response = await POST(makeRequest('/api/chat/stream', {
+      json: { message: 'Hello', mode: 'dashboard' },
+    }));
+
+    expect(response.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(executeChatRuntimeWithContextRecovery).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        providerRateLimit: expect.objectContaining({
+          maxAttempts: 2,
+          baseDelayMs: 30_000,
+          maxDelayMs: 60_000,
+        }),
+      }),
+    );
+  });
+
   test('does not persist provider thought chunks as assistant output', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async () => {

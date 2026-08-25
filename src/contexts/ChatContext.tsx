@@ -2888,8 +2888,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           });
 
           es.addEventListener('engine_error', (e) => {
-            if (inactivityTimer) clearTimeout(inactivityTimer);
             const data = parseSseJsonEventData(e.data);
+            // A provider-throttle notice is progress, not a terminal answer.
+            // Keep this SSE connection and the pending assistant row alive so
+            // the server-side retry can complete in the same chat session.
+            if (data?.recoverable) {
+              resetInactivityTimer();
+              return;
+            }
+            if (inactivityTimer) clearTimeout(inactivityTimer);
             const message = String(data?.message || '执行失败，请稍后重试');
             const failedRuntimeSessionId = readRuntimeSessionIdFromPayload(data);
             const row = storeChatStreamSseEventAsAgentMessage('error', {

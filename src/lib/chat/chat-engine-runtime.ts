@@ -151,6 +151,18 @@ export interface EngineContextRecoveryOptions {
   compactInstructions?: string;
   buildCompactSource?: () => string | Promise<string>;
   onContextReset?: (event: ContextRecoveryEvent) => void | Promise<void>;
+  providerRateLimit?: {
+    /** Number of retries after the initial provider-throttled request. Disabled by default. */
+    maxAttempts?: number;
+    baseDelayMs?: number;
+    maxDelayMs?: number;
+    onRetry?: (event: {
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      error: string;
+    }) => void | Promise<void>;
+  };
 }
 
 export interface ContextRecoveryMetadata {
@@ -165,6 +177,8 @@ export interface ContextRecoveryMetadata {
 const DEFAULT_MAX_ATTEMPTS = 2;
 const DEFAULT_COMPACT_SOURCE_LIMIT = 120_000;
 const DEFAULT_CONTINUATION_PROMPT_LIMIT = 48_000;
+const DEFAULT_RATE_LIMIT_RETRY_BASE_DELAY_MS = 30_000;
+const DEFAULT_RATE_LIMIT_RETRY_MAX_DELAY_MS = 60_000;
 const COMPACT_SUMMARY_SYSTEM_PROMPT = 'You are a helpful AI assistant tasked with summarizing conversations and agent work so another agent can continue without losing context.';
 const COMPACT_SUMMARY_TASK = `Your task is to create a detailed summary of the conversation or agent work so far, paying close attention to the user's explicit requests and the assistant's previous actions.
 This summary should be thorough in capturing technical details, code patterns, architectural decisions, tool calls, files, errors, fixes, and current state that would be essential for continuing work without losing context.
@@ -253,6 +267,51 @@ export async function executeChatRuntimeWithContextRecovery(
   options: ChatRuntimeEngineOptions,
   recovery: EngineContextRecoveryOptions = {},
 ): Promise<ChatRuntimeResult> {
+  const rateLimitRecovery = recovery.providerRateLimit;
+  const maxRateLimitAttempts = Math.max(0, rateLimitRecovery?.maxAttempts ?? 0);
+  let rateLimitAttempt = 0;
+
+  while (true) {
+    try {
+      const result = await executeWithContextRecovery(engine, options, recovery);
+      const error = result.success ? '' : resultContextError(result);
+      if (!isProviderRateLimitError(error) || rateLimitAttempt >= maxRateLimitAttempts) {
+        return result;
+      }
+
+      rateLimitAttempt += 1;
+      const delayMs = providerRateLimitDelayMs(rateLimitAttempt, rateLimitRecovery);
+      await rateLimitRecovery?.onRetry?.({
+        attempt: rateLimitAttempt,
+        maxAttempts: maxRateLimitAttempts,
+        delayMs,
+        error,
+      });
+      await waitForRetry(delayMs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isProviderRateLimitError(message) || rateLimitAttempt >= maxRateLimitAttempts) {
+        throw error;
+      }
+
+      rateLimitAttempt += 1;
+      const delayMs = providerRateLimitDelayMs(rateLimitAttempt, rateLimitRecovery);
+      await rateLimitRecovery?.onRetry?.({
+        attempt: rateLimitAttempt,
+        maxAttempts: maxRateLimitAttempts,
+        delayMs,
+        error: message,
+      });
+      await waitForRetry(delayMs);
+    }
+  }
+}
+
+async function executeWithContextRecovery(
+  engine: ChatRuntimeEngine,
+  options: ChatRuntimeEngineOptions,
+  recovery: EngineContextRecoveryOptions,
+): Promise<ChatRuntimeResult> {
   const maxAttempts = Math.max(1, recovery.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
   const continuationPromptLimit = recovery.continuationPromptLimit ?? DEFAULT_CONTINUATION_PROMPT_LIMIT;
   let currentOptions: ChatRuntimeEngineOptions = { ...options };
@@ -318,6 +377,23 @@ export async function executeChatRuntimeWithContextRecovery(
     result.metadata = { ...(result.metadata || {}), contextRecovery: recoveryMetadata };
   }
   return result;
+}
+
+export function isProviderRateLimitError(value: string): boolean {
+  return /\brate[\s-]?limit(?:ed)?\b|too many requests|\b429\b|请求(?:过于)?频繁|限流/i.test(String(value || ''));
+}
+
+function providerRateLimitDelayMs(
+  attempt: number,
+  recovery: EngineContextRecoveryOptions['providerRateLimit'],
+): number {
+  const baseDelayMs = Math.max(0, recovery?.baseDelayMs ?? DEFAULT_RATE_LIMIT_RETRY_BASE_DELAY_MS);
+  const maxDelayMs = Math.max(baseDelayMs, recovery?.maxDelayMs ?? DEFAULT_RATE_LIMIT_RETRY_MAX_DELAY_MS);
+  return Math.min(maxDelayMs, baseDelayMs * (2 ** Math.max(0, attempt - 1)));
+}
+
+function waitForRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 export async function compactChatRuntimeContextManually(
