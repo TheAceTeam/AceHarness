@@ -204,7 +204,7 @@ export function getAcpxAgentRegistryOverrides(): Record<string, string[]> {
   // process PATH, which misses a CLI installed only on an ACEHarness-configured
   // search path. Parts are returned unwrapped because acpx does its own .cmd
   // handling via buildSpawnCommandOptions.
-  const resolve = (agentId: 'nga' | 'codeagent' | 'codegenie'): string[] => {
+  const resolve = (agentId: 'opencode' | 'nga' | 'codeagent' | 'codegenie'): string[] => {
     const definition = getBuiltinAgentDefinition(agentId);
     if (!definition?.command) throw new Error(`Missing ACPX command metadata for ${agentId}`);
     const env = buildConfiguredProcessEnvSync();
@@ -229,6 +229,12 @@ export function getAcpxAgentRegistryOverrides(): Record<string, string[]> {
     return [...parts];
   };
   return {
+    // ACPX ships an OpenCode registry entry which launches `npx -y opencode-ai
+    // acp`.  That bypasses the CLI the user has configured and may pull a
+    // different package/provider path for every run.  Override it as well so
+    // runtime sessions use the same discovered local `opencode` command as the
+    // terminal and the Engine availability check.
+    opencode: resolve('opencode'),
     nga: resolve('nga'),
     codeagent: resolve('codeagent'),
     codegenie: resolve('codegenie'),

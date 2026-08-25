@@ -104,6 +104,7 @@ describe('runtime adapters', () => {
 
     // The leading part is whatever discovery resolved — an absolute path where the
     // CLI is installed, the bare name otherwise — so assert only the trailing args.
+    expect(overrides.opencode.at(-1)).toBe('acp');
     expect(overrides.nga.slice(1)).toEqual(['--disable-update', 'acp']);
     expect(overrides.codeagent.at(-1)).toBe('acp');
     expect(overrides.codegenie.at(-1)).toBe('acp');
@@ -112,12 +113,13 @@ describe('runtime adapters', () => {
     const registry = createAgentRegistry({ overrides });
     // The array form round-trips, and it is the only shape that makes acpx
     // populate agentArgv — without it resolveAgentCommandParts throws on win32.
+    expect(registry.resolve('opencode')).toEqual(overrides.opencode);
     expect(registry.resolve('codegenie')).toEqual(overrides.codegenie);
     expect(Array.isArray(registry.resolve('nga'))).toBe(true);
   });
 
   test('uses the built-in agent ID for both ACPX session and model discovery launch paths', () => {
-    for (const agentId of ['nga', 'codeagent', 'codegenie']) {
+    for (const agentId of ['opencode', 'nga', 'codeagent', 'codegenie']) {
       expect(resolveAcpxRuntimeAgent(resolveAcpxCommand(agentId), { agentId, cwd: process.cwd() })).toBe(agentId);
     }
   });
