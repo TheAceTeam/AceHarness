@@ -1352,21 +1352,32 @@ describe('engine-level failure detection', () => {
     )).toBe(false);
   });
 
-  test('stops the workflow when an engine returns a context-window error as plain output', async () => {
+  test('does not fail a completed verdict that cites a historical rate-limit recovery', async () => {
     const engine = new MockEngine({
       success: true,
-      output: 'ApiError: the model has reached its context window limit',
+      output: [
+        '```json',
+        '{"verdict":"pass","remaining_issues":0,"summary":"evidence complete"}',
+        '```',
+        '<step-conclusion>',
+        '本轮因之前的 rate-limit 恢复重放，未重复执行工具；证据未变。',
+        '</step-conclusion>',
+      ].join('\n'),
     });
     const manager = await createManagerForTest(engine);
     const config = makeConfig();
 
-    await expect((manager as any).executeStateMachine(config, 'Build a feature')).rejects.toThrow(/context window limit/i);
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(result.stepOutputs.join('\n')).toContain('rate-limit 恢复');
   });
 
-  test('stops the workflow when an engine returns localized 401 as plain output', async () => {
+  test('stops the workflow when the runtime itself returns localized 401', async () => {
     const engine = new MockEngine({
-      success: true,
-      output: '模型调用失败 (401): 无效的令牌 (request id: abc)',
+      success: false,
+      output: '',
+      error: '模型调用失败 (401): 无效的令牌 (request id: abc)',
     });
     const manager = await createManagerForTest(engine);
     const config = makeConfig();

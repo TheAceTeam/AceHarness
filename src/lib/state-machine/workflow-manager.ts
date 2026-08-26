@@ -7713,9 +7713,12 @@ try {
       let stepResult = await this.runAgentStep(step, context, config, stepId, memoryV2Execution, stepRunId);
       observedStepResult = stepResult;
       let output = stepResult.output;
-      if (isEngineLevelFailure(output)) {
-        throw new Error(output.trim() || '引擎返回致命错误输出');
-      }
+      // `runAgentStep` is the authoritative runtime-result boundary: it turns
+      // real runtime failures into rejected promises before returning here.
+      // Never classify a successful natural-language answer by scanning it for
+      // error keywords. A valid verdict may legitimately record historical
+      // evidence such as a prior "rate-limit" recovery, which used to make a
+      // completed ACP turn look like an engine failure at this point.
       const requiresLightweightStepConclusion = isLightweightWorkflowConfig(config);
       const requiresFinalVerdict = !requiresLightweightStepConclusion
         && this.shouldRequireFinalVerdict(step, state);
