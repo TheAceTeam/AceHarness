@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
@@ -77,6 +77,37 @@ describe('subworkflow UI coverage', () => {
     expect(screen.getByTitle('Child / Review / Ask human')).toBeInTheDocument();
   });
 
+  test('HumanQuestionCard keeps long approval state lists scrollable and promotes the suggested target', () => {
+    render(
+      <HumanQuestionCard
+        collapsible={false}
+        onSubmit={vi.fn()}
+        question={{
+          id: 'q-long-approval',
+          runId: 'run-approval',
+          configFile: 'workflow.yaml',
+          status: 'unanswered',
+          kind: 'approval',
+          title: '选择恢复目标',
+          message: '请选择下一步状态。',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          requiresWorkflowPause: true,
+          suggestedNextState: '描述与门禁',
+          answerSchema: {
+            type: 'approval-transition',
+            required: true,
+            options: ['上下文固化', '风险分级与受理', '描述与门禁', '人工交付确认', '异常归档'].map((value) => ({ label: value, value })),
+          },
+        } as any}
+      />,
+    );
+
+    const stateList = screen.getByLabelText('下一步状态列表');
+    expect(stateList).toHaveClass('overflow-y-auto');
+    expect(within(stateList).getAllByRole('button')[0]).toHaveTextContent('描述与门禁');
+    expect(within(stateList).getByRole('button', { name: /描述与门禁/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   test('StateMachineExecutionView renders child run card and opens embedded detail action', async () => {
     const onOpen = vi.fn();
     render(
@@ -128,4 +159,3 @@ describe('subworkflow UI coverage', () => {
     expect(onRerunFromStep).toHaveBeenCalledWith('Build-verify');
   });
 });
-

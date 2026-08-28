@@ -13675,7 +13675,7 @@ export default function WorkbenchPage({
   const renderRunLiveOutputPanel = () => (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/10">
       {pendingHumanQuestion?.status === 'unanswered' ? (
-        <div className="shrink-0 border-b bg-background/95 p-4 shadow-sm">
+        <div className="max-h-[60%] min-h-0 shrink overflow-y-auto border-b bg-background/95 p-4 shadow-sm">
           <HumanQuestionCard
             question={pendingHumanQuestion}
             submitting={submittingHumanQuestion}

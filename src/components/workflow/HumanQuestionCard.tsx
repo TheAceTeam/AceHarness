@@ -75,6 +75,14 @@ export default function HumanQuestionCard({
   const defaultAnswer = useMemo(() => buildDefaultAnswer(question), [question]);
   const [answer, setAnswer] = useState<HumanQuestionAnswer>(() => defaultAnswer);
   const options: Array<{ label: string; value: string; description?: string }> = question.answerSchema.options || question.availableStates?.map((state) => ({ label: state, value: state })) || [];
+  const orderedOptions = useMemo(() => {
+    if (question.answerSchema.type !== 'approval-transition' || !question.suggestedNextState) return options;
+    return [...options].sort((left, right) => {
+      const leftRecommended = left.value === question.suggestedNextState ? 0 : 1;
+      const rightRecommended = right.value === question.suggestedNextState ? 0 : 1;
+      return leftRecommended - rightRecommended;
+    });
+  }, [options, question.answerSchema.type, question.suggestedNextState]);
   const ready = useMemo(() => isAnswerReady(question, answer), [answer, question]);
 
   useEffect(() => {
@@ -164,12 +172,17 @@ export default function HumanQuestionCard({
             {question.answerSchema.type === 'approval-transition' ? (
               <div className="space-y-2">
                 <div className="text-sm font-medium">选择下一步状态</div>
-                <div className="grid gap-2">
-                  {options.map((option) => (
+                <div
+                  className="grid max-h-[min(32vh,18rem)] gap-2 overflow-y-auto overscroll-contain pr-1"
+                  aria-label="下一步状态列表"
+                  tabIndex={0}
+                >
+                  {orderedOptions.map((option) => (
                     <button
                       key={option.value}
                       type="button"
                       onClick={() => setAnswer((prev) => ({ ...prev, selectedState: option.value }))}
+                      aria-pressed={answer.selectedState === option.value}
                       className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
                         answer.selectedState === option.value
                           ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/50'
