@@ -9,6 +9,7 @@ import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/prom
 import { resolve, join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
+import { markSuspendCheckpoint, suspendedSince } from '@/lib/core/system-suspend-tracker';
 import { cpus } from 'os';
 import { parse } from 'yaml';
 import { resolveAgentEngineSelection } from '@/lib/engines/workflow-engine-selection';
@@ -387,6 +388,18 @@ function stripAceProcessBlocks(text: string): string {
 
 function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): boolean {
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
+}
+
+/**
+ * 从引擎上报的墙钟时长里扣掉这段区间内系统挂起（睡眠/休眠）的时间。
+ *
+ * 引擎按墙钟计时，机器睡一晚会让一次调用被记成十几个小时——实测过 743.6 分钟、
+ * 状态还标着 completed。扣减后至少保留 0，且不会把时长扣成负数。
+ */
+function subtractSuspendedTime(reportedMs: number, suspendedMs: number): number {
+  if (!Number.isFinite(reportedMs) || reportedMs <= 0) return reportedMs;
+  if (!Number.isFinite(suspendedMs) || suspendedMs <= 0) return reportedMs;
+  return Math.max(0, reportedMs - suspendedMs);
 }
 
 function isAceHarnessSkillName(skillName: string): boolean {
@@ -4855,6 +4868,8 @@ try {
         });
       };
 
+      // 机器睡眠期间引擎的墙钟计时照走，这里圈出区间，拿到结果后把挂起时长扣掉。
+      const suspendCheckpoint = markSuspendCheckpoint();
       engine.on('stream', streamHandler);
 
       try {
@@ -4956,7 +4971,10 @@ try {
           stop_reason: result.stopReason,
           is_error: !result.success,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
-          duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
+          duration_ms: subtractSuspendedTime(
+            metadataNumber(metadata, 'duration_ms', 'durationMs'),
+            suspendedSince(suspendCheckpoint),
+          ),
           duration_api_ms: metadataNumber(metadata, 'duration_api_ms', 'durationApiMs'),
           num_turns: metadataNumber(metadata, 'num_turns', 'numTurns'),
           usage,
