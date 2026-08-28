@@ -1487,7 +1487,6 @@ function StateMachineDiagramInner({
         }, 100);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedState, setCenter, nodes]);
 
   const onNodeClick = useCallback(
