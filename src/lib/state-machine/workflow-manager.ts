@@ -943,8 +943,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private globalContext: string = '';
   private stateContexts: Map<string, string> = new Map();
   private taskInput: WorkflowTaskInput = {};
-  private workspaceSkillsCache: string = '';
-  private workspaceSkillsCacheProjectRoot: string = '';
+  /**
+   * 已同步到工作区、Agent 能自行读取的 Skill 名称。由 syncSkillsToWorkspace 填充。
+   * 命中的 Skill 在提示词里只给路径，不再内联正文；内联只为「工作区里没有」的情况兜底。
+   */
   private workspaceSkillNames: Set<string> = new Set();
   /** Per-agent prompt memory for omitting unchanged repeated context within one run session. */
   private promptMemos: Map<string, AgentPromptMemo> = new Map();
@@ -1585,50 +1587,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   /**
-   * Load and cache workspace skills from <engine-config>/skills/
-   */
-  private async loadWorkspaceSkills(projectRoot: string): Promise<string> {
-    if (this.workspaceSkillsCache && this.workspaceSkillsCacheProjectRoot === projectRoot) {
-      return this.workspaceSkillsCache;
-    }
-
-    // Try project-level first, then server-level skills directory
-    const candidates = [
-      join(this.resolveProjectRootPath(projectRoot), this.workspaceSkillsSubdir),
-      await getRuntimeSkillsDirPath(),
-    ];
-
-    for (const skillsDir of candidates) {
-      try {
-        const skillIndex = resolve(skillsDir, 'SKILL.md');
-        const indexContent = await readFile(skillIndex, 'utf-8');
-
-        this.workspaceSkillNames.clear();
-        try {
-          const entries = await readdir(skillsDir);
-          for (const entry of entries) {
-            const entryPath = resolve(skillsDir, entry);
-            const entryStat = await stat(entryPath).catch(() => null);
-            if (entryStat?.isDirectory()) {
-              this.workspaceSkillNames.add(entry);
-            }
-          }
-        } catch { /* ignore */ }
-
-        const result = indexContent.trim();
-        this.workspaceSkillsCache = result;
-        this.workspaceSkillsCacheProjectRoot = projectRoot;
-        return result;
-      } catch { /* try next candidate */ }
-    }
-
-    this.workspaceSkillsCache = '';
-    this.workspaceSkillsCacheProjectRoot = projectRoot;
-    this.workspaceSkillNames.clear();
-    return '';
-  }
-
-  /**
    * Load a single skill's content from project or system skills directory
    */
   private async loadSkillContent(skillName: string, projectRoot: string): Promise<string | null> {
@@ -1677,6 +1635,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const serverSkillsDir = await getRuntimeSkillsDirPath();
     const workspaceSkillsDir = join(this.resolveProjectRootPath(projectRoot), this.workspaceSkillsSubdir);
 
+    this.workspaceSkillNames.clear();
     if (!existsSync(serverSkillsDir)) return;
 
     // Collect all effective skill names: workflow, Agent, and step scopes.
@@ -1705,9 +1664,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
         if (!entry.isDirectory() || isAceHarnessSkillName(entry.name)) continue;
         const src = resolve(serverSkillsDir, entry.name);
         const dst = resolve(workspaceSkillsDir, entry.name);
-        if (existsSync(dst)) continue;
+        if (existsSync(dst)) { this.workspaceSkillNames.add(entry.name); continue; }
         try {
           createDirectoryLinkSync(src, dst);
+          this.workspaceSkillNames.add(entry.name);
           console.log(`[SM-Skills] 已链接 skill "${entry.name}" → ${dst}`);
         } catch (error) {
           console.warn(`[SM-Skills] 链接 skill "${entry.name}" 失败:`, error);
@@ -1735,10 +1695,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (isRequiredTasklistSkill && !existsSync(resolve(src, 'SKILL.md'))) {
         throw new Error(`Required lightweight skill is invalid: ${LIGHTWEIGHT_TASKLIST_SKILL}`);
       }
-      if (existsSync(dst)) continue;
+      if (existsSync(dst)) { this.workspaceSkillNames.add(skillName); continue; }
       try {
         createDirectoryLinkSync(src, dst);
         linkedNames.push(skillName);
+        this.workspaceSkillNames.add(skillName);
         console.log(`[SM-Skills] 已链接 skill "${skillName}" → ${dst}`);
       } catch (error) {
         console.warn(`[SM-Skills] 链接 skill "${skillName}" 失败:`, error);
@@ -8508,6 +8469,8 @@ try {
     });
     if (allSkillNames.length > 0 && config.context?.projectRoot) {
       const skillsAbsPath = await getRuntimeSkillsDirPath();
+      // 已同步到工作区的 Skill 指向工作区副本：它一定在 projectRoot 内，Agent 必然读得到。
+      const workspaceSkillsAbsPath = join(this.resolveProjectRootPath(config.context.projectRoot), this.workspaceSkillsSubdir);
       const uniqueSkillNames = [...new Set(allSkillNames)];
       const stepSkillNames = new Set(Array.isArray(step.skills) ? step.skills : []);
       const agentSkillNames = new Set(Array.isArray((promptRoleConfig as any)?.skills) ? (promptRoleConfig as any).skills : []);
@@ -8520,7 +8483,8 @@ try {
             : workflowSkillNames.has(name)
               ? 'workflow.context.skills'
               : 'runtime-required';
-        return `- ${name} (${source}): \`${skillsAbsPath}/${name}/SKILL.md\``;
+        const baseDir = this.workspaceSkillNames.has(name) ? workspaceSkillsAbsPath : skillsAbsPath;
+        return `- ${name} (${source}): \`${baseDir}/${name}/SKILL.md\``;
       }).join('\n');
       const rules = memo.skillRulesShown
         ? ''
