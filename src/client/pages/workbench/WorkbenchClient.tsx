@@ -13406,10 +13406,10 @@ export default function WorkbenchPage({
                   {isFailedRunRecovery && suggestedAction ? (
                     <>
                       <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
-                        确认是否从「{suggestedAction}」继续；不会重跑已完成步骤。
+                        确认是否重新进入「{suggestedAction}」继续处理。
                       </div>
                       <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">
-                        点「通过」将进入「{suggestedAction}」
+                        点「通过」将进入并执行「{suggestedAction}」的检查步骤
                       </div>
                       <div className="text-orange-700 dark:text-orange-200">如需改选其他状态，请点“查看并审批”。</div>
                     </>
