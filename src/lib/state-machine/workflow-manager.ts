@@ -1006,6 +1006,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     availableStates: string[];
     result: any;
     supervisorAdvice?: string;
+    /** Keep recovery checkpoints distinguishable from ordinary approvals. */
+    checkpoint?: string;
   } | null = null;
   private globalContext: string = '';
   private stateContexts: Map<string, string> = new Map();
@@ -4067,8 +4069,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
         ...(!finalStatus && this.currentState === '__human_approval__' && this.pendingApprovalInfo ? {
           pendingCheckpoint: {
             phase: '__human_approval__',
-            checkpoint: 'human-approval',
-            message: `等待人工审查，建议下一状态: ${this.pendingApprovalInfo.suggestedNextState}`,
+            checkpoint: this.pendingApprovalInfo.checkpoint || 'human-approval',
+            message: this.pendingApprovalInfo.supervisorAdvice
+              || `等待人工审查，建议下一状态: ${this.pendingApprovalInfo.suggestedNextState}`,
             isIterativePhase: false,
             suggestedNextState: this.pendingApprovalInfo.suggestedNextState,
             availableStates: this.pendingApprovalInfo.availableStates,
@@ -9970,6 +9973,19 @@ try {
 
     await this.restoreRunStateForContinuation(runState);
 
+    // `resumeContinuation` persists early, before the workflow config is
+    // loaded.  Hydrate the checkpoint now so that a failed-run recovery is
+    // not silently rewritten as a generic approval and lose its target.
+    if (this.currentState === '__human_approval__' && runState.pendingCheckpoint) {
+      this.pendingApprovalInfo = {
+        suggestedNextState: runState.pendingCheckpoint.suggestedNextState || '',
+        availableStates: runState.pendingCheckpoint.availableStates || [],
+        result: runState.pendingCheckpoint.result || { issues: [] },
+        supervisorAdvice: runState.pendingCheckpoint.supervisorAdvice,
+        checkpoint: runState.pendingCheckpoint.checkpoint,
+      };
+    }
+
     this.emit('status', {
       status: 'running',
       runId: this.currentRunId,
@@ -10044,22 +10060,44 @@ try {
 
     // If resuming from __human_approval__, restore the approval wait flow
     if (this.currentState === '__human_approval__') {
-      const availableStates = workflowConfig.workflow.states.map(s => s.name);
+      const configuredStates = workflowConfig.workflow.states.map(s => s.name);
       // Infer suggested next state from the last transition's "to" before __human_approval__
       const lastTransition = this.stateHistory.filter(h => h.to === '__human_approval__').pop();
       const previousState = lastTransition?.from;
+      const recoveredFromFailedRun = runState.pendingCheckpoint?.checkpoint === 'failed-run-recovery'
+        || String(lastTransition?.reason || '').includes('失败终态转人工处理');
+      const persistedAvailableStates = (runState.pendingCheckpoint?.availableStates || [])
+        .filter((state) => configuredStates.includes(state));
+      const availableStates = persistedAvailableStates.length > 0
+        ? persistedAvailableStates
+        : configuredStates;
       // Find the state config that triggered approval, use its first transition target as suggestion
       const prevStateConfig = previousState
         ? workflowConfig.workflow.states.find(s => s.name === previousState)
         : null;
-      const suggestedNextState = prevStateConfig?.transitions?.[0]?.to || availableStates[0] || '';
+      const persistedSuggestedNextState = String(runState.pendingCheckpoint?.suggestedNextState || '').trim();
+      const suggestedNextState = recoveredFromFailedRun
+        ? (configuredStates.includes(persistedSuggestedNextState)
+          ? persistedSuggestedNextState
+          : (configuredStates.includes(String(previousState || '')) ? String(previousState) : availableStates[0] || ''))
+        : (configuredStates.includes(persistedSuggestedNextState)
+          ? persistedSuggestedNextState
+          : prevStateConfig?.transitions?.[0]?.to || availableStates[0] || '');
       const restoredApprovalResult = runState.pendingCheckpoint?.result || { issues: [] };
+      const recoveryAdvice = recoveredFromFailedRun
+        ? runState.pendingCheckpoint?.supervisorAdvice || [
+          `运行 ${runId} 已从失败终态转入人工处理。`,
+          '已完成步骤、工具输出、失败记录和状态历史均被保留；不会自动重跑任何步骤。',
+          `建议下一状态：${suggestedNextState}。`,
+        ].join('\n')
+        : runState.pendingCheckpoint?.supervisorAdvice;
 
       this.pendingApprovalInfo = {
         suggestedNextState,
         availableStates,
         result: restoredApprovalResult,
-        supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
+        supervisorAdvice: recoveryAdvice,
+        checkpoint: recoveredFromFailedRun ? 'failed-run-recovery' : runState.pendingCheckpoint?.checkpoint,
       };
 
       if (!this.getPendingHumanQuestion() && runState.pendingCheckpoint?.humanQuestion) {
@@ -10074,8 +10112,8 @@ try {
         const restoredQuestion = await this.createHumanQuestion({
           kind: 'approval',
           title: '等待人工审查',
-          message: runState.pendingCheckpoint?.supervisorAdvice || `请确认下一步状态：${suggestedNextState}`,
-          supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
+          message: recoveryAdvice || `请确认下一步状态：${suggestedNextState}`,
+          supervisorAdvice: recoveryAdvice,
           currentState: '__human_approval__',
           previousState,
           suggestedNextState,
@@ -10087,7 +10125,9 @@ try {
             required: true,
             options: availableStates.map(s => ({ label: s, value: s })),
           },
-          source: { type: 'human-approval', restored: true },
+          source: recoveredFromFailedRun
+            ? { type: 'failed-run-recovery', restored: true }
+            : { type: 'human-approval', restored: true },
         });
         if (restoredQuestion?.id) this.pendingHumanQuestionId = restoredQuestion.id;
       }
@@ -10111,7 +10151,7 @@ try {
         suggestedNextState,
         result: restoredApprovalResult,
         availableStates,
-        supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
+        supervisorAdvice: recoveryAdvice,
         humanQuestion: pendingHumanQuestion,
       };
       this.emit('human-approval-required', humanApprovalPayload);

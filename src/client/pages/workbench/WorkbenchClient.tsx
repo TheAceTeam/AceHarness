@@ -9124,6 +9124,15 @@ export default function WorkbenchPage({
 
   const resolveHumanApprovalPassTarget = () => {
     const question = pendingHumanQuestion;
+    const recoveryContext = [
+      question?.supervisorAdvice,
+      question?.message,
+      humanApprovalData?.supervisorAdvice,
+    ].filter(Boolean).join('\n');
+    const isFailedRunRecovery = (question?.source as any)?.type === 'failed-run-recovery'
+      || recoveryContext.includes('已从失败终态转入人工处理');
+    const recoveredTarget = recoveryContext.match(/建议下一状态：\s*([^。\n]+)/)?.[1]?.trim();
+    if (isFailedRunRecovery && recoveredTarget) return recoveredTarget;
     const sourceState = String(
       question?.previousState
       || (question?.source as any)?.fromState
@@ -13346,10 +13355,21 @@ export default function WorkbenchPage({
     const summary = pendingHumanQuestion
       ? (pendingQuestionText || pendingHumanQuestion.supervisorAdvice || '请查看审批选项并给出决定。')
       : humanApprovalData?.result?.summary || humanApprovalData?.supervisorAdvice || '当前工作流等待人工确认后继续推进。';
-    const route = humanApprovalData
+    const recoveryContext = [
+      pendingHumanQuestion?.supervisorAdvice,
+      pendingHumanQuestion?.message,
+      humanApprovalData?.supervisorAdvice,
+    ].filter(Boolean).join('\n');
+    const isFailedRunRecovery = (pendingHumanQuestion?.source as any)?.type === 'failed-run-recovery'
+      || recoveryContext.includes('已从失败终态转入人工处理');
+    const recoveredTarget = recoveryContext.match(/建议下一状态：\s*([^。\n]+)/)?.[1]?.trim() || null;
+    const route = isFailedRunRecovery && recoveredTarget
+      ? `人工处理 -> ${formatStateName(recoveredTarget)}`
+      : humanApprovalData
       ? `${formatStateName(humanApprovalData.currentState)} -> ${formatStateName(humanApprovalData.nextState)}`
       : formatWorkflowLocation(currentPhase, currentStep, '等待处理');
-    const suggestedAction = pendingHumanQuestion?.suggestedNextState
+    const suggestedAction = recoveredTarget
+      || pendingHumanQuestion?.suggestedNextState
       || humanApprovalData?.nextState
       || null;
     const answerOptions = pendingHumanQuestion
@@ -13383,12 +13403,26 @@ export default function WorkbenchPage({
                 </div>
                 <div className="min-w-0 border-orange-200 md:border-l md:pl-5 dark:border-orange-400/20">
                   <div className="font-bold text-orange-950 dark:text-orange-50">需要决定</div>
-                  <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
-                    {answerOptions.length > 0 ? answerOptions.slice(0, 4).join(' / ') : '确认是否继续执行'}
-                  </div>
-                  {suggestedAction ? (
-                    <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">Supervisor 推荐：{suggestedAction}</div>
-                  ) : null}
+                  {isFailedRunRecovery && suggestedAction ? (
+                    <>
+                      <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
+                        确认是否从「{suggestedAction}」继续；不会重跑已完成步骤。
+                      </div>
+                      <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">
+                        点「通过」将进入「{suggestedAction}」
+                      </div>
+                      <div className="text-orange-700 dark:text-orange-200">如需改选其他状态，请点“查看并审批”。</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
+                        {answerOptions.length > 0 ? answerOptions.slice(0, 4).join(' / ') : '确认是否继续执行'}
+                      </div>
+                      {suggestedAction ? (
+                        <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">Supervisor 推荐：{suggestedAction}</div>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </div>
             </div>

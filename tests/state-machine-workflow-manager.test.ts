@@ -2150,6 +2150,74 @@ describe('state machine resume', () => {
     expect(resumeContinuation).toHaveBeenCalledWith('run-terminal-failed', undefined);
   });
 
+  test('restores a failed-run recovery with its persisted target instead of inferring a pass route', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    const config = makeConfig();
+    vi.mocked(parse).mockReturnValue(config);
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-recovery-approval',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'running',
+      startTime: '2024-01-01T00:00:00.000Z',
+      currentState: '__human_approval__',
+      currentPhase: '__human_approval__',
+      currentStep: null,
+      completedSteps: ['设计-design-step'],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [],
+      iterationStates: {},
+      processes: [],
+      requirements: 'Build a feature',
+      stateHistory: [{ from: '实施', to: '__human_approval__', reason: '失败终态转人工处理，等待人工决定下一状态', issues: [], timestamp: '2024-01-01T00:00:00.000Z' }],
+      issueTracker: [],
+      transitionCount: 4,
+      globalContext: '',
+      phaseContexts: {},
+      qualityChecks: [],
+      pendingCheckpoint: {
+        phase: '__human_approval__',
+        checkpoint: 'failed-run-recovery',
+        message: '运行 run-recovery-approval 已从失败终态转入人工处理。\n建议下一状态：实施。',
+        isIterativePhase: false,
+        suggestedNextState: '实施',
+        availableStates: ['设计', '实施', '完成'],
+        supervisorAdvice: '运行 run-recovery-approval 已从失败终态转入人工处理。\n建议下一状态：实施。',
+        result: { verdict: 'conditional_pass', issues: [] },
+      },
+    } as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    (manager as any).readWorkflowConfigContent = vi.fn().mockResolvedValue('workflow: {}');
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeEngine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeMemoryV2 = vi.fn().mockResolvedValue(undefined);
+    (manager as any).executeStateMachine = vi.fn().mockResolvedValue(undefined);
+    const createHumanQuestion = vi.fn().mockResolvedValue({ id: 'recovery-question', status: 'unanswered' });
+    (manager as any).createHumanQuestion = createHumanQuestion;
+    (manager as any).waitForHumanApproval = vi.fn().mockImplementation(async () => {
+      (manager as any).pendingForceTransition = '实施';
+      (manager as any).shouldStop = true;
+    });
+    const approvals: any[] = [];
+    manager.on('human-approval-required', (event) => approvals.push(event));
+
+    await (manager as any).resume('run-recovery-approval');
+
+    expect(createHumanQuestion).toHaveBeenCalledWith(expect.objectContaining({
+      suggestedNextState: '实施',
+      source: { type: 'failed-run-recovery', restored: true },
+    }));
+    expect(approvals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ suggestedNextState: '实施', nextState: '实施' }),
+    ]));
+  });
+
   test('restores workflow frontend session id before emitting resume status', async () => {
     const { loadRunState } = await import('@/lib/run/state-persistence');
     const { parse } = await import('yaml');
