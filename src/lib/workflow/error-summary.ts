@@ -67,17 +67,22 @@ export function formatWorkflowFailureReasonWithStepLogs(
       .map((stepKey) => String(stepKey || '').trim())
       .filter(Boolean),
   );
+  // A terminal status without active failed steps (for example a transition
+  // circuit breaker) must not inherit an old, already-recovered step error.
+  if (failedKeys.size === 0) return base;
+
   const logs = Array.isArray(stepLogs) ? stepLogs : [];
   const latestByStep = new Map<string, any>();
   for (let index = logs.length - 1; index >= 0; index -= 1) {
     const log = logs[index];
     const stepName = String(log?.stepName || log?.step || '').trim();
-    if (!stepName || latestByStep.has(stepName) || log?.superseded || log?.status !== 'failed') continue;
-    if (failedKeys.size > 0 && !failedKeys.has(stepName)) continue;
+    if (!stepName || latestByStep.has(stepName) || log?.superseded) continue;
+    if (!failedKeys.has(stepName)) continue;
     latestByStep.set(stepName, log);
   }
 
   const details = Array.from(latestByStep.entries())
+    .filter(([, log]) => log?.status === 'failed')
     .map(([stepName, log]) => {
       const error = formatWorkflowFailureReason(log?.error || log?.errorPreview || '');
       return error ? `${stepName}: ${error}` : '';

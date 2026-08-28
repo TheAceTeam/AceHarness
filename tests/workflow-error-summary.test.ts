@@ -53,4 +53,42 @@ describe('workflow error summary', () => {
       ],
     )).toContain('步骤执行超时：已超过配置上限 30 分钟。');
   });
+
+  test('does not attach a recovered historical failure to a later terminal error', () => {
+    const summary = formatWorkflowFailureReasonWithStepLogs(
+      '状态 "描述与门禁" 达到最大自我转换次数 (2)，已暂停等待人工处理。',
+      ['根因与方案-裁决方案'],
+      [
+        {
+          stepName: '根因与方案-裁决方案',
+          status: 'failed',
+          error: 'Internal error: session limit',
+        },
+        {
+          stepName: '根因与方案-裁决方案',
+          status: 'completed',
+          output: '已恢复并完成。',
+        },
+      ],
+    );
+
+    expect(summary).toContain('达到最大自我转换次数');
+    expect(summary).not.toContain('session limit');
+  });
+
+  test('does not attach any historical failed step when the terminal state has none', () => {
+    const summary = formatWorkflowFailureReasonWithStepLogs(
+      '状态 "描述与门禁" 达到最大自我转换次数 (2)，已暂停等待人工处理。',
+      [],
+      [
+        {
+          stepName: '根因与方案-裁决方案',
+          status: 'failed',
+          error: 'Internal error: session limit',
+        },
+      ],
+    );
+
+    expect(summary).not.toContain('session limit');
+  });
 });

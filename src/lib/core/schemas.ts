@@ -765,6 +765,7 @@ export const stateMachineStateSchema = z.object({
   description: z.string().optional(),
   type: z.enum(['normal', 'human-checkpoint']).default('normal').optional(), // 状态类型（将废弃）
   requireHumanApproval: z.boolean().default(false).optional(), // 完成后是否需要人工审查（跳转到自身除外）
+  requireHumanApprovalOnConditionalPass: z.boolean().default(false).optional(), // 条件通过且自循环时暂停，等待人工处理外部依赖
   enableSpecRevisionOnComplete: z.boolean().default(false).optional(), // 状态结束后是否发起 Spec 修订表决
   steps: z.array(workflowStepSchema),
   transitions: z.array(stateTransitionSchema), // 终止状态允许空数组

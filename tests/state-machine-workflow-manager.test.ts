@@ -4788,7 +4788,7 @@ describe('circuit breaker with supervisor review', () => {
     ]));
   });
 
-  test('does not fall through to an unrelated verdict route when the circuit breaker trips', async () => {
+  test('pauses for human handling instead of failing when the circuit breaker has no matching route', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async () => ({
       success: true,
@@ -4798,17 +4798,25 @@ describe('circuit breaker with supervisor review', () => {
 
     const config = makeConfig();
     config.workflow.states[0].maxSelfTransitions = 1;
+    const approvals: any[] = [];
+    manager.on('human-approval-required', (payload: any) => approvals.push(payload));
+    (manager as any).createHumanQuestion = vi.fn().mockResolvedValue({ id: 'circuit-question', status: 'unanswered' });
+    (manager as any).waitForHumanApproval = vi.fn().mockImplementation(async () => {
+      (manager as any).pendingForceTransition = '设计';
+      (manager as any).shouldStop = true;
+    });
 
-    await expect((manager as any).executeStateMachine(config, 'Build a feature'))
-      .rejects.toThrow(/无匹配的其他转移路径/);
+    await expect((manager as any).executeStateMachine(config, 'Build a feature')).resolves.toBeUndefined();
 
-    expect((manager as any).currentState).toBe('设计');
+    expect(approvals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ currentState: '__human_approval__' }),
+    ]));
     expect((manager as any).stateHistory).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ from: '设计', to: '实施' }),
     ]));
   });
 
-  test('circuit breaker throws when no alternative transition exists', async () => {
+  test('conditional-pass external dependency can pause before consuming self-transition retries', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async () => ({
       success: true,
@@ -4817,16 +4825,32 @@ describe('circuit breaker with supervisor review', () => {
     const manager = await createManagerForTest(engine);
 
     const config = makeConfig();
-    // Only self-transition available (fail goes back to 设计 which is self)
-    config.workflow.states[0].maxSelfTransitions = 1;
-    // Remove the pass→实施 transition, only keep fail→设计 (self)
+    config.workflow.states[0].maxSelfTransitions = 5;
     config.workflow.states[0].transitions = [
-      { condition: { verdict: 'fail' }, to: '设计', priority: 1 },
+      { condition: { verdict: 'conditional_pass' }, to: '设计', priority: 1 },
     ];
+    config.workflow.states[0].requireHumanApprovalOnConditionalPass = true;
+    const approvals: any[] = [];
+    manager.on('human-approval-required', (payload: any) => approvals.push(payload));
+    (manager as any).createHumanQuestion = vi.fn().mockImplementation(async (input: any) => ({
+      id: 'external-question',
+      status: 'unanswered',
+      title: input.title,
+    }));
+    (manager as any).waitForHumanApproval = vi.fn().mockImplementation(async () => {
+      (manager as any).pendingForceTransition = '设计';
+      (manager as any).shouldStop = true;
+    });
 
-    await expect(
-      (manager as any).executeStateMachine(config, 'Build a feature')
-    ).rejects.toThrow(/达到最大自我转换次数/);
+    await (manager as any).executeStateMachine(config, 'Build a feature');
+
+    expect(approvals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        currentState: '__human_approval__',
+        humanQuestion: expect.objectContaining({ title: '外部依赖待人工处理' }),
+      }),
+    ]));
+    expect((manager as any).selfTransitionCounts.get('设计') || 0).toBe(0);
   });
 
   test('supervisor review is collected after state execution', async () => {

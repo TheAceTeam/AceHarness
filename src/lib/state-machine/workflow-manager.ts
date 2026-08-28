@@ -3190,6 +3190,145 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
+  /**
+   * Move the state machine into the durable human-approval checkpoint used by
+   * ordinary review gates.  Circuit breakers reuse this path so a workflow
+   * never converts a known external dependency into a silent terminal failure.
+   */
+  private async pauseForHumanApproval(input: {
+    config: StateMachineWorkflowConfig;
+    fromStateName: string;
+    nextState: string;
+    result: StateExecutionResult;
+    title: string;
+    message: string;
+    source: HumanQuestion['source'];
+    checkpointAdvice?: string;
+  }): Promise<void> {
+    const {
+      config,
+      fromStateName,
+      nextState,
+      result,
+      title,
+      message,
+      source,
+      checkpointAdvice,
+    } = input;
+
+    this.stateHistory.push({
+      from: fromStateName,
+      to: '__human_approval__',
+      reason: `需要人工审查: ${this.getTransitionReason(result)}`,
+      issues: result.issues,
+      timestamp: new Date().toISOString(),
+    });
+    this.transitionCount++;
+    this.emit('transition', {
+      from: fromStateName,
+      to: '__human_approval__',
+      transitionCount: this.transitionCount,
+      issues: result.issues,
+    });
+
+    this.currentState = '__human_approval__';
+    this.pendingApprovalInfo = {
+      suggestedNextState: nextState,
+      availableStates: config.workflow.states.map(s => s.name),
+      result,
+      supervisorAdvice: checkpointAdvice || undefined,
+    };
+    await this.persistState();
+
+    const humanQuestion = await this.createHumanQuestion({
+      kind: 'approval',
+      title,
+      message,
+      supervisorAdvice: checkpointAdvice || undefined,
+      currentState: '__human_approval__',
+      previousState: fromStateName,
+      suggestedNextState: nextState,
+      availableStates: config.workflow.states.map(s => s.name),
+      result,
+      requiresWorkflowPause: true,
+      answerSchema: {
+        type: 'approval-transition',
+        required: true,
+        options: config.workflow.states.map(s => ({ label: s.name, value: s.name })),
+      },
+      source,
+    });
+
+    this.emit('state-change', {
+      state: '__human_approval__',
+      message: '等待人工审查决策',
+    });
+
+    const humanApprovalPayload = {
+      runId: this.currentRunId,
+      rootRunId: this.rootRunId || this.currentRunId,
+      configFile: this.currentConfigFile,
+      currentConfigFile: this.currentConfigFile,
+      runOwnerId: this._createdBy,
+      createdBy: this._createdBy,
+      workflowFrontendSessionId: this._frontendSessionId || null,
+      currentState: '__human_approval__',
+      nextState,
+      suggestedNextState: nextState,
+      result,
+      availableStates: config.workflow.states.map(s => s.name),
+      supervisorAdvice: checkpointAdvice || undefined,
+      humanQuestion,
+    };
+    this.emit('human-approval-required', humanApprovalPayload);
+    void import('@/lib/channel/delivery')
+      .then((mod) => mod.deliverWorkflowEventToChannels('human-approval-required', humanApprovalPayload))
+      .catch(() => {});
+
+    await this.waitForHumanApproval();
+
+    const humanSelectedState = this.pendingForceTransition || nextState;
+    this.pendingForceTransition = null;
+    this.pendingExplicitForceTransition = false;
+    const answeredHumanQuestion = humanQuestion.status === 'answered'
+      ? humanQuestion
+      : this.humanQuestions.find((question) => question.id === humanQuestion.id) || humanQuestion;
+    this.pendingApprovalInfo = null;
+    const instruction = this.pendingForceInstruction || '';
+    this.pendingForceInstruction = null;
+
+    this.queueSpecRevisionVote({
+      trigger: 'human-review',
+      stateName: fromStateName,
+      nextState: humanSelectedState,
+      result,
+      instruction,
+      checkpointAdvice,
+      question: humanQuestion,
+      answer: answeredHumanQuestion.answer,
+    }, config);
+    this.stateHistory.push({
+      from: '__human_approval__',
+      to: humanSelectedState,
+      reason: instruction
+        ? `人工决策: 选择进入 ${humanSelectedState}，附加指令: ${instruction}`
+        : `人工决策: 选择进入 ${humanSelectedState}`,
+      issues: [],
+      timestamp: new Date().toISOString(),
+    });
+    this.transitionCount++;
+    this.emit('transition', {
+      from: '__human_approval__',
+      to: humanSelectedState,
+      transitionCount: this.transitionCount,
+      issues: [],
+    });
+    this.currentState = humanSelectedState;
+    this.selfTransitionCounts.set(fromStateName, 0);
+    this.selfTransitionCounts.set(humanSelectedState, 0);
+    this.emit('state-change', { state: this.currentState });
+  }
+
   private isHumanHelpEnabled(config: StateMachineWorkflowConfig): boolean {
     return config.workflow?.humanHelp?.enabled === true;
   }
@@ -5663,7 +5802,21 @@ try {
             });
             continue;
           } else {
-            throw new Error(`状态 "${fromState}" 达到最大自我转换次数 (${maxSelfTransitions}) 且无匹配的其他转移路径，工作流终止`);
+            await this.pauseForHumanApproval({
+              config,
+              fromStateName: fromState,
+              nextState: fromState,
+              result,
+              title: '自循环无进展，需要人工处理',
+              message: [
+                `状态「${fromState}」已连续 ${currentSelfCount} 次自循环，达到上限 ${maxSelfTransitions}。`,
+                '没有与本次 verdict 匹配的其他自动路径；工作流已暂停，不会继续轮询或标记为失败。',
+                result.summary ? `本轮结论：${result.summary}` : '',
+                '请确认外部依赖（例如门禁是否已启动、平台命令是否精确匹配），然后选择继续当前状态、回退修复，或转入归档。',
+              ].filter(Boolean).join('\n\n'),
+              source: { type: 'human-approval', reason: 'self-transition-circuit-breaker', stateName: fromState },
+            });
+            continue;
           }
         }
         // Increment self-transition counter
@@ -5673,141 +5826,41 @@ try {
         this.selfTransitionCounts.set(this.currentState!, 0);
       }
 
-      // Check if human approval is required
-      // Skip human approval if transitioning to self (iteration) or if forced by user
-      const requiresApproval = stateConfig.requireHumanApproval && nextState !== this.currentState && !wasForced;
+      // A normal review gate pauses on a real transition.  External-dependency
+      // states may additionally opt into a pause on conditional self-loop so a
+      // confirmed "needs human action" signal never becomes blind polling.
+      const requiresApproval = !wasForced && (
+        (stateConfig.requireHumanApproval && nextState !== this.currentState)
+        || (stateConfig.requireHumanApprovalOnConditionalPass
+          && result.verdict === 'conditional_pass'
+          && nextState === this.currentState)
+      );
 
       if (requiresApproval) {
         const fromStateName = this.currentState;
         const checkpointAdvice = await this.collectSupervisorReview('checkpoint-advice', stateConfig, result, config, nextState);
-
-        // First transition: current state -> __human_approval__
-        this.stateHistory.push({
-          from: this.currentState,
-          to: '__human_approval__',
-          reason: `需要人工审查: ${this.getTransitionReason(result)}`,
-          issues: result.issues,
-          timestamp: new Date().toISOString(),
-        });
-
-        this.transitionCount++;
-        this.emit('transition', {
-          from: this.currentState,
-          to: '__human_approval__',
-          transitionCount: this.transitionCount,
-          issues: result.issues,
-        });
-
-        this.currentState = '__human_approval__';
-
-        // Save approval context for crash recovery
-        this.pendingApprovalInfo = {
-          suggestedNextState: nextState,
-          availableStates: config.workflow.states.map(s => s.name),
-          result,
-          supervisorAdvice: checkpointAdvice || undefined,
-        };
-
-        // Persist state so crash recovery can restore to human approval
-        await this.persistState();
-
-        const humanQuestion = await this.createHumanQuestion({
-          kind: 'approval',
-          title: '等待人工审查',
-          message: checkpointAdvice || `Supervisor 建议进入 ${nextState}，请确认下一步状态。`,
-          supervisorAdvice: checkpointAdvice || undefined,
-          currentState: '__human_approval__',
-          previousState: fromStateName,
-          suggestedNextState: nextState,
-          availableStates: config.workflow.states.map(s => s.name),
-          result,
-          requiresWorkflowPause: true,
-          answerSchema: {
-            type: 'approval-transition',
-            required: true,
-            options: config.workflow.states.map(s => ({ label: s.name, value: s.name })),
-          },
-          source: { type: 'checkpoint-advice', fromState: fromStateName, suggestedNextState: nextState },
-        });
-
-        // Emit state change to human approval
-        this.emit('state-change', {
-          state: '__human_approval__',
-          message: '等待人工审查决策',
-        });
-
-        // Emit human approval required event and wait
-        const humanApprovalPayload = {
-          runId: this.currentRunId,
-          rootRunId: this.rootRunId || this.currentRunId,
-          configFile: this.currentConfigFile,
-          currentConfigFile: this.currentConfigFile,
-          runOwnerId: this._createdBy,
-          createdBy: this._createdBy,
-          workflowFrontendSessionId: this._frontendSessionId || null,
-          currentState: '__human_approval__',
+        await this.pauseForHumanApproval({
+          config,
+          fromStateName,
           nextState,
-          suggestedNextState: nextState,
           result,
-          availableStates: config.workflow.states.map(s => s.name),
-          supervisorAdvice: checkpointAdvice || undefined,
-          humanQuestion,
-        };
-        this.emit('human-approval-required', humanApprovalPayload);
-        void import('@/lib/channel/delivery')
-          .then((mod) => mod.deliverWorkflowEventToChannels('human-approval-required', humanApprovalPayload))
-          .catch(() => {});
-
-        // Wait for human decision via forceTransition
-        await this.waitForHumanApproval();
-
-        // After human approval, pendingForceTransition will be set
-        const humanSelectedState: string = this.pendingForceTransition || nextState;
-        this.pendingForceTransition = null;
-        this.pendingExplicitForceTransition = false;
-        const answeredHumanQuestion = humanQuestion.status === 'answered'
-          ? humanQuestion
-          : this.humanQuestions.find((question) => question.id === humanQuestion.id) || humanQuestion;
-        this.pendingApprovalInfo = null;
-
-        // Second transition: __human_approval__ -> selected state
-        const instruction = this.pendingForceInstruction || '';
-        this.pendingForceInstruction = null;
-        this.queueSpecRevisionVote({
-          trigger: 'human-review',
-          stateName: fromStateName,
-          nextState: humanSelectedState,
-          result,
-          instruction,
-          checkpointAdvice,
-          question: humanQuestion,
-          answer: answeredHumanQuestion.answer,
-        }, config);
-        this.stateHistory.push({
-          from: '__human_approval__',
-          to: humanSelectedState,
-          reason: instruction
-            ? `人工决策: 选择进入 ${humanSelectedState}，附加指令: ${instruction}`
-            : `人工决策: 选择进入 ${humanSelectedState}`,
-          issues: [],
-          timestamp: new Date().toISOString(),
-        });
-
-        this.transitionCount++;
-        this.emit('transition', {
-          from: '__human_approval__',
-          to: humanSelectedState,
-          transitionCount: this.transitionCount,
-          issues: [],
-        });
-
-        // 人工审批后仍然是状态流转，需要补充 Agent 级绿色流转线
-        const fromState = fromStateName
-          ? config.workflow.states.find(s => s.name === fromStateName)
-          : undefined;
-        this.currentState = humanSelectedState;
-        this.emit('state-change', {
-          state: this.currentState,
+          title: stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
+            ? '外部依赖待人工处理'
+            : '等待人工审查',
+          message: checkpointAdvice || (
+            stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
+              ? `状态「${fromStateName}」确认需要人工处理外部依赖，工作流已暂停。\n\n${result.summary || '请确认下一步状态。'}`
+              : `Supervisor 建议进入 ${nextState}，请确认下一步状态。`
+          ),
+          source: {
+            type: 'checkpoint-advice',
+            fromState: fromStateName,
+            suggestedNextState: nextState,
+            reason: stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
+              ? 'conditional-pass-needs-human-action'
+              : undefined,
+          },
+          checkpointAdvice: checkpointAdvice || undefined,
         });
       } else {
         // No human approval needed, proceed automatically
