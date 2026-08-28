@@ -2092,6 +2092,64 @@ describe('state machine live feedback', () => {
 });
 
 describe('state machine resume', () => {
+  test('moves a failed terminal run into human approval without replaying completed work', async () => {
+    const { loadRunState, saveRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    vi.mocked(parse).mockReturnValue(makeConfig());
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-terminal-failed',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'failed',
+      statusReason: '门禁未启动，等待人工处理',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: '2024-01-01T00:10:00.000Z',
+      currentState: '实施',
+      currentPhase: '实施',
+      currentStep: null,
+      completedSteps: ['设计-design-step', '实施-impl-step'],
+      failedSteps: [],
+      stepLogs: [{ id: 'done', stepName: '实施-impl-step', status: 'completed', output: 'kept as evidence' }],
+      agents: [],
+      iterationStates: {},
+      processes: [],
+      requirements: 'Build a feature',
+      stateHistory: [],
+      issueTracker: [],
+      transitionCount: 3,
+      globalContext: '',
+      phaseContexts: {},
+      qualityChecks: [],
+    } as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    (manager as any).assertRestoredWorkflowSnapshot = vi.fn().mockResolvedValue(undefined);
+    (manager as any).readWorkflowConfigContent = vi.fn().mockResolvedValue('workflow: {}');
+    const resumeContinuation = vi.spyOn(manager as any, 'resumeContinuation').mockResolvedValue(undefined);
+
+    await (manager as any).recoverFailedRunToHumanApproval(
+      'run-terminal-failed',
+      '先确认平台要求的精确门禁命令',
+    );
+
+    expect(saveRunState).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'running',
+      currentState: '__human_approval__',
+      completedSteps: ['设计-design-step', '实施-impl-step'],
+      failedSteps: [],
+      stepLogs: [{ id: 'done', stepName: '实施-impl-step', status: 'completed', output: 'kept as evidence' }],
+      pendingCheckpoint: expect.objectContaining({
+        checkpoint: 'failed-run-recovery',
+        suggestedNextState: '实施',
+      }),
+      stateHistory: expect.arrayContaining([
+        expect.objectContaining({ from: '实施', to: '__human_approval__' }),
+      ]),
+    }));
+    expect(resumeContinuation).toHaveBeenCalledWith('run-terminal-failed', undefined);
+  });
+
   test('restores workflow frontend session id before emitting resume status', async () => {
     const { loadRunState } = await import('@/lib/run/state-persistence');
     const { parse } = await import('yaml');

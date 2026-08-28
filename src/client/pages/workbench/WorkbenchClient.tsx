@@ -2627,7 +2627,7 @@ export default function WorkbenchPage({
   const [historyRuns, setHistoryRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<any>(null);
   const returnedRunIdRef = useRef<string | null>(null);
-  const [historyRunAction, setHistoryRunAction] = useState<{ runId: string; action: 'view' | 'resume' | 'analyze' | 'delete' } | null>(null);
+  const [historyRunAction, setHistoryRunAction] = useState<{ runId: string; action: 'view' | 'resume' | 'recover-human' | 'analyze' | 'delete' } | null>(null);
   const [focusedState, setFocusedState] = useState<string | null>(null); // 用于流程图视图跳转
   const [executionViewTabOverride, setExecutionViewTabOverride] = useState<string | null>(null);
   const [runtimeStateViewMode, setRuntimeStateViewMode] = useState<'structure' | 'diagram'>('structure');
@@ -5770,6 +5770,11 @@ export default function WorkbenchPage({
     && !actionIsRunning
     && historyRunAction?.action !== 'resume'
     && ['failed', 'stopped', 'pending', 'crashed'].includes(actionWorkflowStatus);
+  const canRecoverFailedRunToHuman = isRunMode
+    && Boolean(actionRunId)
+    && !actionIsRunning
+    && actionWorkflowStatus === 'failed'
+    && historyRunAction?.action !== 'recover-human';
   const resumeWorkflowDisabledReason = actionIsRunning
     ? '当前工作流正在运行'
     : actionRunId
@@ -9212,6 +9217,37 @@ export default function WorkbenchPage({
     }
     void resumeWorkflow(actionRunId);
   }, [actionRunId, canResumeWorkflow, resumeWorkflowDisabledReason, resumeWorkflow, toast]);
+
+  const recoverFailedRunToHuman = useCallback(async () => {
+    const rid = actionRunId || runId || selectedRun?.id;
+    if (!rid || !canRecoverFailedRunToHuman) return;
+    const confirmed = await confirm({
+      title: '转入人工处理',
+      description: '将保留已完成步骤、日志和状态历史，不自动重跑任何步骤。运行会停在“人工处理”检查点，待你选择下一状态后才继续。',
+      confirmLabel: '转入人工处理',
+      cancelLabel: '取消',
+      variant: 'default',
+    });
+    if (!confirmed) return;
+    setHistoryRunAction({ runId: rid, action: 'recover-human' });
+    try {
+      setViewingHistoryRun(false);
+      dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
+      dispatch({ type: 'SET_RUN_ID', payload: rid });
+      patchRunStatusLocally(rid, 'running', '已转入人工处理，等待选择下一状态');
+      await workflowApi.forceTransition('__human_approval__', undefined, configFile, rid);
+      addLog('system', 'success', '运行已转入人工处理，等待选择下一状态。');
+      toast('success', '已转入人工处理');
+      await fetchCurrentStatus();
+    } catch (error: any) {
+      dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
+      patchRunStatusLocally(rid, 'failed', error?.message || '转入人工处理失败');
+      addLog('system', 'error', `转入人工处理失败: ${error?.message || '未知错误'}`);
+      toast('error', error?.message || '转入人工处理失败');
+    } finally {
+      setHistoryRunAction((current) => current && current.runId === rid && current.action === 'recover-human' ? null : current);
+    }
+  }, [actionRunId, addLog, canRecoverFailedRunToHuman, configFile, confirm, dispatch, fetchCurrentStatus, patchRunStatusLocally, runId, selectedRun?.id, toast]);
 
   const getStatusText = (status: string) => {
     const texts: Record<string, string> = { idle: '空闲', preparing: '准备中', running: '运行中', completed: '已完成', failed: '失败', stopped: '已停止', crashed: '崩溃' };
@@ -13016,6 +13052,16 @@ export default function WorkbenchPage({
         onSelect: requestResumeWorkflow,
       },
       {
+        id: 'recover-failed-run-to-human',
+        label: historyRunAction?.action === 'recover-human' ? '转入人工处理中...' : '转入人工处理',
+        icon: <span className="material-symbols-outlined" style={{ fontSize: 15 }}>support_agent</span>,
+        group: 'run',
+        className: 'border-amber-500/35 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-400/25 dark:bg-amber-500/10 dark:text-amber-100 dark:hover:bg-amber-500/15 disabled:border-border disabled:bg-muted disabled:text-muted-foreground',
+        disabled: !canRecoverFailedRunToHuman,
+        disabledReason: actionWorkflowStatus === 'failed' ? undefined : '仅失败终态可转入人工处理',
+        onSelect: recoverFailedRunToHuman,
+      },
+      {
         id: 'context-workbench',
         label: '上下文工作台',
         icon: <span className="material-symbols-outlined" style={{ fontSize: 15 }}>edit_note</span>,
@@ -13034,6 +13080,7 @@ export default function WorkbenchPage({
   }, [
     canStartWorkflow,
     canResumeWorkflow,
+    canRecoverFailedRunToHuman,
     canStopWorkflow,
     dispatch,
     editingName,
@@ -13045,10 +13092,12 @@ export default function WorkbenchPage({
     openContextEditor,
     requestStopWorkflow,
     requestResumeWorkflow,
+    recoverFailedRunToHuman,
     actionRunId,
     actionIsRunning,
     isRunning,
     resumeWorkflowDisabledReason,
+    actionWorkflowStatus,
     requestStartWorkflow,
     showWorkbenchPreview,
     workflowConfig,

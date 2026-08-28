@@ -39,12 +39,42 @@ export async function POST(request: Request) {
       if (!canAccessRunState(auth, runState, 'operate')) {
         return jsonOk({ error: '无权操作该工作流运行' }, { status: 403 });
       }
-      const targetValidationError = await validateStateMachineTarget(runState, targetState);
+      const recoverToHumanApproval = targetState === '__human_approval__';
+      const targetValidationError = recoverToHumanApproval
+        ? null
+        : await validateStateMachineTarget(runState, targetState);
       if (targetValidationError) return targetValidationError;
 
       const manager = await workflowRegistry.getManagerByRunId(runId) || await workflowRegistry.getManager(runState.configFile);
       if (!isStateMachineManagerLike(manager)) {
         return jsonOk({ error: '目标运行不是状态机工作流' }, { status: 400 });
+      }
+
+      if (recoverToHumanApproval) {
+        if (runState.status !== 'failed') {
+          return jsonOk({ error: '仅失败终态的运行可以转入人工处理' }, { status: 400 });
+        }
+        if (typeof (manager as any).recoverFailedRunToHumanApprovalInBackground !== 'function') {
+          return jsonOk({ error: '当前工作流不支持失败终态人工恢复' }, { status: 400 });
+        }
+        await (manager as any).recoverFailedRunToHumanApprovalInBackground(
+          runId,
+          instruction,
+          { id: auth.id, name: auth.username },
+        );
+        await appendWorkflowAuditEvent({
+          action: 'recover-to-human-approval',
+          runId,
+          rootRunId: runState.rootRunId || runId,
+          configFile: runState.configFile,
+          actorId: auth.id,
+          actorName: auth.username,
+          ...getWorkflowAuditRequestMeta(request),
+          before: { status: runState.status, currentState: runState.currentState },
+          after: { status: 'running', currentState: '__human_approval__' },
+          details: { instruction },
+        });
+        return jsonOk({ success: true, message: '已转入人工处理，等待选择下一状态' });
       }
 
       const currentStatus = manager.getStatus();

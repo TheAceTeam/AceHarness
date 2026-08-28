@@ -84,6 +84,7 @@ function makeStateMachineManager(overrides: Record<string, any> = {}) {
     resumeInBackground: vi.fn().mockResolvedValue(undefined),
     rerunFromStepInBackground: vi.fn().mockResolvedValue(undefined),
     forceJumpToStateInBackground: vi.fn().mockResolvedValue(undefined),
+    recoverFailedRunToHumanApprovalInBackground: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -214,6 +215,35 @@ describe('workflow recovery routes', () => {
       undefined,
       { id: 'user-1', name: 'Tester' },
     );
+  });
+
+  test('moves a failed run into the durable human-approval checkpoint without selecting a state', async () => {
+    const manager = makeStateMachineManager();
+    mocks.getManagerByRunId.mockResolvedValue(manager);
+    mocks.loadRunState.mockResolvedValue({
+      ...makeStoppedRun(),
+      status: 'failed',
+      currentState: 'gate-check',
+    });
+
+    const { POST } = await import('@/server/api-routes/workflow/force-transition/route');
+    const response = await POST(postRequest('/api/workflow/force-transition', {
+      runId: 'run-recovery-1',
+      targetState: '__human_approval__',
+      instruction: '等待人工确认门禁命令',
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ success: true });
+    expect(manager.recoverFailedRunToHumanApprovalInBackground).toHaveBeenCalledWith(
+      'run-recovery-1',
+      '等待人工确认门禁命令',
+      { id: 'user-1', name: 'Tester' },
+    );
+    expect(mocks.appendWorkflowAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'recover-to-human-approval',
+      after: { status: 'running', currentState: '__human_approval__' },
+    }));
   });
 
   test('keeps normal resume separate from the explicit force-transition endpoint', async () => {

@@ -9817,6 +9817,134 @@ try {
     return this.runContinuationInBackground((markStartupReady) => this.resume(runId, markStartupReady));
   }
 
+  /**
+   * Recover a terminal failed run into the durable human-approval checkpoint.
+   *
+   * This is deliberately different from a normal resume or a force jump: no
+   * completed step is replayed, no target state is executed yet, and the
+   * original step logs remain the audit record.  The only materialized change
+   * is replacing the terminal failure with an explicit operator decision.
+   */
+  async recoverFailedRunToHumanApprovalInBackground(
+    runId: string,
+    instruction?: string,
+    actor?: WorkflowActionActor,
+  ): Promise<void> {
+    return this.runContinuationInBackground((markStartupReady) => (
+      this.recoverFailedRunToHumanApproval(runId, instruction, actor, markStartupReady)
+    ));
+  }
+
+  async recoverFailedRunToHumanApproval(
+    runId: string,
+    instruction?: string,
+    actor?: WorkflowActionActor,
+    markStartupReady?: () => void,
+  ): Promise<void> {
+    try {
+      if (this.status === 'running') {
+        throw new Error('已有工作流正在运行');
+      }
+
+      const runState = await loadRunState(runId);
+      if (!runState) {
+        throw new Error(`找不到运行记录: ${runId}`);
+      }
+      if (runState.mode !== 'state-machine') {
+        throw new Error('该运行记录不是状态机工作流');
+      }
+      if (runState.status !== 'failed') {
+        throw new Error('仅失败终态的运行可以转入人工处理');
+      }
+
+      await this.assertRestoredWorkflowSnapshot(runState);
+      const configContent = await this.readWorkflowConfigContent(runState.configFile);
+      const workflowConfig = parseNormalizedWorkflowConfig(configContent, runState.configFile);
+      const availableStates = workflowConfig.workflow.states.map((state) => state.name);
+      const failedState = runState.currentState || runState.currentPhase || '';
+      const suggestedNextState = availableStates.includes(failedState)
+        ? failedState
+        : workflowConfig.workflow.states.find((state) => state.isInitial)?.name || availableStates[0] || '';
+      if (!suggestedNextState) {
+        throw new Error('工作流没有可供人工选择的目标状态');
+      }
+
+      const recoveredAt = new Date().toISOString();
+      const originalReason = String(runState.statusReason || '').trim();
+      const recoverySummary = instruction?.trim()
+        || originalReason
+        || '该运行此前已终止；请核对保留的证据并决定下一状态。';
+      const recoveryAdvice = [
+        `运行 ${runId} 已从失败终态转入人工处理。`,
+        '已完成步骤、工具输出、失败记录和状态历史均被保留；不会自动重跑任何步骤。',
+        `建议下一状态：${suggestedNextState}。`,
+        `失败上下文：${recoverySummary}`,
+      ].join('\n');
+
+      // Failed step logs are evidence, not a future execution checkpoint.  A
+      // human-selected target will decide what to replay, if anything.
+      const recoveredRunState: PersistedRunState = {
+        ...runState,
+        status: 'running',
+        statusReason: `已转入人工处理：${recoverySummary}`,
+        endTime: null,
+        waitStartedAt: recoveredAt,
+        currentState: '__human_approval__',
+        currentPhase: '__human_approval__',
+        currentStep: null,
+        activeSteps: [],
+        activeConcurrencyGroups: [],
+        failedSteps: [],
+        pendingHumanQuestionId: null,
+        stateHistory: [
+          ...(runState.stateHistory || []),
+          {
+            from: failedState || runState.status,
+            to: '__human_approval__',
+            reason: instruction?.trim()
+              ? `失败终态转人工处理，附加说明: ${instruction.trim()}`
+              : '失败终态转人工处理，等待人工决定下一状态',
+            issues: [],
+            timestamp: recoveredAt,
+          },
+        ],
+        transitionCount: (runState.transitionCount || 0) + 1,
+        pendingCheckpoint: {
+          phase: '__human_approval__',
+          checkpoint: 'failed-run-recovery',
+          message: recoveryAdvice,
+          isIterativePhase: false,
+          suggestedNextState,
+          availableStates,
+          supervisorAdvice: recoveryAdvice,
+          result: {
+            verdict: 'conditional_pass',
+            issues: [],
+            summary: recoverySummary,
+          },
+        },
+      };
+
+      await saveRunState(recoveredRunState);
+      this.emit('transition-forced', {
+        from: failedState || runState.status,
+        to: '__human_approval__',
+        instruction,
+        runId,
+        actor,
+        recovery: 'failed-run-to-human-approval',
+      });
+
+      // Reuse the normal durable approval restoration path.  It creates the
+      // human question, emits channel notifications, and waits before any
+      // state-machine execution can resume.
+      await this.resumeContinuation(runId, markStartupReady);
+    } catch (error) {
+      await this.markContinuationFailed(runId, error, '强制恢复');
+      throw error;
+    }
+  }
+
   async resume(runId: string, markStartupReady?: () => void): Promise<void> {
     try {
       await this.resumeContinuation(runId, markStartupReady);
