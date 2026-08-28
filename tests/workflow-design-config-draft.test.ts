@@ -81,6 +81,7 @@ const persistedDraftState = {
   engine: 'codex',
   workflowDefaultModel: 'gpt-5',
   workflowAutoCompactOnStepChange: true,
+  workflowSupervisorEnabled: false,
   workflowAgentOverrides: {
     'judge-agent': {
       enabled: true,
@@ -206,7 +207,9 @@ describe('workflow design config draft helpers', () => {
     });
   });
 
-  test('keeps supervisor unchanged for state-machine design save payloads', () => {
+  // 契约变更：界面新增了 Supervisor 开关，保存时它是权威值。
+  // 但除 enabled 外的其他 supervisor 字段仍必须原样保留。
+  test('supervisor enabled follows the design toggle, other fields survive', () => {
     const config = {
       ...stateMachineConfig,
       workflow: {
@@ -217,12 +220,13 @@ describe('workflow design config draft helpers', () => {
         },
       },
     };
-    const normalized = buildWorkflowDesignConfigForSave(config, persistedDraftState);
+    const off = buildWorkflowDesignConfigForSave(config, { ...persistedDraftState, workflowSupervisorEnabled: false });
+    expect(off.workflow.supervisor.enabled).toBe(false);
+    expect(off.workflow.supervisor.agent).toBe('review-supervisor');
 
-    expect(normalized.workflow.supervisor).toEqual({
-      enabled: true,
-      agent: 'review-supervisor',
-    });
+    const on = buildWorkflowDesignConfigForSave(config, { ...persistedDraftState, workflowSupervisorEnabled: true });
+    expect(on.workflow.supervisor.enabled).toBe(true);
+    expect(on.workflow.supervisor.agent).toBe('review-supervisor');
   });
 
   test('omits supervisor from lightweight policy agent list', () => {
@@ -243,5 +247,48 @@ describe('workflow design config draft helpers', () => {
         { name: 'judge-agent', roleType: 'normal' },
       ],
     })).toEqual(['judge-agent', 'default-supervisor']);
+  });
+});
+
+describe('Supervisor 开关写回', () => {
+  // 背景：Supervisor 能占 6-8% 运行时长，但界面上一直没有开关，只能改 yaml。
+  const base = { ...persistedDraftState, workflowSupervisorEnabled: false };
+
+  test('关闭时把 enabled 置为 false', () => {
+    const cfg = buildWorkflowDesignConfigForSave(
+      { workflow: { supervisor: { enabled: true, stageReviewEnabled: true } }, context: {} } as any,
+      base,
+    ) as any;
+    expect(cfg.workflow.supervisor.enabled).toBe(false);
+  });
+
+  test('打开时连带开启阶段审阅与检查点建议', () => {
+    // 只置 enabled 的话 Supervisor 虽然开着却什么都不做，对用户是个陷阱。
+    const cfg = buildWorkflowDesignConfigForSave(
+      { workflow: { supervisor: { enabled: false } }, context: {} } as any,
+      { ...base, workflowSupervisorEnabled: true },
+    ) as any;
+    expect(cfg.workflow.supervisor.enabled).toBe(true);
+    expect(cfg.workflow.supervisor.stageReviewEnabled).toBe(true);
+    expect(cfg.workflow.supervisor.checkpointAdviceEnabled).toBe(true);
+  });
+
+  test('保留配置里已有的其他 supervisor 字段', () => {
+    const cfg = buildWorkflowDesignConfigForSave(
+      { workflow: { supervisor: { enabled: true, agent: 'my-supervisor', experienceEnabled: false } }, context: {} } as any,
+      { ...base, workflowSupervisorEnabled: true },
+    ) as any;
+    expect(cfg.workflow.supervisor.agent).toBe('my-supervisor');
+    expect(cfg.workflow.supervisor.experienceEnabled).toBe(false);
+  });
+
+  test('原本就没有 supervisor 段且开关是关的，不凭空造一段', () => {
+    const cfg = buildWorkflowDesignConfigForSave({ workflow: {}, context: {} } as any, base) as any;
+    expect(cfg.workflow.supervisor).toBeUndefined();
+  });
+
+  test('没有 workflow 段（轻量工作流）时原样返回，不报错', () => {
+    const cfg = buildWorkflowDesignConfigForSave({ context: {} } as any, { ...base, workflowSupervisorEnabled: true }) as any;
+    expect(cfg.workflow).toBeUndefined();
   });
 });

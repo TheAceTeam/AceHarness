@@ -2527,6 +2527,7 @@ export default function WorkbenchPage({
   const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
   const [workflowDefaultModel, setWorkflowDefaultModel] = useState('');
   const [workflowAutoCompactOnStepChange, setWorkflowAutoCompactOnStepChange] = useState(false);
+  const [workflowSupervisorEnabled, setWorkflowSupervisorEnabled] = useState(false);
   const [workflowAgentOverrides, setWorkflowAgentOverrides] = useState<Record<string, WorkflowAgentExecutionOverride>>({});
   const [showAgentDrawer, setShowAgentDrawer] = useState(false);
   const [showRuntimeAgentCreator, setShowRuntimeAgentCreator] = useState(false);
@@ -3506,6 +3507,7 @@ export default function WorkbenchPage({
     engine,
     workflowDefaultModel,
     workflowAutoCompactOnStepChange,
+    workflowSupervisorEnabled,
     workflowAgentOverrides,
     skills,
     mcpServers,
@@ -3520,6 +3522,7 @@ export default function WorkbenchPage({
     timeoutMinutes,
     workflowAgentOverrides,
     workflowAutoCompactOnStepChange,
+    workflowSupervisorEnabled,
     workflowDefaultModel,
     workspaceMode,
   ]);
@@ -3546,6 +3549,7 @@ export default function WorkbenchPage({
       engine: persistedExecutionPolicy.defaultEngine || '',
       workflowDefaultModel: persistedExecutionPolicy.defaultModel || '',
       workflowAutoCompactOnStepChange: persistedExecutionPolicy.autoCompactOnStepChange === true,
+      workflowSupervisorEnabled: (workflowConfig as any)?.workflow?.supervisor?.enabled === true,
       workflowAgentOverrides: persistedExecutionPolicy.agentOverrides || {},
       skills: Array.isArray(workflowConfig.context?.skills) ? workflowConfig.context.skills.filter((item: unknown): item is string => typeof item === 'string') : [],
       mcpServers: Array.isArray(workflowConfig.context?.mcpServers) ? workflowConfig.context.mcpServers.filter((item: unknown): item is string => typeof item === 'string') : [],
@@ -7930,6 +7934,7 @@ export default function WorkbenchPage({
         dispatch({ type: 'SET_ENGINE', payload: loadedExecutionPolicy.defaultEngine || '' });
         setWorkflowDefaultModel(loadedExecutionPolicy.defaultModel || '');
         setWorkflowAutoCompactOnStepChange(loadedExecutionPolicy.autoCompactOnStepChange === true);
+        setWorkflowSupervisorEnabled((config as any)?.workflow?.supervisor?.enabled === true);
         setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
         dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
         dispatch({ type: 'SET_MCP_SERVERS', payload: config.context?.mcpServers || [] });
@@ -14579,6 +14584,9 @@ export default function WorkbenchPage({
                                 <Badge variant={workflowAutoCompactOnStepChange ? 'default' : 'outline'}>
                                   步骤级总结: {workflowAutoCompactOnStepChange ? '开启' : '关闭'}
                                 </Badge>
+                                <Badge variant={workflowSupervisorEnabled ? 'default' : 'outline'}>
+                                  Supervisor: {workflowSupervisorEnabled ? '开启' : '关闭'}
+                                </Badge>
                                 <Badge variant="secondary">
                                   Agent 覆盖: {configuredWorkflowOverrideCount}
                                 </Badge>
@@ -15731,6 +15739,24 @@ export default function WorkbenchPage({
                         id="workflow-auto-compact-on-step-change"
                         checked={workflowAutoCompactOnStepChange}
                         onCheckedChange={setWorkflowAutoCompactOnStepChange}
+                      />
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="space-y-1">
+                        <Label htmlFor="workflow-supervisor-enabled" className="text-sm font-medium">
+                          Supervisor 阶段审阅
+                        </Label>
+                        <div className="text-xs text-muted-foreground">
+                          默认关闭。启用后，每个状态执行结束时由 Supervisor 追加一次阶段审阅，人工审批前再追加一次检查点建议。
+                          实测每次约 30–60 秒，一条 6 状态的工作流会多花 7–8 分钟。
+                        </div>
+                      </div>
+                      <Switch
+                        id="workflow-supervisor-enabled"
+                        checked={workflowSupervisorEnabled}
+                        onCheckedChange={setWorkflowSupervisorEnabled}
                       />
                     </div>
                   </div>
