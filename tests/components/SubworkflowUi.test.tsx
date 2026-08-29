@@ -141,6 +141,35 @@ describe('subworkflow UI coverage', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ selectedState: '描述与门禁' }));
   });
 
+  test('HumanQuestionCard keeps long approval evidence collapsed until requested', () => {
+    render(
+      <HumanQuestionCard
+        collapsible={false}
+        onSubmit={vi.fn()}
+        question={{
+          id: 'q-collapsed-evidence',
+          runId: 'run-approval',
+          configFile: 'workflow.yaml',
+          status: 'unanswered',
+          kind: 'approval',
+          title: '等待外部评审',
+          message: '这是一段很长的审批依据。',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          suggestedNextState: '描述与门禁',
+          answerSchema: {
+            type: 'approval-transition',
+            required: true,
+            options: [{ label: '描述与门禁', value: '描述与门禁' }],
+          },
+        } as any}
+      />,
+    );
+
+    const evidence = screen.getByLabelText('完整审批依据');
+    expect(evidence).not.toHaveAttribute('open');
+    expect(screen.getByText('查看完整审批依据')).toBeInTheDocument();
+  });
+
   test('StateMachineExecutionView renders child run card and opens embedded detail action', async () => {
     const onOpen = vi.fn();
     render(

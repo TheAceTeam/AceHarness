@@ -103,6 +103,10 @@ export default function HumanQuestionCard({
 
   const triggerTitle = `[${formatKind(question.kind)}] ${question.title}`;
   const workflowPath = Array.isArray(question.workflowPath) ? question.workflowPath.filter(Boolean) : [];
+  const collapseApprovalEvidence = !compact
+    && Boolean(onSubmit)
+    && question.status === 'unanswered'
+    && question.answerSchema.type === 'approval-transition';
 
   const header = (
     <div className="flex items-start justify-between gap-3">
@@ -157,12 +161,27 @@ export default function HumanQuestionCard({
             </div>
           </div>
         ) : null}
-        <div className={`${compact ? 'line-clamp-3 text-xs' : 'text-sm'} leading-6 text-foreground`}>
-          <Markdown>{question.message || question.supervisorAdvice || 'Supervisor 请求补充信息。'}</Markdown>
-        </div>
+        {collapseApprovalEvidence ? (
+          <details className="rounded-lg border bg-muted/20 px-3 py-2 text-sm leading-6" aria-label="完整审批依据">
+            <summary className="cursor-pointer font-medium text-foreground">查看完整审批依据</summary>
+            <div className="mt-2 max-h-64 overflow-y-auto overscroll-contain pr-2 text-foreground">
+              <Markdown>{question.message || question.supervisorAdvice || 'Supervisor 请求补充信息。'}</Markdown>
+              {question.supervisorAdvice && question.supervisorAdvice !== question.message ? (
+                <div className="mt-3 border-t pt-3">
+                  <div className="mb-1 text-xs font-medium text-amber-700 dark:text-amber-300">Supervisor 建议</div>
+                  <Markdown>{question.supervisorAdvice}</Markdown>
+                </div>
+              ) : null}
+            </div>
+          </details>
+        ) : (
+          <div className={`${compact ? 'line-clamp-3 text-xs' : 'text-sm'} leading-6 text-foreground`}>
+            <Markdown>{question.message || question.supervisorAdvice || 'Supervisor 请求补充信息。'}</Markdown>
+          </div>
+        )}
       </TaskItem>
 
-      {!compact && question.supervisorAdvice && question.supervisorAdvice !== question.message ? (
+      {!collapseApprovalEvidence && !compact && question.supervisorAdvice && question.supervisorAdvice !== question.message ? (
         <TaskItem>
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 dark:border-amber-900 dark:bg-amber-950/30">
             <div className="mb-1 text-xs font-medium text-amber-700 dark:text-amber-300">Supervisor 建议</div>

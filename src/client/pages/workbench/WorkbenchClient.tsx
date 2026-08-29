@@ -13520,9 +13520,6 @@ export default function WorkbenchPage({
     const pendingQuestionText = pendingHumanQuestion
       ? String((pendingHumanQuestion as any).question || pendingHumanQuestion.message || '').trim()
       : '';
-    const title = pendingHumanQuestion
-      ? (pendingHumanQuestion.title || '等待人工输入')
-      : '确认工作流下一步';
     const summary = pendingHumanQuestion
       ? (pendingQuestionText || pendingHumanQuestion.supervisorAdvice || '请查看审批选项并给出决定。')
       : humanApprovalData?.result?.summary || humanApprovalData?.supervisorAdvice || '当前工作流等待人工确认后继续推进。';
@@ -13550,11 +13547,6 @@ export default function WorkbenchPage({
       || pendingHumanQuestion?.suggestedNextState
       || humanApprovalData?.nextState
       || null;
-    const answerOptions = pendingHumanQuestion
-      ? (pendingHumanQuestion.answerSchema.options?.map((option) => option.label)
-        || pendingHumanQuestion.availableStates
-        || [])
-      : humanApprovalData?.availableStates || [];
     const remediationTarget = resolveHumanApprovalRemediationTarget();
     const shouldRecommendRemediation = approvalPresentation.recommendation === 'verify-first' && Boolean(remediationTarget);
     const shouldSubmitAndMonitorCi = approvalPresentation.recommendation === 'submit-and-monitor-ci' && Boolean(suggestedAction);
@@ -13571,60 +13563,24 @@ export default function WorkbenchPage({
                   累计等待 {formatRunDuration(runTiming.waitMs)}
                 </span>
               </div>
-              <div className="mt-2 grid gap-x-5 gap-y-2 text-xs leading-5 md:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.8fr)]">
-                <div className="min-w-0">
-                  <div className="font-bold text-orange-950 dark:text-orange-50">你现在只需要做一个选择</div>
-                  <div className={`mt-1 rounded-md border px-3 py-2 font-semibold ${approvalPresentation.recommendation === 'verify-first' ? 'border-orange-300 bg-orange-100/80 text-orange-950 dark:border-orange-400/40 dark:bg-orange-950/30 dark:text-orange-50' : 'border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-400/40 dark:bg-emerald-950/25 dark:text-emerald-50'}`}>
-                    {shouldSubmitAndMonitorCi
-                      ? '建议让 Agent 核验 PR 与 CI 状态。'
-                      : shouldRecommendRemediation
-                      ? `建议让 Agent 返回「${remediationTarget}」自动核验并修复。`
-                      : approvalPresentation.headline}
-                  </div>
-                  <p className="mt-2 text-orange-800 dark:text-orange-100/85">
-                    {shouldSubmitAndMonitorCi
-                      ? approvalPresentation.supportingText
-                      : shouldRecommendRemediation
-                      ? '无需你打开终端执行 Git、codecheck 或测试；这些核验应由 Agent 在隔离工作区完成。'
-                      : approvalPresentation.supportingText}
-                  </p>
-                  <details className="mt-2 rounded-md border border-orange-200/80 bg-background/45 px-3 py-2 text-orange-800 dark:border-orange-400/20 dark:bg-black/10 dark:text-orange-100/85">
-                    <summary className="cursor-pointer font-medium text-orange-950 dark:text-orange-50">查看 Agent 将自动核验的 {approvalPresentation.checklist.length} 项内容</summary>
-                    <ul className="mt-2 list-disc space-y-1 pl-5" aria-label="Agent 核验清单">
-                      {approvalPresentation.checklist.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}
-                    </ul>
-                    <div
-                      className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words pr-2"
-                      aria-label="审批说明"
-                      tabIndex={0}
-                    >
-                      {summary}
-                    </div>
-                  </details>
-                </div>
-                <div className="min-w-0 border-orange-200 md:border-l md:pl-5 dark:border-orange-400/20">
-                  <div className="font-bold text-orange-950 dark:text-orange-50">这两个选择分别会发生什么</div>
-                  {isFailedRunRecovery && suggestedAction ? (
-                    <>
-                      <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
-                        返回返工会重新执行需要的检查；直接继续会进入「{suggestedAction}」。
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
-                        {shouldSubmitAndMonitorCi
-                          ? `推荐：进入「${suggestedAction}」，由 Agent 核验 PR 与 CI；CI 已运行时只等待结果。`
-                          : shouldRecommendRemediation && remediationTarget
-                          ? `推荐：返回「${remediationTarget}」，让 Agent 处理未闭合的核验。`
-                          : answerOptions.length > 0 ? `可选：${answerOptions.slice(0, 4).join(' / ')}` : '在完整审批页选择下一步处理路径'}
-                      </div>
-                      {suggestedAction && !shouldSubmitAndMonitorCi ? (
-                        <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">只有已人工确认全部证据时，才继续到：{suggestedAction}</div>
-                      ) : null}
-                    </>
-                  )}
-                </div>
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5">
+                <span className={`rounded-md border px-2 py-1 font-semibold ${approvalPresentation.recommendation === 'verify-first' ? 'border-orange-300 bg-orange-100/80 text-orange-950 dark:border-orange-400/40 dark:bg-orange-950/30 dark:text-orange-50' : 'border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-400/40 dark:bg-emerald-950/25 dark:text-emerald-50'}`}>
+                  {shouldSubmitAndMonitorCi
+                    ? '建议让 Agent 核验 PR 与 CI 状态'
+                    : shouldRecommendRemediation
+                    ? `建议返回「${remediationTarget}」自动修复`
+                    : approvalPresentation.headline}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-orange-800 dark:text-orange-100/85" title={shouldSubmitAndMonitorCi ? approvalPresentation.supportingText : shouldRecommendRemediation ? '无需手动打开终端；Agent 会在隔离工作区完成核验。' : approvalPresentation.supportingText}>
+                  {shouldSubmitAndMonitorCi
+                    ? approvalPresentation.supportingText
+                    : shouldRecommendRemediation
+                    ? '无需手动打开终端；Agent 会在隔离工作区完成核验。'
+                    : approvalPresentation.supportingText}
+                </span>
+                {suggestedAction && !shouldSubmitAndMonitorCi ? (
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-300">确认后进入「{suggestedAction}」</span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -13906,7 +13862,7 @@ export default function WorkbenchPage({
   const renderRunLiveOutputPanel = () => (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/10">
       {pendingHumanQuestion?.status === 'unanswered' ? (
-        <div className="max-h-[60%] min-h-0 shrink overflow-y-auto border-b bg-background/95 p-4 shadow-sm">
+        <div className="max-h-[min(42vh,26rem)] min-h-0 shrink overflow-y-auto border-b bg-background/95 p-4 shadow-sm">
           <HumanQuestionCard
             question={pendingHumanQuestion}
             submitting={submittingHumanQuestion}
