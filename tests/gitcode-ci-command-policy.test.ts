@@ -5,6 +5,7 @@ import {
   decideGitCodeCiGateRecovery,
   findGitCodePullRequestRef,
   findGitCodeCiToolCommandViolation,
+  buildGitCodeCiCommandPolicyPrompt,
   GITCODE_CI_TRIGGER_COMMAND,
   validateGitCodeCiTriggerCommand,
 } from '@/lib/workflow/gitcode-ci-command-policy';
@@ -83,5 +84,14 @@ describe('GitCode CI command policy', () => {
       merged: true,
       checkedAt: '2026-08-29T10:18:20.000Z',
     })).toMatchObject({ status: 'passed', headSha: 'ffe4b340', merged: true });
+  });
+
+  test('injects the single-commit amend policy into every workflow delivery prompt', () => {
+    const prompt = buildGitCodeCiCommandPolicyPrompt('/tmp/aceharness-gitcode-ci-delivery/SKILL.md');
+
+    expect(prompt).toContain('一个 PR、一个提交');
+    expect(prompt).toContain('git commit --amend');
+    expect(prompt).toContain('git push --force-with-lease');
+    expect(prompt).toContain('只有“尚未创建 PR 的首次交付”');
   });
 });

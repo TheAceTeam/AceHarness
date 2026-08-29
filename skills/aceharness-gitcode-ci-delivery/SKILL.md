@@ -46,3 +46,13 @@ start build
 ## ACEHarness 运行时保护
 
 ACEHarness 会检查已观测到的 GitCode PR 评论命令。发现 `start_build` 或 `start-build` 时会取消该 Agent 回合，并将步骤标记为失败恢复。该保护是最后防线；仍应在执行前遵守本 Skill。
+
+## PR 提交形态：默认单提交
+
+已创建 PR 后，后续的 codecheck、CI 或评审反馈修复属于同一评审单元，默认必须保持 **一个 PR、一个提交**：
+
+1. 先读取 PR head、本地 `HEAD`、目标分支和工作区状态。远端 head 与本地不一致时先停止，不能盲目改写历史。
+2. 仅暂存本轮已验证的文件，运行必要验证后使用 `git commit --amend` 更新 PR 的现有提交；没有用户明确授权时，不得再创建第二个普通 commit。
+3. amend 后只能用 `git push --force-with-lease` 推送同一源分支；禁止裸 `--force` 与 `--no-verify`。
+4. 推送后回读 PR head，并验证 `merge-base(base, HEAD)..HEAD` 的提交数为 1。若远端出现并发更新、无法安全 amend，或仓库明确要求提交序列，保留证据并请求用户决定，不能自行改为多提交。
+5. 仅首次创建 PR 前允许普通 `git commit`；用户明确要求保留分步历史时，按其要求执行并在 PR 描述说明提交序列。

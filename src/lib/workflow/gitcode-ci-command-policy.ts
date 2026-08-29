@@ -218,7 +218,25 @@ export function buildGitCodeCiCommandPolicyPrompt(skillPath: string): string {
     '发出后轮询标签和机器人评论：发现 `CI-running` 或流水线启动通知则转为 `wait_external` 监控；若仍无确认，输出 `external_blocked`，说明“机器人未消费精确指令”，不要循环发送。',
     '若最新评论已经是字节级精确的 `start build`，不得重发；直接作为外部依赖异常上报。',
     '运行时会拦截已观测到的无效 GitCode 评论命令并取消本回合，防止它继续被当作成功交付。',
+    '',
+    ...buildGitCodePrCommitTopologyPolicyPrompt(),
   ].join('\n');
+}
+
+/**
+ * Keep a PR's review unit stable while responding to its gates.  This is part
+ * of the runtime prompt (rather than only a Skill) because every delivery
+ * agent must obey it even if it does not independently discover the Skill.
+ */
+export function buildGitCodePrCommitTopologyPolicyPrompt(): string[] {
+  return [
+    '# GitCode PR 提交形态规则（强制）',
+    '当当前工作分支已经存在对应的开放 PR 时，默认目标是“一个 PR、一个提交”。',
+    '对 codecheck、CI 或评审反馈做的同一修复，必须先核对 PR head 与本地 HEAD；随后使用 `git commit --amend` 更新现有提交，而不是创建第二个提交。',
+    'amend 后必须用 `git push --force-with-lease` 更新同一 PR 分支；禁止使用不带 lease 的强推，禁止 `--no-verify`。',
+    '推送后必须回读 PR head，并验证相对目标分支的提交数仍为 1；若无法安全 amend、发现并发远端更新或仓库明确要求提交序列，停止并报告原因，等待用户明确授权新增提交。',
+    '只有“尚未创建 PR 的首次交付”或用户明确要求保留多个提交时，才允许普通 `git commit` 创建新提交。',
+  ];
 }
 
 function looksLikeGitCodePrCommentCommand(command: string): boolean {

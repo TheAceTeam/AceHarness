@@ -120,7 +120,7 @@ context:
         label: PR / 交付规约（可选覆盖）
         type: textarea
         placeholder: 已知 PR 描述、审批、提交或交付要求
-        description: 留空时在「描述与门禁」阶段从仓库和平台配置解析；不足时按需请求补充。
+        description: 留空时在「描述与门禁」阶段从仓库和平台配置解析；对已存在 PR，默认以 amend + force-with-lease 保持单提交，只有用户明确要求才保留多个提交。
       - id: gateContract
         label: Gate 契约（可选结构化覆盖）
         type: textarea
