@@ -68,10 +68,15 @@ import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import {
   buildGitCodeCiCommandPolicyPrompt,
+  createGitCodeCiGateObservation,
+  findGitCodePullRequestRef,
   findGitCodeCiToolCommandViolation,
   GITCODE_CI_DELIVERY_SKILL,
+  type GitCodeCiGateObservation,
+  type GitCodePullRequestRef,
   type GitCodeCiToolCommandViolation,
 } from '@/lib/workflow/gitcode-ci-command-policy';
+import { loadSystemSettings } from '@/lib/config/system-settings';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import {
   buildDatabaseCapabilityPrompt,
@@ -218,6 +223,8 @@ const TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS = 2;
 const RATE_LIMIT_ENGINE_RETRY_MAX_ATTEMPTS = 3;
 const RATE_LIMIT_RETRY_BASE_DELAY_MS = 30_000;
 const RATE_LIMIT_RETRY_MAX_DELAY_MS = 120_000;
+const GITCODE_GATE_OBSERVE_INTERVAL_MS = 15_000;
+const GITCODE_GATE_OBSERVE_TIMEOUT_MS = 8_000;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_PARENT = 8;
 const MAX_ACTIVE_SUBWORKFLOW_RUNS_PER_USER = 16;
 const MAX_SUBWORKFLOW_RUNS_PER_ROOT = 64;
@@ -3193,24 +3200,226 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
+  /**
+   * External-gate checkpoints do not need a human to relay a fact the
+   * platform already exposes. Keep this deliberately narrow: ordinary
+   * approvals, failed gates, and unknown PRs remain human-controlled.
+   */
+  private getAutoResolvableGitCodeGateApproval(question: HumanQuestion): {
+    fromState: string;
+    targetState: string;
+  } | null {
+    if (question.answerSchema.type !== 'approval-transition') return null;
+    const source = question.source;
+    const conditionalExternalWait = source?.type === 'checkpoint-advice'
+      && source.reason === 'conditional-pass-needs-human-action';
+    const circuitBreakerExternalWait = source?.type === 'human-approval'
+      && source.reason === 'self-transition-circuit-breaker'
+      && ['submit_and_monitor_ci', 'wait_external'].includes(String(question.result?.decision?.action || ''));
+    if (!conditionalExternalWait && !circuitBreakerExternalWait) {
+      return null;
+    }
+    const fromState = String(source?.fromState || source?.stateName || question.previousState || '').trim();
+    if (!fromState || !this.currentWorkflowConfig) return null;
+    const state = this.currentWorkflowConfig.workflow.states.find((item) => item.name === fromState);
+    const passTransition = state?.transitions
+      .filter((transition) => transition.condition?.verdict === 'pass' && transition.to !== fromState)
+      .sort((left, right) => left.priority - right.priority)[0];
+    if (!passTransition) return null;
+    return { fromState, targetState: passTransition.to };
+  }
+
+  private findGitCodePullRequestForApproval(question: HumanQuestion): GitCodePullRequestRef | null {
+    const inputs = [
+      question.result?.summary,
+      question.message,
+      question.supervisorAdvice,
+      this.pendingApprovalInfo?.result?.summary,
+      this.pendingApprovalInfo?.supervisorAdvice,
+      this.currentRequirements,
+      this.taskInput.issueUrl,
+      this.taskInput.description,
+      this.taskInput.acceptanceCriteria,
+      ...Object.values(this.taskInput.fields || {}),
+      ...this.stepLogs.slice(-40).reverse().flatMap((log) => [log.output, log.error]),
+    ];
+    for (const input of inputs) {
+      const ref = findGitCodePullRequestRef(input);
+      if (ref) return ref;
+    }
+    return null;
+  }
+
+  private async observeGitCodeCiGate(ref: GitCodePullRequestRef): Promise<GitCodeCiGateObservation | null> {
+    const settings = await loadSystemSettings();
+    const token = settings.gitcodeToken?.trim();
+    if (!token) return null;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GITCODE_GATE_OBSERVE_TIMEOUT_MS);
+    try {
+      const url = `https://api.gitcode.com/api/v5/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/pulls/${ref.number}?access_token=${encodeURIComponent(token)}`;
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const payload = await response.json() as {
+        labels?: Array<string | { name?: string }>;
+        head?: { sha?: string };
+        sha?: string;
+        state?: string;
+        merged_at?: string | null;
+      };
+      const labels = (payload.labels || []).map((label) => (
+        typeof label === 'string' ? label : String(label?.name || '')
+      ));
+      return createGitCodeCiGateObservation({
+        labels,
+        headSha: payload.head?.sha || payload.sha,
+        merged: payload.state === 'merged' || Boolean(payload.merged_at),
+      });
+    } catch {
+      // Observing a third-party CI must never make a workflow fail. The
+      // approval remains available to the operator when GitCode is unavailable.
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async resolveApprovalFromGitCodeGate(input: {
+    question: HumanQuestion;
+    targetState: string;
+    ref: GitCodePullRequestRef;
+    observation: GitCodeCiGateObservation;
+  }): Promise<void> {
+    const index = this.humanQuestions.findIndex((item) => item.id === input.question.id);
+    const existing = index >= 0 ? this.humanQuestions[index] : null;
+    if (!existing || existing.status !== 'unanswered' || this.pendingHumanQuestionId !== existing.id) return;
+
+    const instruction = [
+      `系统已观察到 GitCode PR ${input.ref.url} 的门禁通过且 PR 已合入。`,
+      `标签：${input.observation.labels.join(', ') || '无'}。`,
+      `按状态机声明的 pass 路径自动进入「${input.targetState}」。`,
+    ].join(' ');
+    const answer: HumanQuestionAnswer = {
+      selectedState: input.targetState,
+      instruction,
+      raw: {
+        source: 'gitcode-ci-gate-observer',
+        pr: input.ref.url,
+        headSha: input.observation.headSha,
+        labels: input.observation.labels,
+        checkedAt: input.observation.checkedAt,
+      },
+    };
+    const updated: HumanQuestion = {
+      ...existing,
+      status: 'answered',
+      answer,
+      answeredAt: new Date().toISOString(),
+    };
+    this.humanQuestions[index] = updated;
+    this.pendingHumanQuestionId = null;
+    this.pendingForceTransition = input.targetState;
+    this.pendingForceInstruction = instruction;
+    await this.persistState();
+    await this.appendRuntimeTranscriptEvent({
+      type: 'external-gate-passed',
+      title: 'GitCode 门禁已通过，工作流自动续流',
+      body: instruction,
+      tags: ['gitcode', 'ci', 'gate', 'passed', 'auto-transition'],
+      dedupeKey: `workflow-gitcode-gate-passed-${existing.id}-${input.observation.headSha || 'unknown'}`,
+      speakerName: '系统门禁观察器',
+      speakerType: 'system',
+    });
+    this.emit('human-question-answered', { question: updated, answer, automated: true });
+    this.emit('external-gate-observed', {
+      status: input.observation.status,
+      pr: input.ref.url,
+      headSha: input.observation.headSha,
+      labels: input.observation.labels,
+      nextState: input.targetState,
+      automated: true,
+    });
+  }
+
+  private async reportOpenPullRequestAfterGatePass(input: {
+    question: HumanQuestion;
+    ref: GitCodePullRequestRef;
+    observation: GitCodeCiGateObservation;
+  }): Promise<void> {
+    const index = this.humanQuestions.findIndex((item) => item.id === input.question.id);
+    const existing = index >= 0 ? this.humanQuestions[index] : null;
+    if (!existing || existing.status !== 'unanswered') return;
+    const marker = '系统门禁观察：';
+    if (existing.message.includes(marker)) return;
+    const statusMessage = [
+      `${marker}已确认 ${input.ref.url} 已通过 build-test 与 codecheck。`,
+      '但 PR 仍为打开状态，尚未合入。该状态的 pass 条件是“PR 已合入且门禁通过”，因此不能自动跳到「人工交付确认」。',
+      '无需再次发送 start build；下一项外部条件是评审/合入。PR 合入后，系统会自动确认并按 pass 路径续流。',
+    ].join('\n');
+    const updated: HumanQuestion = {
+      ...existing,
+      message: `${statusMessage}\n\n${existing.message}`,
+      supervisorAdvice: `${statusMessage}\n\n${existing.supervisorAdvice || ''}`.trim(),
+    };
+    this.humanQuestions[index] = updated;
+    await this.persistState();
+    await this.appendRuntimeTranscriptEvent({
+      type: 'external-gate-passed-awaiting-merge',
+      title: 'GitCode 门禁已通过，等待评审与合入',
+      body: statusMessage,
+      tags: ['gitcode', 'ci', 'gate', 'passed', 'awaiting-merge'],
+      dedupeKey: `workflow-gitcode-gate-open-${existing.id}-${input.observation.headSha || 'unknown'}`,
+      speakerName: '系统门禁观察器',
+      speakerType: 'system',
+    });
+    this.emit('human-question-required', { question: updated, humanQuestions: this.humanQuestions, refreshed: true });
+    this.emit('external-gate-observed', {
+      status: input.observation.status,
+      pr: input.ref.url,
+      headSha: input.observation.headSha,
+      labels: input.observation.labels,
+      merged: false,
+      automated: false,
+    });
+  }
+
   private async waitForHumanApproval(): Promise<void> {
     this.beginWait(); // 进入人工审查等待，计入等待时长
     try {
-      const pendingQuestion = this.getPendingHumanQuestion();
-      if (pendingQuestion) {
-        await this.waitForHumanQuestionAnswer(pendingQuestion.id);
-        return;
-      }
-
-      // Wait for human to call forceTransition
-      await new Promise<void>((resolve) => {
-        const checkInterval = setInterval(() => {
-          if (this.pendingForceTransition || this.shouldStop) {
-            clearInterval(checkInterval);
-            resolve();
+      let nextGateObservationAt = 0;
+      while (!this.shouldStop && !this.pendingForceTransition) {
+        const pendingQuestion = this.getPendingHumanQuestion();
+        if (!pendingQuestion) break;
+        const gateApproval = this.getAutoResolvableGitCodeGateApproval(pendingQuestion);
+        const now = Date.now();
+        if (gateApproval && now >= nextGateObservationAt) {
+          nextGateObservationAt = now + GITCODE_GATE_OBSERVE_INTERVAL_MS;
+          const ref = this.findGitCodePullRequestForApproval(pendingQuestion);
+          if (ref) {
+            const observation = await this.observeGitCodeCiGate(ref);
+            if (observation?.status === 'passed') {
+              if (observation.merged) {
+                await this.resolveApprovalFromGitCodeGate({
+                  question: pendingQuestion,
+                  targetState: gateApproval.targetState,
+                  ref,
+                  observation,
+                });
+                continue;
+              }
+              await this.reportOpenPullRequestAfterGatePass({
+                question: pendingQuestion,
+                ref,
+                observation,
+              });
+            }
           }
-        }, 500); // Check every 500ms
-      });
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      }
     } finally {
       this.endWait(); // 人工审查结束，累加本次等待
     }

@@ -5133,6 +5133,46 @@ describe('human approval flow', () => {
     vi.clearAllMocks();
   });
 
+  test('only auto-resolves an explicitly marked external gate approval onto its declared pass path', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig();
+    config.workflow.states[0].transitions = [
+      { condition: { verdict: 'pass' }, to: '实施', priority: 1 },
+      { condition: { verdict: 'conditional_pass' }, to: '设计', priority: 2 },
+    ];
+    (manager as any).currentWorkflowConfig = config;
+    (manager as any).taskInput = {
+      description: 'PR: https://gitcode.com/Cangjie/cangjie_compiler/pull/2085/discuss',
+    };
+    const question = {
+      id: 'gate-question',
+      answerSchema: { type: 'approval-transition' },
+      source: {
+        type: 'checkpoint-advice',
+        reason: 'conditional-pass-needs-human-action',
+        fromState: '设计',
+      },
+      previousState: '设计',
+    };
+
+    expect((manager as any).getAutoResolvableGitCodeGateApproval(question)).toEqual({
+      fromState: '设计',
+      targetState: '实施',
+    });
+    expect((manager as any).findGitCodePullRequestForApproval(question)).toMatchObject({
+      owner: 'Cangjie', repo: 'cangjie_compiler', number: 2085,
+    });
+    expect((manager as any).getAutoResolvableGitCodeGateApproval({
+      ...question,
+      source: { type: 'checkpoint-advice', reason: 'ordinary-review', fromState: '设计' },
+    })).toBeNull();
+    expect((manager as any).getAutoResolvableGitCodeGateApproval({
+      ...question,
+      source: { type: 'human-approval', reason: 'self-transition-circuit-breaker', stateName: '设计' },
+      result: { decision: { action: 'submit_and_monitor_ci' } },
+    })).toEqual({ fromState: '设计', targetState: '实施' });
+  });
+
   test('requireHumanApproval transitions to __human_approval__ virtual state', async () => {
     const engine = new MockEngine({
       success: true,

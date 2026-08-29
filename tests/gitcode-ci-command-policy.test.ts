@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import {
+  classifyGitCodeCiGate,
+  createGitCodeCiGateObservation,
   decideGitCodeCiGateRecovery,
+  findGitCodePullRequestRef,
   findGitCodeCiToolCommandViolation,
   GITCODE_CI_TRIGGER_COMMAND,
   validateGitCodeCiTriggerCommand,
@@ -52,5 +55,33 @@ describe('GitCode CI command policy', () => {
       .toMatchObject({ action: 'external_blocked' });
     expect(decideGitCodeCiGateRecovery({ ...snapshot, ciRunning: true }))
       .toMatchObject({ action: 'monitor' });
+  });
+
+  test('accepts only a canonical PR link as gate-observation input', () => {
+    expect(findGitCodePullRequestRef('https://gitcode.com/Cangjie/cangjie_compiler/pull/2085/discuss'))
+      .toEqual({
+        owner: 'Cangjie',
+        repo: 'cangjie_compiler',
+        number: 2085,
+        url: 'https://gitcode.com/Cangjie/cangjie_compiler/pull/2085',
+      });
+    expect(findGitCodePullRequestRef('https://gitcode.com/Cangjie/UsersForum/issues/3350')).toBeNull();
+  });
+
+  test('requires both build and codecheck labels before auto-advancing a gate', () => {
+    expect(classifyGitCodeCiGate(['build-test-passed', 'codecheck-passed'])).toMatchObject({
+      status: 'passed',
+    });
+    expect(classifyGitCodeCiGate(['build-test-passed'])).toMatchObject({ status: 'unknown' });
+    expect(classifyGitCodeCiGate(['CI-running'])).toMatchObject({ status: 'running' });
+    expect(classifyGitCodeCiGate(['codecheck-failed', 'build-test-passed'])).toMatchObject({
+      status: 'failed',
+    });
+    expect(createGitCodeCiGateObservation({
+      labels: ['build-test-passed', 'codecheck-passed'],
+      headSha: 'ffe4b340',
+      merged: true,
+      checkedAt: '2026-08-29T10:18:20.000Z',
+    })).toMatchObject({ status: 'passed', headSha: 'ffe4b340', merged: true });
   });
 });

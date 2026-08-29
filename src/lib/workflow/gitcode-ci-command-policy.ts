@@ -37,6 +37,24 @@ export type GitCodeCiGateRecoveryDecision = {
   reason: string;
 };
 
+export type GitCodePullRequestRef = {
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+};
+
+export type GitCodeCiGateStatus = 'passed' | 'failed' | 'running' | 'waiting' | 'unknown';
+
+export type GitCodeCiGateObservation = {
+  status: GitCodeCiGateStatus;
+  labels: string[];
+  headSha: string | null;
+  merged: boolean;
+  checkedAt: string;
+  reason: string;
+};
+
 type ToolCommandInput = {
   input?: {
     command?: string;
@@ -100,6 +118,68 @@ export function decideGitCodeCiGateRecovery(
     };
   }
   return { action: 'external_blocked', reason: '最近评论不是可安全纠正的 start build 变体；需要先核对 PR 评论和触发权限。' };
+}
+
+/**
+ * Extract only canonical GitCode PR URLs. Issue URLs deliberately do not
+ * match: an issue is not evidence that a CI gate has passed.
+ */
+export function findGitCodePullRequestRef(text: unknown): GitCodePullRequestRef | null {
+  if (typeof text !== 'string') return null;
+  const match = text.match(/https?:\/\/gitcode\.com\/([^/\s?#]+)\/([^/\s?#]+)\/(?:pull|merge_requests)\/(\d+)(?:[/?#][^\s]*)?/i);
+  if (!match) return null;
+  const [, owner, repo, rawNumber] = match;
+  const number = Number.parseInt(rawNumber, 10);
+  if (!owner || !repo || !Number.isSafeInteger(number) || number <= 0) return null;
+  return {
+    owner,
+    repo,
+    number,
+    url: `https://gitcode.com/${owner}/${repo}/pull/${number}`,
+  };
+}
+
+/**
+ * CI is only considered passed when the two gate labels relevant to this
+ * workflow are both present. A green-looking PR page or a bot comment alone
+ * is not sufficient evidence for automatic progression.
+ */
+export function classifyGitCodeCiGate(labelsInput: readonly string[]): Pick<GitCodeCiGateObservation, 'status' | 'labels' | 'reason'> {
+  const labels = labelsInput
+    .filter((label): label is string => typeof label === 'string')
+    .map((label) => label.trim())
+    .filter(Boolean);
+  const normalized = new Set(labels.map((label) => label.toLowerCase()));
+  const has = (label: string) => normalized.has(label);
+
+  if (has('build-test-passed') && has('codecheck-passed')) {
+    return { status: 'passed', labels, reason: '已同时获得 build-test-passed 与 codecheck-passed。' };
+  }
+  if (has('codecheck-failed') || has('build-test-failed') || has('build-failed')) {
+    return { status: 'failed', labels, reason: 'GitCode 门禁标签显示失败。' };
+  }
+  if (has('ci-running')) {
+    return { status: 'running', labels, reason: 'GitCode CI 正在运行。' };
+  }
+  if (has('waiting-start-build')) {
+    return { status: 'waiting', labels, reason: 'GitCode 正等待精确的 start build 触发。' };
+  }
+  return { status: 'unknown', labels, reason: '未发现可判定 GitCode 门禁状态的标签。' };
+}
+
+export function createGitCodeCiGateObservation(input: {
+  labels?: readonly string[];
+  headSha?: unknown;
+  merged?: unknown;
+  checkedAt?: string;
+}): GitCodeCiGateObservation {
+  const classified = classifyGitCodeCiGate(input.labels || []);
+  return {
+    ...classified,
+    headSha: typeof input.headSha === 'string' && input.headSha.trim() ? input.headSha.trim() : null,
+    merged: input.merged === true,
+    checkedAt: input.checkedAt || new Date().toISOString(),
+  };
 }
 
 /**
