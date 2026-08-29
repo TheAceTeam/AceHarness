@@ -7,7 +7,7 @@ import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
-import { existsSync } from 'fs';
+import { accessSync, constants as fsConstants, existsSync, statSync } from 'fs';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { markSuspendCheckpoint, suspendedSince } from '@/lib/core/system-suspend-tracker';
 import { cpus } from 'os';
@@ -406,10 +406,19 @@ function subtractSuspendedTime(reportedMs: number, suspendedMs: number): number 
  * 目录存在不等于 Skill 可用：悬空软链、残缺目录、只建了壳的同名目录都会让
  * `existsSync(dir)` 为真，但 Agent 顺着提示词里的路径读不到 SKILL.md。
  * 只有正文确实可读，才允许登记为「工作区已可达」并因此关掉内联兜底。
+ *
+ * 存在性不足以说明可读：权限拒绝时文件在、却读不出来，照样会白白关掉内联。
+ * 因此这里要求它是普通文件且当前进程具备读权限。
+ *
+ * 注意这只能证明「本进程可读」。Agent 可能以别的用户或在容器里运行，那种
+ * 跨进程的可读性无法在这里断言；判不准时宁可不登记，代价只是多一次内联。
  */
 function hasReadableSkillDoc(skillDir: string): boolean {
+  const skillDoc = resolve(skillDir, 'SKILL.md');
   try {
-    return existsSync(resolve(skillDir, 'SKILL.md'));
+    if (!statSync(skillDoc).isFile()) return false;
+    accessSync(skillDoc, fsConstants.R_OK);
+    return true;
   } catch {
     return false;
   }

@@ -182,6 +182,9 @@ vi.mock('fs/promises', () => ({
 
 vi.mock('fs', () => ({
   existsSync: vi.fn().mockReturnValue(false),
+  statSync: vi.fn().mockReturnValue({ isFile: () => true, isDirectory: () => false }),
+  accessSync: vi.fn(),
+  constants: { R_OK: 4, F_OK: 0 },
 }));
 
 vi.mock('yaml', () => ({
@@ -5205,6 +5208,30 @@ describe('skill 内联兜底边界', () => {
     const fsp = await import('fs/promises');
     // 服务端目录与工作区目标目录都在，唯独 SKILL.md 不存在（残缺 / 悬空软链）
     vi.mocked(fsMod.existsSync).mockImplementation((p: any) => !String(p).endsWith('SKILL.md'));
+    vi.mocked(fsMod.statSync).mockImplementation((p: any) => {
+      if (String(p).endsWith('SKILL.md')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { isFile: () => true, isDirectory: () => true } as any;
+    });
+    vi.mocked(fsp.readFile).mockResolvedValue('# demo-skill 正文' as any);
+
+    await (manager as any).syncSkillsToWorkspace(config);
+
+    expect((manager as any).workspaceSkillNames.has('demo-skill')).toBe(false);
+    const inlined = await (manager as any).loadAdditionalSkills(['demo-skill'], '/tmp/project');
+    expect(inlined).toContain('demo-skill 正文');
+  });
+
+  // 存在性不足以说明可读：权限拒绝时文件在、却读不出来。此时若仍登记，
+  // 内联兜底会被关掉，而 Agent 顺着路径同样读不到——两头落空。
+  test('SKILL.md 存在但读权限被拒时不登记，内联兜底仍生效', async () => {
+    const manager = await setupManager();
+    const fsMod = await import('fs');
+    const fsp = await import('fs/promises');
+    vi.mocked(fsMod.existsSync).mockReturnValue(true);
+    vi.mocked(fsMod.statSync).mockReturnValue({ isFile: () => true, isDirectory: () => true } as any);
+    vi.mocked(fsMod.accessSync).mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
     vi.mocked(fsp.readFile).mockResolvedValue('# demo-skill 正文' as any);
 
     await (manager as any).syncSkillsToWorkspace(config);
