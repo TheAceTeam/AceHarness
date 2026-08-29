@@ -134,11 +134,14 @@ describe('workflow templates', () => {
         '上下文固化',
         '最小化用例',
         '描述与门禁',
+        'PR 合入前检查与跟踪',
       ]));
       expect(body.template.workflow.context.taskInput.fields.find((field: any) => field.id === 'gateContract'))
         .toMatchObject({ required: false, description: expect.stringContaining('conditional_pass') });
       expect(body.template.workflow.workflow.states.find((state: any) => state.name === '描述与门禁')?.steps[0].task)
         .toContain('不能直接提交 PR');
+      expect(body.template.workflow.workflow.states.find((state: any) => state.name === 'PR 合入前检查与跟踪')?.steps[2].task)
+        .toContain('未解决检视意见');
     });
   });
 

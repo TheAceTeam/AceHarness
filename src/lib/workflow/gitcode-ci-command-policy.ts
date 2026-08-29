@@ -55,6 +55,33 @@ export type GitCodeCiGateObservation = {
   reason: string;
 };
 
+/** A review comment that can block an otherwise green PR from being merged. */
+export type GitCodePullRequestReviewComment = {
+  id: string;
+  body: string;
+  resolved: boolean;
+  file?: string;
+  line?: number;
+};
+
+export type GitCodePullRequestReadinessStatus =
+  | 'merged'
+  | 'repair_required'
+  | 'waiting_external'
+  | 'ready_for_merge'
+  | 'unknown';
+
+/**
+ * A normalized platform snapshot.  The workflow routes on this data instead
+ * of asking an agent to infer merge readiness from a green CI message.
+ */
+export type GitCodePullRequestReadinessObservation = GitCodeCiGateObservation & {
+  readiness: GitCodePullRequestReadinessStatus;
+  blockers: string[];
+  unresolvedReviewComments: GitCodePullRequestReviewComment[];
+  mergeableState: Record<string, unknown>;
+};
+
 type ToolCommandInput = {
   input?: {
     command?: string;
@@ -180,6 +207,60 @@ export function createGitCodeCiGateObservation(input: {
     merged: input.merged === true,
     checkedAt: input.checkedAt || new Date().toISOString(),
   };
+}
+
+export function createGitCodePullRequestReadinessObservation(input: {
+  labels?: readonly string[];
+  headSha?: unknown;
+  merged?: unknown;
+  checkedAt?: string;
+  mergeableState?: unknown;
+  reviewComments?: readonly GitCodePullRequestReviewComment[];
+}): GitCodePullRequestReadinessObservation {
+  const gate = createGitCodeCiGateObservation(input);
+  const mergeableState = input.mergeableState && typeof input.mergeableState === 'object'
+    ? input.mergeableState as Record<string, unknown>
+    : {};
+  const unresolvedReviewComments = (input.reviewComments || []).filter((comment) => !comment.resolved);
+  const blockers: string[] = [];
+  const isFalse = (key: string) => mergeableState[key] === false;
+
+  if (gate.merged) {
+    return { ...gate, readiness: 'merged', blockers, unresolvedReviewComments, mergeableState };
+  }
+  if (gate.status === 'failed') {
+    blockers.push(gate.reason);
+  }
+  if (unresolvedReviewComments.length > 0) {
+    blockers.push(`存在 ${unresolvedReviewComments.length} 条未解决的行级检视意见。`);
+  }
+  if (isFalse('resolve_discussion_passed')) {
+    blockers.push('PR 仍有未解决讨论。');
+  }
+  if (isFalse('conflict_passed')) {
+    blockers.push('PR 与目标分支存在冲突。');
+  }
+  if (blockers.length > 0) {
+    return { ...gate, readiness: 'repair_required', blockers, unresolvedReviewComments, mergeableState };
+  }
+
+  if (gate.status !== 'passed') {
+    blockers.push(gate.reason);
+    return { ...gate, readiness: 'waiting_external', blockers, unresolvedReviewComments, mergeableState };
+  }
+
+  for (const [key, message] of [
+    ['approval_reviewers_required_passed', '尚未满足必需评审人数。'],
+    ['approval_approvers_required_passed', '尚未满足必需审批人数。'],
+    ['approval_testers_required_passed', '尚未满足必需测试人确认。'],
+    ['branch_missing_passed', '源分支不可用。'],
+  ] as const) {
+    if (isFalse(key)) blockers.push(message);
+  }
+  if (blockers.length > 0) {
+    return { ...gate, readiness: 'waiting_external', blockers, unresolvedReviewComments, mergeableState };
+  }
+  return { ...gate, readiness: 'ready_for_merge', blockers, unresolvedReviewComments, mergeableState };
 }
 
 /**

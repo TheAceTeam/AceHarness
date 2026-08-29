@@ -543,6 +543,15 @@ export interface PersistedRunState {
   humanQuestions?: HumanQuestion[];
   pendingHumanQuestionId?: string | null;
   humanAnswersContext?: HumanAnswerContext[];
+  /** Last platform observations used to make PR delivery routing durable across restarts. */
+  prReadinessObservations?: Record<string, {
+    url: string;
+    headSha?: string | null;
+    readiness: string;
+    checkedAt: string;
+    blockers: string[];
+    unresolvedReviewCommentIds: string[];
+  }>;
   globalContext?: string;
   phaseContexts?: Record<string, string>;
   taskInput?: WorkflowTaskInput;

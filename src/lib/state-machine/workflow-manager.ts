@@ -68,11 +68,11 @@ import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import {
   buildGitCodeCiCommandPolicyPrompt,
-  createGitCodeCiGateObservation,
+  createGitCodePullRequestReadinessObservation,
   findGitCodePullRequestRef,
   findGitCodeCiToolCommandViolation,
   GITCODE_CI_DELIVERY_SKILL,
-  type GitCodeCiGateObservation,
+  type GitCodePullRequestReadinessObservation,
   type GitCodePullRequestRef,
   type GitCodeCiToolCommandViolation,
 } from '@/lib/workflow/gitcode-ci-command-policy';
@@ -1070,6 +1070,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private humanQuestions: HumanQuestion[] = [];
   private pendingHumanQuestionId: string | null = null;
   private humanAnswersContext: HumanAnswerContext[] = [];
+  /** Last observed PR facts, retained so restarts do not rediscover old review comments as new. */
+  private prReadinessObservations: Record<string, {
+    url: string;
+    headSha?: string | null;
+    readiness: string;
+    checkedAt: string;
+    blockers: string[];
+    unresolvedReviewCommentIds: string[];
+  }> = {};
   private humanQuestionWaiters = new Map<string, (question: HumanQuestion | null) => void>();
   private specRevisionVote: WorkflowSpecRevisionVoteRecord | null = null;
   private specRevisionVoteHistory: WorkflowSpecRevisionVoteRecord[] = [];
@@ -2401,6 +2410,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.humanQuestions = [];
       this.pendingHumanQuestionId = null;
       this.humanAnswersContext = [];
+      this.prReadinessObservations = {};
       this.humanQuestionWaiters.clear();
       this.interruptFlag = false;
       this.feedbackInterrupt = false;
@@ -2733,6 +2743,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.humanQuestions = existingState.humanQuestions || [];
         this.pendingHumanQuestionId = existingState.pendingHumanQuestionId || existingState.pendingCheckpoint?.humanQuestionId || null;
         this.humanAnswersContext = existingState.humanAnswersContext || [];
+        this.prReadinessObservations = existingState.prReadinessObservations || {};
         if (isLightweightWorkflowConfig(workflowConfig)) {
           this.clearLightweightSpecState();
         } else {
@@ -3208,6 +3219,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private getAutoResolvableGitCodeGateApproval(question: HumanQuestion): {
     fromState: string;
     targetState: string;
+    repairTargetState?: string;
   } | null {
     if (question.answerSchema.type !== 'approval-transition') return null;
     const source = question.source;
@@ -3226,7 +3238,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
       .filter((transition) => transition.condition?.verdict === 'pass' && transition.to !== fromState)
       .sort((left, right) => left.priority - right.priority)[0];
     if (!passTransition) return null;
-    return { fromState, targetState: passTransition.to };
+    const repairTransition = state?.transitions
+      .filter((transition) => transition.condition?.verdict === 'fail' && transition.to !== fromState)
+      .sort((left, right) => left.priority - right.priority)[0];
+    return {
+      fromState,
+      targetState: passTransition.to,
+      ...(repairTransition?.to ? { repairTargetState: repairTransition.to } : {}),
+    };
   }
 
   private findGitCodePullRequestForApproval(question: HumanQuestion): GitCodePullRequestRef | null {
@@ -3250,18 +3269,22 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return null;
   }
 
-  private async observeGitCodeCiGate(ref: GitCodePullRequestRef): Promise<GitCodeCiGateObservation | null> {
+  private async observeGitCodePullRequestReadiness(ref: GitCodePullRequestRef): Promise<GitCodePullRequestReadinessObservation | null> {
     const settings = await loadSystemSettings();
     const token = settings.gitcodeToken?.trim();
     if (!token) return null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), GITCODE_GATE_OBSERVE_TIMEOUT_MS);
     try {
-      const url = `https://api.gitcode.com/api/v5/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/pulls/${ref.number}?access_token=${encodeURIComponent(token)}`;
-      const response = await fetch(url, {
+      const apiRoot = `https://api.gitcode.com/api/v5/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/pulls/${ref.number}`;
+      const request = (url: string) => fetch(url, {
         headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
+      const [response, commentsResponse] = await Promise.all([
+        request(`${apiRoot}?access_token=${encodeURIComponent(token)}`),
+        request(`${apiRoot}/comments?access_token=${encodeURIComponent(token)}&per_page=100`),
+      ]);
       if (!response.ok) return null;
       const payload = await response.json() as {
         labels?: Array<string | { name?: string }>;
@@ -3269,14 +3292,38 @@ export class StateMachineWorkflowManager extends EventEmitter {
         sha?: string;
         state?: string;
         merged_at?: string | null;
+        mergeable_state?: Record<string, unknown>;
       };
       const labels = (payload.labels || []).map((label) => (
         typeof label === 'string' ? label : String(label?.name || '')
       ));
-      return createGitCodeCiGateObservation({
+      const commentsPayload = commentsResponse.ok ? await commentsResponse.json() : [];
+      const rawComments = Array.isArray(commentsPayload)
+        ? commentsPayload
+        : Array.isArray(commentsPayload?.data)
+          ? commentsPayload.data
+          : [];
+      const reviewComments = rawComments.flatMap((comment: any) => {
+        const isDiffComment = comment?.comment_type === 'diff_comment'
+          || Boolean(comment?.diff_file || comment?.diff_position);
+        const id = String(comment?.id || '').trim();
+        if (!isDiffComment || !id) return [];
+        return [{
+          id,
+          body: typeof comment?.body === 'string' ? comment.body : '',
+          resolved: comment?.resolved === true || comment?.resolved === 'true',
+          file: typeof comment?.diff_file === 'string' ? comment.diff_file : undefined,
+          line: Number.isFinite(Number(comment?.diff_position?.start_new_line))
+            ? Number(comment.diff_position.start_new_line)
+            : undefined,
+        }];
+      });
+      return createGitCodePullRequestReadinessObservation({
         labels,
         headSha: payload.head?.sha || payload.sha,
         merged: payload.state === 'merged' || Boolean(payload.merged_at),
+        mergeableState: payload.mergeable_state,
+        reviewComments,
       });
     } catch {
       // Observing a third-party CI must never make a workflow fail. The
@@ -3287,11 +3334,30 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
-  private async resolveApprovalFromGitCodeGate(input: {
+  private recordGitCodePullRequestReadiness(
+    ref: GitCodePullRequestRef,
+    observation: GitCodePullRequestReadinessObservation,
+  ): string[] {
+    const previous = this.prReadinessObservations[ref.url];
+    const unresolvedReviewCommentIds = observation.unresolvedReviewComments.map((comment) => comment.id);
+    const priorIds = new Set(previous?.unresolvedReviewCommentIds || []);
+    const newReviewCommentIds = unresolvedReviewCommentIds.filter((id) => !priorIds.has(id));
+    this.prReadinessObservations[ref.url] = {
+      url: ref.url,
+      headSha: observation.headSha,
+      readiness: observation.readiness,
+      checkedAt: observation.checkedAt,
+      blockers: observation.blockers,
+      unresolvedReviewCommentIds,
+    };
+    return newReviewCommentIds;
+  }
+
+  private async resolveApprovalFromGitCodePrReadiness(input: {
     question: HumanQuestion;
     targetState: string;
     ref: GitCodePullRequestRef;
-    observation: GitCodeCiGateObservation;
+    observation: GitCodePullRequestReadinessObservation;
   }): Promise<void> {
     const index = this.humanQuestions.findIndex((item) => item.id === input.question.id);
     const existing = index >= 0 ? this.humanQuestions[index] : null;
@@ -3306,7 +3372,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       selectedState: input.targetState,
       instruction,
       raw: {
-        source: 'gitcode-ci-gate-observer',
+        source: 'gitcode-pr-readiness-observer',
         pr: input.ref.url,
         headSha: input.observation.headSha,
         labels: input.observation.labels,
@@ -3325,16 +3391,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.pendingForceInstruction = instruction;
     await this.persistState();
     await this.appendRuntimeTranscriptEvent({
-      type: 'external-gate-passed',
-      title: 'GitCode 门禁已通过，工作流自动续流',
+      type: 'external-pr-merged',
+      title: 'GitCode PR 已合入，工作流自动续流',
       body: instruction,
-      tags: ['gitcode', 'ci', 'gate', 'passed', 'auto-transition'],
-      dedupeKey: `workflow-gitcode-gate-passed-${existing.id}-${input.observation.headSha || 'unknown'}`,
-      speakerName: '系统门禁观察器',
+      tags: ['gitcode', 'ci', 'gate', 'merged', 'auto-transition'],
+      dedupeKey: `workflow-gitcode-pr-merged-${existing.id}-${input.observation.headSha || 'unknown'}`,
+      speakerName: '系统 PR 就绪观察器',
       speakerType: 'system',
     });
     this.emit('human-question-answered', { question: updated, answer, automated: true });
-    this.emit('external-gate-observed', {
+    this.emit('external-pr-readiness-observed', {
       status: input.observation.status,
       pr: input.ref.url,
       headSha: input.observation.headSha,
@@ -3344,21 +3410,83 @@ export class StateMachineWorkflowManager extends EventEmitter {
     });
   }
 
-  private async reportOpenPullRequestAfterGatePass(input: {
+  private async routeApprovalToGitCodePrRepair(input: {
+    question: HumanQuestion;
+    targetState: string;
+    ref: GitCodePullRequestRef;
+    observation: GitCodePullRequestReadinessObservation;
+    newReviewCommentIds: string[];
+  }): Promise<void> {
+    const index = this.humanQuestions.findIndex((item) => item.id === input.question.id);
+    const existing = index >= 0 ? this.humanQuestions[index] : null;
+    if (!existing || existing.status !== 'unanswered' || this.pendingHumanQuestionId !== existing.id) return;
+    const instruction = [
+      `系统已观察到 GitCode PR ${input.ref.url} 出现合入阻塞项，按 fail 路径返回「${input.targetState}」。`,
+      ...input.observation.blockers.map((blocker) => `- ${blocker}`),
+      input.newReviewCommentIds.length > 0
+        ? `新增未解决检视意见：${input.newReviewCommentIds.join(', ')}。`
+        : '请处理当前未解决检视意见或冲突，并重新验证后更新 PR。',
+    ].join('\n');
+    const answer: HumanQuestionAnswer = {
+      selectedState: input.targetState,
+      instruction,
+      raw: {
+        source: 'gitcode-pr-readiness-observer',
+        pr: input.ref.url,
+        headSha: input.observation.headSha,
+        blockers: input.observation.blockers,
+        reviewCommentIds: input.observation.unresolvedReviewComments.map((comment) => comment.id),
+        checkedAt: input.observation.checkedAt,
+      },
+    };
+    const updated: HumanQuestion = { ...existing, status: 'answered', answer, answeredAt: new Date().toISOString() };
+    this.humanQuestions[index] = updated;
+    this.pendingHumanQuestionId = null;
+    this.pendingForceTransition = input.targetState;
+    this.pendingForceInstruction = instruction;
+    await this.persistState();
+    await this.appendRuntimeTranscriptEvent({
+      type: 'external-pr-repair-required',
+      title: 'GitCode PR 出现合入阻塞项，自动回流修复',
+      body: instruction,
+      tags: ['gitcode', 'review', 'repair-required', 'auto-transition'],
+      dedupeKey: `workflow-gitcode-pr-repair-${existing.id}-${input.observation.headSha || 'unknown'}-${input.observation.unresolvedReviewComments.map((comment) => comment.id).join('-') || 'none'}`,
+      speakerName: '系统 PR 就绪观察器',
+      speakerType: 'system',
+    });
+    this.emit('human-question-answered', { question: updated, answer, automated: true });
+    this.emit('external-pr-readiness-observed', {
+      status: input.observation.status,
+      readiness: input.observation.readiness,
+      pr: input.ref.url,
+      blockers: input.observation.blockers,
+      nextState: input.targetState,
+      automated: true,
+    });
+  }
+
+  private async reportOpenGitCodePullRequestReadiness(input: {
     question: HumanQuestion;
     ref: GitCodePullRequestRef;
-    observation: GitCodeCiGateObservation;
+    observation: GitCodePullRequestReadinessObservation;
+    newReviewCommentIds: string[];
   }): Promise<void> {
     const index = this.humanQuestions.findIndex((item) => item.id === input.question.id);
     const existing = index >= 0 ? this.humanQuestions[index] : null;
     if (!existing || existing.status !== 'unanswered') return;
-    const marker = '系统门禁观察：';
+    const marker = `系统 PR 合入前观察（${input.observation.readiness}:${input.observation.headSha || 'unknown'}）：`;
     if (existing.message.includes(marker)) return;
-    const statusMessage = [
-      `${marker}已确认 ${input.ref.url} 已通过 build-test 与 codecheck。`,
-      '但 PR 仍为打开状态，尚未合入。该状态的 pass 条件是“PR 已合入且门禁通过”，因此不能自动跳到「人工交付确认」。',
-      '无需再次发送 start build；下一项外部条件是评审/合入。PR 合入后，系统会自动确认并按 pass 路径续流。',
-    ].join('\n');
+    const statusMessage = input.observation.readiness === 'ready_for_merge'
+      ? [
+        `${marker}已确认 ${input.ref.url} 的门禁、已知检视意见和平台合入条件均已满足。`,
+        'PR 尚未合入；请等待有合入权限的评审者执行合入。系统会继续观察，PR 合入后自动沿 pass 路径续流。',
+      ].join('\n')
+      : [
+        `${marker}${input.ref.url} 仍在等待外部条件。`,
+        ...input.observation.blockers.map((blocker) => `- ${blocker}`),
+        input.newReviewCommentIds.length > 0 ? `新增检视意见：${input.newReviewCommentIds.join(', ')}。` : '',
+        '无需重复发送 start build；系统会继续观察门禁、评审和合入状态。',
+      ].filter(Boolean).join('\n');
     const updated: HumanQuestion = {
       ...existing,
       message: `${statusMessage}\n\n${existing.message}`,
@@ -3367,21 +3495,23 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.humanQuestions[index] = updated;
     await this.persistState();
     await this.appendRuntimeTranscriptEvent({
-      type: 'external-gate-passed-awaiting-merge',
-      title: 'GitCode 门禁已通过，等待评审与合入',
+      type: 'external-pr-readiness-wait',
+      title: 'GitCode PR 合入前状态已更新',
       body: statusMessage,
-      tags: ['gitcode', 'ci', 'gate', 'passed', 'awaiting-merge'],
-      dedupeKey: `workflow-gitcode-gate-open-${existing.id}-${input.observation.headSha || 'unknown'}`,
-      speakerName: '系统门禁观察器',
+      tags: ['gitcode', 'ci', 'review', input.observation.readiness],
+      dedupeKey: `workflow-gitcode-pr-readiness-${existing.id}-${input.observation.readiness}-${input.observation.headSha || 'unknown'}`,
+      speakerName: '系统 PR 就绪观察器',
       speakerType: 'system',
     });
     this.emit('human-question-required', { question: updated, humanQuestions: this.humanQuestions, refreshed: true });
-    this.emit('external-gate-observed', {
+    this.emit('external-pr-readiness-observed', {
       status: input.observation.status,
+      readiness: input.observation.readiness,
       pr: input.ref.url,
       headSha: input.observation.headSha,
       labels: input.observation.labels,
-      merged: false,
+      blockers: input.observation.blockers,
+      newReviewCommentIds: input.newReviewCommentIds,
       automated: false,
     });
   }
@@ -3399,23 +3529,34 @@ export class StateMachineWorkflowManager extends EventEmitter {
           nextGateObservationAt = now + GITCODE_GATE_OBSERVE_INTERVAL_MS;
           const ref = this.findGitCodePullRequestForApproval(pendingQuestion);
           if (ref) {
-            const observation = await this.observeGitCodeCiGate(ref);
-            if (observation?.status === 'passed') {
-              if (observation.merged) {
-                await this.resolveApprovalFromGitCodeGate({
-                  question: pendingQuestion,
-                  targetState: gateApproval.targetState,
-                  ref,
-                  observation,
-                });
-                continue;
-              }
-              await this.reportOpenPullRequestAfterGatePass({
+            const observation = await this.observeGitCodePullRequestReadiness(ref);
+            if (!observation) continue;
+            const newReviewCommentIds = this.recordGitCodePullRequestReadiness(ref, observation);
+            if (observation.readiness === 'merged' && observation.status === 'passed') {
+              await this.resolveApprovalFromGitCodePrReadiness({
                 question: pendingQuestion,
+                targetState: gateApproval.targetState,
                 ref,
                 observation,
               });
+              continue;
             }
+            if (observation.readiness === 'repair_required' && gateApproval.repairTargetState) {
+              await this.routeApprovalToGitCodePrRepair({
+                question: pendingQuestion,
+                targetState: gateApproval.repairTargetState,
+                ref,
+                observation,
+                newReviewCommentIds,
+              });
+              continue;
+            }
+            await this.reportOpenGitCodePullRequestReadiness({
+              question: pendingQuestion,
+              ref,
+              observation,
+              newReviewCommentIds,
+            });
           }
         }
         await new Promise<void>((resolve) => setTimeout(resolve, 500));
@@ -4324,6 +4465,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         humanQuestions: this.humanQuestions,
         pendingHumanQuestionId: this.pendingHumanQuestionId,
         humanAnswersContext: this.humanAnswersContext,
+        prReadinessObservations: this.prReadinessObservations,
         specRevisionVote: this.specRevisionVote,
         specRevisionVoteHistory: this.specRevisionVoteHistory,
         qualityChecks: this.qualityChecks,
@@ -10615,6 +10757,7 @@ try {
     this.humanQuestions = runState.humanQuestions || [];
     this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
     this.humanAnswersContext = runState.humanAnswersContext || [];
+    this.prReadinessObservations = runState.prReadinessObservations || {};
     this.specRevisionVote = isLightweightRun ? null : (runState.specRevisionVote || null);
     this.specRevisionVoteHistory = isLightweightRun ? [] : (runState.specRevisionVoteHistory || []);
     this.specRevisionVoteTail = Promise.resolve();

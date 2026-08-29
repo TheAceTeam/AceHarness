@@ -73,16 +73,29 @@ workflow:
         - { name: 门禁挑战, agent: code-hunter, role: attacker, task: 检查 PR 描述、必需检查、审批和门禁契约是否完整且与仓库配置一致。 }
         - { name: 门禁裁决, agent: code-judge, role: judge, task: 只有结构化 gateContract 已解析并满足时给出 pass；缺失契约时给出 conditional_pass 并请求最小补充。 }
       transitions:
-        - { to: 完成, condition: { verdict: pass }, priority: 10, label: 描述与门禁通过 }
+        - { to: PR 合入前检查与跟踪, condition: { verdict: pass }, priority: 10, label: 描述与门禁通过 }
         - { to: 描述与门禁, condition: { verdict: conditional_pass }, priority: 20, label: 补充 Gate 契约 }
         - { to: 验证, condition: { verdict: fail }, priority: 30, label: 返回验证 }
+    - name: PR 合入前检查与跟踪
+      description: 在 PR 已创建后持续完成门禁触发、门禁状态、检视意见、审批与合入状态的全部前置检查
+      isInitial: false
+      isFinal: false
+      position: { x: 1250, y: 180 }
+      steps:
+        - { name: 同步 PR 合入前事实, agent: documentation-writer, role: defender, task: 读取当前 PR head、结构化 gateContract、门禁标签、流水线状态、未解决行级检视意见、讨论解决状态、评审/审批/测试人要求、冲突与可合入状态。仅在平台明确要求且当前步骤已授权时发送字节级精确的 `start build`；发送后必须确认 CI 已创建。输出结构化证据和待办，不能以“评论已发送”替代门禁已运行。 }
+        - { name: 挑战 PR 合入就绪度, agent: code-hunter, role: attacker, task: 审核是否存在未解决检视意见、门禁失败、缺失评审/审批、冲突或未推送变更。出现任何可修复阻塞项时给出 fail 并列出评论 ID、文件行号或门禁证据；仅等待外部评审或合入时给出 conditional_pass。 }
+        - { name: 裁决 PR 合入前状态, agent: code-judge, role: judge, task: 只有当前 PR 已合入且必需门禁均通过时给出 pass。门禁失败、未解决检视意见、讨论或冲突必须给出 fail 回到根因与修复；CI 运行中、等待评审/审批或等待有权限者合入时给出 conditional_pass 留在本状态，由平台观察器继续跟踪。 }
+      transitions:
+        - { to: 完成, condition: { verdict: pass }, priority: 10, label: PR 已合入且交付闭合 }
+        - { to: PR 合入前检查与跟踪, condition: { verdict: conditional_pass }, priority: 20, label: 等待 PR 外部条件 }
+        - { to: 根因与修复, condition: { verdict: fail }, priority: 30, label: 回流修复 PR 阻塞项 }
     - name: 完成
       description: 记录根因、修复和验证结论
       isInitial: false
       isFinal: true
-      position: { x: 1250, y: 180 }
+      position: { x: 1460, y: 180 }
       steps:
-        - { name: 闭环记录, agent: documentation-writer, role: defender, task: 汇总问题单推导的任务标题、根因、修复内容、验证证据、结构化 gateContract 和预防措施。 }
+        - { name: 闭环记录, agent: documentation-writer, role: defender, task: 汇总问题单推导的任务标题、根因、修复内容、验证证据、结构化 gateContract、PR 合入前检查结论、PR 合入结果和预防措施。 }
       transitions: []
 context:
   projectRoot: ""

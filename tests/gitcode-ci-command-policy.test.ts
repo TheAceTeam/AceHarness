@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   classifyGitCodeCiGate,
   createGitCodeCiGateObservation,
+  createGitCodePullRequestReadinessObservation,
   decideGitCodeCiGateRecovery,
   findGitCodePullRequestRef,
   findGitCodeCiToolCommandViolation,
@@ -84,6 +85,39 @@ describe('GitCode CI command policy', () => {
       merged: true,
       checkedAt: '2026-08-29T10:18:20.000Z',
     })).toMatchObject({ status: 'passed', headSha: 'ffe4b340', merged: true });
+  });
+
+  test('routes unresolved reviews back to repair even when CI labels are green', () => {
+    expect(createGitCodePullRequestReadinessObservation({
+      labels: ['build-test-passed', 'codecheck-passed'],
+      headSha: 'ffe4b340',
+      mergeableState: { ci_state_passed: true, resolve_discussion_passed: false },
+      reviewComments: [{ id: 'review-1', body: '[major] add a regression', resolved: false, file: 'foo.cpp', line: 42 }],
+    })).toMatchObject({
+      readiness: 'repair_required',
+      blockers: expect.arrayContaining(['存在 1 条未解决的行级检视意见。']),
+    });
+  });
+
+  test('distinguishes waiting for reviewers from a PR ready for another user to merge', () => {
+    const base = {
+      labels: ['build-test-passed', 'codecheck-passed'],
+      headSha: 'ffe4b340',
+      mergeableState: {
+        ci_state_passed: true,
+        resolve_discussion_passed: true,
+        conflict_passed: true,
+        approval_reviewers_required_passed: true,
+        approval_approvers_required_passed: true,
+        approval_testers_required_passed: true,
+        branch_missing_passed: true,
+      },
+    };
+    expect(createGitCodePullRequestReadinessObservation(base)).toMatchObject({ readiness: 'ready_for_merge' });
+    expect(createGitCodePullRequestReadinessObservation({
+      ...base,
+      mergeableState: { ...base.mergeableState, approval_reviewers_required_passed: false },
+    })).toMatchObject({ readiness: 'waiting_external' });
   });
 
   test('injects the single-commit amend policy into every workflow delivery prompt', () => {
