@@ -299,6 +299,22 @@ export function resolveWorkbenchRuntimeWorkflowConfig(input: {
   return input.baseConfig;
 }
 
+export function resolveWorkbenchStateMapPresentation(input: {
+  baseConfig: any;
+  activeRunId?: string | null;
+  runDetail?: any;
+  statusSnapshot?: any;
+}): {
+  config: any;
+  source: 'run' | 'configuration';
+} {
+  const config = resolveWorkbenchRuntimeWorkflowConfig(input);
+  return {
+    config,
+    source: config === input.baseConfig ? 'configuration' : 'run',
+  };
+}
+
 export function buildWorkbenchPreviewDetailNavItems(input: {
   isLightweightWorkflow: boolean;
   runtimeSpecAvailable?: boolean;
@@ -2527,6 +2543,7 @@ export default function WorkbenchPage({
   const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
   const [workflowDefaultModel, setWorkflowDefaultModel] = useState('');
   const [workflowAutoCompactOnStepChange, setWorkflowAutoCompactOnStepChange] = useState(false);
+  const [workflowSupervisorEnabled, setWorkflowSupervisorEnabled] = useState(false);
   const [workflowAgentOverrides, setWorkflowAgentOverrides] = useState<Record<string, WorkflowAgentExecutionOverride>>({});
   const [showAgentDrawer, setShowAgentDrawer] = useState(false);
   const [showRuntimeAgentCreator, setShowRuntimeAgentCreator] = useState(false);
@@ -3248,12 +3265,14 @@ export default function WorkbenchPage({
     staleTime: 1_000,
     refetchInterval: isRuntimeWorkflowStatusActive(workflowStatus) ? 2_000 : false,
   });
-  const runtimeWorkflowConfig = useMemo(() => resolveWorkbenchRuntimeWorkflowConfig({
+  const runtimeWorkflowPresentation = useMemo(() => resolveWorkbenchStateMapPresentation({
     baseConfig: workflowConfig,
     activeRunId: activeRuntimeRunId,
     runDetail,
     statusSnapshot: statusCompactQuery.data,
   }), [activeRuntimeRunId, runDetail, statusCompactQuery.data, workflowConfig]);
+  const runtimeWorkflowConfig = runtimeWorkflowPresentation.config;
+  const stateMapUsesRuntimeSnapshot = runtimeWorkflowPresentation.source === 'run';
   const isRuntimeLightweightWorkflow = isLightweightWorkflowConfig(runtimeWorkflowConfig);
   const isPromotedLightweightRun = isLightweightWorkflow && !isRuntimeLightweightWorkflow;
   const lightweightTasklistQuery = useLightweightTasklistEvidenceQuery(
@@ -3506,6 +3525,7 @@ export default function WorkbenchPage({
     engine,
     workflowDefaultModel,
     workflowAutoCompactOnStepChange,
+    workflowSupervisorEnabled,
     workflowAgentOverrides,
     skills,
     mcpServers,
@@ -3520,6 +3540,7 @@ export default function WorkbenchPage({
     timeoutMinutes,
     workflowAgentOverrides,
     workflowAutoCompactOnStepChange,
+    workflowSupervisorEnabled,
     workflowDefaultModel,
     workspaceMode,
   ]);
@@ -3546,6 +3567,9 @@ export default function WorkbenchPage({
       engine: persistedExecutionPolicy.defaultEngine || '',
       workflowDefaultModel: persistedExecutionPolicy.defaultModel || '',
       workflowAutoCompactOnStepChange: persistedExecutionPolicy.autoCompactOnStepChange === true,
+      // 运行时把缺省视为开启（isSupervisorEnabled 用 enabled !== false），界面必须同语义，
+      // 否则老工作流实际在跑 Supervisor 而界面显示关闭，且用户无法关掉它。
+      workflowSupervisorEnabled: (workflowConfig as any)?.workflow?.supervisor?.enabled !== false,
       workflowAgentOverrides: persistedExecutionPolicy.agentOverrides || {},
       skills: Array.isArray(workflowConfig.context?.skills) ? workflowConfig.context.skills.filter((item: unknown): item is string => typeof item === 'string') : [],
       mcpServers: Array.isArray(workflowConfig.context?.mcpServers) ? workflowConfig.context.mcpServers.filter((item: unknown): item is string => typeof item === 'string') : [],
@@ -7930,6 +7954,7 @@ export default function WorkbenchPage({
         dispatch({ type: 'SET_ENGINE', payload: loadedExecutionPolicy.defaultEngine || '' });
         setWorkflowDefaultModel(loadedExecutionPolicy.defaultModel || '');
         setWorkflowAutoCompactOnStepChange(loadedExecutionPolicy.autoCompactOnStepChange === true);
+        setWorkflowSupervisorEnabled((config as any)?.workflow?.supervisor?.enabled !== false);
         setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
         dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
         dispatch({ type: 'SET_MCP_SERVERS', payload: config.context?.mcpServers || [] });
@@ -13588,60 +13613,65 @@ export default function WorkbenchPage({
 
   const renderWorkbenchPreview = () => {
     if (runDetailSection === 'state') {
+      const stateMapConfig = stateMapUsesRuntimeSnapshot ? runtimeWorkflowConfig : workflowConfig;
       return (
         <div className={styles.workbenchPreviewFullPanel}>
           <div className={styles.workbenchPreviewFullHeader}>
-            <div className={styles.workbenchPreviewKicker}>结构预览</div>
+            <div className={styles.workbenchPreviewKicker}>{stateMapUsesRuntimeSnapshot ? '本次运行快照' : '结构预览'}</div>
             <h2 className="mt-3 text-xl font-semibold tracking-tight">状态图</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              这里展示工作流结构。预览模式只显示节点和连线，不加载当前步骤、完成状态和流转历史。
+              {stateMapUsesRuntimeSnapshot
+                ? '这里按本次 run 快照展示实际状态、步骤角色和流转历史；不会修改原工作流。'
+                : '这里展示原始工作流配置。启动运行后，将自动切换为本次 run 的真实状态图。'}
             </p>
           </div>
           <div className={styles.workbenchPreviewCanvas}>
-            {workflowConfig && isLightweightWorkflowConfig(workflowConfig) ? (
+            {stateMapConfig && isLightweightWorkflowConfig(stateMapConfig) ? (
               <LightweightTaskExecutionGraph
                 {...lightweightTaskBoardInput}
                 className="h-full"
               />
-            ) : workflowConfig?.workflow?.mode === 'state-machine' ? (
+            ) : stateMapConfig?.workflow?.mode === 'state-machine' ? (
               <StateMachineExecutionView
-                key={`preview-state-machine-${configFile}-${savedWorkflowRevision}`}
-                states={workflowConfig.workflow.states || []}
+                key={`${stateMapUsesRuntimeSnapshot ? `run-${activeRuntimeRunId || 'current'}` : `preview-${configFile}-${savedWorkflowRevision}`}`}
+                states={stateMapConfig.workflow.states || []}
                 agents={agentConfigs}
-                currentState={null}
-                currentStep={null}
-                activeSteps={[]}
-                activeConcurrencyGroups={[]}
-                completedSteps={[]}
-                stateHistory={[]}
-                issueTracker={[]}
-                transitionCount={0}
-                maxTransitions={workflowConfig.workflow.maxTransitions || 50}
-                status={'idle' as any}
-                isRunning={false}
+                currentState={stateMapUsesRuntimeSnapshot ? currentPhase : null}
+                currentStep={stateMapUsesRuntimeSnapshot ? currentStep : null}
+                activeSteps={stateMapUsesRuntimeSnapshot ? activeSteps : []}
+                activeConcurrencyGroups={stateMapUsesRuntimeSnapshot ? activeConcurrencyGroups : []}
+                completedSteps={stateMapUsesRuntimeSnapshot ? completedSteps : []}
+                failedSteps={stateMapUsesRuntimeSnapshot ? failedSteps : []}
+                stateHistory={stateMapUsesRuntimeSnapshot ? smStateHistory : []}
+                issueTracker={stateMapUsesRuntimeSnapshot ? smIssueTracker : []}
+                transitionCount={stateMapUsesRuntimeSnapshot ? smTransitionCount : 0}
+                maxTransitions={stateMapConfig.workflow.maxTransitions || 50}
+                status={(stateMapUsesRuntimeSnapshot ? workflowStatus : 'idle') as any}
+                isRunning={stateMapUsesRuntimeSnapshot ? isRunning : false}
                 allowForceTransition={false}
-                focusedState={null}
-                startTime={null}
-                endTime={null}
-                accumulatedWaitMs={0}
-                waitStartedAt={null}
-                supervisorFlow={[]}
-                agentFlow={[]}
-                tokenAnalytics={undefined}
-                executionTrace={null}
-                runtimeEvents={[]}
-                subworkflowRuns={[]}
-                subworkflowSummary={null}
-                activeSubworkflowRunId={null}
+                focusedState={stateMapUsesRuntimeSnapshot ? focusedState : null}
+                startTime={stateMapUsesRuntimeSnapshot ? runStartTime : null}
+                endTime={stateMapUsesRuntimeSnapshot ? runEndTime : null}
+                accumulatedWaitMs={stateMapUsesRuntimeSnapshot ? runAccumulatedWaitMs : 0}
+                waitStartedAt={stateMapUsesRuntimeSnapshot ? runWaitStartedAt : null}
+                supervisorFlow={stateMapUsesRuntimeSnapshot ? supervisorFlow : []}
+                agentFlow={stateMapUsesRuntimeSnapshot ? agentFlow : []}
+                tokenAnalytics={stateMapUsesRuntimeSnapshot ? workflowTokenAnalytics : undefined}
+                executionTrace={stateMapUsesRuntimeSnapshot ? executionTrace : null}
+                runtimeEvents={stateMapUsesRuntimeSnapshot ? dbRuntimeEvents : []}
+                subworkflowRuns={stateMapUsesRuntimeSnapshot ? subworkflowRuns : []}
+                subworkflowSummary={stateMapUsesRuntimeSnapshot ? subworkflowSummary : null}
+                activeSubworkflowRunId={stateMapUsesRuntimeSnapshot ? activeSubworkflowRunId : null}
                 onOpenSubworkflowRun={() => {}}
                 overviewFooter={null}
                 activeTabOverride="trace"
                 defaultActiveTab="trace"
                 onActiveTabChange={() => {}}
-                hasPendingHumanQuestion={false}
-                pendingHumanQuestion={null as any}
+                hasPendingHumanQuestion={stateMapUsesRuntimeSnapshot && !!pendingHumanQuestion}
+                pendingHumanQuestion={stateMapUsesRuntimeSnapshot ? pendingHumanQuestion as any : null as any}
                 formationAgents={supervisorFormationAgents}
                 supervisorAgent={runtimeSupervisorAgent}
+                diagramSemanticsScope={stateMapUsesRuntimeSnapshot ? 'run' : 'configuration'}
                 onStateClick={() => {}}
                 onStepClick={() => {}}
                 onForceTransition={() => {}}
@@ -14579,6 +14609,13 @@ export default function WorkbenchPage({
                                 <Badge variant={workflowAutoCompactOnStepChange ? 'default' : 'outline'}>
                                   步骤级总结: {workflowAutoCompactOnStepChange ? '开启' : '关闭'}
                                 </Badge>
+                                {isLightweightWorkflow ? (
+                                  <Badge variant="secondary">Supervisor: 轻量模式不适用</Badge>
+                                ) : (
+                                  <Badge variant={workflowSupervisorEnabled ? 'default' : 'outline'}>
+                                    Supervisor: {workflowSupervisorEnabled ? '开启' : '关闭'}
+                                  </Badge>
+                                )}
                                 <Badge variant="secondary">
                                   Agent 覆盖: {configuredWorkflowOverrideCount}
                                 </Badge>
@@ -15734,6 +15771,26 @@ export default function WorkbenchPage({
                       />
                     </div>
                   </div>
+                  {!isLightweightWorkflow ? (
+                    <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1">
+                          <Label htmlFor="workflow-supervisor-enabled" className="text-sm font-medium">
+                            Supervisor 阶段审阅
+                          </Label>
+                          <div className="text-xs text-muted-foreground">
+                            默认关闭。启用后，每个状态执行结束时由 Supervisor 追加一次阶段审阅，人工审批前再追加一次检查点建议。
+                            实测每次约 30–60 秒，一条 6 状态的工作流会多花 7–8 分钟。
+                          </div>
+                        </div>
+                        <Switch
+                          id="workflow-supervisor-enabled"
+                          checked={workflowSupervisorEnabled}
+                          onCheckedChange={setWorkflowSupervisorEnabled}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </section>
 
                 <section className="space-y-4">

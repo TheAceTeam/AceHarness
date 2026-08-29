@@ -8,7 +8,7 @@ import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { GitBranch, Activity, MessageSquare, CheckCircle2, Maximize2, X } from 'lucide-react';
 import StateMachineRuntimePanel, { formatStateName } from './StateMachineRuntimePanel';
-import StateMachineDiagram from './StateMachineDiagram';
+import StateMachineDiagram, { type StateDiagramSemanticsScope } from './StateMachineDiagram';
 import AgentFormationDiagram from './AgentFormationDiagram';
 import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/core/schemas';
 import type { AgentAvatarConfig, AgentRoleType, AgentTeam } from '@/lib/agent/personas';
@@ -222,6 +222,7 @@ interface StateMachineExecutionViewProps {
     avatar?: AgentAvatarConfig | string | null;
   }>;
   supervisorAgent?: string | null;
+  diagramSemanticsScope?: StateDiagramSemanticsScope;
 
   // 回调
   onStateClick?: (stateName: string) => void;
@@ -270,6 +271,7 @@ export default function StateMachineExecutionView({
   subworkflowSummary,
   formationAgents = [],
   supervisorAgent,
+  diagramSemanticsScope = 'run',
   onStateClick,
   onStepClick,
   onRerunFromStep,
@@ -886,6 +888,7 @@ export default function StateMachineExecutionView({
               focusedState={focusedState}
               supervisorFlow={supervisorFlow}
               pendingHumanQuestion={pendingHumanQuestion}
+              semanticsScope={diagramSemanticsScope}
               onStateClick={onStateClick}
               onStepClick={onStepClick}
               onRerunFromStep={onRerunFromStep}

@@ -20,7 +20,7 @@ import ReactFlow, {
   useNodesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/core/schemas';
+import type { StateMachineState, StateTransition, StateTransitionRecord, WorkflowStep } from '@/lib/core/schemas';
 import { Badge } from './ui/badge';
 import { RotateCcw } from 'lucide-react';
 
@@ -35,6 +35,75 @@ const CONFIG_EDGE_COLOR = '#64748b';
 const MUTED_EDGE_COLOR = CONFIG_EDGE_COLOR;
 const MUTED_EDGE_MARKER_COLOR = '#94a3b8';
 const HUMAN_APPROVAL_EDGE_COLOR = '#f97316';
+
+export type StateDiagramReviewModePresentation = {
+  mode: 'standard' | 'adversarial' | null;
+  label: string;
+  description: string;
+};
+
+export type StateDiagramSemanticsScope = 'run' | 'configuration';
+
+export type StateDiagramStepSemantics = {
+  kind: 'ordinary' | 'standard-closer' | 'defender' | 'attacker' | 'judge';
+  label: string;
+  description: string;
+  isolated: boolean;
+  instanceId: string;
+};
+
+/**
+ * Resolve the effective run semantics carried by the workflow snapshot. State
+ * names and transitions can stay identical when a run switches review mode, so
+ * the diagram must not infer this from topology or from human-readable names.
+ */
+export function getStateDiagramReviewMode(
+  state: Pick<StateMachineState, 'reviewPolicy' | 'isFinal'>,
+  scope: StateDiagramSemanticsScope = 'run',
+): StateDiagramReviewModePresentation {
+  if (state.isFinal || !state.reviewPolicy) {
+    return { mode: null, label: '', description: '' };
+  }
+  if (state.reviewPolicy.mode === 'adversarial') {
+    return {
+      mode: 'adversarial',
+      label: scope === 'run' ? '本次对抗' : '配置对抗',
+      description: scope === 'run'
+        ? '本次运行按执行方、挑战方、裁决方的隔离角色编排执行。'
+        : '原始工作流配置为对抗审查；实际运行仍以本次 run 快照为准。',
+    };
+  }
+  return {
+    mode: 'standard',
+    label: scope === 'run' ? '本次标准' : '配置标准',
+    description: scope === 'run'
+      ? '本次运行按标准步骤执行；步骤名称中即使保留“质疑”或“裁决”，也不代表对抗角色。'
+      : '原始工作流配置为标准审查；实际运行仍以本次 run 快照为准。',
+  };
+}
+
+/**
+ * Role and instance binding are the authoritative difference between a real
+ * adversarial step and a legacy step whose name merely sounds adversarial.
+ */
+export function getStateDiagramStepSemantics(
+  step: Pick<WorkflowStep, 'role' | 'agentInstanceId' | 'provenance'>,
+): StateDiagramStepSemantics {
+  const instanceId = String(step.agentInstanceId || '').trim();
+  if (step.role === 'defender') {
+    return { kind: 'defender', label: '执行方', description: '对抗编排中的执行与举证角色', isolated: Boolean(instanceId), instanceId };
+  }
+  if (step.role === 'attacker') {
+    return { kind: 'attacker', label: '挑战方', description: '对抗编排中的独立质疑角色', isolated: Boolean(instanceId), instanceId };
+  }
+  if (step.role === 'judge') {
+    return { kind: 'judge', label: '裁决方', description: '对抗编排中的独立裁决角色', isolated: Boolean(instanceId), instanceId };
+  }
+  if (step.provenance?.managedRole === 'standard-closer') {
+    return { kind: 'standard-closer', label: '标准收口', description: '标准模式下汇总结论并输出状态裁决', isolated: false, instanceId: '' };
+  }
+  return { kind: 'ordinary', label: '标准步骤', description: '不承担对抗角色的普通执行或验证步骤', isolated: false, instanceId: '' };
+}
 
 function compactEdgeLabel(label: string, maxLength = 38): string {
   const normalized = label.replace(/\s+/g, ' ').trim();
@@ -323,6 +392,7 @@ interface StateMachineDiagramProps {
     source?: { type?: string; stateName?: string; stepName?: string; groupId?: string };
     currentState?: string | null;
   } | null;
+  semanticsScope?: StateDiagramSemanticsScope;
 }
 
 // 自动布局算法：基于层次结构排列节点，优化空间利用
@@ -488,7 +558,25 @@ function getStateDiagramTeamIcon(team: string | null | undefined) {
 
 function getStateDiagramStepIcon(step: any, team: string | null | undefined) {
   if (step?.type === 'subworkflow') return 'account_tree';
+  if (step?.role === 'attacker') return 'swords';
+  if (step?.role === 'judge') return 'gavel';
+  if (step?.role === 'defender') return 'shield';
   return getStateDiagramTeamIcon(team);
+}
+
+function getStepSemanticBadgeClass(kind: StateDiagramStepSemantics['kind']): string {
+  if (kind === 'attacker') return 'border-rose-300 bg-rose-100 text-rose-800 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200';
+  if (kind === 'judge') return 'border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200';
+  if (kind === 'defender') return 'border-blue-300 bg-blue-100 text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200';
+  if (kind === 'standard-closer') return 'border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200';
+  return 'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200';
+}
+
+function getStepIdleClass(kind: StateDiagramStepSemantics['kind']): string {
+  if (kind === 'attacker') return 'border border-rose-200 bg-rose-50 text-rose-900 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-100 dark:hover:bg-rose-950';
+  if (kind === 'judge') return 'border border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100 dark:hover:bg-amber-950';
+  if (kind === 'defender') return 'border border-blue-200 bg-blue-50 text-blue-900 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/50 dark:text-blue-100 dark:hover:bg-blue-950';
+  return 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600';
 }
 
 export function stateDiagramStepKeyMatches(stepKey: string | null | undefined, stateName: string, stepName: string): boolean {
@@ -517,7 +605,8 @@ export function getStateDiagramRerunStepKey(stateName: string, stepName: string)
 }
 
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, failedSteps = EMPTY_FAILED_STEPS, agents, onStepClick, onRerunFromStep, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, failedSteps = EMPTY_FAILED_STEPS, agents, onStepClick, onRerunFromStep, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope = 'run' } = data;
+  const reviewMode = getStateDiagramReviewMode(state, semanticsScope);
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const isHumanHelpPending = pendingHumanQuestion?.source?.type === 'human-help'
@@ -538,21 +627,37 @@ function StateNode({ data }: any) {
   const renderStepPill = (step: any, idx: number, compact = false) => {
     const { isDone, isFailed, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval } = getStepStatus(step);
     const agentTeam = getStateDiagramAgentTeam(agents, step?.agent);
+    const semantics = getStateDiagramStepSemantics(step);
     const isWaitingApproval = isWaitingHumanHelp || isWaitingParallelApproval;
     return (
       <div
         key={`${step.name}-${idx}`}
         onClick={(e) => { e.stopPropagation(); onStepClick?.(step); }}
+        title={`${semantics.description}${semantics.isolated ? ` · 独立会话 ${semantics.instanceId}` : ''}`}
         className={`
           flex items-center gap-1 rounded cursor-pointer transition-colors
           ${compact ? 'px-1 py-0.5 text-[9px]' : 'px-1.5 py-0.5 text-[10px]'}
-          ${isWaitingApproval ? 'bg-amber-500 text-black ring-1 ring-amber-300' : isRunningStep ? 'bg-blue-500 text-white' : isFailed ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}
+          ${isWaitingApproval ? 'bg-amber-500 text-black ring-1 ring-amber-300' : isRunningStep ? 'bg-blue-500 text-white' : isFailed ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : getStepIdleClass(semantics.kind)}
         `}
       >
         <span className="material-symbols-outlined" style={{ fontSize: compact ? 10 : 11 }}>
           {isWaitingApproval ? 'support_agent' : isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramStepIcon(step, agentTeam)}
         </span>
         <span className="truncate flex-1">{step.name}</span>
+        <span
+          className={`shrink-0 rounded border px-1 text-[8px] font-semibold leading-3 ${getStepSemanticBadgeClass(semantics.kind)}`}
+          aria-label={`${step.name}：${semantics.label}`}
+        >
+          {semantics.label}
+        </span>
+        {semantics.isolated ? (
+          <span
+            className="shrink-0 rounded border border-violet-300 bg-violet-100 px-1 text-[8px] font-semibold leading-3 text-violet-800 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200"
+            aria-label={`${step.name}：独立会话`}
+          >
+            独立
+          </span>
+        ) : null}
         {!isRunning && (isDone || isFailed) && onRerunFromStep ? (
           <button
             type="button"
@@ -607,6 +712,18 @@ function StateNode({ data }: any) {
           {isInitial && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-green-100 dark:bg-green-900">初始</Badge>}
           {isFinal && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-red-100 dark:bg-red-900">终止</Badge>}
           {isHumanCheckpoint && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">人工审查</Badge>}
+          {reviewMode.mode ? (
+            <Badge
+              variant="outline"
+              className={`text-[10px] px-1 py-0 ${reviewMode.mode === 'adversarial'
+                ? 'border-rose-400 bg-rose-100 text-rose-800 dark:border-rose-700 dark:bg-rose-950 dark:text-rose-200'
+                : 'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'}`}
+              title={`${reviewMode.description}${state.reviewPolicy?.rationale ? ` ${state.reviewPolicy.rationale}` : ''}`}
+              aria-label={`${state.name}：${reviewMode.label}`}
+            >
+              {reviewMode.label}
+            </Badge>
+          ) : null}
           {isHumanHelpPending && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">人工客服</Badge>}
           {isParallelManualJoinPending && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">并发确认</Badge>}
           {isCurrent && (
@@ -955,6 +1072,7 @@ function StateMachineDiagramInner({
   focusedState,
   supervisorFlow = EMPTY_SUPERVISOR_FLOW,
   pendingHumanQuestion,
+  semanticsScope = 'run',
 }: StateMachineDiagramProps) {
   const [showAllEdges, setShowAllEdges] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
@@ -1024,6 +1142,7 @@ function StateMachineDiagramInner({
           isRunning,
           allowForceTransition,
           pendingHumanQuestion,
+          semanticsScope,
         },
       };
     });
@@ -1061,11 +1180,12 @@ function StateMachineDiagramInner({
         isRunning,
         allowForceTransition,
         pendingHumanQuestion,
+        semanticsScope,
       },
     });
 
     return nodes;
-  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, failedSteps, handleStepClick, handleRerunFromStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion]);
+  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, failedSteps, handleStepClick, handleRerunFromStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 
@@ -1367,7 +1487,6 @@ function StateMachineDiagramInner({
         }, 100);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedState, setCenter, nodes]);
 
   const onNodeClick = useCallback(
@@ -1447,12 +1566,17 @@ function StateMachineDiagramInner({
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-green-400" /><span>初始状态</span></div>
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-red-400" /><span>终止状态</span></div>
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-orange-400" /><span>人工检查点</span></div>
+              <div className="flex items-center gap-2"><span className="rounded border border-rose-300 bg-rose-100 px-1 text-[9px] font-semibold text-rose-800">{semanticsScope === 'run' ? '本次对抗' : '配置对抗'}</span><span>隔离角色编排</span></div>
+              <div className="flex items-center gap-2"><span className="rounded border border-slate-300 bg-slate-100 px-1 text-[9px] font-semibold text-slate-700">{semanticsScope === 'run' ? '本次标准' : '配置标准'}</span><span>普通步骤编排</span></div>
+              <div className="flex items-center gap-2"><span className="rounded border border-violet-300 bg-violet-100 px-1 text-[9px] font-semibold text-violet-800">独立</span><span>独立运行会话</span></div>
               <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[3px] border-blue-600" /><span>已执行路径</span></div>
               <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-gray-500" /><span>当前可用</span></div>
               <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[2px] border-dashed border-gray-400 opacity-40" /><span>未使用路径</span></div>
             </div>
             <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 text-[10px] text-gray-500">
-              提示：悬停节点可查看相关路径
+              {semanticsScope === 'run'
+                ? '提示：步骤角色和独立会话来自本次运行快照，不按步骤名称推断'
+                : '提示：当前仅展示原始配置；启动后将切换为本次运行快照'}
             </div>
           </div>
         </Panel>

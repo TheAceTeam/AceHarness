@@ -142,6 +142,10 @@ vi.mock('@/lib/run/runtime-skills', () => ({
   getRuntimeSkillsDirPath: vi.fn().mockResolvedValue('/tmp/skills'),
 }));
 
+vi.mock('@/lib/core/directory-links', () => ({
+  createDirectoryLinkSync: vi.fn(),
+}));
+
 vi.mock('@/lib/core/app-paths', () => ({
   getInstallPath: vi.fn((...segments: string[]) => ['/tmp/install', ...segments].join('/')),
   getInstallConfigsDir: vi.fn().mockReturnValue('/tmp/install/configs'),
@@ -178,6 +182,9 @@ vi.mock('fs/promises', () => ({
 
 vi.mock('fs', () => ({
   existsSync: vi.fn().mockReturnValue(false),
+  statSync: vi.fn().mockReturnValue({ isFile: () => true, isDirectory: () => false }),
+  accessSync: vi.fn(),
+  constants: { R_OK: 4, F_OK: 0 },
 }));
 
 vi.mock('yaml', () => ({
@@ -373,7 +380,6 @@ async function createManagerForTest(engine: MockEngine) {
   (manager as any).syncSkillsToWorkspace = vi.fn().mockResolvedValue(undefined);
   (manager as any).finalizeRun = vi.fn().mockResolvedValue(undefined);
   (manager as any).buildStepContext = vi.fn().mockResolvedValue('Test context for step');
-  (manager as any).loadWorkspaceSkills = vi.fn().mockResolvedValue('');
   (manager as any).loadAdditionalSkills = vi.fn().mockResolvedValue('');
   (manager as any).applyRunSpecCodingTaskUpdatesFromOutput = vi.fn();
   (manager as any).applyLiveSpecCodingTaskUpdatesFromStream = vi.fn();
@@ -5148,5 +5154,104 @@ describe('escalation on unmatched verdict', () => {
     expect(escalationEvents.length).toBeGreaterThanOrEqual(1);
     expect(escalationEvents[0].reason).toContain('没有匹配的状态转移规则');
     expect(nextState).toBe('实施'); // human selected via forceTransition mock
+  });
+});
+
+describe('skill 内联兜底边界', () => {
+  // 回归防线：workspaceSkillNames 曾经只在一个没有任何调用点的私有方法里被填充，
+  // 导致它恒为空集，每个 agent 首次用到某个 Skill 时都会把整篇 SKILL.md 拼进提示词。
+  // 实测一次运行里这样多塞了 209,482 字符（占步骤提示词 35.4%）。
+  async function setupManager() {
+    const engine = new MockEngine();
+    const manager = await createManagerForTest(engine);
+    (manager as any).syncSkillsToWorkspace = Object.getPrototypeOf(manager).syncSkillsToWorkspace;
+    (manager as any).loadAdditionalSkills = Object.getPrototypeOf(manager).loadAdditionalSkills;
+    (manager as any).resolveProjectRootPath = vi.fn().mockReturnValue('/tmp/project');
+    (manager as any).agentConfigs = [];
+    return manager;
+  }
+
+  const config = {
+    context: { projectRoot: '/tmp/project', skills: ['demo-skill'] },
+    workflow: { states: [] },
+  } as any;
+
+  test('同步到工作区的 Skill 会被登记，且不再内联正文', async () => {
+    const manager = await setupManager();
+    const fsMod = await import('fs');
+    // 服务端 skills 目录与 demo-skill 源目录存在；工作区目标还不存在，所以会建链接。
+    vi.mocked(fsMod.existsSync).mockImplementation((p: any) => String(p) !== '/tmp/project/.agents/skills/demo-skill');
+
+    await (manager as any).syncSkillsToWorkspace(config);
+
+    expect((manager as any).workspaceSkillNames.has('demo-skill')).toBe(true);
+    // 已经在工作区里 => 提示词只给路径，不返回正文
+    const inlined = await (manager as any).loadAdditionalSkills(['demo-skill'], '/tmp/project');
+    expect(inlined).toBe('');
+  });
+
+  test('工作区里已存在的 Skill 同样登记（不重复建链接也要算可达）', async () => {
+    const manager = await setupManager();
+    const fsMod = await import('fs');
+    vi.mocked(fsMod.existsSync).mockReturnValue(true);
+
+    await (manager as any).syncSkillsToWorkspace(config);
+
+    expect((manager as any).workspaceSkillNames.has('demo-skill')).toBe(true);
+  });
+
+  // 目录存在不等于 Skill 可用：悬空软链或残缺目录会让 existsSync(dir) 为真，
+  // 但 Agent 顺着提示词里的路径读不到 SKILL.md。此时必须保留内联兜底。
+  test('目录在但 SKILL.md 读不到时不登记，内联兜底仍生效', async () => {
+    const manager = await setupManager();
+    const fsMod = await import('fs');
+    const fsp = await import('fs/promises');
+    // 服务端目录与工作区目标目录都在，唯独 SKILL.md 不存在（残缺 / 悬空软链）
+    vi.mocked(fsMod.existsSync).mockImplementation((p: any) => !String(p).endsWith('SKILL.md'));
+    vi.mocked(fsMod.statSync).mockImplementation((p: any) => {
+      if (String(p).endsWith('SKILL.md')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { isFile: () => true, isDirectory: () => true } as any;
+    });
+    vi.mocked(fsp.readFile).mockResolvedValue('# demo-skill 正文' as any);
+
+    await (manager as any).syncSkillsToWorkspace(config);
+
+    expect((manager as any).workspaceSkillNames.has('demo-skill')).toBe(false);
+    const inlined = await (manager as any).loadAdditionalSkills(['demo-skill'], '/tmp/project');
+    expect(inlined).toContain('demo-skill 正文');
+  });
+
+  // 存在性不足以说明可读：权限拒绝时文件在、却读不出来。此时若仍登记，
+  // 内联兜底会被关掉，而 Agent 顺着路径同样读不到——两头落空。
+  test('SKILL.md 存在但读权限被拒时不登记，内联兜底仍生效', async () => {
+    const manager = await setupManager();
+    const fsMod = await import('fs');
+    const fsp = await import('fs/promises');
+    vi.mocked(fsMod.existsSync).mockReturnValue(true);
+    vi.mocked(fsMod.statSync).mockReturnValue({ isFile: () => true, isDirectory: () => true } as any);
+    vi.mocked(fsMod.accessSync).mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+    vi.mocked(fsp.readFile).mockResolvedValue('# demo-skill 正文' as any);
+
+    await (manager as any).syncSkillsToWorkspace(config);
+
+    expect((manager as any).workspaceSkillNames.has('demo-skill')).toBe(false);
+    const inlined = await (manager as any).loadAdditionalSkills(['demo-skill'], '/tmp/project');
+    expect(inlined).toContain('demo-skill 正文');
+  });
+
+  test('工作区里没有的 Skill 仍然内联，兜底路径保留', async () => {
+    const manager = await setupManager();
+    const fsMod = await import('fs');
+    const fsp = await import('fs/promises');
+    vi.mocked(fsMod.existsSync).mockReturnValue(false);   // 连服务端 skills 目录都没有 => 不登记任何名字
+    vi.mocked(fsp.readFile).mockResolvedValue('# demo-skill 正文' as any);
+
+    await (manager as any).syncSkillsToWorkspace(config);
+
+    expect((manager as any).workspaceSkillNames.size).toBe(0);
+    const inlined = await (manager as any).loadAdditionalSkills(['demo-skill'], '/tmp/project');
+    expect(inlined).toContain('demo-skill 正文');
   });
 });

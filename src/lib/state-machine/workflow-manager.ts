@@ -7,8 +7,9 @@ import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, rm, writeFile, copyFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
-import { existsSync } from 'fs';
+import { accessSync, constants as fsConstants, existsSync, statSync } from 'fs';
 import { createDirectoryLinkSync } from '@/lib/core/directory-links';
+import { markSuspendCheckpoint, suspendedSince } from '@/lib/core/system-suspend-tracker';
 import { cpus } from 'os';
 import { parse } from 'yaml';
 import { resolveAgentEngineSelection } from '@/lib/engines/workflow-engine-selection';
@@ -387,6 +388,40 @@ function stripAceProcessBlocks(text: string): string {
 
 function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): boolean {
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
+}
+
+/**
+ * 从引擎上报的墙钟时长里扣掉这段区间内系统挂起（睡眠/休眠）的时间。
+ *
+ * 引擎按墙钟计时，机器睡一晚会让一次调用被记成十几个小时——实测过 743.6 分钟、
+ * 状态还标着 completed。扣减后至少保留 0，且不会把时长扣成负数。
+ */
+function subtractSuspendedTime(reportedMs: number, suspendedMs: number): number {
+  if (!Number.isFinite(reportedMs) || reportedMs <= 0) return reportedMs;
+  if (!Number.isFinite(suspendedMs) || suspendedMs <= 0) return reportedMs;
+  return Math.max(0, reportedMs - suspendedMs);
+}
+
+/**
+ * 目录存在不等于 Skill 可用：悬空软链、残缺目录、只建了壳的同名目录都会让
+ * `existsSync(dir)` 为真，但 Agent 顺着提示词里的路径读不到 SKILL.md。
+ * 只有正文确实可读，才允许登记为「工作区已可达」并因此关掉内联兜底。
+ *
+ * 存在性不足以说明可读：权限拒绝时文件在、却读不出来，照样会白白关掉内联。
+ * 因此这里要求它是普通文件且当前进程具备读权限。
+ *
+ * 注意这只能证明「本进程可读」。Agent 可能以别的用户或在容器里运行，那种
+ * 跨进程的可读性无法在这里断言；判不准时宁可不登记，代价只是多一次内联。
+ */
+function hasReadableSkillDoc(skillDir: string): boolean {
+  const skillDoc = resolve(skillDir, 'SKILL.md');
+  try {
+    if (!statSync(skillDoc).isFile()) return false;
+    accessSync(skillDoc, fsConstants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isAceHarnessSkillName(skillName: string): boolean {
@@ -943,8 +978,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private globalContext: string = '';
   private stateContexts: Map<string, string> = new Map();
   private taskInput: WorkflowTaskInput = {};
-  private workspaceSkillsCache: string = '';
-  private workspaceSkillsCacheProjectRoot: string = '';
+  /**
+   * 已同步到工作区、Agent 能自行读取的 Skill 名称。由 syncSkillsToWorkspace 填充。
+   * 命中的 Skill 在提示词里只给路径，不再内联正文；内联只为「工作区里没有」的情况兜底。
+   */
   private workspaceSkillNames: Set<string> = new Set();
   /** Per-agent prompt memory for omitting unchanged repeated context within one run session. */
   private promptMemos: Map<string, AgentPromptMemo> = new Map();
@@ -1585,50 +1622,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   /**
-   * Load and cache workspace skills from <engine-config>/skills/
-   */
-  private async loadWorkspaceSkills(projectRoot: string): Promise<string> {
-    if (this.workspaceSkillsCache && this.workspaceSkillsCacheProjectRoot === projectRoot) {
-      return this.workspaceSkillsCache;
-    }
-
-    // Try project-level first, then server-level skills directory
-    const candidates = [
-      join(this.resolveProjectRootPath(projectRoot), this.workspaceSkillsSubdir),
-      await getRuntimeSkillsDirPath(),
-    ];
-
-    for (const skillsDir of candidates) {
-      try {
-        const skillIndex = resolve(skillsDir, 'SKILL.md');
-        const indexContent = await readFile(skillIndex, 'utf-8');
-
-        this.workspaceSkillNames.clear();
-        try {
-          const entries = await readdir(skillsDir);
-          for (const entry of entries) {
-            const entryPath = resolve(skillsDir, entry);
-            const entryStat = await stat(entryPath).catch(() => null);
-            if (entryStat?.isDirectory()) {
-              this.workspaceSkillNames.add(entry);
-            }
-          }
-        } catch { /* ignore */ }
-
-        const result = indexContent.trim();
-        this.workspaceSkillsCache = result;
-        this.workspaceSkillsCacheProjectRoot = projectRoot;
-        return result;
-      } catch { /* try next candidate */ }
-    }
-
-    this.workspaceSkillsCache = '';
-    this.workspaceSkillsCacheProjectRoot = projectRoot;
-    this.workspaceSkillNames.clear();
-    return '';
-  }
-
-  /**
    * Load a single skill's content from project or system skills directory
    */
   private async loadSkillContent(skillName: string, projectRoot: string): Promise<string | null> {
@@ -1677,6 +1670,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const serverSkillsDir = await getRuntimeSkillsDirPath();
     const workspaceSkillsDir = join(this.resolveProjectRootPath(projectRoot), this.workspaceSkillsSubdir);
 
+    this.workspaceSkillNames.clear();
     if (!existsSync(serverSkillsDir)) return;
 
     // Collect all effective skill names: workflow, Agent, and step scopes.
@@ -1705,9 +1699,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
         if (!entry.isDirectory() || isAceHarnessSkillName(entry.name)) continue;
         const src = resolve(serverSkillsDir, entry.name);
         const dst = resolve(workspaceSkillsDir, entry.name);
-        if (existsSync(dst)) continue;
+        if (existsSync(dst)) {
+          if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(entry.name);
+          continue;
+        }
         try {
           createDirectoryLinkSync(src, dst);
+          if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(entry.name);
           console.log(`[SM-Skills] 已链接 skill "${entry.name}" → ${dst}`);
         } catch (error) {
           console.warn(`[SM-Skills] 链接 skill "${entry.name}" 失败:`, error);
@@ -1735,10 +1733,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (isRequiredTasklistSkill && !existsSync(resolve(src, 'SKILL.md'))) {
         throw new Error(`Required lightweight skill is invalid: ${LIGHTWEIGHT_TASKLIST_SKILL}`);
       }
-      if (existsSync(dst)) continue;
+      if (existsSync(dst)) {
+        if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(skillName);
+        continue;
+      }
       try {
         createDirectoryLinkSync(src, dst);
         linkedNames.push(skillName);
+        if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(skillName);
         console.log(`[SM-Skills] 已链接 skill "${skillName}" → ${dst}`);
       } catch (error) {
         console.warn(`[SM-Skills] 链接 skill "${skillName}" 失败:`, error);
@@ -4894,6 +4896,8 @@ try {
         });
       };
 
+      // 机器睡眠期间引擎的墙钟计时照走，这里圈出区间，拿到结果后把挂起时长扣掉。
+      const suspendCheckpoint = markSuspendCheckpoint();
       engine.on('stream', streamHandler);
 
       try {
@@ -4995,7 +4999,10 @@ try {
           stop_reason: result.stopReason,
           is_error: !result.success,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
-          duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
+          duration_ms: subtractSuspendedTime(
+            metadataNumber(metadata, 'duration_ms', 'durationMs'),
+            suspendedSince(suspendCheckpoint),
+          ),
           duration_api_ms: metadataNumber(metadata, 'duration_api_ms', 'durationApiMs'),
           num_turns: metadataNumber(metadata, 'num_turns', 'numTurns'),
           usage,
@@ -8508,6 +8515,8 @@ try {
     });
     if (allSkillNames.length > 0 && config.context?.projectRoot) {
       const skillsAbsPath = await getRuntimeSkillsDirPath();
+      // 已同步到工作区的 Skill 指向工作区副本：它一定在 projectRoot 内，Agent 必然读得到。
+      const workspaceSkillsAbsPath = join(this.resolveProjectRootPath(config.context.projectRoot), this.workspaceSkillsSubdir);
       const uniqueSkillNames = [...new Set(allSkillNames)];
       const stepSkillNames = new Set(Array.isArray(step.skills) ? step.skills : []);
       const agentSkillNames = new Set(Array.isArray((promptRoleConfig as any)?.skills) ? (promptRoleConfig as any).skills : []);
@@ -8520,7 +8529,8 @@ try {
             : workflowSkillNames.has(name)
               ? 'workflow.context.skills'
               : 'runtime-required';
-        return `- ${name} (${source}): \`${skillsAbsPath}/${name}/SKILL.md\``;
+        const baseDir = this.workspaceSkillNames.has(name) ? workspaceSkillsAbsPath : skillsAbsPath;
+        return `- ${name} (${source}): \`${baseDir}/${name}/SKILL.md\``;
       }).join('\n');
       const rules = memo.skillRulesShown
         ? ''

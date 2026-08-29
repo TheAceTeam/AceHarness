@@ -10,6 +10,8 @@ export interface WorkflowDesignDraftState {
   engine: string;
   workflowDefaultModel: string;
   workflowAutoCompactOnStepChange: boolean;
+  /** Supervisor 是否参与本工作流；关闭后阶段审阅与检查点建议都不会发起。 */
+  workflowSupervisorEnabled: boolean;
   workflowAgentOverrides: Record<string, WorkflowAgentExecutionOverride>;
   skills: string[];
   mcpServers: string[];
@@ -18,6 +20,7 @@ export interface WorkflowDesignDraftState {
 
 type WorkflowDesignConfigLike = {
   context?: Record<string, unknown>;
+  workflow?: Record<string, unknown>;
   [key: string]: unknown;
 };
 
@@ -42,7 +45,7 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
   const ragKnowledgeBases = Array.isArray(draftState.ragKnowledgeBases) ? [...draftState.ragKnowledgeBases] : [];
   const skills = Array.isArray(draftState.skills) ? [...draftState.skills] : [];
   if (ragKnowledgeBases.length > 0 && !skills.includes('aceharness-rag')) skills.push('aceharness-rag');
-  const normalized = normalizeLightweightWorkflowConfig({
+  const draftConfig = {
     ...baseConfig,
     context: {
       ...(baseConfig.context || {}),
@@ -71,8 +74,36 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
         },
       },
     },
-  } as T);
-  return materializeStateLevelReviewAdoption(normalized);
+  } as T;
+  const supervisorApplied = applySupervisorToggle(draftConfig, draftState.workflowSupervisorEnabled);
+  // 轻量工作流不支持 Supervisor，必须让轻量规范化最后收口，避免界面开关把它重新写回。
+  return materializeStateLevelReviewAdoption(normalizeLightweightWorkflowConfig(supervisorApplied));
+}
+
+/**
+ * 把界面上的 Supervisor 开关写回 `workflow.supervisor`。
+ *
+ * 打开时连带把阶段审阅与检查点建议一起打开——只置 `enabled` 的话 Supervisor 虽然
+ * 「开着」却什么都不做，对用户是个陷阱。
+ *
+ * 运行时把「没有 supervisor 段」视为开启（isSupervisorEnabled 用 enabled !== false），
+ * 所以「开启 + 原本没有段」已经等价于现状，不必凭空写入；而「关闭」必须显式落下
+ * enabled: false，否则老工作流永远关不掉。
+ *
+ * 轻量工作流不走 Supervisor，没有 workflow 段时原样返回；轻量规范化会在最后收口。
+ */
+function applySupervisorToggle<T extends WorkflowDesignConfigLike>(config: T, enabled: boolean): T {
+  const workflow = config.workflow;
+  if (!workflow || typeof workflow !== 'object') return config;
+  const existing = (workflow as any).supervisor;
+  if (enabled && !existing) return config;
+  const supervisor = {
+    agent: 'default-supervisor',
+    ...(existing && typeof existing === 'object' ? existing : {}),
+    enabled,
+    ...(enabled ? { stageReviewEnabled: true, checkpointAdviceEnabled: true } : {}),
+  };
+  return { ...config, workflow: { ...workflow, supervisor } };
 }
 
 function normalizeComparableValue(value: unknown): unknown {
