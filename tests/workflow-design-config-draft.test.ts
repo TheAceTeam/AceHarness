@@ -294,8 +294,19 @@ describe('Supervisor 开关写回', () => {
     expect(cfg.workflow.supervisor.experienceEnabled).toBe(false);
   });
 
-  test('原本就没有 supervisor 段且开关是关的，不凭空造一段', () => {
+  // 运行时把「没有 supervisor 段」视为开启，所以关闭必须显式落下 enabled: false，
+  // 否则老工作流在界面上关不掉——Supervisor 会继续跑。
+  test('原本没有 supervisor 段时，关闭要显式写下 enabled: false', () => {
     const cfg = buildWorkflowDesignConfigForSave({ workflow: {}, context: {} } as any, base) as any;
+    expect(cfg.workflow.supervisor).toBeDefined();
+    expect(cfg.workflow.supervisor.enabled).toBe(false);
+  });
+
+  test('原本没有 supervisor 段且开关是开的，等价于现状，不凭空写入', () => {
+    const cfg = buildWorkflowDesignConfigForSave(
+      { workflow: {}, context: {} } as any,
+      { ...base, workflowSupervisorEnabled: true },
+    ) as any;
     expect(cfg.workflow.supervisor).toBeUndefined();
   });
 

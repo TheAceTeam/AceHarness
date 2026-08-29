@@ -3567,7 +3567,9 @@ export default function WorkbenchPage({
       engine: persistedExecutionPolicy.defaultEngine || '',
       workflowDefaultModel: persistedExecutionPolicy.defaultModel || '',
       workflowAutoCompactOnStepChange: persistedExecutionPolicy.autoCompactOnStepChange === true,
-      workflowSupervisorEnabled: (workflowConfig as any)?.workflow?.supervisor?.enabled === true,
+      // 运行时把缺省视为开启（isSupervisorEnabled 用 enabled !== false），界面必须同语义，
+      // 否则老工作流实际在跑 Supervisor 而界面显示关闭，且用户无法关掉它。
+      workflowSupervisorEnabled: (workflowConfig as any)?.workflow?.supervisor?.enabled !== false,
       workflowAgentOverrides: persistedExecutionPolicy.agentOverrides || {},
       skills: Array.isArray(workflowConfig.context?.skills) ? workflowConfig.context.skills.filter((item: unknown): item is string => typeof item === 'string') : [],
       mcpServers: Array.isArray(workflowConfig.context?.mcpServers) ? workflowConfig.context.mcpServers.filter((item: unknown): item is string => typeof item === 'string') : [],
@@ -7952,7 +7954,7 @@ export default function WorkbenchPage({
         dispatch({ type: 'SET_ENGINE', payload: loadedExecutionPolicy.defaultEngine || '' });
         setWorkflowDefaultModel(loadedExecutionPolicy.defaultModel || '');
         setWorkflowAutoCompactOnStepChange(loadedExecutionPolicy.autoCompactOnStepChange === true);
-        setWorkflowSupervisorEnabled((config as any)?.workflow?.supervisor?.enabled === true);
+        setWorkflowSupervisorEnabled((config as any)?.workflow?.supervisor?.enabled !== false);
         setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
         dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
         dispatch({ type: 'SET_MCP_SERVERS', payload: config.context?.mcpServers || [] });
