@@ -526,6 +526,15 @@ export interface PersistedRunState {
       issues?: any[];
       summary?: string;
       stepOutputs?: string[];
+      decision?: {
+        action?: string;
+        targetState?: string | null;
+        rationale?: string;
+        blockers?: string[];
+        evidence?: string[];
+        instruction?: string;
+        source?: string;
+      };
     };
     /** State machine: linked supervisor question for restored approval UI */
     humanQuestionId?: string;

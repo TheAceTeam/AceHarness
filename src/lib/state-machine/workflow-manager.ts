@@ -66,6 +66,12 @@ import {
 } from '@/lib/workflow/runtime-facade';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
+import {
+  buildGitCodeCiCommandPolicyPrompt,
+  findGitCodeCiToolCommandViolation,
+  GITCODE_CI_DELIVERY_SKILL,
+  type GitCodeCiToolCommandViolation,
+} from '@/lib/workflow/gitcode-ci-command-policy';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import {
   buildDatabaseCapabilityPrompt,
@@ -343,6 +349,22 @@ export interface AgentState {
   summary: string;
 }
 
+export type WorkflowTransitionDecisionAction = 'advance' | 'repair' | 'retry' | 'wait_external' | 'needs_human' | 'submit_and_monitor_ci';
+
+/**
+ * A durable, machine-readable state-boundary decision.  Narrative step output
+ * remains evidence for people, but routing must never depend on re-reading it.
+ */
+export interface WorkflowTransitionDecision {
+  action: WorkflowTransitionDecisionAction;
+  targetState: string | null;
+  rationale: string;
+  blockers: string[];
+  evidence: string[];
+  instruction: string;
+  source: 'state-machine' | 'supervisor';
+}
+
 export interface StateExecutionResult {
   stateName: string;
   verdict: 'pass' | 'conditional_pass' | 'fail';
@@ -350,6 +372,8 @@ export interface StateExecutionResult {
   stepOutputs: string[];
   summary: string;
   executionFailed?: boolean;
+  /** Filled before the result can drive a state transition or human checkpoint. */
+  decision?: WorkflowTransitionDecision;
 }
 
 export interface RuntimeEvidenceItem {
@@ -5046,6 +5070,7 @@ try {
       let fullTranscript = '';
       let streamedTextContent = '';
       let lastFailedTool: { toolName?: string; result?: { error?: string } } | undefined;
+      let gitCodeCiCommandViolation: GitCodeCiToolCommandViolation | undefined;
 
       const appendTranscriptSegment = (content: string) => {
         const segment = String(content || '');
@@ -5075,6 +5100,21 @@ try {
 
         if (event.type === 'tool') {
           const tool = event.tool;
+          const policyViolation = tool.status === 'running'
+            ? findGitCodeCiToolCommandViolation(tool)
+            : null;
+          if (policyViolation && !gitCodeCiCommandViolation) {
+            gitCodeCiCommandViolation = policyViolation;
+            // ACP emits the running tool call before its terminal result. Cancel
+            // immediately and reject the turn even if the provider reports success.
+            engine.cancel();
+            appendTranscriptSegment(`\n[GitCode CI policy] ${policyViolation.message}`);
+            this.emit('log', {
+              agent,
+              level: 'warning',
+              message: policyViolation.message,
+            });
+          }
           if (tool.status === 'failed') {
             lastFailedTool = tool;
           }
@@ -5135,6 +5175,14 @@ try {
         );
         let result = await executeRuntime(prompt, options.resumeSessionId, options.appendSystemPrompt);
         let visibleOutput = result.output || streamedTextContent || '';
+
+        if (gitCodeCiCommandViolation) {
+          result = {
+            ...result,
+            success: false,
+            error: gitCodeCiCommandViolation.message,
+          };
+        }
 
         // ACPX can surface a provider capacity rejection as turn.completed.
         // Preserve the provider text, but expose it as a failed runtime turn
@@ -5528,6 +5576,10 @@ try {
       type === 'state-review'
         ? '请输出：1. 当前阶段结论 2. 是否建议继续迭代 3. 下一步指导意见'
         : '请输出：1. 是否建议人工放行 2. 若不建议放行，需重点检查的风险 3. 给操作者的简短建议',
+      '',
+      '最后必须输出一个独立 JSON 对象（不要放在 Markdown 表格中），格式如下：',
+      '{"decision":{"action":"advance|repair|retry|wait_external|needs_human|submit_and_monitor_ci","targetState":"已声明的目标状态名","rationale":"不超过 300 字的裁决理由","blockers":["阻塞项"],"evidence":["证据"],"instruction":"下一状态的明确执行指令"}}',
+      'targetState 只能从上方“已声明转移”中的目标选择；若无法判断，仍填写建议下一状态。不要编造新的状态名。',
     ].filter(Boolean).join('\n');
 
     const query = await this.queryAgentWithTranscript(this.currentSupervisorAgent, prompt, config);
@@ -5728,11 +5780,28 @@ try {
       // Evaluate transitions
       // Remember whether this transition was forced by the user so we can skip human approval
       const wasForced = !!this.pendingForceTransition;
-      const nextState = await this.evaluateTransitions(
+      let nextState = await this.evaluateTransitions(
         stateConfig.transitions,
         result,
         config
       );
+      // The static state machine always supplies a safe proposed target first.
+      // When enabled, Supervisor may refine it only through the declared
+      // transitions and a valid structured decision. A failed/malformed review
+      // never blocks the workflow or turns prose into an unchecked route.
+      if (config.workflow.supervisor?.stageReviewAsync !== true) {
+        try {
+          const review = await this.collectSupervisorReview('state-review', stateConfig, result, config, nextState);
+          nextState = this.applySupervisorTransitionDecision(review, stateConfig, result, nextState);
+        } catch (error: any) {
+          this.emit('log', {
+            level: 'warning',
+            message: `Supervisor 流转裁决不可用，沿用状态机确定性流转：${error?.message || String(error)}`,
+          });
+        }
+      } else {
+        this.runSupervisorReviewInBackground('state-review', stateConfig, result, config, nextState);
+      }
       if (!wasForced && nextState !== '__human_approval__') {
         this.queueSpecRevisionVote({
           trigger: 'state-complete',
@@ -5753,12 +5822,6 @@ try {
           this.keepRunSpecCodingActiveUntilWorkflowFinal(statusUpdate.summary);
         }
         await this.persistState();
-      }
-
-      if (config.workflow.supervisor?.stageReviewAsync === false) {
-        await this.collectSupervisorReview('state-review', stateConfig, result, config, nextState);
-      } else {
-        this.runSupervisorReviewInBackground('state-review', stateConfig, result, config, nextState);
       }
 
       // Check self-transition circuit breaker
@@ -8579,6 +8642,9 @@ try {
       parts.push(`\n# 项目路径\n${config.context.projectRoot}`);
     }
     parts.push(buildHostShellGuidance());
+    parts.push(buildGitCodeCiCommandPolicyPrompt(
+      join(await getRuntimeSkillsDirPath(), GITCODE_CI_DELIVERY_SKILL, 'SKILL.md'),
+    ));
 
     const conclusionScope = isLastStepInState
       ? `当前步骤是状态 "${state.name}" 的最后一个步骤。`
@@ -9488,7 +9554,7 @@ try {
         speakerType: 'human',
         dedupeKey: `workflow-forced-transition-${this.currentRunId || this.currentConfigFile}-${result.stateName}-${target}-${Date.now()}`,
       });
-      return target;
+      return this.assignTransitionDecision(result, target, 'state-machine', '人工明确选择了下一状态。');
     }
 
     // AI-suggested next_state is only accepted when it is one of the configured
@@ -9502,7 +9568,7 @@ try {
         ))
       : false;
     if (aiSuggestedState && configuredSuggestedTarget) {
-      return aiSuggestedState;
+      return this.assignTransitionDecision(result, aiSuggestedState, 'state-machine', '步骤的结构化 next_state 与已声明转移匹配。');
     }
 
     // Sort by priority (lower number = higher priority)
@@ -9510,7 +9576,7 @@ try {
 
     for (const transition of sorted) {
       if (this.matchCondition(transition.condition, result)) {
-        return transition.to;
+        return this.assignTransitionDecision(result, transition.to, 'state-machine', '当前 verdict 与状态机转移条件匹配。');
       }
     }
 
@@ -9521,7 +9587,7 @@ try {
         reason: `有条件通过 (conditional_pass)，继续迭代当前状态`,
         result,
       });
-      return result.stateName;
+      return this.assignTransitionDecision(result, result.stateName, 'state-machine', 'conditional_pass 需要在当前状态继续补齐证据或修复。');
     }
 
     // No matching transition - wait for human decision instead of crashing
@@ -9541,6 +9607,15 @@ try {
       suggestedNextState: transitions[0]?.to || result.stateName,
       availableStates: config.workflow.states.map(s => s.name),
       result,
+    };
+    result.decision = {
+      action: 'needs_human',
+      targetState: null,
+      rationale: '没有匹配当前 verdict 的已声明状态转移，需要人工从允许路径中选择。',
+      blockers: ['状态机配置缺少与本次 verdict 匹配的转移。'],
+      evidence: [`verdict: ${result.verdict}`],
+      instruction: '补齐状态机转移配置或选择一个已声明的后续状态。',
+      source: 'state-machine',
     };
 
     const humanQuestion = await this.createHumanQuestion({
@@ -9576,7 +9651,80 @@ try {
     this.pendingForceTransition = null;
     this.pendingExplicitForceTransition = false;
     this.pendingApprovalInfo = null;
-    return humanSelectedState;
+    return this.assignTransitionDecision(result, humanSelectedState, 'state-machine', '人工在审批点选择了下一状态。');
+  }
+
+  private assignTransitionDecision(
+    result: StateExecutionResult,
+    targetState: string,
+    source: WorkflowTransitionDecision['source'],
+    rationale: string,
+    override?: Partial<WorkflowTransitionDecision>,
+  ): string {
+    const normalizedTarget = String(targetState || '').trim() || null;
+    const hasCiDeliveryTarget = Boolean(normalizedTarget && /(?:\bPR\b|提交|门禁|\bCI\b)/i.test(normalizedTarget));
+    const action: WorkflowTransitionDecisionAction = override?.action
+      || (hasCiDeliveryTarget && result.verdict !== 'fail'
+        ? 'submit_and_monitor_ci'
+        : result.verdict === 'fail'
+          ? 'repair'
+          : normalizedTarget === result.stateName
+            ? (result.verdict === 'conditional_pass' ? 'retry' : 'wait_external')
+            : 'advance');
+    result.decision = {
+      action,
+      targetState: normalizedTarget,
+      rationale: override?.rationale || rationale,
+      blockers: Array.isArray(override?.blockers) ? override.blockers.filter(Boolean).slice(0, 8) : [],
+      evidence: Array.isArray(override?.evidence) && override.evidence.length > 0
+        ? override.evidence.filter(Boolean).slice(0, 8)
+        : [`verdict: ${result.verdict}`, `issues: ${result.issues.length}`],
+      instruction: override?.instruction || (action === 'submit_and_monitor_ci'
+        ? '先核验当前 PR head 是否已推送及 CI 是否已创建；CI 已运行时只监控，未触发且机器人明确要求时才按授权精确触发一次。'
+        : action === 'repair' || action === 'retry'
+          ? '回到修复与验证，补齐失败或缺失证据。'
+          : '按目标状态继续执行。'),
+      source,
+    };
+    return normalizedTarget || result.stateName;
+  }
+
+  private applySupervisorTransitionDecision(
+    review: string | null,
+    state: StateMachineState,
+    result: StateExecutionResult,
+    proposedTarget: string,
+  ): string {
+    const fallback = this.assignTransitionDecision(
+      result,
+      proposedTarget,
+      'state-machine',
+      result.decision?.rationale || '当前 verdict 与状态机转移条件匹配。',
+      result.decision,
+    );
+    if (!review) return fallback;
+
+    const parsed = this.extractJsonObject(review);
+    const candidate = parsed?.decision && typeof parsed.decision === 'object' ? parsed.decision : parsed;
+    const action = String(candidate?.action || '').trim() as WorkflowTransitionDecisionAction;
+    const targetState = String(candidate?.targetState || candidate?.target_state || '').trim();
+    const allowedActions: WorkflowTransitionDecisionAction[] = ['advance', 'repair', 'retry', 'wait_external', 'needs_human', 'submit_and_monitor_ci'];
+    const isDeclaredTarget = Boolean(targetState) && state.transitions.some((transition) => transition.to === targetState);
+    if (!allowedActions.includes(action) || !isDeclaredTarget) {
+      return fallback;
+    }
+
+    return this.assignTransitionDecision(result, targetState, 'supervisor', 'Supervisor 已在已声明的状态路径中完成结构化裁决。', {
+      action,
+      rationale: typeof candidate.rationale === 'string' && candidate.rationale.trim()
+        ? candidate.rationale.trim().slice(0, 1000)
+        : 'Supervisor 已在已声明的状态路径中完成结构化裁决。',
+      blockers: Array.isArray(candidate.blockers) ? candidate.blockers.map((item: unknown) => String(item).trim()).filter(Boolean) : [],
+      evidence: Array.isArray(candidate.evidence) ? candidate.evidence.map((item: unknown) => String(item).trim()).filter(Boolean) : [],
+      instruction: typeof candidate.instruction === 'string' && candidate.instruction.trim()
+        ? candidate.instruction.trim().slice(0, 1000)
+        : undefined,
+    });
   }
 
   private matchCondition(

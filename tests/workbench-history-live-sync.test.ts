@@ -21,6 +21,7 @@ import {
   resolveInitialAdversarialIntent,
   getRunReviewIntentPresentation,
   buildWorkbenchRunDetailNavItems,
+  buildWorkbenchHumanApprovalPresentation,
   resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
 } from '@/client/pages/workbench/WorkbenchClient';
@@ -285,11 +286,64 @@ describe('Workbench stop progress', () => {
     expect(source).toContain('正在执行启动前检查并创建正式运行');
   });
 
-  test('keeps long human-approval summaries inside a bounded scroll region', async () => {
+  test('turns blocking human approval advice into a short, checkable decision', () => {
+    expect(buildWorkbenchHumanApprovalPresentation({
+      advice: [
+        '## 是否建议人工放行',
+        '**不建议无条件放行**。关键硬阻塞待确认。',
+        '- **R1（最高优先级，硬阻塞）**：确认 codecheck 修正已提交，工作区干净。',
+      ].join('\n'),
+    })).toEqual({
+      recommendation: 'verify-first',
+      headline: '先完成以下核验，再决定是否继续',
+      supportingText: '让 Agent 在隔离工作区完成这些核验；不要在此处把历史风险当作已解决。',
+      checklist: ['R1（最高优先级，硬阻塞）：确认 codecheck 修正已提交，工作区干净。'],
+    });
+  });
+
+  test('routes a resolved codecheck report to PR submission instead of looping back to repair', () => {
+    expect(buildWorkbenchHumanApprovalPresentation({
+      advice: [
+        '## 是否建议人工放行',
+        '有条件建议放行。R1 硬阻塞（未提交改动）已解除——codecheck 重构提交为 ffe4b34，worktree 干净。',
+        '- R2（codecheck 预验证）：放行前确认本地检查已通过。',
+      ].join('\n'),
+    })).toEqual({
+      recommendation: 'submit-and-monitor-ci',
+      headline: '修复已具备放行证据；下一步应推送 PR 并触发 CI',
+      supportingText: '让 Agent 在隔离工作区复核剩余证据后进入 PR 提交；若复核仍失败，会自动回到修复与验证，不再要求你重复做终端核验。',
+      checklist: ['R2（codecheck 预验证）：放行前确认本地检查已通过。'],
+    });
+  });
+
+  test('uses the persisted state-boundary decision before historic review prose', () => {
+    expect(buildWorkbenchHumanApprovalPresentation({
+      advice: '历史记录中仍引用：硬阻塞待确认。',
+      decision: {
+        action: 'submit_and_monitor_ci',
+        targetState: 'PR提交',
+        rationale: '本轮 codecheck 与回归均已通过。',
+        blockers: [],
+        evidence: ['commit ffe4b34', 'codecheck passed'],
+        instruction: '推送 PR 分支并确认 CI 已创建。',
+      },
+    })).toEqual({
+      recommendation: 'submit-and-monitor-ci',
+      headline: '已裁决进入「PR提交」核验 PR 与 CI 状态',
+      supportingText: 'Agent 会先确认当前 PR head 是否已推送及 CI 是否已创建。CI 已运行时只监控结果，不会再次发送触发评论；只有当前 head 尚未触发且机器人明确要求时，才会按授权进行一次精确触发。',
+      checklist: ['commit ffe4b34', 'codecheck passed', '确认当前 PR head 已推送，并确认 CI 已创建或正在运行。'],
+    });
+  });
+
+  test('keeps full human-approval evidence behind a bounded disclosure', async () => {
     const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
 
     expect(source).toContain('aria-label="审批说明"');
     expect(source).toContain('max-h-48 overflow-y-auto overscroll-contain');
+    expect(source).toContain('Agent 核验清单');
+    expect(source).toContain('让 Agent 自动核验并返回');
+    expect(source).toContain('让 Agent 核验 PR 与 CI 状态');
+    expect(source).toContain('我已人工确认，继续');
   });
 
   test('does not present stale human approval as actionable after a run stops', () => {

@@ -108,6 +108,39 @@ describe('subworkflow UI coverage', () => {
     expect(within(stateList).getByRole('button', { name: /描述与门禁/ })).toHaveAttribute('aria-pressed', 'true');
   });
 
+  test('HumanQuestionCard requires an explicit review acknowledgement before continuing', async () => {
+    const onSubmit = vi.fn();
+    render(
+      <HumanQuestionCard
+        collapsible={false}
+        onSubmit={onSubmit}
+        question={{
+          id: 'q-acknowledgement',
+          runId: 'run-approval',
+          configFile: 'workflow.yaml',
+          status: 'unanswered',
+          kind: 'approval',
+          title: '确认提交闭合',
+          message: '请核验工作区和提交。',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          suggestedNextState: '描述与门禁',
+          answerSchema: {
+            type: 'approval-transition',
+            required: true,
+            options: [{ label: '描述与门禁', value: '描述与门禁' }],
+          },
+        } as any}
+      />,
+    );
+
+    const submit = screen.getByRole('button', { name: '确认路径并继续' });
+    expect(submit).toBeDisabled();
+    await userEvent.click(screen.getByText('我已核对审批依据与所选处理路径。'));
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ selectedState: '描述与门禁' }));
+  });
+
   test('StateMachineExecutionView renders child run card and opens embedded detail action', async () => {
     const onOpen = vi.fn();
     render(

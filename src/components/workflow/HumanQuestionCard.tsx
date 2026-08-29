@@ -74,6 +74,7 @@ export default function HumanQuestionCard({
 }: HumanQuestionCardProps) {
   const defaultAnswer = useMemo(() => buildDefaultAnswer(question), [question]);
   const [answer, setAnswer] = useState<HumanQuestionAnswer>(() => defaultAnswer);
+  const [approvalAcknowledged, setApprovalAcknowledged] = useState(false);
   const options: Array<{ label: string; value: string; description?: string }> = question.answerSchema.options || question.availableStates?.map((state) => ({ label: state, value: state })) || [];
   const orderedOptions = useMemo(() => {
     if (question.answerSchema.type !== 'approval-transition' || !question.suggestedNextState) return options;
@@ -83,10 +84,14 @@ export default function HumanQuestionCard({
       return leftRecommended - rightRecommended;
     });
   }, [options, question.answerSchema.type, question.suggestedNextState]);
-  const ready = useMemo(() => isAnswerReady(question, answer), [answer, question]);
+  const ready = useMemo(() => (
+    isAnswerReady(question, answer)
+    && (question.answerSchema.type !== 'approval-transition' || approvalAcknowledged)
+  ), [answer, approvalAcknowledged, question]);
 
   useEffect(() => {
     setAnswer(defaultAnswer);
+    setApprovalAcknowledged(false);
   }, [defaultAnswer]);
 
   const toggleOption = (value: string, checked: boolean) => {
@@ -263,9 +268,23 @@ export default function HumanQuestionCard({
               </div>
             )}
 
+            {question.answerSchema.type === 'approval-transition' ? (
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/20">
+                <Checkbox
+                  className="mt-0.5"
+                  checked={approvalAcknowledged}
+                  onCheckedChange={(checked) => setApprovalAcknowledged(checked === true)}
+                />
+                <span>
+                  <span className="font-medium">我已核对审批依据与所选处理路径。</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">提交后工作流会按所选状态继续；如需返工，请在上方改选修复或验证状态。</span>
+                </span>
+              </label>
+            ) : null}
+
             <div className="flex justify-end gap-2">
               <Button disabled={!ready || submitting} onClick={() => onSubmit(answer)}>
-                {submitting ? '提交中...' : '提交回复'}
+                {submitting ? '提交中...' : question.answerSchema.type === 'approval-transition' ? '确认路径并继续' : '提交回复'}
               </Button>
             </div>
           </div>

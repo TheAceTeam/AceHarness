@@ -26,7 +26,10 @@ const workflowSupervisorConfigSchema = z.object({
   enabled: z.boolean().default(true),
   agent: z.string().min(1).default('default-supervisor'),
   stageReviewEnabled: z.boolean().default(true),
-  stageReviewAsync: z.boolean().default(true),
+  // State routing is a control-plane decision. Keep it synchronous by default
+  // so the Supervisor can return a validated decision before the transition is
+  // persisted. Engines may still opt into async advisory reviews explicitly.
+  stageReviewAsync: z.boolean().default(false),
   checkpointAdviceEnabled: z.boolean().default(true),
   scoringEnabled: z.boolean().default(true),
   experienceEnabled: z.boolean().default(true),

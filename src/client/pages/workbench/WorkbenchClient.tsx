@@ -733,6 +733,121 @@ export function shouldShowWorkbenchHumanAttention(input: {
   return input.hasPendingQuestion || input.hasApproval || input.isHumanReviewLocation;
 }
 
+export interface WorkbenchHumanApprovalPresentation {
+  recommendation: 'verify-first' | 'ready-to-continue' | 'submit-and-monitor-ci';
+  headline: string;
+  supportingText: string;
+  checklist: string[];
+}
+
+/**
+ * Human-review advice is persisted as free-form text so historic runs stay
+ * readable. The banner promotes explicit risks to a small, checkable decision
+ * card while preserving the original report as expandable evidence.
+ */
+export function buildWorkbenchHumanApprovalPresentation(input: {
+  advice?: unknown;
+  summary?: unknown;
+  decision?: unknown;
+}): WorkbenchHumanApprovalPresentation {
+  const decision = input.decision && typeof input.decision === 'object'
+    ? input.decision as Record<string, unknown>
+    : null;
+  const action = String(decision?.action || '').trim();
+  const targetState = String(decision?.targetState || decision?.target_state || '').trim();
+  const decisionChecklist = Array.isArray(decision?.blockers)
+    ? decision.blockers.map((item) => String(item).trim()).filter(Boolean).slice(0, 4)
+    : [];
+  const evidence = Array.isArray(decision?.evidence)
+    ? decision.evidence.map((item) => String(item).trim()).filter(Boolean).slice(0, 2)
+    : [];
+  const rationale = String(decision?.rationale || '').trim();
+  const instruction = String(decision?.instruction || '').trim();
+  // New runs persist this decision at the state boundary. Prefer it over any
+  // historic prose: the text may quote obsolete blockers, while the decision
+  // is already validated against declared workflow transitions.
+  if (action === 'submit_and_monitor_ci') {
+    return {
+      recommendation: 'submit-and-monitor-ci',
+      headline: targetState ? `已裁决进入「${targetState}」核验 PR 与 CI 状态` : '已裁决核验 PR 与 CI 状态',
+      supportingText: 'Agent 会先确认当前 PR head 是否已推送及 CI 是否已创建。CI 已运行时只监控结果，不会再次发送触发评论；只有当前 head 尚未触发且机器人明确要求时，才会按授权进行一次精确触发。',
+      checklist: decisionChecklist.length > 0 ? decisionChecklist : [
+        ...evidence,
+        '确认当前 PR head 已推送，并确认 CI 已创建或正在运行。',
+      ].slice(0, 4),
+    };
+  }
+  if (action === 'repair' || action === 'retry' || action === 'needs_human' || action === 'wait_external') {
+    return {
+      recommendation: 'verify-first',
+      headline: targetState ? `已裁决先进入「${targetState}」处理未闭合事项` : '已裁决先处理未闭合事项',
+      supportingText: instruction || rationale || '由 Agent 在隔离工作区完成核验或修复后，再由状态机决定后续路径。',
+      checklist: decisionChecklist.length > 0 ? decisionChecklist : (evidence.length > 0 ? evidence : ['完成当前裁决要求的核验或修复。']),
+    };
+  }
+  if (action === 'advance') {
+    return {
+      recommendation: 'ready-to-continue',
+      headline: targetState ? `已裁决继续到「${targetState}」` : '已裁决继续工作流',
+      supportingText: instruction || rationale || '状态机将按已声明路径继续执行。',
+      checklist: evidence.length > 0 ? evidence : ['当前状态证据已满足继续条件。'],
+    };
+  }
+  const text = [input.advice, input.summary]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  // Advice records keep the full history of a review. A later “released”
+  // verdict can legitimately quote the earlier blockers, so never let those
+  // historic words send an already-fixed change back into a repair loop.
+  const readyForSubmission = /有条件建议放行|放行条件基本满足|(?:硬阻塞|R\d+).*已解除/i.test(text);
+  const needsVerification = /不建议\s*无条件\s*放行|不得放行|硬阻塞|放行前须|待人工确认|未核验/i.test(text);
+  const checklist = text
+    .split('\n')
+    .map((line) => line
+      .replace(/^\s*[-*]\s*/, '')
+      .replace(/\*\*/g, '')
+      .trim())
+    .filter((line) => /^(?:R\d+|风险\s*\d*|阻塞(?:项)?|需(?:重点)?检查|放行前)/i.test(line))
+    .slice(0, 4);
+
+  if (readyForSubmission) {
+    return {
+      recommendation: 'submit-and-monitor-ci',
+      headline: '修复已具备放行证据；下一步应推送 PR 并触发 CI',
+      supportingText: '让 Agent 在隔离工作区复核剩余证据后进入 PR 提交；若复核仍失败，会自动回到修复与验证，不再要求你重复做终端核验。',
+      checklist: checklist.length > 0
+        ? checklist
+        : ['复核修复提交、工作区状态和关键测试后，推送到 PR 分支并确认 CI 已启动。'],
+    };
+  }
+
+  if (checklist.length > 0) {
+    return {
+      recommendation: 'verify-first',
+      headline: '先完成以下核验，再决定是否继续',
+      supportingText: '让 Agent 在隔离工作区完成这些核验；不要在此处把历史风险当作已解决。',
+      checklist,
+    };
+  }
+
+  if (needsVerification) {
+    return {
+      recommendation: 'verify-first',
+      headline: '当前存在待核验事项，不建议直接继续',
+      supportingText: '让 Agent 在隔离工作区补齐证据或修复问题后再继续。',
+      checklist: ['阅读完整审批依据，确认阻塞项已关闭并保留可追溯证据。'],
+    };
+  }
+
+  return {
+    recommendation: 'ready-to-continue',
+    headline: '确认审批依据后，选择下一步处理路径',
+    supportingText: '如果证据充分，可继续工作流；若发现问题，请在完整审批页选择返工路径。',
+    checklist: ['确认当前结果、证据和所选流向符合本次交付要求。'],
+  };
+}
+
 export function getWorkflowStatusDotClass(status: unknown, isRunning: boolean): string {
   const value = normalizeWorkflowStatusCode(status);
   if (isRunning || value === 'running') return 'bg-blue-500';
@@ -9093,6 +9208,19 @@ export default function WorkbenchPage({
     }
   };
 
+  const submitHumanApprovalToState = async (selectedState: string, instruction: string) => {
+    if (!pendingHumanQuestion) {
+      toast('warning', '当前没有待处理的人工问题');
+      return;
+    }
+    if (!selectedState) {
+      toast('warning', '请先选择下一步处理状态');
+      openRunDetailSection('live');
+      return;
+    }
+    await handleSubmitHumanQuestion({ selectedState, instruction });
+  };
+
   const forceCompleteStep = async () => {
     const stepName = forceCompletableStep;
     if (!stepName) {
@@ -9124,6 +9252,12 @@ export default function WorkbenchPage({
 
   const resolveHumanApprovalPassTarget = () => {
     const question = pendingHumanQuestion;
+    const structuredTarget = String(
+      (question?.result as any)?.decision?.targetState
+      || humanApprovalData?.result?.decision?.targetState
+      || ''
+    ).trim();
+    if (structuredTarget) return structuredTarget;
     const recoveryContext = [
       question?.supervisorAdvice,
       question?.message,
@@ -9160,10 +9294,47 @@ export default function WorkbenchPage({
       openRunDetailSection('live');
       return;
     }
-    await handleSubmitHumanQuestion({
-      selectedState,
-      instruction: `通过人工审查，按 pass 路径进入「${selectedState}」。`,
+    const ok = await confirm({
+      title: `确认直接继续到「${selectedState}」`,
+      description: '这会跳过返工，让工作流按当前结果继续。仅在你已经亲自确认审批依据中的核验项都已满足时使用。',
+      confirmLabel: '确认继续',
+      cancelLabel: '返回',
+      variant: 'default',
     });
+    if (!ok) return;
+    await submitHumanApprovalToState(selectedState, `人工确认核验已完成，按建议进入「${selectedState}」。`);
+  };
+
+  const submitHumanApprovalForCi = async () => {
+    if (!pendingHumanQuestion) {
+      toast('warning', '当前没有待处理的人工问题');
+      return;
+    }
+    const selectedState = resolveHumanApprovalPassTarget();
+    if (!selectedState) {
+      toast('warning', '未找到 PR 提交路径，请在完整审批页选择下一步状态');
+      openRunDetailSection('live');
+      return;
+    }
+    await submitHumanApprovalToState(
+      selectedState,
+      `人工授权：先在隔离工作区复核修复提交、codecheck 和关键回归；通过后进入「${selectedState}」推送 PR 分支并确认 CI 已触发。若任一复核未通过，返回「修复与验证」处理，不要求人工重复执行终端核验。`,
+    );
+  };
+
+  const resolveHumanApprovalRemediationTarget = () => {
+    const options = pendingHumanQuestion?.availableStates || humanApprovalData?.availableStates || [];
+    return options.find((state) => /修复|验证|整改|返工|处理/.test(String(state))) || '';
+  };
+
+  const returnHumanApprovalForRemediation = async () => {
+    const selectedState = resolveHumanApprovalRemediationTarget();
+    if (!selectedState) {
+      openRunDetailSection('live');
+      toast('warning', '请在完整审批页选择返工状态');
+      return;
+    }
+    await submitHumanApprovalToState(selectedState, `人工核验未闭合，返回「${selectedState}」继续处理。`);
   };
 
   const rejectHumanApprovalFromBanner = async () => {
@@ -13355,6 +13526,12 @@ export default function WorkbenchPage({
     const summary = pendingHumanQuestion
       ? (pendingQuestionText || pendingHumanQuestion.supervisorAdvice || '请查看审批选项并给出决定。')
       : humanApprovalData?.result?.summary || humanApprovalData?.supervisorAdvice || '当前工作流等待人工确认后继续推进。';
+    const structuredDecision = (pendingHumanQuestion?.result as any)?.decision || humanApprovalData?.result?.decision || null;
+    const approvalPresentation = buildWorkbenchHumanApprovalPresentation({
+      advice: pendingHumanQuestion?.supervisorAdvice || humanApprovalData?.supervisorAdvice,
+      summary,
+      decision: structuredDecision,
+    });
     const recoveryContext = [
       pendingHumanQuestion?.supervisorAdvice,
       pendingHumanQuestion?.message,
@@ -13368,7 +13545,8 @@ export default function WorkbenchPage({
       : humanApprovalData
       ? `${formatStateName(humanApprovalData.currentState)} -> ${formatStateName(humanApprovalData.nextState)}`
       : formatWorkflowLocation(currentPhase, currentStep, '等待处理');
-    const suggestedAction = recoveredTarget
+    const suggestedAction = String((structuredDecision as any)?.targetState || '').trim()
+      || recoveredTarget
       || pendingHumanQuestion?.suggestedNextState
       || humanApprovalData?.nextState
       || null;
@@ -13377,6 +13555,9 @@ export default function WorkbenchPage({
         || pendingHumanQuestion.availableStates
         || [])
       : humanApprovalData?.availableStates || [];
+    const remediationTarget = resolveHumanApprovalRemediationTarget();
+    const shouldRecommendRemediation = approvalPresentation.recommendation === 'verify-first' && Boolean(remediationTarget);
+    const shouldSubmitAndMonitorCi = approvalPresentation.recommendation === 'submit-and-monitor-ci' && Boolean(suggestedAction);
     return (
       <div className="shrink-0 border-b border-orange-300 bg-orange-50 px-5 py-4 text-orange-950 shadow-[inset_4px_0_0_#f97316] dark:border-orange-400/25 dark:bg-orange-500/10 dark:text-orange-50">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -13392,34 +13573,54 @@ export default function WorkbenchPage({
               </div>
               <div className="mt-2 grid gap-x-5 gap-y-2 text-xs leading-5 md:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.8fr)]">
                 <div className="min-w-0">
-                  <div className="font-bold text-orange-950 dark:text-orange-50">审批事项：{title}</div>
-                  <div
-                    className="mt-0.5 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words pr-2 text-orange-800 dark:text-orange-100/85"
-                    aria-label="审批说明"
-                    tabIndex={0}
-                  >
-                    {summary}
+                  <div className="font-bold text-orange-950 dark:text-orange-50">你现在只需要做一个选择</div>
+                  <div className={`mt-1 rounded-md border px-3 py-2 font-semibold ${approvalPresentation.recommendation === 'verify-first' ? 'border-orange-300 bg-orange-100/80 text-orange-950 dark:border-orange-400/40 dark:bg-orange-950/30 dark:text-orange-50' : 'border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-400/40 dark:bg-emerald-950/25 dark:text-emerald-50'}`}>
+                    {shouldSubmitAndMonitorCi
+                      ? '建议让 Agent 核验 PR 与 CI 状态。'
+                      : shouldRecommendRemediation
+                      ? `建议让 Agent 返回「${remediationTarget}」自动核验并修复。`
+                      : approvalPresentation.headline}
                   </div>
+                  <p className="mt-2 text-orange-800 dark:text-orange-100/85">
+                    {shouldSubmitAndMonitorCi
+                      ? approvalPresentation.supportingText
+                      : shouldRecommendRemediation
+                      ? '无需你打开终端执行 Git、codecheck 或测试；这些核验应由 Agent 在隔离工作区完成。'
+                      : approvalPresentation.supportingText}
+                  </p>
+                  <details className="mt-2 rounded-md border border-orange-200/80 bg-background/45 px-3 py-2 text-orange-800 dark:border-orange-400/20 dark:bg-black/10 dark:text-orange-100/85">
+                    <summary className="cursor-pointer font-medium text-orange-950 dark:text-orange-50">查看 Agent 将自动核验的 {approvalPresentation.checklist.length} 项内容</summary>
+                    <ul className="mt-2 list-disc space-y-1 pl-5" aria-label="Agent 核验清单">
+                      {approvalPresentation.checklist.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}
+                    </ul>
+                    <div
+                      className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words pr-2"
+                      aria-label="审批说明"
+                      tabIndex={0}
+                    >
+                      {summary}
+                    </div>
+                  </details>
                 </div>
                 <div className="min-w-0 border-orange-200 md:border-l md:pl-5 dark:border-orange-400/20">
-                  <div className="font-bold text-orange-950 dark:text-orange-50">需要决定</div>
+                  <div className="font-bold text-orange-950 dark:text-orange-50">这两个选择分别会发生什么</div>
                   {isFailedRunRecovery && suggestedAction ? (
                     <>
                       <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
-                        确认是否重新进入「{suggestedAction}」继续处理。
+                        返回返工会重新执行需要的检查；直接继续会进入「{suggestedAction}」。
                       </div>
-                      <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">
-                        点「通过」将进入并执行「{suggestedAction}」的检查步骤
-                      </div>
-                      <div className="text-orange-700 dark:text-orange-200">如需改选其他状态，请点“查看并审批”。</div>
                     </>
                   ) : (
                     <>
                       <div className="mt-0.5 text-orange-800 dark:text-orange-100/85">
-                        {answerOptions.length > 0 ? answerOptions.slice(0, 4).join(' / ') : '确认是否继续执行'}
+                        {shouldSubmitAndMonitorCi
+                          ? `推荐：进入「${suggestedAction}」，由 Agent 核验 PR 与 CI；CI 已运行时只等待结果。`
+                          : shouldRecommendRemediation && remediationTarget
+                          ? `推荐：返回「${remediationTarget}」，让 Agent 处理未闭合的核验。`
+                          : answerOptions.length > 0 ? `可选：${answerOptions.slice(0, 4).join(' / ')}` : '在完整审批页选择下一步处理路径'}
                       </div>
-                      {suggestedAction ? (
-                        <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">Supervisor 推荐：{suggestedAction}</div>
+                      {suggestedAction && !shouldSubmitAndMonitorCi ? (
+                        <div className="mt-1 font-semibold text-emerald-700 dark:text-emerald-300">只有已人工确认全部证据时，才继续到：{suggestedAction}</div>
                       ) : null}
                     </>
                   )}
@@ -13431,37 +13632,67 @@ export default function WorkbenchPage({
             {pendingHumanQuestion ? (
               <Button type="button" size="sm" className="h-9 bg-orange-600 px-3 text-xs font-bold text-white hover:bg-orange-700" onClick={() => openRunDetailSection('live')}>
                 <span className="material-symbols-outlined mr-1 text-sm">fact_check</span>
-                查看并审批
+                查看依据并选择路径
               </Button>
             ) : null}
             <Button type="button" size="sm" variant="outline" className="h-9 border-orange-400/60 bg-background/90 text-xs" onClick={() => openRunDetailSection('state')}>
               <span className="material-symbols-outlined mr-1 text-sm">hub</span>
               查看状态图
             </Button>
-            {humanApprovalData ? (
+            {humanApprovalData && pendingHumanQuestion ? (
               <>
+                {shouldSubmitAndMonitorCi ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-700"
+                    onClick={submitHumanApprovalForCi}
+                    disabled={submittingHumanQuestion}
+                  >
+                    <span className="material-symbols-outlined mr-1 text-sm">rocket_launch</span>
+                    {submittingHumanQuestion ? '提交中...' : '让 Agent 核验 PR 与 CI 状态'}
+                  </Button>
+                ) : remediationTarget ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className={`h-8 px-3 text-xs text-white ${shouldRecommendRemediation ? 'bg-orange-600 hover:bg-orange-700' : 'bg-orange-500 hover:bg-orange-600'}`}
+                    onClick={returnHumanApprovalForRemediation}
+                    disabled={submittingHumanQuestion}
+                  >
+                    <span className="material-symbols-outlined mr-1 text-sm">build</span>
+                    {shouldRecommendRemediation ? `让 Agent 自动核验并返回「${remediationTarget}」` : `返回「${remediationTarget}」`}
+                  </Button>
+                ) : null}
+                {!shouldSubmitAndMonitorCi ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={shouldRecommendRemediation ? 'outline' : 'default'}
+                    className={`h-8 px-3 text-xs ${shouldRecommendRemediation ? 'border-emerald-600 bg-background/90 text-emerald-800 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+                    onClick={submitHumanApprovalFromBanner}
+                    disabled={submittingHumanQuestion}
+                  >
+                    <span className="material-symbols-outlined mr-1 text-sm">check</span>
+                    {submittingHumanQuestion ? '提交中...' : suggestedAction ? `我已人工确认，继续「${suggestedAction}」` : '我已人工确认，继续'}
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   size="sm"
-                  className="h-8 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-700"
-                  onClick={submitHumanApprovalFromBanner}
-                  disabled={submittingHumanQuestion}
-                >
-                  <span className="material-symbols-outlined mr-1 text-sm">check</span>
-                  {submittingHumanQuestion ? '提交中...' : '通过'}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="destructive"
-                  className="h-8 px-3 text-xs"
+                  variant="ghost"
+                  className="h-8 px-3 text-xs text-orange-800 hover:bg-orange-100 dark:text-orange-100 dark:hover:bg-orange-950/30"
                   onClick={rejectHumanApprovalFromBanner}
                   disabled={submittingHumanQuestion}
                 >
-                  <span className="material-symbols-outlined mr-1 text-sm">close</span>
-                  拒绝并停止
+                  停止运行
                 </Button>
               </>
+            ) : humanApprovalData ? (
+              <Button type="button" size="sm" className="h-8 bg-orange-600 px-3 text-xs text-white hover:bg-orange-700" onClick={() => openRunDetailSection('live')}>
+                <span className="material-symbols-outlined mr-1 text-sm">fact_check</span>
+                打开审批并选择路径
+              </Button>
             ) : null}
           </div>
         </div>

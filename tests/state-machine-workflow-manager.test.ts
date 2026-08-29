@@ -2941,6 +2941,39 @@ describe('state machine execution flow', () => {
     expect(result.rawOutput).toContain('最终答复');
   });
 
+  test('cancels a malformed GitCode CI comment before the workflow can accept it', async () => {
+    const engine = new MockEngine({ success: true, output: 'posted comment' });
+    engine.executeImpl = async () => {
+      (engine as any).emit('stream', {
+        type: 'tool',
+        tool: {
+          id: 'tool-gitcode-comment-1',
+          toolName: 'bash',
+          title: '执行命令',
+          status: 'running',
+          input: { command: 'gc pr comment 2085 --body start_build' },
+        },
+      });
+      return { success: true, output: 'posted comment' };
+    };
+    const manager = await createManagerForTest(engine);
+
+    const result = await (manager as any).executeWithEngine(
+      'process-gitcode-policy',
+      'developer',
+      'submit-pr',
+      'Submit PR',
+      'You are a developer',
+      'test-model',
+      { engineType: 'mock-engine', runId: 'test-run-001' },
+    );
+
+    expect(engine.cancelCalls).toBe(1);
+    expect(result.is_error).toBe(true);
+    expect(result.result).toContain('start_build');
+    expect(result.rawOutput).toContain('GitCode CI policy');
+  });
+
   test('persists each streamed delta only once while observing the running process', async () => {
     const { appendStreamContent } = await import('@/lib/run/state-persistence');
     const { processManager } = await import('@/lib/core/process-manager');
@@ -3117,6 +3150,10 @@ describe('state machine execution flow', () => {
     expect(finalJudgePrompt).toContain('# 步骤结论归档协议');
     expect(finalJudgePrompt).toContain('# 结构化输出要求');
     expect(finalJudgePrompt.indexOf('# 结构化输出要求')).toBeLessThan(finalJudgePrompt.indexOf('<step-conclusion>'));
+    expect(finalJudgePrompt).toContain('# GitCode CI 触发规则（强制）');
+    expect(finalJudgePrompt).toContain('`start build`');
+    expect(finalJudgePrompt).toContain('GitCode 门禁恢复流转（强制）');
+    expect(finalJudgePrompt).toContain('gitcode-ci-retry.json');
   });
 
   test('human help prompt is injected only when workflow option is enabled', async () => {
@@ -3938,6 +3975,51 @@ describe('state machine execution flow', () => {
       config
     );
     expect(nextState).toBe('实施');
+    expect(result.decision).toMatchObject({
+      action: 'advance',
+      targetState: '实施',
+      source: 'state-machine',
+    });
+  });
+
+  test('accepts a Supervisor route only when it is a declared transition', async () => {
+    const engine = new MockEngine({ success: true, output: 'unused' });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+    const state = config.workflow.states[0];
+    const result = {
+      stateName: state.name,
+      verdict: 'pass' as const,
+      issues: [],
+      stepOutputs: [],
+      summary: 'checks passed',
+      decision: undefined as any,
+    };
+
+    const nextState = (manager as any).applySupervisorTransitionDecision(
+      JSON.stringify({ decision: {
+        action: 'submit_and_monitor_ci',
+        targetState: '实施',
+        rationale: 'ready',
+        blockers: [],
+        evidence: ['local gate passed'],
+        instruction: 'continue',
+      } }),
+      state,
+      result,
+      '实施',
+    );
+    expect(nextState).toBe('实施');
+    expect(result.decision).toMatchObject({ source: 'supervisor', action: 'submit_and_monitor_ci' });
+
+    const fallback = (manager as any).applySupervisorTransitionDecision(
+      JSON.stringify({ decision: { action: 'advance', targetState: '未声明状态' } }),
+      state,
+      result,
+      '实施',
+    );
+    expect(fallback).toBe('实施');
+    expect(result.decision).toMatchObject({ source: 'state-machine', targetState: '实施' });
   });
 
   test('verdict=fail transitions back to previous state', async () => {
