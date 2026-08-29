@@ -56,6 +56,7 @@ function formatWorkflowPathSegment(segment: NonNullable<HumanQuestion['workflowP
 interface HumanQuestionCardProps {
   question: HumanQuestion;
   compact?: boolean;
+  presentation?: 'default' | 'decision';
   autoFocus?: boolean;
   submitting?: boolean;
   collapsible?: boolean;
@@ -66,12 +67,14 @@ interface HumanQuestionCardProps {
 export default function HumanQuestionCard({
   question,
   compact = false,
+  presentation = 'default',
   autoFocus = false,
   submitting = false,
   collapsible = true,
   onSubmit,
   onNavigate,
 }: HumanQuestionCardProps) {
+  const isDecisionPresentation = presentation === 'decision';
   const defaultAnswer = useMemo(() => buildDefaultAnswer(question), [question]);
   const [answer, setAnswer] = useState<HumanQuestionAnswer>(() => defaultAnswer);
   const [approvalAcknowledged, setApprovalAcknowledged] = useState(false);
@@ -108,7 +111,15 @@ export default function HumanQuestionCard({
     && question.status === 'unanswered'
     && question.answerSchema.type === 'approval-transition';
 
-  const header = (
+  const header = isDecisionPresentation ? (
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge>需要你的决定</Badge>
+        <span className="text-xs text-muted-foreground">工作流已暂停，完成选择后继续。</span>
+      </div>
+      <h3 className="mt-2 text-base font-semibold leading-6">选择接下来的处理路径</h3>
+    </div>
+  ) : (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2 mb-1">
@@ -146,7 +157,7 @@ export default function HumanQuestionCard({
   const content = (
     <>
       <TaskItem>
-        {workflowPath.length > 0 ? (
+        {!isDecisionPresentation && workflowPath.length > 0 ? (
           <div className="mb-3 rounded-lg border bg-muted/25 px-3 py-2">
             <div className="mb-1 text-xs font-medium text-muted-foreground">来源路径</div>
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -164,7 +175,7 @@ export default function HumanQuestionCard({
         {collapseApprovalEvidence ? (
           <details className="rounded-lg border bg-muted/20 px-3 py-2 text-sm leading-6" aria-label="完整审批依据">
             <summary className="cursor-pointer font-medium text-foreground">查看完整审批依据</summary>
-            <div className="mt-2 max-h-64 overflow-y-auto overscroll-contain pr-2 text-foreground">
+            <div className="mt-2 text-foreground">
               <Markdown>{question.message || question.supervisorAdvice || 'Supervisor 请求补充信息。'}</Markdown>
               {question.supervisorAdvice && question.supervisorAdvice !== question.message ? (
                 <div className="mt-3 border-t pt-3">
@@ -197,7 +208,9 @@ export default function HumanQuestionCard({
               <div className="space-y-2">
                 <div className="text-sm font-medium">选择下一步状态</div>
                 <div
-                  className="grid max-h-[min(32vh,18rem)] gap-2 overflow-y-auto overscroll-contain pr-1"
+                  className={isDecisionPresentation
+                    ? 'grid gap-2 sm:grid-cols-2'
+                    : 'grid max-h-[min(32vh,18rem)] gap-2 overflow-y-auto overscroll-contain pr-1'}
                   aria-label="下一步状态列表"
                   tabIndex={0}
                 >

@@ -13859,24 +13859,28 @@ export default function WorkbenchPage({
     </div>
   );
 
-  const renderRunLiveOutputPanel = () => (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/10">
-      {pendingHumanQuestion?.status === 'unanswered' ? (
-        <div className="max-h-[min(42vh,26rem)] min-h-0 shrink overflow-y-auto border-b bg-background/95 p-4 shadow-sm">
+  const renderRunLiveOutputPanel = () => {
+    if (pendingHumanQuestion?.status === 'unanswered') {
+      return (
+        <div className="h-full min-h-0 overflow-y-auto bg-muted/10 p-4">
           <HumanQuestionCard
             question={pendingHumanQuestion}
+            presentation="decision"
             submitting={submittingHumanQuestion}
             collapsible={false}
             autoFocus
             onSubmit={handleSubmitHumanQuestion}
           />
         </div>
-      ) : null}
-      <div className="min-h-0 flex-1 overflow-hidden">
+      );
+    }
+
+    return (
+      <div className="h-full min-h-0 overflow-hidden bg-muted/10">
         {renderLiveStreamPanel()}
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderWorkbenchNavigation = () => (
     <div className={styles.workbenchNav}>

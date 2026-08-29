@@ -145,6 +145,7 @@ describe('subworkflow UI coverage', () => {
     render(
       <HumanQuestionCard
         collapsible={false}
+        presentation="decision"
         onSubmit={vi.fn()}
         question={{
           id: 'q-collapsed-evidence',
@@ -168,6 +169,10 @@ describe('subworkflow UI coverage', () => {
     const evidence = screen.getByLabelText('完整审批依据');
     expect(evidence).not.toHaveAttribute('open');
     expect(screen.getByText('查看完整审批依据')).toBeInTheDocument();
+    expect(screen.getByText('选择接下来的处理路径')).toBeInTheDocument();
+    expect(screen.queryByText('run-approval')).not.toBeInTheDocument();
+    expect(evidence.querySelector('.overflow-y-auto')).toBeNull();
+    expect(screen.getByLabelText('下一步状态列表')).not.toHaveClass('overflow-y-auto');
   });
 
   test('StateMachineExecutionView renders child run card and opens embedded detail action', async () => {
