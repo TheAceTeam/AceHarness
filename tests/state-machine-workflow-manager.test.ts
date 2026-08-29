@@ -5197,6 +5197,23 @@ describe('skill 内联兜底边界', () => {
     expect((manager as any).workspaceSkillNames.has('demo-skill')).toBe(true);
   });
 
+  // 目录存在不等于 Skill 可用：悬空软链或残缺目录会让 existsSync(dir) 为真，
+  // 但 Agent 顺着提示词里的路径读不到 SKILL.md。此时必须保留内联兜底。
+  test('目录在但 SKILL.md 读不到时不登记，内联兜底仍生效', async () => {
+    const manager = await setupManager();
+    const fsMod = await import('fs');
+    const fsp = await import('fs/promises');
+    // 服务端目录与工作区目标目录都在，唯独 SKILL.md 不存在（残缺 / 悬空软链）
+    vi.mocked(fsMod.existsSync).mockImplementation((p: any) => !String(p).endsWith('SKILL.md'));
+    vi.mocked(fsp.readFile).mockResolvedValue('# demo-skill 正文' as any);
+
+    await (manager as any).syncSkillsToWorkspace(config);
+
+    expect((manager as any).workspaceSkillNames.has('demo-skill')).toBe(false);
+    const inlined = await (manager as any).loadAdditionalSkills(['demo-skill'], '/tmp/project');
+    expect(inlined).toContain('demo-skill 正文');
+  });
+
   test('工作区里没有的 Skill 仍然内联，兜底路径保留', async () => {
     const manager = await setupManager();
     const fsMod = await import('fs');

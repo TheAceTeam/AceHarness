@@ -402,6 +402,19 @@ function subtractSuspendedTime(reportedMs: number, suspendedMs: number): number 
   return Math.max(0, reportedMs - suspendedMs);
 }
 
+/**
+ * 目录存在不等于 Skill 可用：悬空软链、残缺目录、只建了壳的同名目录都会让
+ * `existsSync(dir)` 为真，但 Agent 顺着提示词里的路径读不到 SKILL.md。
+ * 只有正文确实可读，才允许登记为「工作区已可达」并因此关掉内联兜底。
+ */
+function hasReadableSkillDoc(skillDir: string): boolean {
+  try {
+    return existsSync(resolve(skillDir, 'SKILL.md'));
+  } catch {
+    return false;
+  }
+}
+
 function isAceHarnessSkillName(skillName: string): boolean {
   return skillName.toLowerCase().startsWith('aceharness-');
 }
@@ -1677,10 +1690,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
         if (!entry.isDirectory() || isAceHarnessSkillName(entry.name)) continue;
         const src = resolve(serverSkillsDir, entry.name);
         const dst = resolve(workspaceSkillsDir, entry.name);
-        if (existsSync(dst)) { this.workspaceSkillNames.add(entry.name); continue; }
+        if (existsSync(dst)) {
+          if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(entry.name);
+          continue;
+        }
         try {
           createDirectoryLinkSync(src, dst);
-          this.workspaceSkillNames.add(entry.name);
+          if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(entry.name);
           console.log(`[SM-Skills] 已链接 skill "${entry.name}" → ${dst}`);
         } catch (error) {
           console.warn(`[SM-Skills] 链接 skill "${entry.name}" 失败:`, error);
@@ -1708,11 +1724,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (isRequiredTasklistSkill && !existsSync(resolve(src, 'SKILL.md'))) {
         throw new Error(`Required lightweight skill is invalid: ${LIGHTWEIGHT_TASKLIST_SKILL}`);
       }
-      if (existsSync(dst)) { this.workspaceSkillNames.add(skillName); continue; }
+      if (existsSync(dst)) {
+        if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(skillName);
+        continue;
+      }
       try {
         createDirectoryLinkSync(src, dst);
         linkedNames.push(skillName);
-        this.workspaceSkillNames.add(skillName);
+        if (hasReadableSkillDoc(dst)) this.workspaceSkillNames.add(skillName);
         console.log(`[SM-Skills] 已链接 skill "${skillName}" → ${dst}`);
       } catch (error) {
         console.warn(`[SM-Skills] 链接 skill "${skillName}" 失败:`, error);
