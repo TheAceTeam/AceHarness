@@ -36,6 +36,7 @@ export async function runNodejsInstrumentation() {
     const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
     const recoverer = new StateMachineWorkflowManager();
     await recoverer.recoverFromCrash();
+    await restoreDurableHumanApprovalWaits();
   } catch (error) {
     console.error('[ACEHarness] Workflow recovery failed:', error);
   }
@@ -59,5 +60,36 @@ export async function runNodejsInstrumentation() {
     await ensureSchedulerInitialized();
   } catch (error) {
     console.error('[ACEHarness] Scheduler restore failed:', error);
+  }
+}
+
+/**
+ * Reattach the in-memory waiter for persisted human approvals after a Node
+ * service restart.  The run snapshot is authoritative; only the lightweight
+ * waiter is recreated.  In particular, this lets external GitCode gate
+ * observations continue without replaying completed workflow steps.
+ */
+export async function restoreDurableHumanApprovalWaits(): Promise<void> {
+  const { findActiveRuns } = await import('@/lib/run/state-persistence');
+  const { workflowRegistry } = await import('@/lib/workflow/registry');
+  const activeRuns = await findActiveRuns();
+
+  for (const runState of activeRuns) {
+    if (runState.mode !== 'state-machine'
+      || runState.currentState !== '__human_approval__'
+      || !(runState.pendingHumanQuestionId || runState.pendingCheckpoint)) {
+      continue;
+    }
+
+    try {
+      const manager = await workflowRegistry.getManagerByRunId(runState.runId);
+      if (!manager || manager.getStatus().status === 'running') continue;
+      void manager.resumeInBackground(runState.runId).catch((error) => {
+        console.error(`[ACEHarness] Failed to restore approval observer for ${runState.runId}:`, error);
+      });
+      console.log(`[ACEHarness] Restoring durable approval observer for ${runState.runId}`);
+    } catch (error) {
+      console.error(`[ACEHarness] Failed to prepare approval observer for ${runState.runId}:`, error);
+    }
   }
 }

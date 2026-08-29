@@ -418,6 +418,51 @@ async function restoreScheduler() {
   }
 }
 
+// TanStack Start's standalone production launcher does not execute framework
+// instrumentation hooks.  Resume durable approval waits through the existing
+// workflow API so a restart keeps observing external CI/review state instead
+// of leaving a persisted human-approval checkpoint inert.
+async function restoreDurableWorkflowApprovals() {
+  try {
+    const runsDir = getAppPaths().getWorkspaceRunsDir();
+    if (!fs.existsSync(runsDir)) return;
+    const { parse: parseYaml } = require('yaml');
+    const entries = fs.readdirSync(runsDir, { withFileTypes: true });
+    const resumableRunIds = entries.flatMap((entry) => {
+      if (!entry.isDirectory()) return [];
+      try {
+        const statePath = path.join(runsDir, entry.name, 'state.yaml');
+        if (!fs.existsSync(statePath)) return [];
+        const state = parseYaml(fs.readFileSync(statePath, 'utf8')) || {};
+        const isDurableApproval = state.mode === 'state-machine'
+          && state.status === 'running'
+          && state.currentState === '__human_approval__'
+          && Boolean(state.pendingHumanQuestionId || state.pendingCheckpoint);
+        return isDurableApproval && typeof state.runId === 'string' ? [state.runId] : [];
+      } catch {
+        return [];
+      }
+    });
+
+    for (const runId of resumableRunIds) {
+      const endpoint = `http://${host}:${port}${basePath}/api/workflow/resume`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runId }),
+      });
+      if (response.ok) {
+        console.log(`[ACEHarness] Restored durable approval observer for ${runId}`);
+      } else {
+        const payload = await response.text();
+        console.warn(`[ACEHarness] Durable approval restore skipped for ${runId}: ${payload}`);
+      }
+    }
+  } catch (error) {
+    console.error('[ACEHarness] Durable approval restore failed:', error);
+  }
+}
+
 function startMemoryWatchdog() {
   const maxMb = Number(process.env.ACE_MEMORY_WATCHDOG_MB || 0);
   if (!Number.isFinite(maxMb) || maxMb <= 0) return;
@@ -625,4 +670,5 @@ server.listen(port, host, async () => {
   console.log(`[ACEHarness] TanStack Start server ready on http://${host}:${port}${basePath || ''}`);
   startMemoryWatchdog();
   await restoreScheduler();
+  await restoreDurableWorkflowApprovals();
 });

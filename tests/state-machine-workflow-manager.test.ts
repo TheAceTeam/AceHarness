@@ -5498,3 +5498,32 @@ describe('escalation on unmatched verdict', () => {
     expect(nextState).toBe('实施'); // human selected via forceTransition mock
   });
 });
+
+describe('startup recovery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('preserves a durable human approval instead of marking its process-free wait as crashed', async () => {
+    const { findActiveRuns, saveRunState } = await import('@/lib/run/state-persistence');
+    vi.mocked(findActiveRuns).mockResolvedValue([
+      {
+        runId: 'run-durable-approval',
+        mode: 'state-machine',
+        status: 'running',
+        currentState: '__human_approval__',
+        pendingHumanQuestionId: 'hq-durable-approval',
+        pendingCheckpoint: { checkpoint: 'external-gate-wait' },
+        processes: [],
+        agents: [],
+        completedSteps: [],
+        failedSteps: [],
+      } as any,
+    ]);
+    const manager = await createManagerForTest(new MockEngine({ success: true, output: 'unused' }));
+
+    await manager.recoverFromCrash();
+
+    expect(saveRunState).not.toHaveBeenCalled();
+  });
+});

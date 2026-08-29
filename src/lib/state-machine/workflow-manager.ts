@@ -10087,6 +10087,14 @@ try {
       const activeRuns = await findActiveRuns();
       for (const runState of activeRuns) {
         if (runState.mode !== 'state-machine') continue;
+        // A durable human-approval checkpoint deliberately has no child
+        // process.  Treating it as a crashed worker on service startup turns
+        // an external wait (for example GitCode CI/review) into a terminal
+        // failure and also prevents its observer from being restored.
+        if (runState.currentState === '__human_approval__'
+          && (runState.pendingHumanQuestionId || runState.pendingCheckpoint)) {
+          continue;
+        }
         const anyProcessAlive = (runState.processes || []).some((processInfo) => isProcessAlive(processInfo.pid));
         if (anyProcessAlive) continue;
 
