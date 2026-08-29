@@ -14607,9 +14607,13 @@ export default function WorkbenchPage({
                                 <Badge variant={workflowAutoCompactOnStepChange ? 'default' : 'outline'}>
                                   步骤级总结: {workflowAutoCompactOnStepChange ? '开启' : '关闭'}
                                 </Badge>
-                                <Badge variant={workflowSupervisorEnabled ? 'default' : 'outline'}>
-                                  Supervisor: {workflowSupervisorEnabled ? '开启' : '关闭'}
-                                </Badge>
+                                {isLightweightWorkflow ? (
+                                  <Badge variant="secondary">Supervisor: 轻量模式不适用</Badge>
+                                ) : (
+                                  <Badge variant={workflowSupervisorEnabled ? 'default' : 'outline'}>
+                                    Supervisor: {workflowSupervisorEnabled ? '开启' : '关闭'}
+                                  </Badge>
+                                )}
                                 <Badge variant="secondary">
                                   Agent 覆盖: {configuredWorkflowOverrideCount}
                                 </Badge>
@@ -15765,24 +15769,26 @@ export default function WorkbenchPage({
                       />
                     </div>
                   </div>
-                  <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-1">
-                        <Label htmlFor="workflow-supervisor-enabled" className="text-sm font-medium">
-                          Supervisor 阶段审阅
-                        </Label>
-                        <div className="text-xs text-muted-foreground">
-                          默认关闭。启用后，每个状态执行结束时由 Supervisor 追加一次阶段审阅，人工审批前再追加一次检查点建议。
-                          实测每次约 30–60 秒，一条 6 状态的工作流会多花 7–8 分钟。
+                  {!isLightweightWorkflow ? (
+                    <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1">
+                          <Label htmlFor="workflow-supervisor-enabled" className="text-sm font-medium">
+                            Supervisor 阶段审阅
+                          </Label>
+                          <div className="text-xs text-muted-foreground">
+                            默认关闭。启用后，每个状态执行结束时由 Supervisor 追加一次阶段审阅，人工审批前再追加一次检查点建议。
+                            实测每次约 30–60 秒，一条 6 状态的工作流会多花 7–8 分钟。
+                          </div>
                         </div>
+                        <Switch
+                          id="workflow-supervisor-enabled"
+                          checked={workflowSupervisorEnabled}
+                          onCheckedChange={setWorkflowSupervisorEnabled}
+                        />
                       </div>
-                      <Switch
-                        id="workflow-supervisor-enabled"
-                        checked={workflowSupervisorEnabled}
-                        onCheckedChange={setWorkflowSupervisorEnabled}
-                      />
                     </div>
-                  </div>
+                  ) : null}
                 </section>
 
                 <section className="space-y-4">

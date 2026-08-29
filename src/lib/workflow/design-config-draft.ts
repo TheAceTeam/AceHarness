@@ -45,7 +45,7 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
   const ragKnowledgeBases = Array.isArray(draftState.ragKnowledgeBases) ? [...draftState.ragKnowledgeBases] : [];
   const skills = Array.isArray(draftState.skills) ? [...draftState.skills] : [];
   if (ragKnowledgeBases.length > 0 && !skills.includes('aceharness-rag')) skills.push('aceharness-rag');
-  const normalized = normalizeLightweightWorkflowConfig({
+  const draftConfig = {
     ...baseConfig,
     context: {
       ...(baseConfig.context || {}),
@@ -74,8 +74,10 @@ export function buildWorkflowDesignConfigForSave<T extends WorkflowDesignConfigL
         },
       },
     },
-  } as T);
-  return materializeStateLevelReviewAdoption(applySupervisorToggle(normalized, draftState.workflowSupervisorEnabled));
+  } as T;
+  const supervisorApplied = applySupervisorToggle(draftConfig, draftState.workflowSupervisorEnabled);
+  // 轻量工作流不支持 Supervisor，必须让轻量规范化最后收口，避免界面开关把它重新写回。
+  return materializeStateLevelReviewAdoption(normalizeLightweightWorkflowConfig(supervisorApplied));
 }
 
 /**

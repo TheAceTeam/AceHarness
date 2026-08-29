@@ -207,6 +207,18 @@ describe('workflow design config draft helpers', () => {
     });
   });
 
+  test('does not recreate supervisor when the lightweight draft toggle is enabled', () => {
+    const normalized = buildWorkflowDesignConfigForSave(lightweightConfig, {
+      ...persistedDraftState,
+      requirements: 'run tasklist',
+      timeoutMinutes: 300,
+      workflowSupervisorEnabled: true,
+    });
+
+    expect(normalized.workflow.profile).toBe('lightweight');
+    expect(normalized.workflow.supervisor).toBeUndefined();
+  });
+
   // 契约变更：界面新增了 Supervisor 开关，保存时它是权威值。
   // 但除 enabled 外的其他 supervisor 字段仍必须原样保留。
   test('supervisor enabled follows the design toggle, other fields survive', () => {
