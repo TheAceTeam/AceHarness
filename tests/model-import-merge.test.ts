@@ -75,4 +75,39 @@ describe('model import merge', () => {
 
     expect(merged).toEqual([]);
   });
+
+  test('preserves the detected endpoint without inferring a provider endpoint', () => {
+    const merged = mergeDetectedModelsForImport({
+      models: [],
+      detectedModels: [{ modelId: 'deepseek-chat', label: 'DeepSeek Chat', selected: true }],
+      engine: 'deepseek-harness',
+    });
+
+    expect(merged).toEqual([{
+      value: 'deepseek-chat',
+      label: 'DeepSeek Chat',
+      costMultiplier: 1,
+      endpoints: [],
+      engines: ['deepseek-harness'],
+    }]);
+  });
+
+  test('keeps a provider-qualified id and its API endpoint distinct', () => {
+    const merged = mergeDetectedModelsForImport({
+      models: [],
+      detectedModels: [{
+        modelId: 'boft/gpt-5.6-sol',
+        label: 'GPT 5.6 Sol',
+        endpoints: ['deepseek'],
+        selected: true,
+      }],
+      engine: 'deepseek-harness',
+    });
+
+    expect(merged[0]).toMatchObject({
+      value: 'boft/gpt-5.6-sol',
+      endpoints: ['deepseek'],
+      engines: ['deepseek-harness'],
+    });
+  });
 });

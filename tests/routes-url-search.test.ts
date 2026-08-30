@@ -14,6 +14,7 @@ describe('typed route search normalizers', () => {
 
   test('normalizes engine selection without accepting arbitrary values', () => {
     expect(normalizeEnginesSearch({ engine: 'opencode' })).toEqual({ engine: 'opencode' });
+    expect(normalizeEnginesSearch({ engine: 'deepseek-harness' })).toEqual({ engine: 'deepseek-harness' });
     expect(normalizeEnginesSearch({ engine: 'not-a-known-engine' })).toEqual({ engine: undefined });
     expect(normalizeEnginesSearch({ engine: 'engine with spaces' })).toEqual({ engine: undefined });
   });

@@ -9,7 +9,7 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getAcpxAgentRegistryOverrides } from './acpx-agent-overrides.mjs';
+import { createAcpxCompatibleSessionStore, getAcpxAgentRegistryOverrides } from './acpx-agent-overrides.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -45,11 +45,17 @@ const SUPPORTED_AGENTS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
 ];
 
-function applyProcessEnvForAgent(agent) {
+export function applyProcessEnvForAgent(agent, model) {
   if (agent === 'opencode' || agent === 'nga' || agent === 'codegenie') {
     process.env.OPENCODE_SKIP_SAFE_CHECK = process.env.OPENCODE_SKIP_SAFE_CHECK || '1';
+  }
+  if (agent === 'deepseek-harness' && stringValue(model)) {
+    const [provider, ...modelParts] = stringValue(model).split('/');
+    if (modelParts.length > 0 && provider) process.env.DSH_PROVIDER = provider;
+    process.env.DSH_MODEL = modelParts.length > 0 ? modelParts.join('/') : provider;
   }
 }
 
@@ -213,12 +219,12 @@ async function run() {
   let handle;
   try {
     const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
-    applyProcessEnvForAgent(agent);
+    applyProcessEnvForAgent(agent, options.model);
     runtime = createAcpRuntime({
       cwd: options.cwd,
-      sessionStore: createRuntimeStore({
+      sessionStore: createAcpxCompatibleSessionStore(createRuntimeStore({
         stateDir: resolve(root, '.acpx-connectivity-cache'),
-      }),
+      })),
       agentRegistry: createAgentRegistry({
         overrides: AGENT_OVERRIDES,
       }),
@@ -228,6 +234,13 @@ async function run() {
     });
     pushPhase(report, 'runtime', 'ok');
 
+    const deepseekEnv = agent === 'deepseek-harness' && options.model
+      ? {
+        ...(process.env.DSH_PROVIDER ? { DSH_PROVIDER: process.env.DSH_PROVIDER } : {}),
+        ...(process.env.DSH_MODEL ? { DSH_MODEL: process.env.DSH_MODEL } : {}),
+      }
+      : undefined;
+
     handle = await withTimeout(runtime.ensureSession({
       sessionKey: `connectivity:${agent}:${Date.now()}`,
       agent,
@@ -235,6 +248,7 @@ async function run() {
       cwd: options.cwd,
       sessionOptions: {
         ...(options.model ? { model: options.model } : {}),
+        ...(deepseekEnv ? { env: deepseekEnv } : {}),
       },
     }), options.timeoutMs, 'ensureSession');
     pushPhase(report, 'ensureSession', 'ok', {
@@ -311,7 +325,10 @@ async function run() {
   process.exit(report.ok ? 0 : 1);
 }
 
-run().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  run().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

@@ -197,6 +197,7 @@ const ENGINE_TO_AGENT: Record<string, string> = {
   'codegenie-sdk': 'codegenie',
   'magic-cli': 'cangjie-magic',
   'cangjie-magic': 'cangjie-magic',
+  'deepseek-harness': 'deepseek-harness',
 };
 
 const pooledRuntimeEngines = new Map<string, RuntimeBackedChatEngine>();

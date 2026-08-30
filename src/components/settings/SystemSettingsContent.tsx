@@ -628,6 +628,47 @@ export default function SystemSettingsContent() {
             <DataCard className="p-0">
               <FormSection
                 className="px-5"
+                title="GitCode Token"
+                description="配置此系统 Token 后即可拉取工具链信息、检测并下载托管 SDK；留空会保留已保存值。"
+                actions={(
+                  <Button size="sm" onClick={saveGitcodeToken} disabled={tokenSaving || !gitcodeToken.trim()}>
+                    {tokenSaving ? '保存中...' : '保存 GitCode Token'}
+                  </Button>
+                )}
+              >
+                {!gitcodeConfigured && !tokenLoading ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                    配置 GitCode Token 后才能拉取工具链信息。
+                  </div>
+                ) : null}
+                {tokenError ? (
+                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{tokenError}</div>
+                ) : null}
+                <FormField
+                  label="Token"
+                  description="输入新值会覆盖已保存 Token；已保存值以安全方式保管。"
+                  control={(
+                    <Input
+                      type="password"
+                      value={gitcodeToken}
+                      onChange={(event) => {
+                        setGitcodeToken(event.target.value);
+                        if (tokenError) setTokenError(null);
+                      }}
+                      disabled={tokenLoading || tokenSaving}
+                      placeholder={gitcodeConfigured ? '已配置，输入新值可覆盖' : '请输入 GitCode Token'}
+                    />
+                  )}
+                />
+                <StatusPill tone={tokenLoading ? 'info' : gitcodeConfigured ? 'success' : 'warning'}>
+                  {tokenLoading ? '加载中' : gitcodeConfigured ? '已配置' : '未配置'}
+                </StatusPill>
+              </FormSection>
+            </DataCard>
+
+            <DataCard className="p-0">
+              <FormSection
+                className="px-5"
                 title="托管 Cangjie SDK"
                 description="统一管理本机 Cangjie SDK。安装、激活和删除会影响系统使用的 CANGJIE_HOME。"
                 actions={(
@@ -764,47 +805,6 @@ export default function SystemSettingsContent() {
 
         {activeSection === 'security' ? (
           <div className="space-y-5">
-            <DataCard className="p-0">
-              <FormSection
-                className="px-5"
-                title="GitCode Token"
-                description="配置此系统 Token 后即可检测和下载托管 SDK；留空会保留已保存值。"
-                actions={(
-                  <Button size="sm" onClick={saveGitcodeToken} disabled={tokenSaving || !gitcodeToken.trim()}>
-                    {tokenSaving ? '保存中...' : '保存 GitCode Token'}
-                  </Button>
-                )}
-              >
-                {!gitcodeConfigured && !tokenLoading ? (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                     配置 GitCode Token 后即可使用托管 SDK 检测和下载。
-                  </div>
-                ) : null}
-                {tokenError ? (
-                  <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{tokenError}</div>
-                ) : null}
-                <FormField
-                  label="Token"
-                  description="输入新值会覆盖已保存 Token；已保存值以安全方式保管。"
-                  control={(
-                    <Input
-                      type="password"
-                      value={gitcodeToken}
-                      onChange={(event) => {
-                        setGitcodeToken(event.target.value);
-                        if (tokenError) setTokenError(null);
-                      }}
-                      disabled={tokenLoading || tokenSaving}
-                      placeholder={gitcodeConfigured ? '已配置，输入新值可覆盖' : '请输入 GitCode Token'}
-                    />
-                  )}
-                />
-                <StatusPill tone={tokenLoading ? 'info' : gitcodeConfigured ? 'success' : 'warning'}>
-                  {tokenLoading ? '加载中' : gitcodeConfigured ? '已配置' : '未配置'}
-                </StatusPill>
-              </FormSection>
-            </DataCard>
-
             <DataCard className="p-0">
               <FormSection
                 className="px-5"

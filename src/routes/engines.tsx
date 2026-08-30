@@ -16,6 +16,7 @@ const VALID_ENGINE_IDS = new Set([
   'cursor',
   'trae-cli',
   'magic-cli',
+  'deepseek-harness',
 ]);
 
 export const Route = createFileRoute('/engines')({

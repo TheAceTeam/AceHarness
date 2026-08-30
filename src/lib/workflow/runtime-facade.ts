@@ -121,6 +121,7 @@ const ENGINE_TO_AGENT: Record<string, string> = {
   'codegenie-sdk': 'codegenie',
   'magic-cli': 'cangjie-magic',
   'cangjie-magic': 'cangjie-magic',
+  'deepseek-harness': 'deepseek-harness',
 };
 
 let sharedOrchestrator: RuntimeOrchestrator | null = null;
@@ -431,6 +432,7 @@ function runtimeAgentLabel(agentId: string): string {
     claude: 'Claude Code',
     codeagent: 'CodeAgent',
     gemini: 'Gemini',
+    'deepseek-harness': 'DeepSeek Harness',
   };
   return labels[agentId] || agentId;
 }

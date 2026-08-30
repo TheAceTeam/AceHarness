@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { isLocalAgentIconPath } from '@/lib/runtime-agent/agent-icons';
 import {
   BUILTIN_AGENT_DEFINITIONS,
+  DEEPSEEK_HARNESS_LAUNCHER_COMMAND,
   getBuiltinAgentDefinitions,
   mergeAgentRuntimeState,
   runtimeStateRecordsToDtos,
@@ -30,6 +31,7 @@ const REQUIRED_VISIBLE_AGENT_IDS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
 ] as const;
 
 describe('runtime agent registry', () => {
@@ -89,6 +91,28 @@ describe('runtime agent registry', () => {
     expect(definitionsById.get('codeagent')?.commandOverrideEnv).toBe('ACEH_CODEAGENT_COMMAND');
     expect(nga?.capabilities.session).toBe('agent-scoped');
     expect(codegenie?.capabilities.session).toBe('agent-scoped');
+  });
+
+  test('registers DeepSeek Harness as a managed OpenMa ACPX agent', () => {
+    const definition = BUILTIN_AGENT_DEFINITIONS.find((agent) => agent.id === 'deepseek-harness');
+
+    expect(definition).toMatchObject({
+      id: 'deepseek-harness',
+      displayName: 'DeepSeek Harness',
+      runtime: 'acpx',
+      command: DEEPSEEK_HARNESS_LAUNCHER_COMMAND,
+      fallbackCommands: ['deepseek-harness.mjs'],
+      args: [],
+      commandOverrideEnv: 'ACEH_DEEPSEEK_HARNESS_COMMAND',
+      iconPath: '/engines/deepseek-harness.svg',
+      family: 'deepseek-harness',
+    });
+    expect(definition?.capabilities.permissions).toBe('agent-managed');
+    expect(definition?.availabilityProbe).toMatchObject({
+      command: DEEPSEEK_HARNESS_LAUNCHER_COMMAND,
+      args: ['--version'],
+      resolver: { primaryCommand: DEEPSEEK_HARNESS_LAUNCHER_COMMAND, fallbackCommands: ['deepseek-harness.mjs'] },
+    });
   });
 
   test('registers all visible acpx agents as formal builtin agents with local icons', () => {

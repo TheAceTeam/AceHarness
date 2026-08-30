@@ -1099,7 +1099,7 @@ export function syncModelCatalogToDb(models: Array<ModelCatalogInput>) {
     upsertModelCatalogRow({
       id,
       name: String(model.name || model.label || id),
-      endpoints: Array.isArray(model.endpoints) && model.endpoints.length > 0 ? model.endpoints : [...DEFAULT_MODEL_ENDPOINTS],
+      endpoints: Array.isArray(model.endpoints) ? model.endpoints : [...DEFAULT_MODEL_ENDPOINTS],
       engines: Array.isArray(model.engines) ? model.engines : [],
       status: model.status === 'inactive' ? 'inactive' : 'active',
       costMultiplier: Number.isFinite(Number(model.costMultiplier)) ? Number(model.costMultiplier) : 1,

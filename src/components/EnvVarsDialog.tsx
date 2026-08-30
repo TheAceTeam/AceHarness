@@ -24,6 +24,7 @@ interface EnvVar {
   key: string;
   value: string;
   enabled: boolean;
+  group?: CliEnvironmentGroupId;
 }
 
 interface EnvVarError {
@@ -115,7 +116,7 @@ export function EnvVarsEditor({
   const activeRows = useMemo(
     () => vars
       .map((item, index) => ({ item, index }))
-      .filter(({ item }) => getCliEnvironmentGroupId(item.key) === activeGroup),
+      .filter(({ item }) => (getCliEnvironmentGroupId(item.key) || item.group || 'other-cli') === activeGroup),
     [activeGroup, vars],
   );
   const activeKeys = useMemo(() => new Set(activeRows.map(({ item }) => item.key.trim().toUpperCase())), [activeRows]);
@@ -136,7 +137,13 @@ export function EnvVarsEditor({
   const addPreset = (key: string) => {
     if (vars.some((item) => item.key.trim().toUpperCase() === key)) return;
     setSaved(false);
-    setVars((previous) => [...previous, { key, value: '', enabled: true }]);
+    setVars((previous) => [...previous, { key, value: '', enabled: true, group: activeGroup }]);
+    setErrors((previous) => [...previous, {}]);
+  };
+
+  const addCustomVariable = () => {
+    setSaved(false);
+    setVars((previous) => [...previous, { key: '', value: '', enabled: true, group: activeGroup }]);
     setErrors((previous) => [...previous, {}]);
   };
 
@@ -160,7 +167,9 @@ export function EnvVarsEditor({
     onSavingChange?.(true);
     setSubmitError(null);
     try {
-      await envApi.save(scope, normalizedVars.filter((item) => item.key));
+      await envApi.save(scope, normalizedVars
+        .filter((item) => item.key)
+        .map(({ key, value, enabled }) => ({ key, value, enabled })));
       setSaved(true);
       if (!inline) onClose?.();
     } catch (error: any) {
@@ -230,7 +239,7 @@ export function EnvVarsEditor({
                       enabled: item.enabled,
                       description: definition?.description,
                       maskValue: Boolean(definition && 'secret' in definition && definition.secret),
-                      disableKeyEdit: true,
+                      disableKeyEdit: Boolean(definition),
                       keyError: errors[index]?.key,
                     };
                   })}
@@ -243,6 +252,7 @@ export function EnvVarsEditor({
                     const actualIndex = activeRows[rowIndex]?.index;
                     if (actualIndex !== undefined) removeVar(actualIndex);
                   }}
+                  onAdd={addCustomVariable}
                   emptyMessage="选择上方变量名，开始配置此 CLI。"
                 />
               </TabsContent>

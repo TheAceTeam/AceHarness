@@ -13,6 +13,7 @@ describe('/api/engine/availability', () => {
     ['nga', 'ACEH_NGA_COMMAND', 'ngagent'],
     ['codeagent', 'ACEH_CODEAGENT_COMMAND', 'codeagent'],
     ['codegenie', 'ACEH_CODEGENIE_COMMAND', 'codegenie'],
+    ['deepseek-harness', 'ACEH_DEEPSEEK_HARNESS_COMMAND', 'aceharness-deepseek-acp'],
   ])('resolves the configured %s command before probing', async (engine, overrideKey, fixtureName) => {
     await withIsolatedAceHome(async (aceHome) => {
       const commandPath = path.join(aceHome, 'configured command with spaces', process.platform === 'win32' ? `${fixtureName}.cmd` : fixtureName);
@@ -41,6 +42,41 @@ describe('/api/engine/availability', () => {
       } finally {
         if (previousCommand === undefined) delete process.env[overrideKey];
         else process.env[overrideKey] = previousCommand;
+      }
+    });
+  });
+
+  test('DeepSeek availability refresh probes the configured DSH home', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const commandPath = path.join(aceHome, process.platform === 'win32' ? 'deepseek-launcher.cmd' : 'deepseek-launcher');
+      const commandSource = process.platform === 'win32'
+        ? '@echo off\r\necho deepseek-launcher:%DSH_HOME%\r\nexit /b 0\r\n'
+        : '#!/bin/sh\nprintf "deepseek-launcher:%s\\n" "$DSH_HOME"\nexit 0\n';
+      await writeFile(commandPath, commandSource, 'utf8');
+      if (process.platform !== 'win32') await chmod(commandPath, 0o755);
+
+      const previousCommand = process.env.ACEH_DEEPSEEK_HARNESS_COMMAND;
+      const previousDshHome = process.env.DSH_HOME;
+      const dshHome = path.join(aceHome, 'user-dsh');
+      process.env.ACEH_DEEPSEEK_HARNESS_COMMAND = commandPath;
+      process.env.DSH_HOME = dshHome;
+      try {
+        const route = await import('@/server/api-routes/engine/availability/route');
+        const response = await route.GET(makeRequest('/api/engine/availability?engine=deepseek-harness&refresh=1'));
+        const json = await responseJson<any>(response);
+
+        expect(response.status).toBe(200);
+        expect(json).toMatchObject({
+          engine: 'deepseek-harness',
+          available: true,
+          diagnostics: { status: 'available' },
+        });
+        expect(json.diagnostics.summary).toContain(`deepseek-launcher:${dshHome}`);
+      } finally {
+        if (previousCommand === undefined) delete process.env.ACEH_DEEPSEEK_HARNESS_COMMAND;
+        else process.env.ACEH_DEEPSEEK_HARNESS_COMMAND = previousCommand;
+        if (previousDshHome === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = previousDshHome;
       }
     });
   });

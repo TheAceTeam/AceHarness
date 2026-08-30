@@ -11,4 +11,14 @@ describe('CLI environment variable catalog', () => {
       });
     }
   });
+
+  test('publishes the official DeepSeek Harness environment contract', () => {
+    expect(getCliEnvironmentGroupId('DEEPSEEK_API_KEY')).toBe('deepseek');
+    expect(getCliEnvironmentVariable('DEEPSEEK_API_KEY')).toMatchObject({ secret: true });
+    expect(getCliEnvironmentGroupId('DEEPSEEK_BASE_URL')).toBe('deepseek');
+    expect(getCliEnvironmentGroupId('DSH_PERMISSION_MODE')).toBe('deepseek');
+    expect(getCliEnvironmentVariable('DSH_PERMISSION_MODE')).toMatchObject({
+      allowedValues: ['workspace-write', 'danger-full-access'],
+    });
+  });
 });

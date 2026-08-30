@@ -9,311 +9,231 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as WorkflowsRouteImport } from './routes/workflows'
-import { Route as UsersRouteImport } from './routes/users'
-import { Route as SkillsRouteImport } from './routes/skills'
-import { Route as SetupRouteImport } from './routes/setup'
-import { Route as SchedulesRouteImport } from './routes/schedules'
-import { Route as RunHistoryRouteImport } from './routes/run-history'
-import { Route as RegisterRouteImport } from './routes/register'
-import { Route as OfficeRouteImport } from './routes/office'
-import { Route as NotebookRouteImport } from './routes/notebook'
-import { Route as ModelsRouteImport } from './routes/models'
-import { Route as MarketplaceRouteImport } from './routes/marketplace'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as KnowledgeRouteImport } from './routes/knowledge'
-import { Route as EnginesRouteImport } from './routes/engines'
-import { Route as DashboardRouteImport } from './routes/dashboard'
-import { Route as ApiDocsRouteImport } from './routes/api-docs'
-import { Route as AgentsRouteImport } from './routes/agents'
-import { Route as AccountRouteImport } from './routes/account'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as WorkspaceMarkdownPreviewRouteImport } from './routes/workspace.markdown-preview'
-import { Route as WorkbenchConfigRouteImport } from './routes/workbench.$config'
-import { Route as LoginResetRouteImport } from './routes/login.reset'
-import { Route as KnowledgeLibraryRouteImport } from './routes/knowledge.library'
-import { Route as ApiWorkflowTemplatesRouteImport } from './routes/api.workflow-templates'
-import { Route as ApiUsersRouteImport } from './routes/api.users'
-import { Route as ApiSystemSettingsRouteImport } from './routes/api.system-settings'
-import { Route as ApiSkillsRouteImport } from './routes/api.skills'
-import { Route as ApiSchedulesRouteImport } from './routes/api.schedules'
-import { Route as ApiRuntimeAgentsRouteImport } from './routes/api.runtime-agents'
-import { Route as ApiRunsRouteImport } from './routes/api.runs'
-import { Route as ApiRunHistoryRouteImport } from './routes/api.run-history'
-import { Route as ApiPromptAnalysisRouteImport } from './routes/api.prompt-analysis'
-import { Route as ApiProcessesRouteImport } from './routes/api.processes'
-import { Route as ApiModelsRouteImport } from './routes/api.models'
-import { Route as ApiMcpRouteImport } from './routes/api.mcp'
-import { Route as ApiEnvRouteImport } from './routes/api.env'
-import { Route as ApiEngineRouteImport } from './routes/api.engine'
-import { Route as ApiDashboardRouteImport } from './routes/api.dashboard'
-import { Route as ApiConfigsRouteImport } from './routes/api.configs'
-import { Route as ApiChatRouteImport } from './routes/api.chat'
-import { Route as ApiAgentsRouteImport } from './routes/api.agents'
-import { Route as ApiSplatRouteImport } from './routes/api.$'
-import { Route as AccountSystemSettingsRouteImport } from './routes/account.system-settings'
+import { Route as AccountRouteImport } from './routes/account'
+import { Route as AgentsRouteImport } from './routes/agents'
+import { Route as ApiDocsRouteImport } from './routes/api-docs'
+import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as EnginesRouteImport } from './routes/engines'
+import { Route as KnowledgeRouteImport } from './routes/knowledge'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as MarketplaceRouteImport } from './routes/marketplace'
+import { Route as ModelsRouteImport } from './routes/models'
+import { Route as NotebookRouteImport } from './routes/notebook'
+import { Route as OfficeRouteImport } from './routes/office'
+import { Route as RegisterRouteImport } from './routes/register'
+import { Route as RunHistoryRouteImport } from './routes/run-history'
+import { Route as SchedulesRouteImport } from './routes/schedules'
+import { Route as SetupRouteImport } from './routes/setup'
+import { Route as SkillsRouteImport } from './routes/skills'
+import { Route as UsersRouteImport } from './routes/users'
+import { Route as WorkflowsRouteImport } from './routes/workflows'
 import { Route as AccountChannelsRouteImport } from './routes/account.channels'
-import { Route as ApiWorkspaceUploadRouteImport } from './routes/api.workspace.upload'
-import { Route as ApiWorkspaceTreeRouteImport } from './routes/api.workspace.tree'
-import { Route as ApiWorkspaceRemoteCredentialsRouteImport } from './routes/api.workspace.remote-credentials'
-import { Route as ApiWorkspaceManageRouteImport } from './routes/api.workspace.manage'
-import { Route as ApiWorkspaceGitDiffRouteImport } from './routes/api.workspace.git-diff'
-import { Route as ApiWorkspaceGitBrowserRouteImport } from './routes/api.workspace.git-browser'
-import { Route as ApiWorkspaceFileRouteImport } from './routes/api.workspace.file'
-import { Route as ApiWorkspaceDownloadRouteImport } from './routes/api.workspace.download'
-import { Route as ApiWorkflowStopRouteImport } from './routes/api.workflow.stop'
-import { Route as ApiWorkflowStepLogsRouteImport } from './routes/api.workflow.step-logs'
-import { Route as ApiWorkflowStatusRouteImport } from './routes/api.workflow.status'
-import { Route as ApiWorkflowStateHistoryRouteImport } from './routes/api.workflow.state-history'
-import { Route as ApiWorkflowStartRouteImport } from './routes/api.workflow.start'
-import { Route as ApiWorkflowSpecMergeRouteImport } from './routes/api.workflow.spec-merge'
-import { Route as ApiWorkflowSpecImportRouteImport } from './routes/api.workflow.spec-import'
-import { Route as ApiWorkflowResumeRouteImport } from './routes/api.workflow.resume'
-import { Route as ApiWorkflowRerunFromStepRouteImport } from './routes/api.workflow.rerun-from-step'
-import { Route as ApiWorkflowRecallFeedbackRouteImport } from './routes/api.workflow.recall-feedback'
-import { Route as ApiWorkflowPreflightRouteImport } from './routes/api.workflow.preflight'
-import { Route as ApiWorkflowIterateRouteImport } from './routes/api.workflow.iterate'
-import { Route as ApiWorkflowInjectFeedbackRouteImport } from './routes/api.workflow.inject-feedback'
-import { Route as ApiWorkflowHumanQuestionsRouteImport } from './routes/api.workflow.human-questions'
-import { Route as ApiWorkflowGitDiffRouteImport } from './routes/api.workflow.git-diff'
-import { Route as ApiWorkflowForceTransitionRouteImport } from './routes/api.workflow.force-transition'
-import { Route as ApiWorkflowForceCompleteRouteImport } from './routes/api.workflow.force-complete'
-import { Route as ApiWorkflowEventsRouteImport } from './routes/api.workflow.events'
-import { Route as ApiWorkflowEventLogRouteImport } from './routes/api.workflow.event-log'
-import { Route as ApiWorkflowContextRouteImport } from './routes/api.workflow.context'
-import { Route as ApiWorkflowAuditLogRouteImport } from './routes/api.workflow.audit-log'
-import { Route as ApiWorkflowApproveRouteImport } from './routes/api.workflow.approve'
-import { Route as ApiWorkflowTemplatesInstantiateRouteImport } from './routes/api.workflow-templates.instantiate'
-import { Route as ApiUsersShareableRouteImport } from './routes/api.users.shareable'
-import { Route as ApiUsersIdRouteImport } from './routes/api.users.$id'
-import { Route as ApiUploadsImageRouteImport } from './routes/api.uploads.image'
-import { Route as ApiSpecCodingValidatePersistedRootRouteImport } from './routes/api.spec-coding.validate-persisted-root'
-import { Route as ApiSpecCodingSessionsRouteImport } from './routes/api.spec-coding.sessions'
-import { Route as ApiSpecCodingQualityRouteImport } from './routes/api.spec-coding.quality'
-import { Route as ApiSpecCodingAiDraftRouteImport } from './routes/api.spec-coding.ai-draft'
-import { Route as ApiSidebarPluginsPreferencesRouteImport } from './routes/api.sidebar-plugins.preferences'
-import { Route as ApiSchedulesIdRouteImport } from './routes/api.schedules.$id'
-import { Route as ApiRunsBatchRouteImport } from './routes/api.runs.batch'
-import { Route as ApiRunsIdRouteImport } from './routes/api.runs.$id'
-import { Route as ApiRagSearchRouteImport } from './routes/api.rag.search'
-import { Route as ApiRagKnowledgeBasesRouteImport } from './routes/api.rag.knowledge-bases'
-import { Route as ApiRagImportRouteImport } from './routes/api.rag.import'
-import { Route as ApiRagDocumentsRouteImport } from './routes/api.rag.documents'
-import { Route as ApiRagDetailRouteImport } from './routes/api.rag.detail'
-import { Route as ApiProcessesIdRouteImport } from './routes/api.processes.$id'
-import { Route as ApiOnboardingProgressRouteImport } from './routes/api.onboarding.progress'
-import { Route as ApiNotebookTreeRouteImport } from './routes/api.notebook.tree'
-import { Route as ApiNotebookSnapshotsRouteImport } from './routes/api.notebook.snapshots'
-import { Route as ApiNotebookShareRouteImport } from './routes/api.notebook.share'
-import { Route as ApiNotebookManageRouteImport } from './routes/api.notebook.manage'
-import { Route as ApiNotebookFileRouteImport } from './routes/api.notebook.file'
-import { Route as ApiModelsProbesRouteImport } from './routes/api.models.probes'
-import { Route as ApiModelsDiagnosticsRouteImport } from './routes/api.models.diagnostics'
-import { Route as ApiMemoryV2GovernanceRouteImport } from './routes/api.memory-v2.governance'
-import { Route as ApiMemoryV2DiagnosticsRouteImport } from './routes/api.memory-v2.diagnostics'
-import { Route as ApiMcpTestRouteImport } from './routes/api.mcp.test'
-import { Route as ApiMarketplaceSearchRouteImport } from './routes/api.marketplace.search'
-import { Route as ApiMarketplaceInstallRouteImport } from './routes/api.marketplace.install'
-import { Route as ApiMarketplaceCategoriesRouteImport } from './routes/api.marketplace.categories'
-import { Route as ApiEngineModelsRouteImport } from './routes/api.engine.models'
-import { Route as ApiEngineCommandsRouteImport } from './routes/api.engine.commands'
-import { Route as ApiEngineAvailabilityRouteImport } from './routes/api.engine.availability'
-import { Route as ApiConfigsValidateRouteImport } from './routes/api.configs.validate'
-import { Route as ApiConfigsReferencesRouteImport } from './routes/api.configs.references'
-import { Route as ApiConfigsCreateRouteImport } from './routes/api.configs.create'
-import { Route as ApiConfigsBatchDeleteRouteImport } from './routes/api.configs.batch-delete'
-import { Route as ApiConfigsArchiveRouteImport } from './routes/api.configs.archive'
-import { Route as ApiConfigsFilenameRouteImport } from './routes/api.configs.$filename'
-import { Route as ApiCollaborationRoomsRouteImport } from './routes/api.collaboration.rooms'
-import { Route as ApiCollaborationMembersRouteImport } from './routes/api.collaboration.members'
-import { Route as ApiCliRunRouteImport } from './routes/api.cli.run'
-import { Route as ApiChatStreamRouteImport } from './routes/api.chat.stream'
-import { Route as ApiChatSettingsRouteImport } from './routes/api.chat.settings'
-import { Route as ApiChatSessionsRouteImport } from './routes/api.chat.sessions'
-import { Route as ApiChatDebugPromptRouteImport } from './routes/api.chat.debug-prompt'
-import { Route as ApiChatCompactRouteImport } from './routes/api.chat.compact'
-import { Route as ApiChannelsSetupRouteImport } from './routes/api.channels.setup'
-import { Route as ApiChannelsProvidersRouteImport } from './routes/api.channels.providers'
-import { Route as ApiChannelsIntegrationsRouteImport } from './routes/api.channels.integrations'
-import { Route as ApiChannelsBindingsRouteImport } from './routes/api.channels.bindings'
-import { Route as ApiCangjieSdkRouteImport } from './routes/api.cangjie.sdk'
-import { Route as ApiCangjieRunRouteImport } from './routes/api.cangjie.run'
-import { Route as ApiAuthSetupRouteImport } from './routes/api.auth.setup'
-import { Route as ApiAuthResetPasswordRouteImport } from './routes/api.auth.reset-password'
-import { Route as ApiAuthRegisterRouteImport } from './routes/api.auth.register'
-import { Route as ApiAuthProfileRouteImport } from './routes/api.auth.profile'
-import { Route as ApiAuthPasswordRouteImport } from './routes/api.auth.password'
-import { Route as ApiAuthMeRouteImport } from './routes/api.auth.me'
-import { Route as ApiAuthLoginRouteImport } from './routes/api.auth.login'
-import { Route as ApiAuthEmailRouteImport } from './routes/api.auth.email'
-import { Route as ApiAgoraWorkspaceRouteImport } from './routes/api.agora.workspace'
-import { Route as ApiAgoraGuestsRouteImport } from './routes/api.agora.guests'
-import { Route as ApiAgentsGenerateAvatarRouteImport } from './routes/api.agents.generate-avatar'
-import { Route as ApiAgentsBatchRouteImport } from './routes/api.agents.batch'
-import { Route as ApiAgentsArchiveRouteImport } from './routes/api.agents.archive'
-import { Route as ApiAgentsAiDraftRouteImport } from './routes/api.agents.ai-draft'
+import { Route as AccountSystemSettingsRouteImport } from './routes/account.system-settings'
+import { Route as ApiSplatRouteImport } from './routes/api.$'
+import { Route as ApiAgentsRouteImport } from './routes/api.agents'
+import { Route as ApiChatRouteImport } from './routes/api.chat'
+import { Route as ApiConfigsRouteImport } from './routes/api.configs'
+import { Route as ApiDashboardRouteImport } from './routes/api.dashboard'
+import { Route as ApiEngineRouteImport } from './routes/api.engine'
+import { Route as ApiEnvRouteImport } from './routes/api.env'
+import { Route as ApiMcpRouteImport } from './routes/api.mcp'
+import { Route as ApiModelsRouteImport } from './routes/api.models'
+import { Route as ApiProcessesRouteImport } from './routes/api.processes'
+import { Route as ApiPromptAnalysisRouteImport } from './routes/api.prompt-analysis'
+import { Route as ApiRunHistoryRouteImport } from './routes/api.run-history'
+import { Route as ApiRunsRouteImport } from './routes/api.runs'
+import { Route as ApiRuntimeAgentsRouteImport } from './routes/api.runtime-agents'
+import { Route as ApiSchedulesRouteImport } from './routes/api.schedules'
+import { Route as ApiSkillsRouteImport } from './routes/api.skills'
+import { Route as ApiSystemSettingsRouteImport } from './routes/api.system-settings'
+import { Route as ApiUsersRouteImport } from './routes/api.users'
+import { Route as ApiWorkflowTemplatesRouteImport } from './routes/api.workflow-templates'
+import { Route as KnowledgeLibraryRouteImport } from './routes/knowledge.library'
+import { Route as LoginResetRouteImport } from './routes/login.reset'
+import { Route as WorkbenchConfigRouteImport } from './routes/workbench.$config'
+import { Route as WorkspaceMarkdownPreviewRouteImport } from './routes/workspace.markdown-preview'
 import { Route as ApiAgentsNameRouteImport } from './routes/api.agents.$name'
-import { Route as ApiWorkflowStartPlanRouteImport } from './routes/api.workflow.start.plan'
-import { Route as ApiSpecCodingSessionsIdRouteImport } from './routes/api.spec-coding.sessions.$id'
-import { Route as ApiSchedulesIdTriggerRouteImport } from './routes/api.schedules.$id.trigger'
-import { Route as ApiSchedulesIdToggleRouteImport } from './routes/api.schedules.$id.toggle'
-import { Route as ApiRuntimeSqliteTransactionRouteImport } from './routes/api.runtime.sqlite.transaction'
-import { Route as ApiRuntimeSqliteQueryRouteImport } from './routes/api.runtime.sqlite.query'
-import { Route as ApiRuntimeSqliteExecRouteImport } from './routes/api.runtime.sqlite.exec'
-import { Route as ApiRuntimeSqliteDatabasesRouteImport } from './routes/api.runtime.sqlite.databases'
-import { Route as ApiRuntimeRagSearchRouteImport } from './routes/api.runtime.rag.search'
-import { Route as ApiRuntimeRagKnowledgeBasesRouteImport } from './routes/api.runtime.rag.knowledge-bases'
-import { Route as ApiRunsByConfigConfigRouteImport } from './routes/api.runs.by-config.$config'
-import { Route as ApiRunsIdStreamRouteImport } from './routes/api.runs.$id.stream'
-import { Route as ApiRunsIdOutputsRouteImport } from './routes/api.runs.$id.outputs'
-import { Route as ApiRunsIdDocumentsRouteImport } from './routes/api.runs.$id.documents'
-import { Route as ApiRunsIdDetailRouteImport } from './routes/api.runs.$id.detail'
-import { Route as ApiRunsIdDeleteRouteImport } from './routes/api.runs.$id.delete'
-import { Route as ApiRagV1CollectionsRouteImport } from './routes/api.rag.v1.collections'
-import { Route as ApiOnboardingAdminProgressRouteImport } from './routes/api.onboarding.admin.progress'
-import { Route as ApiOfficeTeamPlanRouteImport } from './routes/api.office.team.plan'
-import { Route as ApiOfficeTeamCurrentRouteImport } from './routes/api.office.team.current'
-import { Route as ApiOfficeTeamApplyRouteImport } from './routes/api.office.team.apply'
-import { Route as ApiOfficeOrgVersionsRouteImport } from './routes/api.office.org.versions'
-import { Route as ApiOfficeOrgDraftRouteImport } from './routes/api.office.org.draft'
-import { Route as ApiOfficeOrgCurrentRouteImport } from './routes/api.office.org.current'
-import { Route as ApiOfficeOrgClarifyRouteImport } from './routes/api.office.org.clarify'
-import { Route as ApiOfficeOrgApplyRouteImport } from './routes/api.office.org.apply'
-import { Route as ApiModelsProbesRunRouteImport } from './routes/api.models.probes.run'
-import { Route as ApiModelsProbesQueryRouteImport } from './routes/api.models.probes.query'
-import { Route as ApiModelsProbesBatchRouteImport } from './routes/api.models.probes.batch'
-import { Route as ApiModelsProbesIdRouteImport } from './routes/api.models.probes.$id'
-import { Route as ApiModelsDiagnosticsStreamRouteImport } from './routes/api.models.diagnostics.stream'
-import { Route as ApiMemoryV2GovernanceDetailsRouteImport } from './routes/api.memory-v2.governance.details'
-import { Route as ApiMemoryV2GovernanceActionsRouteImport } from './routes/api.memory-v2.governance.actions'
-import { Route as ApiEngineModelsSmokeRouteImport } from './routes/api.engine.models.smoke'
-import { Route as ApiConfigsFilenameCopyRouteImport } from './routes/api.configs.$filename.copy'
-import { Route as ApiCollaborationRoomsDirectRouteImport } from './routes/api.collaboration.rooms.direct'
-import { Route as ApiCollaborationRoomsRoomIdRouteImport } from './routes/api.collaboration.rooms.$roomId'
-import { Route as ApiChatStreamRecoverRouteImport } from './routes/api.chat.stream.recover'
-import { Route as ApiChatStreamActiveRouteImport } from './routes/api.chat.stream.active'
-import { Route as ApiChatSessionsBatchDeleteRouteImport } from './routes/api.chat.sessions.batch-delete'
-import { Route as ApiChatSessionsIdRouteImport } from './routes/api.chat.sessions.$id'
-import { Route as ApiChannelsWechatOfficialQrcodeImageRouteImport } from './routes/api.channels.wechat-official.qrcode-image'
-import { Route as ApiChannelsWechatOfficialLoginRouteImport } from './routes/api.channels.wechat-official.login'
-import { Route as ApiChannelsWechatOfficialBridgeRouteImport } from './routes/api.channels.wechat-official.bridge'
-import { Route as ApiChannelsIntegrationsIdRouteImport } from './routes/api.channels.integrations.$id'
-import { Route as ApiChannelsInboundIntegrationIdRouteImport } from './routes/api.channels.inbound.$integrationId'
-import { Route as ApiCangjieSdkRemoveRouteImport } from './routes/api.cangjie.sdk.remove'
-import { Route as ApiCangjieSdkInstallRouteImport } from './routes/api.cangjie.sdk.install'
-import { Route as ApiCangjieSdkActivateRouteImport } from './routes/api.cangjie.sdk.activate'
-import { Route as ApiAgoraGuestsIdRouteImport } from './routes/api.agora.guests.$id'
-import { Route as ApiAgentsNameWorkspaceProfileRouteImport } from './routes/api.agents.$name.workspace-profile'
-import { Route as ApiAgentsNameMemoryRouteImport } from './routes/api.agents.$name.memory'
+import { Route as ApiAgentsAiDraftRouteImport } from './routes/api.agents.ai-draft'
+import { Route as ApiAgentsArchiveRouteImport } from './routes/api.agents.archive'
+import { Route as ApiAgentsBatchRouteImport } from './routes/api.agents.batch'
+import { Route as ApiAgentsGenerateAvatarRouteImport } from './routes/api.agents.generate-avatar'
+import { Route as ApiAgoraGuestsRouteImport } from './routes/api.agora.guests'
+import { Route as ApiAgoraWorkspaceRouteImport } from './routes/api.agora.workspace'
+import { Route as ApiAuthEmailRouteImport } from './routes/api.auth.email'
+import { Route as ApiAuthLoginRouteImport } from './routes/api.auth.login'
+import { Route as ApiAuthMeRouteImport } from './routes/api.auth.me'
+import { Route as ApiAuthPasswordRouteImport } from './routes/api.auth.password'
+import { Route as ApiAuthProfileRouteImport } from './routes/api.auth.profile'
+import { Route as ApiAuthRegisterRouteImport } from './routes/api.auth.register'
+import { Route as ApiAuthResetPasswordRouteImport } from './routes/api.auth.reset-password'
+import { Route as ApiAuthSetupRouteImport } from './routes/api.auth.setup'
+import { Route as ApiCangjieRunRouteImport } from './routes/api.cangjie.run'
+import { Route as ApiCangjieSdkRouteImport } from './routes/api.cangjie.sdk'
+import { Route as ApiChannelsBindingsRouteImport } from './routes/api.channels.bindings'
+import { Route as ApiChannelsIntegrationsRouteImport } from './routes/api.channels.integrations'
+import { Route as ApiChannelsProvidersRouteImport } from './routes/api.channels.providers'
+import { Route as ApiChannelsSetupRouteImport } from './routes/api.channels.setup'
+import { Route as ApiChatCompactRouteImport } from './routes/api.chat.compact'
+import { Route as ApiChatDebugPromptRouteImport } from './routes/api.chat.debug-prompt'
+import { Route as ApiChatSessionsRouteImport } from './routes/api.chat.sessions'
+import { Route as ApiChatSettingsRouteImport } from './routes/api.chat.settings'
+import { Route as ApiChatStreamRouteImport } from './routes/api.chat.stream'
+import { Route as ApiCliRunRouteImport } from './routes/api.cli.run'
+import { Route as ApiCollaborationMembersRouteImport } from './routes/api.collaboration.members'
+import { Route as ApiCollaborationRoomsRouteImport } from './routes/api.collaboration.rooms'
+import { Route as ApiConfigsFilenameRouteImport } from './routes/api.configs.$filename'
+import { Route as ApiConfigsArchiveRouteImport } from './routes/api.configs.archive'
+import { Route as ApiConfigsBatchDeleteRouteImport } from './routes/api.configs.batch-delete'
+import { Route as ApiConfigsCreateRouteImport } from './routes/api.configs.create'
+import { Route as ApiConfigsReferencesRouteImport } from './routes/api.configs.references'
+import { Route as ApiConfigsValidateRouteImport } from './routes/api.configs.validate'
+import { Route as ApiEngineAvailabilityRouteImport } from './routes/api.engine.availability'
+import { Route as ApiEngineCommandsRouteImport } from './routes/api.engine.commands'
+import { Route as ApiEngineModelsRouteImport } from './routes/api.engine.models'
+import { Route as ApiMarketplaceCategoriesRouteImport } from './routes/api.marketplace.categories'
+import { Route as ApiMarketplaceInstallRouteImport } from './routes/api.marketplace.install'
+import { Route as ApiMarketplaceSearchRouteImport } from './routes/api.marketplace.search'
+import { Route as ApiMcpTestRouteImport } from './routes/api.mcp.test'
+import { Route as ApiMemoryV2DiagnosticsRouteImport } from './routes/api.memory-v2.diagnostics'
+import { Route as ApiMemoryV2GovernanceRouteImport } from './routes/api.memory-v2.governance'
+import { Route as ApiModelsDiagnosticsRouteImport } from './routes/api.models.diagnostics'
+import { Route as ApiModelsProbesRouteImport } from './routes/api.models.probes'
+import { Route as ApiNotebookFileRouteImport } from './routes/api.notebook.file'
+import { Route as ApiNotebookManageRouteImport } from './routes/api.notebook.manage'
+import { Route as ApiNotebookShareRouteImport } from './routes/api.notebook.share'
+import { Route as ApiNotebookSnapshotsRouteImport } from './routes/api.notebook.snapshots'
+import { Route as ApiNotebookTreeRouteImport } from './routes/api.notebook.tree'
+import { Route as ApiOnboardingProgressRouteImport } from './routes/api.onboarding.progress'
+import { Route as ApiProcessesIdRouteImport } from './routes/api.processes.$id'
+import { Route as ApiRagDetailRouteImport } from './routes/api.rag.detail'
+import { Route as ApiRagDocumentsRouteImport } from './routes/api.rag.documents'
+import { Route as ApiRagImportRouteImport } from './routes/api.rag.import'
+import { Route as ApiRagKnowledgeBasesRouteImport } from './routes/api.rag.knowledge-bases'
+import { Route as ApiRagSearchRouteImport } from './routes/api.rag.search'
+import { Route as ApiRunsIdRouteImport } from './routes/api.runs.$id'
+import { Route as ApiRunsBatchRouteImport } from './routes/api.runs.batch'
+import { Route as ApiSchedulesIdRouteImport } from './routes/api.schedules.$id'
+import { Route as ApiSidebarPluginsPreferencesRouteImport } from './routes/api.sidebar-plugins.preferences'
+import { Route as ApiSpecCodingAiDraftRouteImport } from './routes/api.spec-coding.ai-draft'
+import { Route as ApiSpecCodingQualityRouteImport } from './routes/api.spec-coding.quality'
+import { Route as ApiSpecCodingSessionsRouteImport } from './routes/api.spec-coding.sessions'
+import { Route as ApiSpecCodingValidatePersistedRootRouteImport } from './routes/api.spec-coding.validate-persisted-root'
+import { Route as ApiUploadsImageRouteImport } from './routes/api.uploads.image'
+import { Route as ApiUsersIdRouteImport } from './routes/api.users.$id'
+import { Route as ApiUsersShareableRouteImport } from './routes/api.users.shareable'
+import { Route as ApiWorkflowTemplatesInstantiateRouteImport } from './routes/api.workflow-templates.instantiate'
+import { Route as ApiWorkflowApproveRouteImport } from './routes/api.workflow.approve'
+import { Route as ApiWorkflowAuditLogRouteImport } from './routes/api.workflow.audit-log'
+import { Route as ApiWorkflowContextRouteImport } from './routes/api.workflow.context'
+import { Route as ApiWorkflowEventLogRouteImport } from './routes/api.workflow.event-log'
+import { Route as ApiWorkflowEventsRouteImport } from './routes/api.workflow.events'
+import { Route as ApiWorkflowForceCompleteRouteImport } from './routes/api.workflow.force-complete'
+import { Route as ApiWorkflowForceTransitionRouteImport } from './routes/api.workflow.force-transition'
+import { Route as ApiWorkflowGitDiffRouteImport } from './routes/api.workflow.git-diff'
+import { Route as ApiWorkflowHumanQuestionsRouteImport } from './routes/api.workflow.human-questions'
+import { Route as ApiWorkflowInjectFeedbackRouteImport } from './routes/api.workflow.inject-feedback'
+import { Route as ApiWorkflowIterateRouteImport } from './routes/api.workflow.iterate'
+import { Route as ApiWorkflowPreflightRouteImport } from './routes/api.workflow.preflight'
+import { Route as ApiWorkflowRecallFeedbackRouteImport } from './routes/api.workflow.recall-feedback'
+import { Route as ApiWorkflowRerunFromStepRouteImport } from './routes/api.workflow.rerun-from-step'
+import { Route as ApiWorkflowResumeRouteImport } from './routes/api.workflow.resume'
+import { Route as ApiWorkflowSpecImportRouteImport } from './routes/api.workflow.spec-import'
+import { Route as ApiWorkflowSpecMergeRouteImport } from './routes/api.workflow.spec-merge'
+import { Route as ApiWorkflowStartRouteImport } from './routes/api.workflow.start'
+import { Route as ApiWorkflowStateHistoryRouteImport } from './routes/api.workflow.state-history'
+import { Route as ApiWorkflowStatusRouteImport } from './routes/api.workflow.status'
+import { Route as ApiWorkflowStepLogsRouteImport } from './routes/api.workflow.step-logs'
+import { Route as ApiWorkflowStopRouteImport } from './routes/api.workflow.stop'
+import { Route as ApiWorkspaceDownloadRouteImport } from './routes/api.workspace.download'
+import { Route as ApiWorkspaceFileRouteImport } from './routes/api.workspace.file'
+import { Route as ApiWorkspaceGitBrowserRouteImport } from './routes/api.workspace.git-browser'
+import { Route as ApiWorkspaceGitDiffRouteImport } from './routes/api.workspace.git-diff'
+import { Route as ApiWorkspaceManageRouteImport } from './routes/api.workspace.manage'
+import { Route as ApiWorkspaceRemoteCredentialsRouteImport } from './routes/api.workspace.remote-credentials'
+import { Route as ApiWorkspaceTreeRouteImport } from './routes/api.workspace.tree'
+import { Route as ApiWorkspaceUploadRouteImport } from './routes/api.workspace.upload'
 import { Route as ApiAgentsNameChatRouteImport } from './routes/api.agents.$name.chat'
-import { Route as ApiWorkspaceStaticWorkspaceTokenSplatRouteImport } from './routes/api.workspace.static.$workspaceToken.$'
-import { Route as ApiWorkflowHumanQuestionsQuestionIdAnswerRouteImport } from './routes/api.workflow.human-questions.$questionId.answer'
-import { Route as ApiSpecCodingSessionsIdImportPersistedRouteImport } from './routes/api.spec-coding.sessions.$id.import-persisted'
-import { Route as ApiRuntimeSqliteDatabasesNameRouteImport } from './routes/api.runtime.sqlite.databases.$name'
-import { Route as ApiOfficeOrgDraftIdRouteImport } from './routes/api.office.org.draft.$id'
-import { Route as ApiModelsProbesIdRunRouteImport } from './routes/api.models.probes.$id.run'
-import { Route as ApiMemoryV2WorkflowsRunIdHandoffsRouteImport } from './routes/api.memory-v2.workflows.$runId.handoffs'
-import { Route as ApiCollaborationRoomsRoomIdSessionRouteImport } from './routes/api.collaboration.rooms.$roomId.session'
-import { Route as ApiCollaborationRoomsRoomIdParticipantsRouteImport } from './routes/api.collaboration.rooms.$roomId.participants'
-import { Route as ApiCollaborationRoomsRoomIdFinishRouteImport } from './routes/api.collaboration.rooms.$roomId.finish'
-import { Route as ApiChannelsWechatOfficialLoginIdRouteImport } from './routes/api.channels.wechat-official.login.$id'
-import { Route as ApiChannelsIntegrationsIdTestSendRouteImport } from './routes/api.channels.integrations.$id.test-send'
-import { Route as ApiChannelsIntegrationsIdBootstrapRouteImport } from './routes/api.channels.integrations.$id.bootstrap'
-import { Route as ApiAgentsNameChatStreamRouteImport } from './routes/api.agents.$name.chat.stream'
+import { Route as ApiAgentsNameMemoryRouteImport } from './routes/api.agents.$name.memory'
+import { Route as ApiAgentsNameWorkspaceProfileRouteImport } from './routes/api.agents.$name.workspace-profile'
+import { Route as ApiAgoraGuestsIdRouteImport } from './routes/api.agora.guests.$id'
+import { Route as ApiCangjieSdkActivateRouteImport } from './routes/api.cangjie.sdk.activate'
+import { Route as ApiCangjieSdkInstallRouteImport } from './routes/api.cangjie.sdk.install'
+import { Route as ApiCangjieSdkRemoveRouteImport } from './routes/api.cangjie.sdk.remove'
+import { Route as ApiChannelsInboundIntegrationIdRouteImport } from './routes/api.channels.inbound.$integrationId'
+import { Route as ApiChannelsIntegrationsIdRouteImport } from './routes/api.channels.integrations.$id'
+import { Route as ApiChannelsWechatOfficialBridgeRouteImport } from './routes/api.channels.wechat-official.bridge'
+import { Route as ApiChannelsWechatOfficialLoginRouteImport } from './routes/api.channels.wechat-official.login'
+import { Route as ApiChannelsWechatOfficialQrcodeImageRouteImport } from './routes/api.channels.wechat-official.qrcode-image'
+import { Route as ApiChatSessionsIdRouteImport } from './routes/api.chat.sessions.$id'
+import { Route as ApiChatSessionsBatchDeleteRouteImport } from './routes/api.chat.sessions.batch-delete'
+import { Route as ApiChatStreamActiveRouteImport } from './routes/api.chat.stream.active'
+import { Route as ApiChatStreamRecoverRouteImport } from './routes/api.chat.stream.recover'
+import { Route as ApiCollaborationRoomsRoomIdRouteImport } from './routes/api.collaboration.rooms.$roomId'
+import { Route as ApiCollaborationRoomsDirectRouteImport } from './routes/api.collaboration.rooms.direct'
+import { Route as ApiConfigsFilenameCopyRouteImport } from './routes/api.configs.$filename.copy'
+import { Route as ApiEngineModelsSmokeRouteImport } from './routes/api.engine.models.smoke'
+import { Route as ApiMemoryV2GovernanceActionsRouteImport } from './routes/api.memory-v2.governance.actions'
+import { Route as ApiMemoryV2GovernanceDetailsRouteImport } from './routes/api.memory-v2.governance.details'
+import { Route as ApiModelsDiagnosticsStreamRouteImport } from './routes/api.models.diagnostics.stream'
+import { Route as ApiModelsProbesIdRouteImport } from './routes/api.models.probes.$id'
+import { Route as ApiModelsProbesBatchRouteImport } from './routes/api.models.probes.batch'
+import { Route as ApiModelsProbesQueryRouteImport } from './routes/api.models.probes.query'
+import { Route as ApiModelsProbesRunRouteImport } from './routes/api.models.probes.run'
+import { Route as ApiOfficeOrgApplyRouteImport } from './routes/api.office.org.apply'
+import { Route as ApiOfficeOrgClarifyRouteImport } from './routes/api.office.org.clarify'
+import { Route as ApiOfficeOrgCurrentRouteImport } from './routes/api.office.org.current'
+import { Route as ApiOfficeOrgDraftRouteImport } from './routes/api.office.org.draft'
+import { Route as ApiOfficeOrgVersionsRouteImport } from './routes/api.office.org.versions'
+import { Route as ApiOfficeTeamApplyRouteImport } from './routes/api.office.team.apply'
+import { Route as ApiOfficeTeamCurrentRouteImport } from './routes/api.office.team.current'
+import { Route as ApiOfficeTeamPlanRouteImport } from './routes/api.office.team.plan'
+import { Route as ApiOnboardingAdminProgressRouteImport } from './routes/api.onboarding.admin.progress'
+import { Route as ApiRagV1CollectionsRouteImport } from './routes/api.rag.v1.collections'
+import { Route as ApiRunsIdDeleteRouteImport } from './routes/api.runs.$id.delete'
+import { Route as ApiRunsIdDetailRouteImport } from './routes/api.runs.$id.detail'
+import { Route as ApiRunsIdDocumentsRouteImport } from './routes/api.runs.$id.documents'
+import { Route as ApiRunsIdOutputsRouteImport } from './routes/api.runs.$id.outputs'
+import { Route as ApiRunsIdStreamRouteImport } from './routes/api.runs.$id.stream'
+import { Route as ApiRunsByConfigConfigRouteImport } from './routes/api.runs.by-config.$config'
+import { Route as ApiRuntimeRagKnowledgeBasesRouteImport } from './routes/api.runtime.rag.knowledge-bases'
+import { Route as ApiRuntimeRagSearchRouteImport } from './routes/api.runtime.rag.search'
+import { Route as ApiRuntimeSqliteDatabasesRouteImport } from './routes/api.runtime.sqlite.databases'
+import { Route as ApiRuntimeSqliteExecRouteImport } from './routes/api.runtime.sqlite.exec'
+import { Route as ApiRuntimeSqliteQueryRouteImport } from './routes/api.runtime.sqlite.query'
+import { Route as ApiRuntimeSqliteTransactionRouteImport } from './routes/api.runtime.sqlite.transaction'
+import { Route as ApiSchedulesIdToggleRouteImport } from './routes/api.schedules.$id.toggle'
+import { Route as ApiSchedulesIdTriggerRouteImport } from './routes/api.schedules.$id.trigger'
+import { Route as ApiSpecCodingSessionsIdRouteImport } from './routes/api.spec-coding.sessions.$id'
+import { Route as ApiWorkflowStartPlanRouteImport } from './routes/api.workflow.start.plan'
 import { Route as ApiAgentsNameChatSessionRouteImport } from './routes/api.agents.$name.chat.session'
-import { Route as ApiRagV1CollectionsIdSearchRouteImport } from './routes/api.rag.v1.collections.$id.search'
-import { Route as ApiRagV1CollectionsIdSchemaRouteImport } from './routes/api.rag.v1.collections.$id.schema'
-import { Route as ApiRagV1CollectionsIdRowsRouteImport } from './routes/api.rag.v1.collections.$id.rows'
-import { Route as ApiRagV1CollectionsIdImportRouteImport } from './routes/api.rag.v1.collections.$id.import'
-import { Route as ApiOfficeOrgVersionsIdRestoreRouteImport } from './routes/api.office.org.versions.$id.restore'
+import { Route as ApiAgentsNameChatStreamRouteImport } from './routes/api.agents.$name.chat.stream'
+import { Route as ApiChannelsIntegrationsIdBootstrapRouteImport } from './routes/api.channels.integrations.$id.bootstrap'
+import { Route as ApiChannelsIntegrationsIdTestSendRouteImport } from './routes/api.channels.integrations.$id.test-send'
+import { Route as ApiChannelsWechatOfficialLoginIdRouteImport } from './routes/api.channels.wechat-official.login.$id'
+import { Route as ApiCollaborationRoomsRoomIdFinishRouteImport } from './routes/api.collaboration.rooms.$roomId.finish'
+import { Route as ApiCollaborationRoomsRoomIdParticipantsRouteImport } from './routes/api.collaboration.rooms.$roomId.participants'
+import { Route as ApiCollaborationRoomsRoomIdSessionRouteImport } from './routes/api.collaboration.rooms.$roomId.session'
+import { Route as ApiMemoryV2WorkflowsRunIdHandoffsRouteImport } from './routes/api.memory-v2.workflows.$runId.handoffs'
+import { Route as ApiModelsProbesIdRunRouteImport } from './routes/api.models.probes.$id.run'
+import { Route as ApiOfficeOrgDraftIdRouteImport } from './routes/api.office.org.draft.$id'
+import { Route as ApiRuntimeSqliteDatabasesNameRouteImport } from './routes/api.runtime.sqlite.databases.$name'
+import { Route as ApiSpecCodingSessionsIdImportPersistedRouteImport } from './routes/api.spec-coding.sessions.$id.import-persisted'
+import { Route as ApiWorkflowHumanQuestionsQuestionIdAnswerRouteImport } from './routes/api.workflow.human-questions.$questionId.answer'
+import { Route as ApiWorkspaceStaticWorkspaceTokenSplatRouteImport } from './routes/api.workspace.static.$workspaceToken.$'
 import { Route as ApiChannelsWechatOfficialLoginIdWaitRouteImport } from './routes/api.channels.wechat-official.login.$id.wait'
-import { Route as ApiRagV1CollectionsIdSourcesSourceIdRouteImport } from './routes/api.rag.v1.collections.$id.sources.$sourceId'
-import { Route as ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRouteImport } from './routes/api.memory-v2.workflows.$runId.handoffs.$handoffId.details'
+import { Route as ApiOfficeOrgVersionsIdRestoreRouteImport } from './routes/api.office.org.versions.$id.restore'
+import { Route as ApiRagV1CollectionsIdImportRouteImport } from './routes/api.rag.v1.collections.$id.import'
+import { Route as ApiRagV1CollectionsIdRowsRouteImport } from './routes/api.rag.v1.collections.$id.rows'
+import { Route as ApiRagV1CollectionsIdSchemaRouteImport } from './routes/api.rag.v1.collections.$id.schema'
+import { Route as ApiRagV1CollectionsIdSearchRouteImport } from './routes/api.rag.v1.collections.$id.search'
 import { Route as ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRouteImport } from './routes/api.collaboration.rooms.$roomId.participants.$agentName.memory'
+import { Route as ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRouteImport } from './routes/api.memory-v2.workflows.$runId.handoffs.$handoffId.details'
+import { Route as ApiRagV1CollectionsIdSourcesSourceIdRouteImport } from './routes/api.rag.v1.collections.$id.sources.$sourceId'
 
-const WorkflowsRoute = WorkflowsRouteImport.update({
-  id: '/workflows',
-  path: '/workflows',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const UsersRoute = UsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SkillsRoute = SkillsRouteImport.update({
-  id: '/skills',
-  path: '/skills',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SetupRoute = SetupRouteImport.update({
-  id: '/setup',
-  path: '/setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SchedulesRoute = SchedulesRouteImport.update({
-  id: '/schedules',
-  path: '/schedules',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RunHistoryRoute = RunHistoryRouteImport.update({
-  id: '/run-history',
-  path: '/run-history',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RegisterRoute = RegisterRouteImport.update({
-  id: '/register',
-  path: '/register',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const OfficeRoute = OfficeRouteImport.update({
-  id: '/office',
-  path: '/office',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NotebookRoute = NotebookRouteImport.update({
-  id: '/notebook',
-  path: '/notebook',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ModelsRoute = ModelsRouteImport.update({
-  id: '/models',
-  path: '/models',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MarketplaceRoute = MarketplaceRouteImport.update({
-  id: '/marketplace',
-  path: '/marketplace',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const KnowledgeRoute = KnowledgeRouteImport.update({
-  id: '/knowledge',
-  path: '/knowledge',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EnginesRoute = EnginesRouteImport.update({
-  id: '/engines',
-  path: '/engines',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DashboardRoute = DashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiDocsRoute = ApiDocsRouteImport.update({
-  id: '/api-docs',
-  path: '/api-docs',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgentsRoute = AgentsRouteImport.update({
-  id: '/agents',
-  path: '/agents',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AccountRoute = AccountRouteImport.update({
@@ -321,9 +241,209 @@ const AccountRoute = AccountRouteImport.update({
   path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AgentsRoute = AgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDocsRoute = ApiDocsRouteImport.update({
+  id: '/api-docs',
+  path: '/api-docs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EnginesRoute = EnginesRouteImport.update({
+  id: '/engines',
+  path: '/engines',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const KnowledgeRoute = KnowledgeRouteImport.update({
+  id: '/knowledge',
+  path: '/knowledge',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MarketplaceRoute = MarketplaceRouteImport.update({
+  id: '/marketplace',
+  path: '/marketplace',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ModelsRoute = ModelsRouteImport.update({
+  id: '/models',
+  path: '/models',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotebookRoute = NotebookRouteImport.update({
+  id: '/notebook',
+  path: '/notebook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OfficeRoute = OfficeRouteImport.update({
+  id: '/office',
+  path: '/office',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RunHistoryRoute = RunHistoryRouteImport.update({
+  id: '/run-history',
+  path: '/run-history',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SchedulesRoute = SchedulesRouteImport.update({
+  id: '/schedules',
+  path: '/schedules',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SkillsRoute = SkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UsersRoute = UsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkflowsRoute = WorkflowsRouteImport.update({
+  id: '/workflows',
+  path: '/workflows',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountChannelsRoute = AccountChannelsRouteImport.update({
+  id: '/channels',
+  path: '/channels',
+  getParentRoute: () => AccountRoute,
+} as any)
+const AccountSystemSettingsRoute = AccountSystemSettingsRouteImport.update({
+  id: '/system-settings',
+  path: '/system-settings',
+  getParentRoute: () => AccountRoute,
+} as any)
+const ApiSplatRoute = ApiSplatRouteImport.update({
+  id: '/api/$',
+  path: '/api/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentsRoute = ApiAgentsRouteImport.update({
+  id: '/api/agents',
+  path: '/api/agents',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiChatRoute = ApiChatRouteImport.update({
+  id: '/api/chat',
+  path: '/api/chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiConfigsRoute = ApiConfigsRouteImport.update({
+  id: '/api/configs',
+  path: '/api/configs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDashboardRoute = ApiDashboardRouteImport.update({
+  id: '/api/dashboard',
+  path: '/api/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiEngineRoute = ApiEngineRouteImport.update({
+  id: '/api/engine',
+  path: '/api/engine',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiEnvRoute = ApiEnvRouteImport.update({
+  id: '/api/env',
+  path: '/api/env',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMcpRoute = ApiMcpRouteImport.update({
+  id: '/api/mcp',
+  path: '/api/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiModelsRoute = ApiModelsRouteImport.update({
+  id: '/api/models',
+  path: '/api/models',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiProcessesRoute = ApiProcessesRouteImport.update({
+  id: '/api/processes',
+  path: '/api/processes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPromptAnalysisRoute = ApiPromptAnalysisRouteImport.update({
+  id: '/api/prompt-analysis',
+  path: '/api/prompt-analysis',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRunHistoryRoute = ApiRunHistoryRouteImport.update({
+  id: '/api/run-history',
+  path: '/api/run-history',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRunsRoute = ApiRunsRouteImport.update({
+  id: '/api/runs',
+  path: '/api/runs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRuntimeAgentsRoute = ApiRuntimeAgentsRouteImport.update({
+  id: '/api/runtime-agents',
+  path: '/api/runtime-agents',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSchedulesRoute = ApiSchedulesRouteImport.update({
+  id: '/api/schedules',
+  path: '/api/schedules',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSkillsRoute = ApiSkillsRouteImport.update({
+  id: '/api/skills',
+  path: '/api/skills',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSystemSettingsRoute = ApiSystemSettingsRouteImport.update({
+  id: '/api/system-settings',
+  path: '/api/system-settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUsersRoute = ApiUsersRouteImport.update({
+  id: '/api/users',
+  path: '/api/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowTemplatesRoute = ApiWorkflowTemplatesRouteImport.update({
+  id: '/api/workflow-templates',
+  path: '/api/workflow-templates',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const KnowledgeLibraryRoute = KnowledgeLibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
+  getParentRoute: () => KnowledgeRoute,
+} as any)
+const LoginResetRoute = LoginResetRouteImport.update({
+  id: '/reset',
+  path: '/reset',
+  getParentRoute: () => LoginRoute,
+} as any)
+const WorkbenchConfigRoute = WorkbenchConfigRouteImport.update({
+  id: '/workbench/$config',
+  path: '/workbench/$config',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WorkspaceMarkdownPreviewRoute =
@@ -332,302 +452,331 @@ const WorkspaceMarkdownPreviewRoute =
     path: '/workspace/markdown-preview',
     getParentRoute: () => rootRouteImport,
   } as any)
-const WorkbenchConfigRoute = WorkbenchConfigRouteImport.update({
-  id: '/workbench/$config',
-  path: '/workbench/$config',
+const ApiAgentsNameRoute = ApiAgentsNameRouteImport.update({
+  id: '/$name',
+  path: '/$name',
+  getParentRoute: () => ApiAgentsRoute,
+} as any)
+const ApiAgentsAiDraftRoute = ApiAgentsAiDraftRouteImport.update({
+  id: '/ai-draft',
+  path: '/ai-draft',
+  getParentRoute: () => ApiAgentsRoute,
+} as any)
+const ApiAgentsArchiveRoute = ApiAgentsArchiveRouteImport.update({
+  id: '/archive',
+  path: '/archive',
+  getParentRoute: () => ApiAgentsRoute,
+} as any)
+const ApiAgentsBatchRoute = ApiAgentsBatchRouteImport.update({
+  id: '/batch',
+  path: '/batch',
+  getParentRoute: () => ApiAgentsRoute,
+} as any)
+const ApiAgentsGenerateAvatarRoute = ApiAgentsGenerateAvatarRouteImport.update({
+  id: '/generate-avatar',
+  path: '/generate-avatar',
+  getParentRoute: () => ApiAgentsRoute,
+} as any)
+const ApiAgoraGuestsRoute = ApiAgoraGuestsRouteImport.update({
+  id: '/api/agora/guests',
+  path: '/api/agora/guests',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LoginResetRoute = LoginResetRouteImport.update({
-  id: '/reset',
-  path: '/reset',
-  getParentRoute: () => LoginRoute,
-} as any)
-const KnowledgeLibraryRoute = KnowledgeLibraryRouteImport.update({
-  id: '/library',
-  path: '/library',
-  getParentRoute: () => KnowledgeRoute,
-} as any)
-const ApiWorkflowTemplatesRoute = ApiWorkflowTemplatesRouteImport.update({
-  id: '/api/workflow-templates',
-  path: '/api/workflow-templates',
+const ApiAgoraWorkspaceRoute = ApiAgoraWorkspaceRouteImport.update({
+  id: '/api/agora/workspace',
+  path: '/api/agora/workspace',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiUsersRoute = ApiUsersRouteImport.update({
-  id: '/api/users',
-  path: '/api/users',
+const ApiAuthEmailRoute = ApiAuthEmailRouteImport.update({
+  id: '/api/auth/email',
+  path: '/api/auth/email',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSystemSettingsRoute = ApiSystemSettingsRouteImport.update({
-  id: '/api/system-settings',
-  path: '/api/system-settings',
+const ApiAuthLoginRoute = ApiAuthLoginRouteImport.update({
+  id: '/api/auth/login',
+  path: '/api/auth/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSkillsRoute = ApiSkillsRouteImport.update({
-  id: '/api/skills',
-  path: '/api/skills',
+const ApiAuthMeRoute = ApiAuthMeRouteImport.update({
+  id: '/api/auth/me',
+  path: '/api/auth/me',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSchedulesRoute = ApiSchedulesRouteImport.update({
-  id: '/api/schedules',
-  path: '/api/schedules',
+const ApiAuthPasswordRoute = ApiAuthPasswordRouteImport.update({
+  id: '/api/auth/password',
+  path: '/api/auth/password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiRuntimeAgentsRoute = ApiRuntimeAgentsRouteImport.update({
-  id: '/api/runtime-agents',
-  path: '/api/runtime-agents',
+const ApiAuthProfileRoute = ApiAuthProfileRouteImport.update({
+  id: '/api/auth/profile',
+  path: '/api/auth/profile',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiRunsRoute = ApiRunsRouteImport.update({
-  id: '/api/runs',
-  path: '/api/runs',
+const ApiAuthRegisterRoute = ApiAuthRegisterRouteImport.update({
+  id: '/api/auth/register',
+  path: '/api/auth/register',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiRunHistoryRoute = ApiRunHistoryRouteImport.update({
-  id: '/api/run-history',
-  path: '/api/run-history',
+const ApiAuthResetPasswordRoute = ApiAuthResetPasswordRouteImport.update({
+  id: '/api/auth/reset-password',
+  path: '/api/auth/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiPromptAnalysisRoute = ApiPromptAnalysisRouteImport.update({
-  id: '/api/prompt-analysis',
-  path: '/api/prompt-analysis',
+const ApiAuthSetupRoute = ApiAuthSetupRouteImport.update({
+  id: '/api/auth/setup',
+  path: '/api/auth/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiProcessesRoute = ApiProcessesRouteImport.update({
-  id: '/api/processes',
-  path: '/api/processes',
+const ApiCangjieRunRoute = ApiCangjieRunRouteImport.update({
+  id: '/api/cangjie/run',
+  path: '/api/cangjie/run',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiModelsRoute = ApiModelsRouteImport.update({
-  id: '/api/models',
-  path: '/api/models',
+const ApiCangjieSdkRoute = ApiCangjieSdkRouteImport.update({
+  id: '/api/cangjie/sdk',
+  path: '/api/cangjie/sdk',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiMcpRoute = ApiMcpRouteImport.update({
-  id: '/api/mcp',
-  path: '/api/mcp',
+const ApiChannelsBindingsRoute = ApiChannelsBindingsRouteImport.update({
+  id: '/api/channels/bindings',
+  path: '/api/channels/bindings',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiEnvRoute = ApiEnvRouteImport.update({
-  id: '/api/env',
-  path: '/api/env',
+const ApiChannelsIntegrationsRoute = ApiChannelsIntegrationsRouteImport.update({
+  id: '/api/channels/integrations',
+  path: '/api/channels/integrations',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiEngineRoute = ApiEngineRouteImport.update({
-  id: '/api/engine',
-  path: '/api/engine',
+const ApiChannelsProvidersRoute = ApiChannelsProvidersRouteImport.update({
+  id: '/api/channels/providers',
+  path: '/api/channels/providers',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiDashboardRoute = ApiDashboardRouteImport.update({
-  id: '/api/dashboard',
-  path: '/api/dashboard',
+const ApiChannelsSetupRoute = ApiChannelsSetupRouteImport.update({
+  id: '/api/channels/setup',
+  path: '/api/channels/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiConfigsRoute = ApiConfigsRouteImport.update({
-  id: '/api/configs',
-  path: '/api/configs',
+const ApiChatCompactRoute = ApiChatCompactRouteImport.update({
+  id: '/compact',
+  path: '/compact',
+  getParentRoute: () => ApiChatRoute,
+} as any)
+const ApiChatDebugPromptRoute = ApiChatDebugPromptRouteImport.update({
+  id: '/debug-prompt',
+  path: '/debug-prompt',
+  getParentRoute: () => ApiChatRoute,
+} as any)
+const ApiChatSessionsRoute = ApiChatSessionsRouteImport.update({
+  id: '/sessions',
+  path: '/sessions',
+  getParentRoute: () => ApiChatRoute,
+} as any)
+const ApiChatSettingsRoute = ApiChatSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => ApiChatRoute,
+} as any)
+const ApiChatStreamRoute = ApiChatStreamRouteImport.update({
+  id: '/stream',
+  path: '/stream',
+  getParentRoute: () => ApiChatRoute,
+} as any)
+const ApiCliRunRoute = ApiCliRunRouteImport.update({
+  id: '/api/cli/run',
+  path: '/api/cli/run',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiChatRoute = ApiChatRouteImport.update({
-  id: '/api/chat',
-  path: '/api/chat',
+const ApiCollaborationMembersRoute = ApiCollaborationMembersRouteImport.update({
+  id: '/api/collaboration/members',
+  path: '/api/collaboration/members',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAgentsRoute = ApiAgentsRouteImport.update({
-  id: '/api/agents',
-  path: '/api/agents',
+const ApiCollaborationRoomsRoute = ApiCollaborationRoomsRouteImport.update({
+  id: '/api/collaboration/rooms',
+  path: '/api/collaboration/rooms',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSplatRoute = ApiSplatRouteImport.update({
-  id: '/api/$',
-  path: '/api/$',
-  getParentRoute: () => rootRouteImport,
+const ApiConfigsFilenameRoute = ApiConfigsFilenameRouteImport.update({
+  id: '/$filename',
+  path: '/$filename',
+  getParentRoute: () => ApiConfigsRoute,
 } as any)
-const AccountSystemSettingsRoute = AccountSystemSettingsRouteImport.update({
-  id: '/system-settings',
-  path: '/system-settings',
-  getParentRoute: () => AccountRoute,
+const ApiConfigsArchiveRoute = ApiConfigsArchiveRouteImport.update({
+  id: '/archive',
+  path: '/archive',
+  getParentRoute: () => ApiConfigsRoute,
 } as any)
-const AccountChannelsRoute = AccountChannelsRouteImport.update({
-  id: '/channels',
-  path: '/channels',
-  getParentRoute: () => AccountRoute,
+const ApiConfigsBatchDeleteRoute = ApiConfigsBatchDeleteRouteImport.update({
+  id: '/batch-delete',
+  path: '/batch-delete',
+  getParentRoute: () => ApiConfigsRoute,
 } as any)
-const ApiWorkspaceUploadRoute = ApiWorkspaceUploadRouteImport.update({
-  id: '/api/workspace/upload',
-  path: '/api/workspace/upload',
-  getParentRoute: () => rootRouteImport,
+const ApiConfigsCreateRoute = ApiConfigsCreateRouteImport.update({
+  id: '/create',
+  path: '/create',
+  getParentRoute: () => ApiConfigsRoute,
 } as any)
-const ApiWorkspaceTreeRoute = ApiWorkspaceTreeRouteImport.update({
-  id: '/api/workspace/tree',
-  path: '/api/workspace/tree',
-  getParentRoute: () => rootRouteImport,
+const ApiConfigsReferencesRoute = ApiConfigsReferencesRouteImport.update({
+  id: '/references',
+  path: '/references',
+  getParentRoute: () => ApiConfigsRoute,
 } as any)
-const ApiWorkspaceRemoteCredentialsRoute =
-  ApiWorkspaceRemoteCredentialsRouteImport.update({
-    id: '/api/workspace/remote-credentials',
-    path: '/api/workspace/remote-credentials',
+const ApiConfigsValidateRoute = ApiConfigsValidateRouteImport.update({
+  id: '/validate',
+  path: '/validate',
+  getParentRoute: () => ApiConfigsRoute,
+} as any)
+const ApiEngineAvailabilityRoute = ApiEngineAvailabilityRouteImport.update({
+  id: '/availability',
+  path: '/availability',
+  getParentRoute: () => ApiEngineRoute,
+} as any)
+const ApiEngineCommandsRoute = ApiEngineCommandsRouteImport.update({
+  id: '/commands',
+  path: '/commands',
+  getParentRoute: () => ApiEngineRoute,
+} as any)
+const ApiEngineModelsRoute = ApiEngineModelsRouteImport.update({
+  id: '/models',
+  path: '/models',
+  getParentRoute: () => ApiEngineRoute,
+} as any)
+const ApiMarketplaceCategoriesRoute =
+  ApiMarketplaceCategoriesRouteImport.update({
+    id: '/api/marketplace/categories',
+    path: '/api/marketplace/categories',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiWorkspaceManageRoute = ApiWorkspaceManageRouteImport.update({
-  id: '/api/workspace/manage',
-  path: '/api/workspace/manage',
+const ApiMarketplaceInstallRoute = ApiMarketplaceInstallRouteImport.update({
+  id: '/api/marketplace/install',
+  path: '/api/marketplace/install',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkspaceGitDiffRoute = ApiWorkspaceGitDiffRouteImport.update({
-  id: '/api/workspace/git-diff',
-  path: '/api/workspace/git-diff',
+const ApiMarketplaceSearchRoute = ApiMarketplaceSearchRouteImport.update({
+  id: '/api/marketplace/search',
+  path: '/api/marketplace/search',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkspaceGitBrowserRoute = ApiWorkspaceGitBrowserRouteImport.update({
-  id: '/api/workspace/git-browser',
-  path: '/api/workspace/git-browser',
+const ApiMcpTestRoute = ApiMcpTestRouteImport.update({
+  id: '/test',
+  path: '/test',
+  getParentRoute: () => ApiMcpRoute,
+} as any)
+const ApiMemoryV2DiagnosticsRoute = ApiMemoryV2DiagnosticsRouteImport.update({
+  id: '/api/memory-v2/diagnostics',
+  path: '/api/memory-v2/diagnostics',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkspaceFileRoute = ApiWorkspaceFileRouteImport.update({
-  id: '/api/workspace/file',
-  path: '/api/workspace/file',
+const ApiMemoryV2GovernanceRoute = ApiMemoryV2GovernanceRouteImport.update({
+  id: '/api/memory-v2/governance',
+  path: '/api/memory-v2/governance',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkspaceDownloadRoute = ApiWorkspaceDownloadRouteImport.update({
-  id: '/api/workspace/download',
-  path: '/api/workspace/download',
+const ApiModelsDiagnosticsRoute = ApiModelsDiagnosticsRouteImport.update({
+  id: '/diagnostics',
+  path: '/diagnostics',
+  getParentRoute: () => ApiModelsRoute,
+} as any)
+const ApiModelsProbesRoute = ApiModelsProbesRouteImport.update({
+  id: '/probes',
+  path: '/probes',
+  getParentRoute: () => ApiModelsRoute,
+} as any)
+const ApiNotebookFileRoute = ApiNotebookFileRouteImport.update({
+  id: '/api/notebook/file',
+  path: '/api/notebook/file',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkflowStopRoute = ApiWorkflowStopRouteImport.update({
-  id: '/api/workflow/stop',
-  path: '/api/workflow/stop',
+const ApiNotebookManageRoute = ApiNotebookManageRouteImport.update({
+  id: '/api/notebook/manage',
+  path: '/api/notebook/manage',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkflowStepLogsRoute = ApiWorkflowStepLogsRouteImport.update({
-  id: '/api/workflow/step-logs',
-  path: '/api/workflow/step-logs',
+const ApiNotebookShareRoute = ApiNotebookShareRouteImport.update({
+  id: '/api/notebook/share',
+  path: '/api/notebook/share',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkflowStatusRoute = ApiWorkflowStatusRouteImport.update({
-  id: '/api/workflow/status',
-  path: '/api/workflow/status',
+const ApiNotebookSnapshotsRoute = ApiNotebookSnapshotsRouteImport.update({
+  id: '/api/notebook/snapshots',
+  path: '/api/notebook/snapshots',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkflowStateHistoryRoute = ApiWorkflowStateHistoryRouteImport.update({
-  id: '/api/workflow/state-history',
-  path: '/api/workflow/state-history',
+const ApiNotebookTreeRoute = ApiNotebookTreeRouteImport.update({
+  id: '/api/notebook/tree',
+  path: '/api/notebook/tree',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkflowStartRoute = ApiWorkflowStartRouteImport.update({
-  id: '/api/workflow/start',
-  path: '/api/workflow/start',
+const ApiOnboardingProgressRoute = ApiOnboardingProgressRouteImport.update({
+  id: '/api/onboarding/progress',
+  path: '/api/onboarding/progress',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiWorkflowSpecMergeRoute = ApiWorkflowSpecMergeRouteImport.update({
-  id: '/api/workflow/spec-merge',
-  path: '/api/workflow/spec-merge',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowSpecImportRoute = ApiWorkflowSpecImportRouteImport.update({
-  id: '/api/workflow/spec-import',
-  path: '/api/workflow/spec-import',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowResumeRoute = ApiWorkflowResumeRouteImport.update({
-  id: '/api/workflow/resume',
-  path: '/api/workflow/resume',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowRerunFromStepRoute =
-  ApiWorkflowRerunFromStepRouteImport.update({
-    id: '/api/workflow/rerun-from-step',
-    path: '/api/workflow/rerun-from-step',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiWorkflowRecallFeedbackRoute =
-  ApiWorkflowRecallFeedbackRouteImport.update({
-    id: '/api/workflow/recall-feedback',
-    path: '/api/workflow/recall-feedback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiWorkflowPreflightRoute = ApiWorkflowPreflightRouteImport.update({
-  id: '/api/workflow/preflight',
-  path: '/api/workflow/preflight',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowIterateRoute = ApiWorkflowIterateRouteImport.update({
-  id: '/api/workflow/iterate',
-  path: '/api/workflow/iterate',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowInjectFeedbackRoute =
-  ApiWorkflowInjectFeedbackRouteImport.update({
-    id: '/api/workflow/inject-feedback',
-    path: '/api/workflow/inject-feedback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiWorkflowHumanQuestionsRoute =
-  ApiWorkflowHumanQuestionsRouteImport.update({
-    id: '/api/workflow/human-questions',
-    path: '/api/workflow/human-questions',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiWorkflowGitDiffRoute = ApiWorkflowGitDiffRouteImport.update({
-  id: '/api/workflow/git-diff',
-  path: '/api/workflow/git-diff',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowForceTransitionRoute =
-  ApiWorkflowForceTransitionRouteImport.update({
-    id: '/api/workflow/force-transition',
-    path: '/api/workflow/force-transition',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiWorkflowForceCompleteRoute =
-  ApiWorkflowForceCompleteRouteImport.update({
-    id: '/api/workflow/force-complete',
-    path: '/api/workflow/force-complete',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiWorkflowEventsRoute = ApiWorkflowEventsRouteImport.update({
-  id: '/api/workflow/events',
-  path: '/api/workflow/events',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowEventLogRoute = ApiWorkflowEventLogRouteImport.update({
-  id: '/api/workflow/event-log',
-  path: '/api/workflow/event-log',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowContextRoute = ApiWorkflowContextRouteImport.update({
-  id: '/api/workflow/context',
-  path: '/api/workflow/context',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowAuditLogRoute = ApiWorkflowAuditLogRouteImport.update({
-  id: '/api/workflow/audit-log',
-  path: '/api/workflow/audit-log',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowApproveRoute = ApiWorkflowApproveRouteImport.update({
-  id: '/api/workflow/approve',
-  path: '/api/workflow/approve',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiWorkflowTemplatesInstantiateRoute =
-  ApiWorkflowTemplatesInstantiateRouteImport.update({
-    id: '/instantiate',
-    path: '/instantiate',
-    getParentRoute: () => ApiWorkflowTemplatesRoute,
-  } as any)
-const ApiUsersShareableRoute = ApiUsersShareableRouteImport.update({
-  id: '/shareable',
-  path: '/shareable',
-  getParentRoute: () => ApiUsersRoute,
-} as any)
-const ApiUsersIdRoute = ApiUsersIdRouteImport.update({
+const ApiProcessesIdRoute = ApiProcessesIdRouteImport.update({
   id: '/$id',
   path: '/$id',
-  getParentRoute: () => ApiUsersRoute,
+  getParentRoute: () => ApiProcessesRoute,
 } as any)
-const ApiUploadsImageRoute = ApiUploadsImageRouteImport.update({
-  id: '/api/uploads/image',
-  path: '/api/uploads/image',
+const ApiRagDetailRoute = ApiRagDetailRouteImport.update({
+  id: '/api/rag/detail',
+  path: '/api/rag/detail',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRagDocumentsRoute = ApiRagDocumentsRouteImport.update({
+  id: '/api/rag/documents',
+  path: '/api/rag/documents',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRagImportRoute = ApiRagImportRouteImport.update({
+  id: '/api/rag/import',
+  path: '/api/rag/import',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRagKnowledgeBasesRoute = ApiRagKnowledgeBasesRouteImport.update({
+  id: '/api/rag/knowledge-bases',
+  path: '/api/rag/knowledge-bases',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRagSearchRoute = ApiRagSearchRouteImport.update({
+  id: '/api/rag/search',
+  path: '/api/rag/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRunsIdRoute = ApiRunsIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiRunsRoute,
+} as any)
+const ApiRunsBatchRoute = ApiRunsBatchRouteImport.update({
+  id: '/batch',
+  path: '/batch',
+  getParentRoute: () => ApiRunsRoute,
+} as any)
+const ApiSchedulesIdRoute = ApiSchedulesIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiSchedulesRoute,
+} as any)
+const ApiSidebarPluginsPreferencesRoute =
+  ApiSidebarPluginsPreferencesRouteImport.update({
+    id: '/api/sidebar-plugins/preferences',
+    path: '/api/sidebar-plugins/preferences',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiSpecCodingAiDraftRoute = ApiSpecCodingAiDraftRouteImport.update({
+  id: '/api/spec-coding/ai-draft',
+  path: '/api/spec-coding/ai-draft',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSpecCodingQualityRoute = ApiSpecCodingQualityRouteImport.update({
+  id: '/api/spec-coding/quality',
+  path: '/api/spec-coding/quality',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSpecCodingSessionsRoute = ApiSpecCodingSessionsRouteImport.update({
+  id: '/api/spec-coding/sessions',
+  path: '/api/spec-coding/sessions',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSpecCodingValidatePersistedRootRoute =
@@ -636,564 +785,224 @@ const ApiSpecCodingValidatePersistedRootRoute =
     path: '/api/spec-coding/validate-persisted-root',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiSpecCodingSessionsRoute = ApiSpecCodingSessionsRouteImport.update({
-  id: '/api/spec-coding/sessions',
-  path: '/api/spec-coding/sessions',
+const ApiUploadsImageRoute = ApiUploadsImageRouteImport.update({
+  id: '/api/uploads/image',
+  path: '/api/uploads/image',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSpecCodingQualityRoute = ApiSpecCodingQualityRouteImport.update({
-  id: '/api/spec-coding/quality',
-  path: '/api/spec-coding/quality',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiSpecCodingAiDraftRoute = ApiSpecCodingAiDraftRouteImport.update({
-  id: '/api/spec-coding/ai-draft',
-  path: '/api/spec-coding/ai-draft',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiSidebarPluginsPreferencesRoute =
-  ApiSidebarPluginsPreferencesRouteImport.update({
-    id: '/api/sidebar-plugins/preferences',
-    path: '/api/sidebar-plugins/preferences',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiSchedulesIdRoute = ApiSchedulesIdRouteImport.update({
+const ApiUsersIdRoute = ApiUsersIdRouteImport.update({
   id: '/$id',
   path: '/$id',
-  getParentRoute: () => ApiSchedulesRoute,
+  getParentRoute: () => ApiUsersRoute,
 } as any)
-const ApiRunsBatchRoute = ApiRunsBatchRouteImport.update({
-  id: '/batch',
-  path: '/batch',
-  getParentRoute: () => ApiRunsRoute,
+const ApiUsersShareableRoute = ApiUsersShareableRouteImport.update({
+  id: '/shareable',
+  path: '/shareable',
+  getParentRoute: () => ApiUsersRoute,
 } as any)
-const ApiRunsIdRoute = ApiRunsIdRouteImport.update({
+const ApiWorkflowTemplatesInstantiateRoute =
+  ApiWorkflowTemplatesInstantiateRouteImport.update({
+    id: '/instantiate',
+    path: '/instantiate',
+    getParentRoute: () => ApiWorkflowTemplatesRoute,
+  } as any)
+const ApiWorkflowApproveRoute = ApiWorkflowApproveRouteImport.update({
+  id: '/api/workflow/approve',
+  path: '/api/workflow/approve',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowAuditLogRoute = ApiWorkflowAuditLogRouteImport.update({
+  id: '/api/workflow/audit-log',
+  path: '/api/workflow/audit-log',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowContextRoute = ApiWorkflowContextRouteImport.update({
+  id: '/api/workflow/context',
+  path: '/api/workflow/context',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowEventLogRoute = ApiWorkflowEventLogRouteImport.update({
+  id: '/api/workflow/event-log',
+  path: '/api/workflow/event-log',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowEventsRoute = ApiWorkflowEventsRouteImport.update({
+  id: '/api/workflow/events',
+  path: '/api/workflow/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowForceCompleteRoute =
+  ApiWorkflowForceCompleteRouteImport.update({
+    id: '/api/workflow/force-complete',
+    path: '/api/workflow/force-complete',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkflowForceTransitionRoute =
+  ApiWorkflowForceTransitionRouteImport.update({
+    id: '/api/workflow/force-transition',
+    path: '/api/workflow/force-transition',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkflowGitDiffRoute = ApiWorkflowGitDiffRouteImport.update({
+  id: '/api/workflow/git-diff',
+  path: '/api/workflow/git-diff',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowHumanQuestionsRoute =
+  ApiWorkflowHumanQuestionsRouteImport.update({
+    id: '/api/workflow/human-questions',
+    path: '/api/workflow/human-questions',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkflowInjectFeedbackRoute =
+  ApiWorkflowInjectFeedbackRouteImport.update({
+    id: '/api/workflow/inject-feedback',
+    path: '/api/workflow/inject-feedback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkflowIterateRoute = ApiWorkflowIterateRouteImport.update({
+  id: '/api/workflow/iterate',
+  path: '/api/workflow/iterate',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowPreflightRoute = ApiWorkflowPreflightRouteImport.update({
+  id: '/api/workflow/preflight',
+  path: '/api/workflow/preflight',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowRecallFeedbackRoute =
+  ApiWorkflowRecallFeedbackRouteImport.update({
+    id: '/api/workflow/recall-feedback',
+    path: '/api/workflow/recall-feedback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkflowRerunFromStepRoute =
+  ApiWorkflowRerunFromStepRouteImport.update({
+    id: '/api/workflow/rerun-from-step',
+    path: '/api/workflow/rerun-from-step',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkflowResumeRoute = ApiWorkflowResumeRouteImport.update({
+  id: '/api/workflow/resume',
+  path: '/api/workflow/resume',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowSpecImportRoute = ApiWorkflowSpecImportRouteImport.update({
+  id: '/api/workflow/spec-import',
+  path: '/api/workflow/spec-import',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowSpecMergeRoute = ApiWorkflowSpecMergeRouteImport.update({
+  id: '/api/workflow/spec-merge',
+  path: '/api/workflow/spec-merge',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowStartRoute = ApiWorkflowStartRouteImport.update({
+  id: '/api/workflow/start',
+  path: '/api/workflow/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowStateHistoryRoute = ApiWorkflowStateHistoryRouteImport.update({
+  id: '/api/workflow/state-history',
+  path: '/api/workflow/state-history',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowStatusRoute = ApiWorkflowStatusRouteImport.update({
+  id: '/api/workflow/status',
+  path: '/api/workflow/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowStepLogsRoute = ApiWorkflowStepLogsRouteImport.update({
+  id: '/api/workflow/step-logs',
+  path: '/api/workflow/step-logs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkflowStopRoute = ApiWorkflowStopRouteImport.update({
+  id: '/api/workflow/stop',
+  path: '/api/workflow/stop',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceDownloadRoute = ApiWorkspaceDownloadRouteImport.update({
+  id: '/api/workspace/download',
+  path: '/api/workspace/download',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceFileRoute = ApiWorkspaceFileRouteImport.update({
+  id: '/api/workspace/file',
+  path: '/api/workspace/file',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceGitBrowserRoute = ApiWorkspaceGitBrowserRouteImport.update({
+  id: '/api/workspace/git-browser',
+  path: '/api/workspace/git-browser',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceGitDiffRoute = ApiWorkspaceGitDiffRouteImport.update({
+  id: '/api/workspace/git-diff',
+  path: '/api/workspace/git-diff',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceManageRoute = ApiWorkspaceManageRouteImport.update({
+  id: '/api/workspace/manage',
+  path: '/api/workspace/manage',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceRemoteCredentialsRoute =
+  ApiWorkspaceRemoteCredentialsRouteImport.update({
+    id: '/api/workspace/remote-credentials',
+    path: '/api/workspace/remote-credentials',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkspaceTreeRoute = ApiWorkspaceTreeRouteImport.update({
+  id: '/api/workspace/tree',
+  path: '/api/workspace/tree',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceUploadRoute = ApiWorkspaceUploadRouteImport.update({
+  id: '/api/workspace/upload',
+  path: '/api/workspace/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentsNameChatRoute = ApiAgentsNameChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
+  getParentRoute: () => ApiAgentsNameRoute,
+} as any)
+const ApiAgentsNameMemoryRoute = ApiAgentsNameMemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
+  getParentRoute: () => ApiAgentsNameRoute,
+} as any)
+const ApiAgentsNameWorkspaceProfileRoute =
+  ApiAgentsNameWorkspaceProfileRouteImport.update({
+    id: '/workspace-profile',
+    path: '/workspace-profile',
+    getParentRoute: () => ApiAgentsNameRoute,
+  } as any)
+const ApiAgoraGuestsIdRoute = ApiAgoraGuestsIdRouteImport.update({
   id: '/$id',
   path: '/$id',
-  getParentRoute: () => ApiRunsRoute,
-} as any)
-const ApiRagSearchRoute = ApiRagSearchRouteImport.update({
-  id: '/api/rag/search',
-  path: '/api/rag/search',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRagKnowledgeBasesRoute = ApiRagKnowledgeBasesRouteImport.update({
-  id: '/api/rag/knowledge-bases',
-  path: '/api/rag/knowledge-bases',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRagImportRoute = ApiRagImportRouteImport.update({
-  id: '/api/rag/import',
-  path: '/api/rag/import',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRagDocumentsRoute = ApiRagDocumentsRouteImport.update({
-  id: '/api/rag/documents',
-  path: '/api/rag/documents',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRagDetailRoute = ApiRagDetailRouteImport.update({
-  id: '/api/rag/detail',
-  path: '/api/rag/detail',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiProcessesIdRoute = ApiProcessesIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => ApiProcessesRoute,
-} as any)
-const ApiOnboardingProgressRoute = ApiOnboardingProgressRouteImport.update({
-  id: '/api/onboarding/progress',
-  path: '/api/onboarding/progress',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiNotebookTreeRoute = ApiNotebookTreeRouteImport.update({
-  id: '/api/notebook/tree',
-  path: '/api/notebook/tree',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiNotebookSnapshotsRoute = ApiNotebookSnapshotsRouteImport.update({
-  id: '/api/notebook/snapshots',
-  path: '/api/notebook/snapshots',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiNotebookShareRoute = ApiNotebookShareRouteImport.update({
-  id: '/api/notebook/share',
-  path: '/api/notebook/share',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiNotebookManageRoute = ApiNotebookManageRouteImport.update({
-  id: '/api/notebook/manage',
-  path: '/api/notebook/manage',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiNotebookFileRoute = ApiNotebookFileRouteImport.update({
-  id: '/api/notebook/file',
-  path: '/api/notebook/file',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiModelsProbesRoute = ApiModelsProbesRouteImport.update({
-  id: '/probes',
-  path: '/probes',
-  getParentRoute: () => ApiModelsRoute,
-} as any)
-const ApiModelsDiagnosticsRoute = ApiModelsDiagnosticsRouteImport.update({
-  id: '/diagnostics',
-  path: '/diagnostics',
-  getParentRoute: () => ApiModelsRoute,
-} as any)
-const ApiMemoryV2GovernanceRoute = ApiMemoryV2GovernanceRouteImport.update({
-  id: '/api/memory-v2/governance',
-  path: '/api/memory-v2/governance',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMemoryV2DiagnosticsRoute = ApiMemoryV2DiagnosticsRouteImport.update({
-  id: '/api/memory-v2/diagnostics',
-  path: '/api/memory-v2/diagnostics',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMcpTestRoute = ApiMcpTestRouteImport.update({
-  id: '/test',
-  path: '/test',
-  getParentRoute: () => ApiMcpRoute,
-} as any)
-const ApiMarketplaceSearchRoute = ApiMarketplaceSearchRouteImport.update({
-  id: '/api/marketplace/search',
-  path: '/api/marketplace/search',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMarketplaceInstallRoute = ApiMarketplaceInstallRouteImport.update({
-  id: '/api/marketplace/install',
-  path: '/api/marketplace/install',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMarketplaceCategoriesRoute =
-  ApiMarketplaceCategoriesRouteImport.update({
-    id: '/api/marketplace/categories',
-    path: '/api/marketplace/categories',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiEngineModelsRoute = ApiEngineModelsRouteImport.update({
-  id: '/models',
-  path: '/models',
-  getParentRoute: () => ApiEngineRoute,
-} as any)
-const ApiEngineCommandsRoute = ApiEngineCommandsRouteImport.update({
-  id: '/commands',
-  path: '/commands',
-  getParentRoute: () => ApiEngineRoute,
-} as any)
-const ApiEngineAvailabilityRoute = ApiEngineAvailabilityRouteImport.update({
-  id: '/availability',
-  path: '/availability',
-  getParentRoute: () => ApiEngineRoute,
-} as any)
-const ApiConfigsValidateRoute = ApiConfigsValidateRouteImport.update({
-  id: '/validate',
-  path: '/validate',
-  getParentRoute: () => ApiConfigsRoute,
-} as any)
-const ApiConfigsReferencesRoute = ApiConfigsReferencesRouteImport.update({
-  id: '/references',
-  path: '/references',
-  getParentRoute: () => ApiConfigsRoute,
-} as any)
-const ApiConfigsCreateRoute = ApiConfigsCreateRouteImport.update({
-  id: '/create',
-  path: '/create',
-  getParentRoute: () => ApiConfigsRoute,
-} as any)
-const ApiConfigsBatchDeleteRoute = ApiConfigsBatchDeleteRouteImport.update({
-  id: '/batch-delete',
-  path: '/batch-delete',
-  getParentRoute: () => ApiConfigsRoute,
-} as any)
-const ApiConfigsArchiveRoute = ApiConfigsArchiveRouteImport.update({
-  id: '/archive',
-  path: '/archive',
-  getParentRoute: () => ApiConfigsRoute,
-} as any)
-const ApiConfigsFilenameRoute = ApiConfigsFilenameRouteImport.update({
-  id: '/$filename',
-  path: '/$filename',
-  getParentRoute: () => ApiConfigsRoute,
-} as any)
-const ApiCollaborationRoomsRoute = ApiCollaborationRoomsRouteImport.update({
-  id: '/api/collaboration/rooms',
-  path: '/api/collaboration/rooms',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiCollaborationMembersRoute = ApiCollaborationMembersRouteImport.update({
-  id: '/api/collaboration/members',
-  path: '/api/collaboration/members',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiCliRunRoute = ApiCliRunRouteImport.update({
-  id: '/api/cli/run',
-  path: '/api/cli/run',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiChatStreamRoute = ApiChatStreamRouteImport.update({
-  id: '/stream',
-  path: '/stream',
-  getParentRoute: () => ApiChatRoute,
-} as any)
-const ApiChatSettingsRoute = ApiChatSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => ApiChatRoute,
-} as any)
-const ApiChatSessionsRoute = ApiChatSessionsRouteImport.update({
-  id: '/sessions',
-  path: '/sessions',
-  getParentRoute: () => ApiChatRoute,
-} as any)
-const ApiChatDebugPromptRoute = ApiChatDebugPromptRouteImport.update({
-  id: '/debug-prompt',
-  path: '/debug-prompt',
-  getParentRoute: () => ApiChatRoute,
-} as any)
-const ApiChatCompactRoute = ApiChatCompactRouteImport.update({
-  id: '/compact',
-  path: '/compact',
-  getParentRoute: () => ApiChatRoute,
-} as any)
-const ApiChannelsSetupRoute = ApiChannelsSetupRouteImport.update({
-  id: '/api/channels/setup',
-  path: '/api/channels/setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiChannelsProvidersRoute = ApiChannelsProvidersRouteImport.update({
-  id: '/api/channels/providers',
-  path: '/api/channels/providers',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiChannelsIntegrationsRoute = ApiChannelsIntegrationsRouteImport.update({
-  id: '/api/channels/integrations',
-  path: '/api/channels/integrations',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiChannelsBindingsRoute = ApiChannelsBindingsRouteImport.update({
-  id: '/api/channels/bindings',
-  path: '/api/channels/bindings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiCangjieSdkRoute = ApiCangjieSdkRouteImport.update({
-  id: '/api/cangjie/sdk',
-  path: '/api/cangjie/sdk',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiCangjieRunRoute = ApiCangjieRunRouteImport.update({
-  id: '/api/cangjie/run',
-  path: '/api/cangjie/run',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthSetupRoute = ApiAuthSetupRouteImport.update({
-  id: '/api/auth/setup',
-  path: '/api/auth/setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthResetPasswordRoute = ApiAuthResetPasswordRouteImport.update({
-  id: '/api/auth/reset-password',
-  path: '/api/auth/reset-password',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthRegisterRoute = ApiAuthRegisterRouteImport.update({
-  id: '/api/auth/register',
-  path: '/api/auth/register',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthProfileRoute = ApiAuthProfileRouteImport.update({
-  id: '/api/auth/profile',
-  path: '/api/auth/profile',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthPasswordRoute = ApiAuthPasswordRouteImport.update({
-  id: '/api/auth/password',
-  path: '/api/auth/password',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthMeRoute = ApiAuthMeRouteImport.update({
-  id: '/api/auth/me',
-  path: '/api/auth/me',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthLoginRoute = ApiAuthLoginRouteImport.update({
-  id: '/api/auth/login',
-  path: '/api/auth/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthEmailRoute = ApiAuthEmailRouteImport.update({
-  id: '/api/auth/email',
-  path: '/api/auth/email',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAgoraWorkspaceRoute = ApiAgoraWorkspaceRouteImport.update({
-  id: '/api/agora/workspace',
-  path: '/api/agora/workspace',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAgoraGuestsRoute = ApiAgoraGuestsRouteImport.update({
-  id: '/api/agora/guests',
-  path: '/api/agora/guests',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAgentsGenerateAvatarRoute = ApiAgentsGenerateAvatarRouteImport.update({
-  id: '/generate-avatar',
-  path: '/generate-avatar',
-  getParentRoute: () => ApiAgentsRoute,
-} as any)
-const ApiAgentsBatchRoute = ApiAgentsBatchRouteImport.update({
-  id: '/batch',
-  path: '/batch',
-  getParentRoute: () => ApiAgentsRoute,
-} as any)
-const ApiAgentsArchiveRoute = ApiAgentsArchiveRouteImport.update({
-  id: '/archive',
-  path: '/archive',
-  getParentRoute: () => ApiAgentsRoute,
-} as any)
-const ApiAgentsAiDraftRoute = ApiAgentsAiDraftRouteImport.update({
-  id: '/ai-draft',
-  path: '/ai-draft',
-  getParentRoute: () => ApiAgentsRoute,
-} as any)
-const ApiAgentsNameRoute = ApiAgentsNameRouteImport.update({
-  id: '/$name',
-  path: '/$name',
-  getParentRoute: () => ApiAgentsRoute,
-} as any)
-const ApiWorkflowStartPlanRoute = ApiWorkflowStartPlanRouteImport.update({
-  id: '/plan',
-  path: '/plan',
-  getParentRoute: () => ApiWorkflowStartRoute,
-} as any)
-const ApiSpecCodingSessionsIdRoute = ApiSpecCodingSessionsIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => ApiSpecCodingSessionsRoute,
-} as any)
-const ApiSchedulesIdTriggerRoute = ApiSchedulesIdTriggerRouteImport.update({
-  id: '/trigger',
-  path: '/trigger',
-  getParentRoute: () => ApiSchedulesIdRoute,
-} as any)
-const ApiSchedulesIdToggleRoute = ApiSchedulesIdToggleRouteImport.update({
-  id: '/toggle',
-  path: '/toggle',
-  getParentRoute: () => ApiSchedulesIdRoute,
-} as any)
-const ApiRuntimeSqliteTransactionRoute =
-  ApiRuntimeSqliteTransactionRouteImport.update({
-    id: '/api/runtime/sqlite/transaction',
-    path: '/api/runtime/sqlite/transaction',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiRuntimeSqliteQueryRoute = ApiRuntimeSqliteQueryRouteImport.update({
-  id: '/api/runtime/sqlite/query',
-  path: '/api/runtime/sqlite/query',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRuntimeSqliteExecRoute = ApiRuntimeSqliteExecRouteImport.update({
-  id: '/api/runtime/sqlite/exec',
-  path: '/api/runtime/sqlite/exec',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRuntimeSqliteDatabasesRoute =
-  ApiRuntimeSqliteDatabasesRouteImport.update({
-    id: '/api/runtime/sqlite/databases',
-    path: '/api/runtime/sqlite/databases',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiRuntimeRagSearchRoute = ApiRuntimeRagSearchRouteImport.update({
-  id: '/api/runtime/rag/search',
-  path: '/api/runtime/rag/search',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRuntimeRagKnowledgeBasesRoute =
-  ApiRuntimeRagKnowledgeBasesRouteImport.update({
-    id: '/api/runtime/rag/knowledge-bases',
-    path: '/api/runtime/rag/knowledge-bases',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiRunsByConfigConfigRoute = ApiRunsByConfigConfigRouteImport.update({
-  id: '/by-config/$config',
-  path: '/by-config/$config',
-  getParentRoute: () => ApiRunsRoute,
-} as any)
-const ApiRunsIdStreamRoute = ApiRunsIdStreamRouteImport.update({
-  id: '/stream',
-  path: '/stream',
-  getParentRoute: () => ApiRunsIdRoute,
-} as any)
-const ApiRunsIdOutputsRoute = ApiRunsIdOutputsRouteImport.update({
-  id: '/outputs',
-  path: '/outputs',
-  getParentRoute: () => ApiRunsIdRoute,
-} as any)
-const ApiRunsIdDocumentsRoute = ApiRunsIdDocumentsRouteImport.update({
-  id: '/documents',
-  path: '/documents',
-  getParentRoute: () => ApiRunsIdRoute,
-} as any)
-const ApiRunsIdDetailRoute = ApiRunsIdDetailRouteImport.update({
-  id: '/detail',
-  path: '/detail',
-  getParentRoute: () => ApiRunsIdRoute,
-} as any)
-const ApiRunsIdDeleteRoute = ApiRunsIdDeleteRouteImport.update({
-  id: '/delete',
-  path: '/delete',
-  getParentRoute: () => ApiRunsIdRoute,
-} as any)
-const ApiRagV1CollectionsRoute = ApiRagV1CollectionsRouteImport.update({
-  id: '/api/rag/v1/collections',
-  path: '/api/rag/v1/collections',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOnboardingAdminProgressRoute =
-  ApiOnboardingAdminProgressRouteImport.update({
-    id: '/api/onboarding/admin/progress',
-    path: '/api/onboarding/admin/progress',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiOfficeTeamPlanRoute = ApiOfficeTeamPlanRouteImport.update({
-  id: '/api/office/team/plan',
-  path: '/api/office/team/plan',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOfficeTeamCurrentRoute = ApiOfficeTeamCurrentRouteImport.update({
-  id: '/api/office/team/current',
-  path: '/api/office/team/current',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOfficeTeamApplyRoute = ApiOfficeTeamApplyRouteImport.update({
-  id: '/api/office/team/apply',
-  path: '/api/office/team/apply',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOfficeOrgVersionsRoute = ApiOfficeOrgVersionsRouteImport.update({
-  id: '/api/office/org/versions',
-  path: '/api/office/org/versions',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOfficeOrgDraftRoute = ApiOfficeOrgDraftRouteImport.update({
-  id: '/api/office/org/draft',
-  path: '/api/office/org/draft',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOfficeOrgCurrentRoute = ApiOfficeOrgCurrentRouteImport.update({
-  id: '/api/office/org/current',
-  path: '/api/office/org/current',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOfficeOrgClarifyRoute = ApiOfficeOrgClarifyRouteImport.update({
-  id: '/api/office/org/clarify',
-  path: '/api/office/org/clarify',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOfficeOrgApplyRoute = ApiOfficeOrgApplyRouteImport.update({
-  id: '/api/office/org/apply',
-  path: '/api/office/org/apply',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiModelsProbesRunRoute = ApiModelsProbesRunRouteImport.update({
-  id: '/run',
-  path: '/run',
-  getParentRoute: () => ApiModelsProbesRoute,
-} as any)
-const ApiModelsProbesQueryRoute = ApiModelsProbesQueryRouteImport.update({
-  id: '/query',
-  path: '/query',
-  getParentRoute: () => ApiModelsProbesRoute,
-} as any)
-const ApiModelsProbesBatchRoute = ApiModelsProbesBatchRouteImport.update({
-  id: '/batch',
-  path: '/batch',
-  getParentRoute: () => ApiModelsProbesRoute,
-} as any)
-const ApiModelsProbesIdRoute = ApiModelsProbesIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => ApiModelsProbesRoute,
-} as any)
-const ApiModelsDiagnosticsStreamRoute =
-  ApiModelsDiagnosticsStreamRouteImport.update({
-    id: '/stream',
-    path: '/stream',
-    getParentRoute: () => ApiModelsDiagnosticsRoute,
-  } as any)
-const ApiMemoryV2GovernanceDetailsRoute =
-  ApiMemoryV2GovernanceDetailsRouteImport.update({
-    id: '/details',
-    path: '/details',
-    getParentRoute: () => ApiMemoryV2GovernanceRoute,
-  } as any)
-const ApiMemoryV2GovernanceActionsRoute =
-  ApiMemoryV2GovernanceActionsRouteImport.update({
-    id: '/actions',
-    path: '/actions',
-    getParentRoute: () => ApiMemoryV2GovernanceRoute,
-  } as any)
-const ApiEngineModelsSmokeRoute = ApiEngineModelsSmokeRouteImport.update({
-  id: '/smoke',
-  path: '/smoke',
-  getParentRoute: () => ApiEngineModelsRoute,
-} as any)
-const ApiConfigsFilenameCopyRoute = ApiConfigsFilenameCopyRouteImport.update({
-  id: '/copy',
-  path: '/copy',
-  getParentRoute: () => ApiConfigsFilenameRoute,
-} as any)
-const ApiCollaborationRoomsDirectRoute =
-  ApiCollaborationRoomsDirectRouteImport.update({
-    id: '/direct',
-    path: '/direct',
-    getParentRoute: () => ApiCollaborationRoomsRoute,
-  } as any)
-const ApiCollaborationRoomsRoomIdRoute =
-  ApiCollaborationRoomsRoomIdRouteImport.update({
-    id: '/$roomId',
-    path: '/$roomId',
-    getParentRoute: () => ApiCollaborationRoomsRoute,
-  } as any)
-const ApiChatStreamRecoverRoute = ApiChatStreamRecoverRouteImport.update({
-  id: '/recover',
-  path: '/recover',
-  getParentRoute: () => ApiChatStreamRoute,
-} as any)
-const ApiChatStreamActiveRoute = ApiChatStreamActiveRouteImport.update({
-  id: '/active',
-  path: '/active',
-  getParentRoute: () => ApiChatStreamRoute,
-} as any)
-const ApiChatSessionsBatchDeleteRoute =
-  ApiChatSessionsBatchDeleteRouteImport.update({
-    id: '/batch-delete',
-    path: '/batch-delete',
-    getParentRoute: () => ApiChatSessionsRoute,
-  } as any)
-const ApiChatSessionsIdRoute = ApiChatSessionsIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => ApiChatSessionsRoute,
-} as any)
-const ApiChannelsWechatOfficialQrcodeImageRoute =
-  ApiChannelsWechatOfficialQrcodeImageRouteImport.update({
-    id: '/api/channels/wechat-official/qrcode-image',
-    path: '/api/channels/wechat-official/qrcode-image',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiChannelsWechatOfficialLoginRoute =
-  ApiChannelsWechatOfficialLoginRouteImport.update({
-    id: '/api/channels/wechat-official/login',
-    path: '/api/channels/wechat-official/login',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiChannelsWechatOfficialBridgeRoute =
-  ApiChannelsWechatOfficialBridgeRouteImport.update({
-    id: '/api/channels/wechat-official/bridge',
-    path: '/api/channels/wechat-official/bridge',
+  getParentRoute: () => ApiAgoraGuestsRoute,
+} as any)
+const ApiCangjieSdkActivateRoute = ApiCangjieSdkActivateRouteImport.update({
+  id: '/activate',
+  path: '/activate',
+  getParentRoute: () => ApiCangjieSdkRoute,
+} as any)
+const ApiCangjieSdkInstallRoute = ApiCangjieSdkInstallRouteImport.update({
+  id: '/install',
+  path: '/install',
+  getParentRoute: () => ApiCangjieSdkRoute,
+} as any)
+const ApiCangjieSdkRemoveRoute = ApiCangjieSdkRemoveRouteImport.update({
+  id: '/remove',
+  path: '/remove',
+  getParentRoute: () => ApiCangjieSdkRoute,
+} as any)
+const ApiChannelsInboundIntegrationIdRoute =
+  ApiChannelsInboundIntegrationIdRouteImport.update({
+    id: '/api/channels/inbound/$integrationId',
+    path: '/api/channels/inbound/$integrationId',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiChannelsIntegrationsIdRoute =
@@ -1202,92 +1011,272 @@ const ApiChannelsIntegrationsIdRoute =
     path: '/$id',
     getParentRoute: () => ApiChannelsIntegrationsRoute,
   } as any)
-const ApiChannelsInboundIntegrationIdRoute =
-  ApiChannelsInboundIntegrationIdRouteImport.update({
-    id: '/api/channels/inbound/$integrationId',
-    path: '/api/channels/inbound/$integrationId',
+const ApiChannelsWechatOfficialBridgeRoute =
+  ApiChannelsWechatOfficialBridgeRouteImport.update({
+    id: '/api/channels/wechat-official/bridge',
+    path: '/api/channels/wechat-official/bridge',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiCangjieSdkRemoveRoute = ApiCangjieSdkRemoveRouteImport.update({
-  id: '/remove',
-  path: '/remove',
-  getParentRoute: () => ApiCangjieSdkRoute,
-} as any)
-const ApiCangjieSdkInstallRoute = ApiCangjieSdkInstallRouteImport.update({
-  id: '/install',
-  path: '/install',
-  getParentRoute: () => ApiCangjieSdkRoute,
-} as any)
-const ApiCangjieSdkActivateRoute = ApiCangjieSdkActivateRouteImport.update({
-  id: '/activate',
-  path: '/activate',
-  getParentRoute: () => ApiCangjieSdkRoute,
-} as any)
-const ApiAgoraGuestsIdRoute = ApiAgoraGuestsIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => ApiAgoraGuestsRoute,
-} as any)
-const ApiAgentsNameWorkspaceProfileRoute =
-  ApiAgentsNameWorkspaceProfileRouteImport.update({
-    id: '/workspace-profile',
-    path: '/workspace-profile',
-    getParentRoute: () => ApiAgentsNameRoute,
-  } as any)
-const ApiAgentsNameMemoryRoute = ApiAgentsNameMemoryRouteImport.update({
-  id: '/memory',
-  path: '/memory',
-  getParentRoute: () => ApiAgentsNameRoute,
-} as any)
-const ApiAgentsNameChatRoute = ApiAgentsNameChatRouteImport.update({
-  id: '/chat',
-  path: '/chat',
-  getParentRoute: () => ApiAgentsNameRoute,
-} as any)
-const ApiWorkspaceStaticWorkspaceTokenSplatRoute =
-  ApiWorkspaceStaticWorkspaceTokenSplatRouteImport.update({
-    id: '/api/workspace/static/$workspaceToken/$',
-    path: '/api/workspace/static/$workspaceToken/$',
+const ApiChannelsWechatOfficialLoginRoute =
+  ApiChannelsWechatOfficialLoginRouteImport.update({
+    id: '/api/channels/wechat-official/login',
+    path: '/api/channels/wechat-official/login',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiWorkflowHumanQuestionsQuestionIdAnswerRoute =
-  ApiWorkflowHumanQuestionsQuestionIdAnswerRouteImport.update({
-    id: '/$questionId/answer',
-    path: '/$questionId/answer',
-    getParentRoute: () => ApiWorkflowHumanQuestionsRoute,
+const ApiChannelsWechatOfficialQrcodeImageRoute =
+  ApiChannelsWechatOfficialQrcodeImageRouteImport.update({
+    id: '/api/channels/wechat-official/qrcode-image',
+    path: '/api/channels/wechat-official/qrcode-image',
+    getParentRoute: () => rootRouteImport,
   } as any)
-const ApiSpecCodingSessionsIdImportPersistedRoute =
-  ApiSpecCodingSessionsIdImportPersistedRouteImport.update({
-    id: '/import-persisted',
-    path: '/import-persisted',
-    getParentRoute: () => ApiSpecCodingSessionsIdRoute,
-  } as any)
-const ApiRuntimeSqliteDatabasesNameRoute =
-  ApiRuntimeSqliteDatabasesNameRouteImport.update({
-    id: '/$name',
-    path: '/$name',
-    getParentRoute: () => ApiRuntimeSqliteDatabasesRoute,
-  } as any)
-const ApiOfficeOrgDraftIdRoute = ApiOfficeOrgDraftIdRouteImport.update({
+const ApiChatSessionsIdRoute = ApiChatSessionsIdRouteImport.update({
   id: '/$id',
   path: '/$id',
-  getParentRoute: () => ApiOfficeOrgDraftRoute,
+  getParentRoute: () => ApiChatSessionsRoute,
 } as any)
-const ApiModelsProbesIdRunRoute = ApiModelsProbesIdRunRouteImport.update({
+const ApiChatSessionsBatchDeleteRoute =
+  ApiChatSessionsBatchDeleteRouteImport.update({
+    id: '/batch-delete',
+    path: '/batch-delete',
+    getParentRoute: () => ApiChatSessionsRoute,
+  } as any)
+const ApiChatStreamActiveRoute = ApiChatStreamActiveRouteImport.update({
+  id: '/active',
+  path: '/active',
+  getParentRoute: () => ApiChatStreamRoute,
+} as any)
+const ApiChatStreamRecoverRoute = ApiChatStreamRecoverRouteImport.update({
+  id: '/recover',
+  path: '/recover',
+  getParentRoute: () => ApiChatStreamRoute,
+} as any)
+const ApiCollaborationRoomsRoomIdRoute =
+  ApiCollaborationRoomsRoomIdRouteImport.update({
+    id: '/$roomId',
+    path: '/$roomId',
+    getParentRoute: () => ApiCollaborationRoomsRoute,
+  } as any)
+const ApiCollaborationRoomsDirectRoute =
+  ApiCollaborationRoomsDirectRouteImport.update({
+    id: '/direct',
+    path: '/direct',
+    getParentRoute: () => ApiCollaborationRoomsRoute,
+  } as any)
+const ApiConfigsFilenameCopyRoute = ApiConfigsFilenameCopyRouteImport.update({
+  id: '/copy',
+  path: '/copy',
+  getParentRoute: () => ApiConfigsFilenameRoute,
+} as any)
+const ApiEngineModelsSmokeRoute = ApiEngineModelsSmokeRouteImport.update({
+  id: '/smoke',
+  path: '/smoke',
+  getParentRoute: () => ApiEngineModelsRoute,
+} as any)
+const ApiMemoryV2GovernanceActionsRoute =
+  ApiMemoryV2GovernanceActionsRouteImport.update({
+    id: '/actions',
+    path: '/actions',
+    getParentRoute: () => ApiMemoryV2GovernanceRoute,
+  } as any)
+const ApiMemoryV2GovernanceDetailsRoute =
+  ApiMemoryV2GovernanceDetailsRouteImport.update({
+    id: '/details',
+    path: '/details',
+    getParentRoute: () => ApiMemoryV2GovernanceRoute,
+  } as any)
+const ApiModelsDiagnosticsStreamRoute =
+  ApiModelsDiagnosticsStreamRouteImport.update({
+    id: '/stream',
+    path: '/stream',
+    getParentRoute: () => ApiModelsDiagnosticsRoute,
+  } as any)
+const ApiModelsProbesIdRoute = ApiModelsProbesIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiModelsProbesRoute,
+} as any)
+const ApiModelsProbesBatchRoute = ApiModelsProbesBatchRouteImport.update({
+  id: '/batch',
+  path: '/batch',
+  getParentRoute: () => ApiModelsProbesRoute,
+} as any)
+const ApiModelsProbesQueryRoute = ApiModelsProbesQueryRouteImport.update({
+  id: '/query',
+  path: '/query',
+  getParentRoute: () => ApiModelsProbesRoute,
+} as any)
+const ApiModelsProbesRunRoute = ApiModelsProbesRunRouteImport.update({
   id: '/run',
   path: '/run',
-  getParentRoute: () => ApiModelsProbesIdRoute,
+  getParentRoute: () => ApiModelsProbesRoute,
 } as any)
-const ApiMemoryV2WorkflowsRunIdHandoffsRoute =
-  ApiMemoryV2WorkflowsRunIdHandoffsRouteImport.update({
-    id: '/api/memory-v2/workflows/$runId/handoffs',
-    path: '/api/memory-v2/workflows/$runId/handoffs',
+const ApiOfficeOrgApplyRoute = ApiOfficeOrgApplyRouteImport.update({
+  id: '/api/office/org/apply',
+  path: '/api/office/org/apply',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfficeOrgClarifyRoute = ApiOfficeOrgClarifyRouteImport.update({
+  id: '/api/office/org/clarify',
+  path: '/api/office/org/clarify',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfficeOrgCurrentRoute = ApiOfficeOrgCurrentRouteImport.update({
+  id: '/api/office/org/current',
+  path: '/api/office/org/current',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfficeOrgDraftRoute = ApiOfficeOrgDraftRouteImport.update({
+  id: '/api/office/org/draft',
+  path: '/api/office/org/draft',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfficeOrgVersionsRoute = ApiOfficeOrgVersionsRouteImport.update({
+  id: '/api/office/org/versions',
+  path: '/api/office/org/versions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfficeTeamApplyRoute = ApiOfficeTeamApplyRouteImport.update({
+  id: '/api/office/team/apply',
+  path: '/api/office/team/apply',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfficeTeamCurrentRoute = ApiOfficeTeamCurrentRouteImport.update({
+  id: '/api/office/team/current',
+  path: '/api/office/team/current',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfficeTeamPlanRoute = ApiOfficeTeamPlanRouteImport.update({
+  id: '/api/office/team/plan',
+  path: '/api/office/team/plan',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOnboardingAdminProgressRoute =
+  ApiOnboardingAdminProgressRouteImport.update({
+    id: '/api/onboarding/admin/progress',
+    path: '/api/onboarding/admin/progress',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiCollaborationRoomsRoomIdSessionRoute =
-  ApiCollaborationRoomsRoomIdSessionRouteImport.update({
+const ApiRagV1CollectionsRoute = ApiRagV1CollectionsRouteImport.update({
+  id: '/api/rag/v1/collections',
+  path: '/api/rag/v1/collections',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRunsIdDeleteRoute = ApiRunsIdDeleteRouteImport.update({
+  id: '/delete',
+  path: '/delete',
+  getParentRoute: () => ApiRunsIdRoute,
+} as any)
+const ApiRunsIdDetailRoute = ApiRunsIdDetailRouteImport.update({
+  id: '/detail',
+  path: '/detail',
+  getParentRoute: () => ApiRunsIdRoute,
+} as any)
+const ApiRunsIdDocumentsRoute = ApiRunsIdDocumentsRouteImport.update({
+  id: '/documents',
+  path: '/documents',
+  getParentRoute: () => ApiRunsIdRoute,
+} as any)
+const ApiRunsIdOutputsRoute = ApiRunsIdOutputsRouteImport.update({
+  id: '/outputs',
+  path: '/outputs',
+  getParentRoute: () => ApiRunsIdRoute,
+} as any)
+const ApiRunsIdStreamRoute = ApiRunsIdStreamRouteImport.update({
+  id: '/stream',
+  path: '/stream',
+  getParentRoute: () => ApiRunsIdRoute,
+} as any)
+const ApiRunsByConfigConfigRoute = ApiRunsByConfigConfigRouteImport.update({
+  id: '/by-config/$config',
+  path: '/by-config/$config',
+  getParentRoute: () => ApiRunsRoute,
+} as any)
+const ApiRuntimeRagKnowledgeBasesRoute =
+  ApiRuntimeRagKnowledgeBasesRouteImport.update({
+    id: '/api/runtime/rag/knowledge-bases',
+    path: '/api/runtime/rag/knowledge-bases',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiRuntimeRagSearchRoute = ApiRuntimeRagSearchRouteImport.update({
+  id: '/api/runtime/rag/search',
+  path: '/api/runtime/rag/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRuntimeSqliteDatabasesRoute =
+  ApiRuntimeSqliteDatabasesRouteImport.update({
+    id: '/api/runtime/sqlite/databases',
+    path: '/api/runtime/sqlite/databases',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiRuntimeSqliteExecRoute = ApiRuntimeSqliteExecRouteImport.update({
+  id: '/api/runtime/sqlite/exec',
+  path: '/api/runtime/sqlite/exec',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRuntimeSqliteQueryRoute = ApiRuntimeSqliteQueryRouteImport.update({
+  id: '/api/runtime/sqlite/query',
+  path: '/api/runtime/sqlite/query',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRuntimeSqliteTransactionRoute =
+  ApiRuntimeSqliteTransactionRouteImport.update({
+    id: '/api/runtime/sqlite/transaction',
+    path: '/api/runtime/sqlite/transaction',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiSchedulesIdToggleRoute = ApiSchedulesIdToggleRouteImport.update({
+  id: '/toggle',
+  path: '/toggle',
+  getParentRoute: () => ApiSchedulesIdRoute,
+} as any)
+const ApiSchedulesIdTriggerRoute = ApiSchedulesIdTriggerRouteImport.update({
+  id: '/trigger',
+  path: '/trigger',
+  getParentRoute: () => ApiSchedulesIdRoute,
+} as any)
+const ApiSpecCodingSessionsIdRoute = ApiSpecCodingSessionsIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiSpecCodingSessionsRoute,
+} as any)
+const ApiWorkflowStartPlanRoute = ApiWorkflowStartPlanRouteImport.update({
+  id: '/plan',
+  path: '/plan',
+  getParentRoute: () => ApiWorkflowStartRoute,
+} as any)
+const ApiAgentsNameChatSessionRoute =
+  ApiAgentsNameChatSessionRouteImport.update({
     id: '/session',
     path: '/session',
+    getParentRoute: () => ApiAgentsNameChatRoute,
+  } as any)
+const ApiAgentsNameChatStreamRoute = ApiAgentsNameChatStreamRouteImport.update({
+  id: '/stream',
+  path: '/stream',
+  getParentRoute: () => ApiAgentsNameChatRoute,
+} as any)
+const ApiChannelsIntegrationsIdBootstrapRoute =
+  ApiChannelsIntegrationsIdBootstrapRouteImport.update({
+    id: '/bootstrap',
+    path: '/bootstrap',
+    getParentRoute: () => ApiChannelsIntegrationsIdRoute,
+  } as any)
+const ApiChannelsIntegrationsIdTestSendRoute =
+  ApiChannelsIntegrationsIdTestSendRouteImport.update({
+    id: '/test-send',
+    path: '/test-send',
+    getParentRoute: () => ApiChannelsIntegrationsIdRoute,
+  } as any)
+const ApiChannelsWechatOfficialLoginIdRoute =
+  ApiChannelsWechatOfficialLoginIdRouteImport.update({
+    id: '/$id',
+    path: '/$id',
+    getParentRoute: () => ApiChannelsWechatOfficialLoginRoute,
+  } as any)
+const ApiCollaborationRoomsRoomIdFinishRoute =
+  ApiCollaborationRoomsRoomIdFinishRouteImport.update({
+    id: '/finish',
+    path: '/finish',
     getParentRoute: () => ApiCollaborationRoomsRoomIdRoute,
   } as any)
 const ApiCollaborationRoomsRoomIdParticipantsRoute =
@@ -1296,51 +1285,68 @@ const ApiCollaborationRoomsRoomIdParticipantsRoute =
     path: '/participants',
     getParentRoute: () => ApiCollaborationRoomsRoomIdRoute,
   } as any)
-const ApiCollaborationRoomsRoomIdFinishRoute =
-  ApiCollaborationRoomsRoomIdFinishRouteImport.update({
-    id: '/finish',
-    path: '/finish',
-    getParentRoute: () => ApiCollaborationRoomsRoomIdRoute,
-  } as any)
-const ApiChannelsWechatOfficialLoginIdRoute =
-  ApiChannelsWechatOfficialLoginIdRouteImport.update({
-    id: '/$id',
-    path: '/$id',
-    getParentRoute: () => ApiChannelsWechatOfficialLoginRoute,
-  } as any)
-const ApiChannelsIntegrationsIdTestSendRoute =
-  ApiChannelsIntegrationsIdTestSendRouteImport.update({
-    id: '/test-send',
-    path: '/test-send',
-    getParentRoute: () => ApiChannelsIntegrationsIdRoute,
-  } as any)
-const ApiChannelsIntegrationsIdBootstrapRoute =
-  ApiChannelsIntegrationsIdBootstrapRouteImport.update({
-    id: '/bootstrap',
-    path: '/bootstrap',
-    getParentRoute: () => ApiChannelsIntegrationsIdRoute,
-  } as any)
-const ApiAgentsNameChatStreamRoute = ApiAgentsNameChatStreamRouteImport.update({
-  id: '/stream',
-  path: '/stream',
-  getParentRoute: () => ApiAgentsNameChatRoute,
-} as any)
-const ApiAgentsNameChatSessionRoute =
-  ApiAgentsNameChatSessionRouteImport.update({
+const ApiCollaborationRoomsRoomIdSessionRoute =
+  ApiCollaborationRoomsRoomIdSessionRouteImport.update({
     id: '/session',
     path: '/session',
-    getParentRoute: () => ApiAgentsNameChatRoute,
+    getParentRoute: () => ApiCollaborationRoomsRoomIdRoute,
   } as any)
-const ApiRagV1CollectionsIdSearchRoute =
-  ApiRagV1CollectionsIdSearchRouteImport.update({
-    id: '/$id/search',
-    path: '/$id/search',
-    getParentRoute: () => ApiRagV1CollectionsRoute,
+const ApiMemoryV2WorkflowsRunIdHandoffsRoute =
+  ApiMemoryV2WorkflowsRunIdHandoffsRouteImport.update({
+    id: '/api/memory-v2/workflows/$runId/handoffs',
+    path: '/api/memory-v2/workflows/$runId/handoffs',
+    getParentRoute: () => rootRouteImport,
   } as any)
-const ApiRagV1CollectionsIdSchemaRoute =
-  ApiRagV1CollectionsIdSchemaRouteImport.update({
-    id: '/$id/schema',
-    path: '/$id/schema',
+const ApiModelsProbesIdRunRoute = ApiModelsProbesIdRunRouteImport.update({
+  id: '/run',
+  path: '/run',
+  getParentRoute: () => ApiModelsProbesIdRoute,
+} as any)
+const ApiOfficeOrgDraftIdRoute = ApiOfficeOrgDraftIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiOfficeOrgDraftRoute,
+} as any)
+const ApiRuntimeSqliteDatabasesNameRoute =
+  ApiRuntimeSqliteDatabasesNameRouteImport.update({
+    id: '/$name',
+    path: '/$name',
+    getParentRoute: () => ApiRuntimeSqliteDatabasesRoute,
+  } as any)
+const ApiSpecCodingSessionsIdImportPersistedRoute =
+  ApiSpecCodingSessionsIdImportPersistedRouteImport.update({
+    id: '/import-persisted',
+    path: '/import-persisted',
+    getParentRoute: () => ApiSpecCodingSessionsIdRoute,
+  } as any)
+const ApiWorkflowHumanQuestionsQuestionIdAnswerRoute =
+  ApiWorkflowHumanQuestionsQuestionIdAnswerRouteImport.update({
+    id: '/$questionId/answer',
+    path: '/$questionId/answer',
+    getParentRoute: () => ApiWorkflowHumanQuestionsRoute,
+  } as any)
+const ApiWorkspaceStaticWorkspaceTokenSplatRoute =
+  ApiWorkspaceStaticWorkspaceTokenSplatRouteImport.update({
+    id: '/api/workspace/static/$workspaceToken/$',
+    path: '/api/workspace/static/$workspaceToken/$',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiChannelsWechatOfficialLoginIdWaitRoute =
+  ApiChannelsWechatOfficialLoginIdWaitRouteImport.update({
+    id: '/wait',
+    path: '/wait',
+    getParentRoute: () => ApiChannelsWechatOfficialLoginIdRoute,
+  } as any)
+const ApiOfficeOrgVersionsIdRestoreRoute =
+  ApiOfficeOrgVersionsIdRestoreRouteImport.update({
+    id: '/$id/restore',
+    path: '/$id/restore',
+    getParentRoute: () => ApiOfficeOrgVersionsRoute,
+  } as any)
+const ApiRagV1CollectionsIdImportRoute =
+  ApiRagV1CollectionsIdImportRouteImport.update({
+    id: '/$id/import',
+    path: '/$id/import',
     getParentRoute: () => ApiRagV1CollectionsRoute,
   } as any)
 const ApiRagV1CollectionsIdRowsRoute =
@@ -1349,29 +1355,23 @@ const ApiRagV1CollectionsIdRowsRoute =
     path: '/$id/rows',
     getParentRoute: () => ApiRagV1CollectionsRoute,
   } as any)
-const ApiRagV1CollectionsIdImportRoute =
-  ApiRagV1CollectionsIdImportRouteImport.update({
-    id: '/$id/import',
-    path: '/$id/import',
+const ApiRagV1CollectionsIdSchemaRoute =
+  ApiRagV1CollectionsIdSchemaRouteImport.update({
+    id: '/$id/schema',
+    path: '/$id/schema',
     getParentRoute: () => ApiRagV1CollectionsRoute,
   } as any)
-const ApiOfficeOrgVersionsIdRestoreRoute =
-  ApiOfficeOrgVersionsIdRestoreRouteImport.update({
-    id: '/$id/restore',
-    path: '/$id/restore',
-    getParentRoute: () => ApiOfficeOrgVersionsRoute,
-  } as any)
-const ApiChannelsWechatOfficialLoginIdWaitRoute =
-  ApiChannelsWechatOfficialLoginIdWaitRouteImport.update({
-    id: '/wait',
-    path: '/wait',
-    getParentRoute: () => ApiChannelsWechatOfficialLoginIdRoute,
-  } as any)
-const ApiRagV1CollectionsIdSourcesSourceIdRoute =
-  ApiRagV1CollectionsIdSourcesSourceIdRouteImport.update({
-    id: '/$id/sources/$sourceId',
-    path: '/$id/sources/$sourceId',
+const ApiRagV1CollectionsIdSearchRoute =
+  ApiRagV1CollectionsIdSearchRouteImport.update({
+    id: '/$id/search',
+    path: '/$id/search',
     getParentRoute: () => ApiRagV1CollectionsRoute,
+  } as any)
+const ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRoute =
+  ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRouteImport.update({
+    id: '/$agentName/memory',
+    path: '/$agentName/memory',
+    getParentRoute: () => ApiCollaborationRoomsRoomIdParticipantsRoute,
   } as any)
 const ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute =
   ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRouteImport.update({
@@ -1379,11 +1379,11 @@ const ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRoute =
     path: '/$handoffId/details',
     getParentRoute: () => ApiMemoryV2WorkflowsRunIdHandoffsRoute,
   } as any)
-const ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRoute =
-  ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRouteImport.update({
-    id: '/$agentName/memory',
-    path: '/$agentName/memory',
-    getParentRoute: () => ApiCollaborationRoomsRoomIdParticipantsRoute,
+const ApiRagV1CollectionsIdSourcesSourceIdRoute =
+  ApiRagV1CollectionsIdSourcesSourceIdRouteImport.update({
+    id: '/$id/sources/$sourceId',
+    path: '/$id/sources/$sourceId',
+    getParentRoute: () => ApiRagV1CollectionsRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -2866,123 +2866,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/workflows': {
-      id: '/workflows'
-      path: '/workflows'
-      fullPath: '/workflows'
-      preLoaderRoute: typeof WorkflowsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/users': {
-      id: '/users'
-      path: '/users'
-      fullPath: '/users'
-      preLoaderRoute: typeof UsersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/skills': {
-      id: '/skills'
-      path: '/skills'
-      fullPath: '/skills'
-      preLoaderRoute: typeof SkillsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/setup': {
-      id: '/setup'
-      path: '/setup'
-      fullPath: '/setup'
-      preLoaderRoute: typeof SetupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/schedules': {
-      id: '/schedules'
-      path: '/schedules'
-      fullPath: '/schedules'
-      preLoaderRoute: typeof SchedulesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/run-history': {
-      id: '/run-history'
-      path: '/run-history'
-      fullPath: '/run-history'
-      preLoaderRoute: typeof RunHistoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/register': {
-      id: '/register'
-      path: '/register'
-      fullPath: '/register'
-      preLoaderRoute: typeof RegisterRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/office': {
-      id: '/office'
-      path: '/office'
-      fullPath: '/office'
-      preLoaderRoute: typeof OfficeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/notebook': {
-      id: '/notebook'
-      path: '/notebook'
-      fullPath: '/notebook'
-      preLoaderRoute: typeof NotebookRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/models': {
-      id: '/models'
-      path: '/models'
-      fullPath: '/models'
-      preLoaderRoute: typeof ModelsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/marketplace': {
-      id: '/marketplace'
-      path: '/marketplace'
-      fullPath: '/marketplace'
-      preLoaderRoute: typeof MarketplaceRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/knowledge': {
-      id: '/knowledge'
-      path: '/knowledge'
-      fullPath: '/knowledge'
-      preLoaderRoute: typeof KnowledgeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/engines': {
-      id: '/engines'
-      path: '/engines'
-      fullPath: '/engines'
-      preLoaderRoute: typeof EnginesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api-docs': {
-      id: '/api-docs'
-      path: '/api-docs'
-      fullPath: '/api-docs'
-      preLoaderRoute: typeof ApiDocsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agents': {
-      id: '/agents'
-      path: '/agents'
-      fullPath: '/agents'
-      preLoaderRoute: typeof AgentsRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/account': {
@@ -2992,158 +2880,144 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/agents': {
+      id: '/agents'
+      path: '/agents'
+      fullPath: '/agents'
+      preLoaderRoute: typeof AgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/workspace/markdown-preview': {
-      id: '/workspace/markdown-preview'
-      path: '/workspace/markdown-preview'
-      fullPath: '/workspace/markdown-preview'
-      preLoaderRoute: typeof WorkspaceMarkdownPreviewRouteImport
+    '/api-docs': {
+      id: '/api-docs'
+      path: '/api-docs'
+      fullPath: '/api-docs'
+      preLoaderRoute: typeof ApiDocsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/workbench/$config': {
-      id: '/workbench/$config'
-      path: '/workbench/$config'
-      fullPath: '/workbench/$config'
-      preLoaderRoute: typeof WorkbenchConfigRouteImport
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/login/reset': {
-      id: '/login/reset'
-      path: '/reset'
-      fullPath: '/login/reset'
-      preLoaderRoute: typeof LoginResetRouteImport
-      parentRoute: typeof LoginRoute
-    }
-    '/knowledge/library': {
-      id: '/knowledge/library'
-      path: '/library'
-      fullPath: '/knowledge/library'
-      preLoaderRoute: typeof KnowledgeLibraryRouteImport
-      parentRoute: typeof KnowledgeRoute
-    }
-    '/api/workflow-templates': {
-      id: '/api/workflow-templates'
-      path: '/api/workflow-templates'
-      fullPath: '/api/workflow-templates'
-      preLoaderRoute: typeof ApiWorkflowTemplatesRouteImport
+    '/engines': {
+      id: '/engines'
+      path: '/engines'
+      fullPath: '/engines'
+      preLoaderRoute: typeof EnginesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/users': {
-      id: '/api/users'
-      path: '/api/users'
-      fullPath: '/api/users'
-      preLoaderRoute: typeof ApiUsersRouteImport
+    '/knowledge': {
+      id: '/knowledge'
+      path: '/knowledge'
+      fullPath: '/knowledge'
+      preLoaderRoute: typeof KnowledgeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/system-settings': {
-      id: '/api/system-settings'
-      path: '/api/system-settings'
-      fullPath: '/api/system-settings'
-      preLoaderRoute: typeof ApiSystemSettingsRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/skills': {
-      id: '/api/skills'
-      path: '/api/skills'
-      fullPath: '/api/skills'
-      preLoaderRoute: typeof ApiSkillsRouteImport
+    '/marketplace': {
+      id: '/marketplace'
+      path: '/marketplace'
+      fullPath: '/marketplace'
+      preLoaderRoute: typeof MarketplaceRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/schedules': {
-      id: '/api/schedules'
-      path: '/api/schedules'
-      fullPath: '/api/schedules'
-      preLoaderRoute: typeof ApiSchedulesRouteImport
+    '/models': {
+      id: '/models'
+      path: '/models'
+      fullPath: '/models'
+      preLoaderRoute: typeof ModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/runtime-agents': {
-      id: '/api/runtime-agents'
-      path: '/api/runtime-agents'
-      fullPath: '/api/runtime-agents'
-      preLoaderRoute: typeof ApiRuntimeAgentsRouteImport
+    '/notebook': {
+      id: '/notebook'
+      path: '/notebook'
+      fullPath: '/notebook'
+      preLoaderRoute: typeof NotebookRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/runs': {
-      id: '/api/runs'
-      path: '/api/runs'
-      fullPath: '/api/runs'
-      preLoaderRoute: typeof ApiRunsRouteImport
+    '/office': {
+      id: '/office'
+      path: '/office'
+      fullPath: '/office'
+      preLoaderRoute: typeof OfficeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/run-history': {
-      id: '/api/run-history'
-      path: '/api/run-history'
-      fullPath: '/api/run-history'
-      preLoaderRoute: typeof ApiRunHistoryRouteImport
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/prompt-analysis': {
-      id: '/api/prompt-analysis'
-      path: '/api/prompt-analysis'
-      fullPath: '/api/prompt-analysis'
-      preLoaderRoute: typeof ApiPromptAnalysisRouteImport
+    '/run-history': {
+      id: '/run-history'
+      path: '/run-history'
+      fullPath: '/run-history'
+      preLoaderRoute: typeof RunHistoryRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/processes': {
-      id: '/api/processes'
-      path: '/api/processes'
-      fullPath: '/api/processes'
-      preLoaderRoute: typeof ApiProcessesRouteImport
+    '/schedules': {
+      id: '/schedules'
+      path: '/schedules'
+      fullPath: '/schedules'
+      preLoaderRoute: typeof SchedulesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/models': {
-      id: '/api/models'
-      path: '/api/models'
-      fullPath: '/api/models'
-      preLoaderRoute: typeof ApiModelsRouteImport
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/mcp': {
-      id: '/api/mcp'
-      path: '/api/mcp'
-      fullPath: '/api/mcp'
-      preLoaderRoute: typeof ApiMcpRouteImport
+    '/skills': {
+      id: '/skills'
+      path: '/skills'
+      fullPath: '/skills'
+      preLoaderRoute: typeof SkillsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/env': {
-      id: '/api/env'
-      path: '/api/env'
-      fullPath: '/api/env'
-      preLoaderRoute: typeof ApiEnvRouteImport
+    '/users': {
+      id: '/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof UsersRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/engine': {
-      id: '/api/engine'
-      path: '/api/engine'
-      fullPath: '/api/engine'
-      preLoaderRoute: typeof ApiEngineRouteImport
+    '/workflows': {
+      id: '/workflows'
+      path: '/workflows'
+      fullPath: '/workflows'
+      preLoaderRoute: typeof WorkflowsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/dashboard': {
-      id: '/api/dashboard'
-      path: '/api/dashboard'
-      fullPath: '/api/dashboard'
-      preLoaderRoute: typeof ApiDashboardRouteImport
-      parentRoute: typeof rootRouteImport
+    '/account/channels': {
+      id: '/account/channels'
+      path: '/channels'
+      fullPath: '/account/channels'
+      preLoaderRoute: typeof AccountChannelsRouteImport
+      parentRoute: typeof AccountRoute
     }
-    '/api/configs': {
-      id: '/api/configs'
-      path: '/api/configs'
-      fullPath: '/api/configs'
-      preLoaderRoute: typeof ApiConfigsRouteImport
-      parentRoute: typeof rootRouteImport
+    '/account/system-settings': {
+      id: '/account/system-settings'
+      path: '/system-settings'
+      fullPath: '/account/system-settings'
+      preLoaderRoute: typeof AccountSystemSettingsRouteImport
+      parentRoute: typeof AccountRoute
     }
-    '/api/chat': {
-      id: '/api/chat'
-      path: '/api/chat'
-      fullPath: '/api/chat'
-      preLoaderRoute: typeof ApiChatRouteImport
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/agents': {
@@ -3153,711 +3027,158 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/$': {
-      id: '/api/$'
-      path: '/api/$'
-      fullPath: '/api/$'
-      preLoaderRoute: typeof ApiSplatRouteImport
+    '/api/chat': {
+      id: '/api/chat'
+      path: '/api/chat'
+      fullPath: '/api/chat'
+      preLoaderRoute: typeof ApiChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/account/system-settings': {
-      id: '/account/system-settings'
-      path: '/system-settings'
-      fullPath: '/account/system-settings'
-      preLoaderRoute: typeof AccountSystemSettingsRouteImport
-      parentRoute: typeof AccountRoute
-    }
-    '/account/channels': {
-      id: '/account/channels'
-      path: '/channels'
-      fullPath: '/account/channels'
-      preLoaderRoute: typeof AccountChannelsRouteImport
-      parentRoute: typeof AccountRoute
-    }
-    '/api/workspace/upload': {
-      id: '/api/workspace/upload'
-      path: '/api/workspace/upload'
-      fullPath: '/api/workspace/upload'
-      preLoaderRoute: typeof ApiWorkspaceUploadRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workspace/tree': {
-      id: '/api/workspace/tree'
-      path: '/api/workspace/tree'
-      fullPath: '/api/workspace/tree'
-      preLoaderRoute: typeof ApiWorkspaceTreeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workspace/remote-credentials': {
-      id: '/api/workspace/remote-credentials'
-      path: '/api/workspace/remote-credentials'
-      fullPath: '/api/workspace/remote-credentials'
-      preLoaderRoute: typeof ApiWorkspaceRemoteCredentialsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workspace/manage': {
-      id: '/api/workspace/manage'
-      path: '/api/workspace/manage'
-      fullPath: '/api/workspace/manage'
-      preLoaderRoute: typeof ApiWorkspaceManageRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workspace/git-diff': {
-      id: '/api/workspace/git-diff'
-      path: '/api/workspace/git-diff'
-      fullPath: '/api/workspace/git-diff'
-      preLoaderRoute: typeof ApiWorkspaceGitDiffRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workspace/git-browser': {
-      id: '/api/workspace/git-browser'
-      path: '/api/workspace/git-browser'
-      fullPath: '/api/workspace/git-browser'
-      preLoaderRoute: typeof ApiWorkspaceGitBrowserRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workspace/file': {
-      id: '/api/workspace/file'
-      path: '/api/workspace/file'
-      fullPath: '/api/workspace/file'
-      preLoaderRoute: typeof ApiWorkspaceFileRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workspace/download': {
-      id: '/api/workspace/download'
-      path: '/api/workspace/download'
-      fullPath: '/api/workspace/download'
-      preLoaderRoute: typeof ApiWorkspaceDownloadRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/stop': {
-      id: '/api/workflow/stop'
-      path: '/api/workflow/stop'
-      fullPath: '/api/workflow/stop'
-      preLoaderRoute: typeof ApiWorkflowStopRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/step-logs': {
-      id: '/api/workflow/step-logs'
-      path: '/api/workflow/step-logs'
-      fullPath: '/api/workflow/step-logs'
-      preLoaderRoute: typeof ApiWorkflowStepLogsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/status': {
-      id: '/api/workflow/status'
-      path: '/api/workflow/status'
-      fullPath: '/api/workflow/status'
-      preLoaderRoute: typeof ApiWorkflowStatusRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/state-history': {
-      id: '/api/workflow/state-history'
-      path: '/api/workflow/state-history'
-      fullPath: '/api/workflow/state-history'
-      preLoaderRoute: typeof ApiWorkflowStateHistoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/start': {
-      id: '/api/workflow/start'
-      path: '/api/workflow/start'
-      fullPath: '/api/workflow/start'
-      preLoaderRoute: typeof ApiWorkflowStartRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/spec-merge': {
-      id: '/api/workflow/spec-merge'
-      path: '/api/workflow/spec-merge'
-      fullPath: '/api/workflow/spec-merge'
-      preLoaderRoute: typeof ApiWorkflowSpecMergeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/spec-import': {
-      id: '/api/workflow/spec-import'
-      path: '/api/workflow/spec-import'
-      fullPath: '/api/workflow/spec-import'
-      preLoaderRoute: typeof ApiWorkflowSpecImportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/resume': {
-      id: '/api/workflow/resume'
-      path: '/api/workflow/resume'
-      fullPath: '/api/workflow/resume'
-      preLoaderRoute: typeof ApiWorkflowResumeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/rerun-from-step': {
-      id: '/api/workflow/rerun-from-step'
-      path: '/api/workflow/rerun-from-step'
-      fullPath: '/api/workflow/rerun-from-step'
-      preLoaderRoute: typeof ApiWorkflowRerunFromStepRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/recall-feedback': {
-      id: '/api/workflow/recall-feedback'
-      path: '/api/workflow/recall-feedback'
-      fullPath: '/api/workflow/recall-feedback'
-      preLoaderRoute: typeof ApiWorkflowRecallFeedbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/preflight': {
-      id: '/api/workflow/preflight'
-      path: '/api/workflow/preflight'
-      fullPath: '/api/workflow/preflight'
-      preLoaderRoute: typeof ApiWorkflowPreflightRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/iterate': {
-      id: '/api/workflow/iterate'
-      path: '/api/workflow/iterate'
-      fullPath: '/api/workflow/iterate'
-      preLoaderRoute: typeof ApiWorkflowIterateRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/inject-feedback': {
-      id: '/api/workflow/inject-feedback'
-      path: '/api/workflow/inject-feedback'
-      fullPath: '/api/workflow/inject-feedback'
-      preLoaderRoute: typeof ApiWorkflowInjectFeedbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/human-questions': {
-      id: '/api/workflow/human-questions'
-      path: '/api/workflow/human-questions'
-      fullPath: '/api/workflow/human-questions'
-      preLoaderRoute: typeof ApiWorkflowHumanQuestionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/git-diff': {
-      id: '/api/workflow/git-diff'
-      path: '/api/workflow/git-diff'
-      fullPath: '/api/workflow/git-diff'
-      preLoaderRoute: typeof ApiWorkflowGitDiffRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/force-transition': {
-      id: '/api/workflow/force-transition'
-      path: '/api/workflow/force-transition'
-      fullPath: '/api/workflow/force-transition'
-      preLoaderRoute: typeof ApiWorkflowForceTransitionRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/force-complete': {
-      id: '/api/workflow/force-complete'
-      path: '/api/workflow/force-complete'
-      fullPath: '/api/workflow/force-complete'
-      preLoaderRoute: typeof ApiWorkflowForceCompleteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/events': {
-      id: '/api/workflow/events'
-      path: '/api/workflow/events'
-      fullPath: '/api/workflow/events'
-      preLoaderRoute: typeof ApiWorkflowEventsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/event-log': {
-      id: '/api/workflow/event-log'
-      path: '/api/workflow/event-log'
-      fullPath: '/api/workflow/event-log'
-      preLoaderRoute: typeof ApiWorkflowEventLogRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/context': {
-      id: '/api/workflow/context'
-      path: '/api/workflow/context'
-      fullPath: '/api/workflow/context'
-      preLoaderRoute: typeof ApiWorkflowContextRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/audit-log': {
-      id: '/api/workflow/audit-log'
-      path: '/api/workflow/audit-log'
-      fullPath: '/api/workflow/audit-log'
-      preLoaderRoute: typeof ApiWorkflowAuditLogRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/approve': {
-      id: '/api/workflow/approve'
-      path: '/api/workflow/approve'
-      fullPath: '/api/workflow/approve'
-      preLoaderRoute: typeof ApiWorkflowApproveRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow-templates/instantiate': {
-      id: '/api/workflow-templates/instantiate'
-      path: '/instantiate'
-      fullPath: '/api/workflow-templates/instantiate'
-      preLoaderRoute: typeof ApiWorkflowTemplatesInstantiateRouteImport
-      parentRoute: typeof ApiWorkflowTemplatesRoute
-    }
-    '/api/users/shareable': {
-      id: '/api/users/shareable'
-      path: '/shareable'
-      fullPath: '/api/users/shareable'
-      preLoaderRoute: typeof ApiUsersShareableRouteImport
-      parentRoute: typeof ApiUsersRoute
-    }
-    '/api/users/$id': {
-      id: '/api/users/$id'
-      path: '/$id'
-      fullPath: '/api/users/$id'
-      preLoaderRoute: typeof ApiUsersIdRouteImport
-      parentRoute: typeof ApiUsersRoute
-    }
-    '/api/uploads/image': {
-      id: '/api/uploads/image'
-      path: '/api/uploads/image'
-      fullPath: '/api/uploads/image'
-      preLoaderRoute: typeof ApiUploadsImageRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/spec-coding/validate-persisted-root': {
-      id: '/api/spec-coding/validate-persisted-root'
-      path: '/api/spec-coding/validate-persisted-root'
-      fullPath: '/api/spec-coding/validate-persisted-root'
-      preLoaderRoute: typeof ApiSpecCodingValidatePersistedRootRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/spec-coding/sessions': {
-      id: '/api/spec-coding/sessions'
-      path: '/api/spec-coding/sessions'
-      fullPath: '/api/spec-coding/sessions'
-      preLoaderRoute: typeof ApiSpecCodingSessionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/spec-coding/quality': {
-      id: '/api/spec-coding/quality'
-      path: '/api/spec-coding/quality'
-      fullPath: '/api/spec-coding/quality'
-      preLoaderRoute: typeof ApiSpecCodingQualityRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/spec-coding/ai-draft': {
-      id: '/api/spec-coding/ai-draft'
-      path: '/api/spec-coding/ai-draft'
-      fullPath: '/api/spec-coding/ai-draft'
-      preLoaderRoute: typeof ApiSpecCodingAiDraftRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/sidebar-plugins/preferences': {
-      id: '/api/sidebar-plugins/preferences'
-      path: '/api/sidebar-plugins/preferences'
-      fullPath: '/api/sidebar-plugins/preferences'
-      preLoaderRoute: typeof ApiSidebarPluginsPreferencesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/schedules/$id': {
-      id: '/api/schedules/$id'
-      path: '/$id'
-      fullPath: '/api/schedules/$id'
-      preLoaderRoute: typeof ApiSchedulesIdRouteImport
-      parentRoute: typeof ApiSchedulesRoute
-    }
-    '/api/runs/batch': {
-      id: '/api/runs/batch'
-      path: '/batch'
-      fullPath: '/api/runs/batch'
-      preLoaderRoute: typeof ApiRunsBatchRouteImport
-      parentRoute: typeof ApiRunsRoute
-    }
-    '/api/runs/$id': {
-      id: '/api/runs/$id'
-      path: '/$id'
-      fullPath: '/api/runs/$id'
-      preLoaderRoute: typeof ApiRunsIdRouteImport
-      parentRoute: typeof ApiRunsRoute
-    }
-    '/api/rag/search': {
-      id: '/api/rag/search'
-      path: '/api/rag/search'
-      fullPath: '/api/rag/search'
-      preLoaderRoute: typeof ApiRagSearchRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/rag/knowledge-bases': {
-      id: '/api/rag/knowledge-bases'
-      path: '/api/rag/knowledge-bases'
-      fullPath: '/api/rag/knowledge-bases'
-      preLoaderRoute: typeof ApiRagKnowledgeBasesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/rag/import': {
-      id: '/api/rag/import'
-      path: '/api/rag/import'
-      fullPath: '/api/rag/import'
-      preLoaderRoute: typeof ApiRagImportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/rag/documents': {
-      id: '/api/rag/documents'
-      path: '/api/rag/documents'
-      fullPath: '/api/rag/documents'
-      preLoaderRoute: typeof ApiRagDocumentsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/rag/detail': {
-      id: '/api/rag/detail'
-      path: '/api/rag/detail'
-      fullPath: '/api/rag/detail'
-      preLoaderRoute: typeof ApiRagDetailRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/processes/$id': {
-      id: '/api/processes/$id'
-      path: '/$id'
-      fullPath: '/api/processes/$id'
-      preLoaderRoute: typeof ApiProcessesIdRouteImport
-      parentRoute: typeof ApiProcessesRoute
-    }
-    '/api/onboarding/progress': {
-      id: '/api/onboarding/progress'
-      path: '/api/onboarding/progress'
-      fullPath: '/api/onboarding/progress'
-      preLoaderRoute: typeof ApiOnboardingProgressRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/notebook/tree': {
-      id: '/api/notebook/tree'
-      path: '/api/notebook/tree'
-      fullPath: '/api/notebook/tree'
-      preLoaderRoute: typeof ApiNotebookTreeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/notebook/snapshots': {
-      id: '/api/notebook/snapshots'
-      path: '/api/notebook/snapshots'
-      fullPath: '/api/notebook/snapshots'
-      preLoaderRoute: typeof ApiNotebookSnapshotsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/notebook/share': {
-      id: '/api/notebook/share'
-      path: '/api/notebook/share'
-      fullPath: '/api/notebook/share'
-      preLoaderRoute: typeof ApiNotebookShareRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/notebook/manage': {
-      id: '/api/notebook/manage'
-      path: '/api/notebook/manage'
-      fullPath: '/api/notebook/manage'
-      preLoaderRoute: typeof ApiNotebookManageRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/notebook/file': {
-      id: '/api/notebook/file'
-      path: '/api/notebook/file'
-      fullPath: '/api/notebook/file'
-      preLoaderRoute: typeof ApiNotebookFileRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/models/probes': {
-      id: '/api/models/probes'
-      path: '/probes'
-      fullPath: '/api/models/probes'
-      preLoaderRoute: typeof ApiModelsProbesRouteImport
-      parentRoute: typeof ApiModelsRoute
-    }
-    '/api/models/diagnostics': {
-      id: '/api/models/diagnostics'
-      path: '/diagnostics'
-      fullPath: '/api/models/diagnostics'
-      preLoaderRoute: typeof ApiModelsDiagnosticsRouteImport
-      parentRoute: typeof ApiModelsRoute
-    }
-    '/api/memory-v2/governance': {
-      id: '/api/memory-v2/governance'
-      path: '/api/memory-v2/governance'
-      fullPath: '/api/memory-v2/governance'
-      preLoaderRoute: typeof ApiMemoryV2GovernanceRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/memory-v2/diagnostics': {
-      id: '/api/memory-v2/diagnostics'
-      path: '/api/memory-v2/diagnostics'
-      fullPath: '/api/memory-v2/diagnostics'
-      preLoaderRoute: typeof ApiMemoryV2DiagnosticsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/mcp/test': {
-      id: '/api/mcp/test'
-      path: '/test'
-      fullPath: '/api/mcp/test'
-      preLoaderRoute: typeof ApiMcpTestRouteImport
-      parentRoute: typeof ApiMcpRoute
-    }
-    '/api/marketplace/search': {
-      id: '/api/marketplace/search'
-      path: '/api/marketplace/search'
-      fullPath: '/api/marketplace/search'
-      preLoaderRoute: typeof ApiMarketplaceSearchRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/marketplace/install': {
-      id: '/api/marketplace/install'
-      path: '/api/marketplace/install'
-      fullPath: '/api/marketplace/install'
-      preLoaderRoute: typeof ApiMarketplaceInstallRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/marketplace/categories': {
-      id: '/api/marketplace/categories'
-      path: '/api/marketplace/categories'
-      fullPath: '/api/marketplace/categories'
-      preLoaderRoute: typeof ApiMarketplaceCategoriesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/engine/models': {
-      id: '/api/engine/models'
-      path: '/models'
-      fullPath: '/api/engine/models'
-      preLoaderRoute: typeof ApiEngineModelsRouteImport
-      parentRoute: typeof ApiEngineRoute
-    }
-    '/api/engine/commands': {
-      id: '/api/engine/commands'
-      path: '/commands'
-      fullPath: '/api/engine/commands'
-      preLoaderRoute: typeof ApiEngineCommandsRouteImport
-      parentRoute: typeof ApiEngineRoute
-    }
-    '/api/engine/availability': {
-      id: '/api/engine/availability'
-      path: '/availability'
-      fullPath: '/api/engine/availability'
-      preLoaderRoute: typeof ApiEngineAvailabilityRouteImport
-      parentRoute: typeof ApiEngineRoute
-    }
-    '/api/configs/validate': {
-      id: '/api/configs/validate'
-      path: '/validate'
-      fullPath: '/api/configs/validate'
-      preLoaderRoute: typeof ApiConfigsValidateRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
-    '/api/configs/references': {
-      id: '/api/configs/references'
-      path: '/references'
-      fullPath: '/api/configs/references'
-      preLoaderRoute: typeof ApiConfigsReferencesRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
-    '/api/configs/create': {
-      id: '/api/configs/create'
-      path: '/create'
-      fullPath: '/api/configs/create'
-      preLoaderRoute: typeof ApiConfigsCreateRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
-    '/api/configs/batch-delete': {
-      id: '/api/configs/batch-delete'
-      path: '/batch-delete'
-      fullPath: '/api/configs/batch-delete'
-      preLoaderRoute: typeof ApiConfigsBatchDeleteRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
-    '/api/configs/archive': {
-      id: '/api/configs/archive'
-      path: '/archive'
-      fullPath: '/api/configs/archive'
-      preLoaderRoute: typeof ApiConfigsArchiveRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
-    '/api/configs/$filename': {
-      id: '/api/configs/$filename'
-      path: '/$filename'
-      fullPath: '/api/configs/$filename'
-      preLoaderRoute: typeof ApiConfigsFilenameRouteImport
-      parentRoute: typeof ApiConfigsRoute
-    }
-    '/api/collaboration/rooms': {
-      id: '/api/collaboration/rooms'
-      path: '/api/collaboration/rooms'
-      fullPath: '/api/collaboration/rooms'
-      preLoaderRoute: typeof ApiCollaborationRoomsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/collaboration/members': {
-      id: '/api/collaboration/members'
-      path: '/api/collaboration/members'
-      fullPath: '/api/collaboration/members'
-      preLoaderRoute: typeof ApiCollaborationMembersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/cli/run': {
-      id: '/api/cli/run'
-      path: '/api/cli/run'
-      fullPath: '/api/cli/run'
-      preLoaderRoute: typeof ApiCliRunRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/chat/stream': {
-      id: '/api/chat/stream'
-      path: '/stream'
-      fullPath: '/api/chat/stream'
-      preLoaderRoute: typeof ApiChatStreamRouteImport
-      parentRoute: typeof ApiChatRoute
-    }
-    '/api/chat/settings': {
-      id: '/api/chat/settings'
-      path: '/settings'
-      fullPath: '/api/chat/settings'
-      preLoaderRoute: typeof ApiChatSettingsRouteImport
-      parentRoute: typeof ApiChatRoute
-    }
-    '/api/chat/sessions': {
-      id: '/api/chat/sessions'
-      path: '/sessions'
-      fullPath: '/api/chat/sessions'
-      preLoaderRoute: typeof ApiChatSessionsRouteImport
-      parentRoute: typeof ApiChatRoute
-    }
-    '/api/chat/debug-prompt': {
-      id: '/api/chat/debug-prompt'
-      path: '/debug-prompt'
-      fullPath: '/api/chat/debug-prompt'
-      preLoaderRoute: typeof ApiChatDebugPromptRouteImport
-      parentRoute: typeof ApiChatRoute
-    }
-    '/api/chat/compact': {
-      id: '/api/chat/compact'
-      path: '/compact'
-      fullPath: '/api/chat/compact'
-      preLoaderRoute: typeof ApiChatCompactRouteImport
-      parentRoute: typeof ApiChatRoute
-    }
-    '/api/channels/setup': {
-      id: '/api/channels/setup'
-      path: '/api/channels/setup'
-      fullPath: '/api/channels/setup'
-      preLoaderRoute: typeof ApiChannelsSetupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/channels/providers': {
-      id: '/api/channels/providers'
-      path: '/api/channels/providers'
-      fullPath: '/api/channels/providers'
-      preLoaderRoute: typeof ApiChannelsProvidersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/channels/integrations': {
-      id: '/api/channels/integrations'
-      path: '/api/channels/integrations'
-      fullPath: '/api/channels/integrations'
-      preLoaderRoute: typeof ApiChannelsIntegrationsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/channels/bindings': {
-      id: '/api/channels/bindings'
-      path: '/api/channels/bindings'
-      fullPath: '/api/channels/bindings'
-      preLoaderRoute: typeof ApiChannelsBindingsRouteImport
+    '/api/configs': {
+      id: '/api/configs'
+      path: '/api/configs'
+      fullPath: '/api/configs'
+      preLoaderRoute: typeof ApiConfigsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/cangjie/sdk': {
-      id: '/api/cangjie/sdk'
-      path: '/api/cangjie/sdk'
-      fullPath: '/api/cangjie/sdk'
-      preLoaderRoute: typeof ApiCangjieSdkRouteImport
+    '/api/dashboard': {
+      id: '/api/dashboard'
+      path: '/api/dashboard'
+      fullPath: '/api/dashboard'
+      preLoaderRoute: typeof ApiDashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/cangjie/run': {
-      id: '/api/cangjie/run'
-      path: '/api/cangjie/run'
-      fullPath: '/api/cangjie/run'
-      preLoaderRoute: typeof ApiCangjieRunRouteImport
+    '/api/engine': {
+      id: '/api/engine'
+      path: '/api/engine'
+      fullPath: '/api/engine'
+      preLoaderRoute: typeof ApiEngineRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/setup': {
-      id: '/api/auth/setup'
-      path: '/api/auth/setup'
-      fullPath: '/api/auth/setup'
-      preLoaderRoute: typeof ApiAuthSetupRouteImport
+    '/api/env': {
+      id: '/api/env'
+      path: '/api/env'
+      fullPath: '/api/env'
+      preLoaderRoute: typeof ApiEnvRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/reset-password': {
-      id: '/api/auth/reset-password'
-      path: '/api/auth/reset-password'
-      fullPath: '/api/auth/reset-password'
-      preLoaderRoute: typeof ApiAuthResetPasswordRouteImport
+    '/api/mcp': {
+      id: '/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/api/mcp'
+      preLoaderRoute: typeof ApiMcpRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/register': {
-      id: '/api/auth/register'
-      path: '/api/auth/register'
-      fullPath: '/api/auth/register'
-      preLoaderRoute: typeof ApiAuthRegisterRouteImport
+    '/api/models': {
+      id: '/api/models'
+      path: '/api/models'
+      fullPath: '/api/models'
+      preLoaderRoute: typeof ApiModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/profile': {
-      id: '/api/auth/profile'
-      path: '/api/auth/profile'
-      fullPath: '/api/auth/profile'
-      preLoaderRoute: typeof ApiAuthProfileRouteImport
+    '/api/processes': {
+      id: '/api/processes'
+      path: '/api/processes'
+      fullPath: '/api/processes'
+      preLoaderRoute: typeof ApiProcessesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/password': {
-      id: '/api/auth/password'
-      path: '/api/auth/password'
-      fullPath: '/api/auth/password'
-      preLoaderRoute: typeof ApiAuthPasswordRouteImport
+    '/api/prompt-analysis': {
+      id: '/api/prompt-analysis'
+      path: '/api/prompt-analysis'
+      fullPath: '/api/prompt-analysis'
+      preLoaderRoute: typeof ApiPromptAnalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/me': {
-      id: '/api/auth/me'
-      path: '/api/auth/me'
-      fullPath: '/api/auth/me'
-      preLoaderRoute: typeof ApiAuthMeRouteImport
+    '/api/run-history': {
+      id: '/api/run-history'
+      path: '/api/run-history'
+      fullPath: '/api/run-history'
+      preLoaderRoute: typeof ApiRunHistoryRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/login': {
-      id: '/api/auth/login'
-      path: '/api/auth/login'
-      fullPath: '/api/auth/login'
-      preLoaderRoute: typeof ApiAuthLoginRouteImport
+    '/api/runs': {
+      id: '/api/runs'
+      path: '/api/runs'
+      fullPath: '/api/runs'
+      preLoaderRoute: typeof ApiRunsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/email': {
-      id: '/api/auth/email'
-      path: '/api/auth/email'
-      fullPath: '/api/auth/email'
-      preLoaderRoute: typeof ApiAuthEmailRouteImport
+    '/api/runtime-agents': {
+      id: '/api/runtime-agents'
+      path: '/api/runtime-agents'
+      fullPath: '/api/runtime-agents'
+      preLoaderRoute: typeof ApiRuntimeAgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/agora/workspace': {
-      id: '/api/agora/workspace'
-      path: '/api/agora/workspace'
-      fullPath: '/api/agora/workspace'
-      preLoaderRoute: typeof ApiAgoraWorkspaceRouteImport
+    '/api/schedules': {
+      id: '/api/schedules'
+      path: '/api/schedules'
+      fullPath: '/api/schedules'
+      preLoaderRoute: typeof ApiSchedulesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/agora/guests': {
-      id: '/api/agora/guests'
-      path: '/api/agora/guests'
-      fullPath: '/api/agora/guests'
-      preLoaderRoute: typeof ApiAgoraGuestsRouteImport
+    '/api/skills': {
+      id: '/api/skills'
+      path: '/api/skills'
+      fullPath: '/api/skills'
+      preLoaderRoute: typeof ApiSkillsRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/api/agents/generate-avatar': {
-      id: '/api/agents/generate-avatar'
-      path: '/generate-avatar'
-      fullPath: '/api/agents/generate-avatar'
-      preLoaderRoute: typeof ApiAgentsGenerateAvatarRouteImport
-      parentRoute: typeof ApiAgentsRoute
-    }
-    '/api/agents/batch': {
-      id: '/api/agents/batch'
-      path: '/batch'
-      fullPath: '/api/agents/batch'
-      preLoaderRoute: typeof ApiAgentsBatchRouteImport
-      parentRoute: typeof ApiAgentsRoute
     }
-    '/api/agents/archive': {
-      id: '/api/agents/archive'
-      path: '/archive'
-      fullPath: '/api/agents/archive'
-      preLoaderRoute: typeof ApiAgentsArchiveRouteImport
+    '/api/system-settings': {
+      id: '/api/system-settings'
+      path: '/api/system-settings'
+      fullPath: '/api/system-settings'
+      preLoaderRoute: typeof ApiSystemSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/users': {
+      id: '/api/users'
+      path: '/api/users'
+      fullPath: '/api/users'
+      preLoaderRoute: typeof ApiUsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow-templates': {
+      id: '/api/workflow-templates'
+      path: '/api/workflow-templates'
+      fullPath: '/api/workflow-templates'
+      preLoaderRoute: typeof ApiWorkflowTemplatesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/knowledge/library': {
+      id: '/knowledge/library'
+      path: '/library'
+      fullPath: '/knowledge/library'
+      preLoaderRoute: typeof KnowledgeLibraryRouteImport
+      parentRoute: typeof KnowledgeRoute
+    }
+    '/login/reset': {
+      id: '/login/reset'
+      path: '/reset'
+      fullPath: '/login/reset'
+      preLoaderRoute: typeof LoginResetRouteImport
+      parentRoute: typeof LoginRoute
+    }
+    '/workbench/$config': {
+      id: '/workbench/$config'
+      path: '/workbench/$config'
+      fullPath: '/workbench/$config'
+      preLoaderRoute: typeof WorkbenchConfigRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workspace/markdown-preview': {
+      id: '/workspace/markdown-preview'
+      path: '/workspace/markdown-preview'
+      fullPath: '/workspace/markdown-preview'
+      preLoaderRoute: typeof WorkspaceMarkdownPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agents/$name': {
+      id: '/api/agents/$name'
+      path: '/$name'
+      fullPath: '/api/agents/$name'
+      preLoaderRoute: typeof ApiAgentsNameRouteImport
       parentRoute: typeof ApiAgentsRoute
     }
     '/api/agents/ai-draft': {
@@ -3867,368 +3188,697 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAgentsAiDraftRouteImport
       parentRoute: typeof ApiAgentsRoute
     }
-    '/api/agents/$name': {
-      id: '/api/agents/$name'
-      path: '/$name'
-      fullPath: '/api/agents/$name'
-      preLoaderRoute: typeof ApiAgentsNameRouteImport
+    '/api/agents/archive': {
+      id: '/api/agents/archive'
+      path: '/archive'
+      fullPath: '/api/agents/archive'
+      preLoaderRoute: typeof ApiAgentsArchiveRouteImport
       parentRoute: typeof ApiAgentsRoute
     }
-    '/api/workflow/start/plan': {
-      id: '/api/workflow/start/plan'
-      path: '/plan'
-      fullPath: '/api/workflow/start/plan'
-      preLoaderRoute: typeof ApiWorkflowStartPlanRouteImport
-      parentRoute: typeof ApiWorkflowStartRoute
+    '/api/agents/batch': {
+      id: '/api/agents/batch'
+      path: '/batch'
+      fullPath: '/api/agents/batch'
+      preLoaderRoute: typeof ApiAgentsBatchRouteImport
+      parentRoute: typeof ApiAgentsRoute
     }
-    '/api/spec-coding/sessions/$id': {
-      id: '/api/spec-coding/sessions/$id'
+    '/api/agents/generate-avatar': {
+      id: '/api/agents/generate-avatar'
+      path: '/generate-avatar'
+      fullPath: '/api/agents/generate-avatar'
+      preLoaderRoute: typeof ApiAgentsGenerateAvatarRouteImport
+      parentRoute: typeof ApiAgentsRoute
+    }
+    '/api/agora/guests': {
+      id: '/api/agora/guests'
+      path: '/api/agora/guests'
+      fullPath: '/api/agora/guests'
+      preLoaderRoute: typeof ApiAgoraGuestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agora/workspace': {
+      id: '/api/agora/workspace'
+      path: '/api/agora/workspace'
+      fullPath: '/api/agora/workspace'
+      preLoaderRoute: typeof ApiAgoraWorkspaceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/email': {
+      id: '/api/auth/email'
+      path: '/api/auth/email'
+      fullPath: '/api/auth/email'
+      preLoaderRoute: typeof ApiAuthEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/login': {
+      id: '/api/auth/login'
+      path: '/api/auth/login'
+      fullPath: '/api/auth/login'
+      preLoaderRoute: typeof ApiAuthLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/me': {
+      id: '/api/auth/me'
+      path: '/api/auth/me'
+      fullPath: '/api/auth/me'
+      preLoaderRoute: typeof ApiAuthMeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/password': {
+      id: '/api/auth/password'
+      path: '/api/auth/password'
+      fullPath: '/api/auth/password'
+      preLoaderRoute: typeof ApiAuthPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/profile': {
+      id: '/api/auth/profile'
+      path: '/api/auth/profile'
+      fullPath: '/api/auth/profile'
+      preLoaderRoute: typeof ApiAuthProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/register': {
+      id: '/api/auth/register'
+      path: '/api/auth/register'
+      fullPath: '/api/auth/register'
+      preLoaderRoute: typeof ApiAuthRegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/reset-password': {
+      id: '/api/auth/reset-password'
+      path: '/api/auth/reset-password'
+      fullPath: '/api/auth/reset-password'
+      preLoaderRoute: typeof ApiAuthResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/setup': {
+      id: '/api/auth/setup'
+      path: '/api/auth/setup'
+      fullPath: '/api/auth/setup'
+      preLoaderRoute: typeof ApiAuthSetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/cangjie/run': {
+      id: '/api/cangjie/run'
+      path: '/api/cangjie/run'
+      fullPath: '/api/cangjie/run'
+      preLoaderRoute: typeof ApiCangjieRunRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/cangjie/sdk': {
+      id: '/api/cangjie/sdk'
+      path: '/api/cangjie/sdk'
+      fullPath: '/api/cangjie/sdk'
+      preLoaderRoute: typeof ApiCangjieSdkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/channels/bindings': {
+      id: '/api/channels/bindings'
+      path: '/api/channels/bindings'
+      fullPath: '/api/channels/bindings'
+      preLoaderRoute: typeof ApiChannelsBindingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/channels/integrations': {
+      id: '/api/channels/integrations'
+      path: '/api/channels/integrations'
+      fullPath: '/api/channels/integrations'
+      preLoaderRoute: typeof ApiChannelsIntegrationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/channels/providers': {
+      id: '/api/channels/providers'
+      path: '/api/channels/providers'
+      fullPath: '/api/channels/providers'
+      preLoaderRoute: typeof ApiChannelsProvidersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/channels/setup': {
+      id: '/api/channels/setup'
+      path: '/api/channels/setup'
+      fullPath: '/api/channels/setup'
+      preLoaderRoute: typeof ApiChannelsSetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/chat/compact': {
+      id: '/api/chat/compact'
+      path: '/compact'
+      fullPath: '/api/chat/compact'
+      preLoaderRoute: typeof ApiChatCompactRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
+    '/api/chat/debug-prompt': {
+      id: '/api/chat/debug-prompt'
+      path: '/debug-prompt'
+      fullPath: '/api/chat/debug-prompt'
+      preLoaderRoute: typeof ApiChatDebugPromptRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
+    '/api/chat/sessions': {
+      id: '/api/chat/sessions'
+      path: '/sessions'
+      fullPath: '/api/chat/sessions'
+      preLoaderRoute: typeof ApiChatSessionsRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
+    '/api/chat/settings': {
+      id: '/api/chat/settings'
+      path: '/settings'
+      fullPath: '/api/chat/settings'
+      preLoaderRoute: typeof ApiChatSettingsRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
+    '/api/chat/stream': {
+      id: '/api/chat/stream'
+      path: '/stream'
+      fullPath: '/api/chat/stream'
+      preLoaderRoute: typeof ApiChatStreamRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
+    '/api/cli/run': {
+      id: '/api/cli/run'
+      path: '/api/cli/run'
+      fullPath: '/api/cli/run'
+      preLoaderRoute: typeof ApiCliRunRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/collaboration/members': {
+      id: '/api/collaboration/members'
+      path: '/api/collaboration/members'
+      fullPath: '/api/collaboration/members'
+      preLoaderRoute: typeof ApiCollaborationMembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/collaboration/rooms': {
+      id: '/api/collaboration/rooms'
+      path: '/api/collaboration/rooms'
+      fullPath: '/api/collaboration/rooms'
+      preLoaderRoute: typeof ApiCollaborationRoomsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/configs/$filename': {
+      id: '/api/configs/$filename'
+      path: '/$filename'
+      fullPath: '/api/configs/$filename'
+      preLoaderRoute: typeof ApiConfigsFilenameRouteImport
+      parentRoute: typeof ApiConfigsRoute
+    }
+    '/api/configs/archive': {
+      id: '/api/configs/archive'
+      path: '/archive'
+      fullPath: '/api/configs/archive'
+      preLoaderRoute: typeof ApiConfigsArchiveRouteImport
+      parentRoute: typeof ApiConfigsRoute
+    }
+    '/api/configs/batch-delete': {
+      id: '/api/configs/batch-delete'
+      path: '/batch-delete'
+      fullPath: '/api/configs/batch-delete'
+      preLoaderRoute: typeof ApiConfigsBatchDeleteRouteImport
+      parentRoute: typeof ApiConfigsRoute
+    }
+    '/api/configs/create': {
+      id: '/api/configs/create'
+      path: '/create'
+      fullPath: '/api/configs/create'
+      preLoaderRoute: typeof ApiConfigsCreateRouteImport
+      parentRoute: typeof ApiConfigsRoute
+    }
+    '/api/configs/references': {
+      id: '/api/configs/references'
+      path: '/references'
+      fullPath: '/api/configs/references'
+      preLoaderRoute: typeof ApiConfigsReferencesRouteImport
+      parentRoute: typeof ApiConfigsRoute
+    }
+    '/api/configs/validate': {
+      id: '/api/configs/validate'
+      path: '/validate'
+      fullPath: '/api/configs/validate'
+      preLoaderRoute: typeof ApiConfigsValidateRouteImport
+      parentRoute: typeof ApiConfigsRoute
+    }
+    '/api/engine/availability': {
+      id: '/api/engine/availability'
+      path: '/availability'
+      fullPath: '/api/engine/availability'
+      preLoaderRoute: typeof ApiEngineAvailabilityRouteImport
+      parentRoute: typeof ApiEngineRoute
+    }
+    '/api/engine/commands': {
+      id: '/api/engine/commands'
+      path: '/commands'
+      fullPath: '/api/engine/commands'
+      preLoaderRoute: typeof ApiEngineCommandsRouteImport
+      parentRoute: typeof ApiEngineRoute
+    }
+    '/api/engine/models': {
+      id: '/api/engine/models'
+      path: '/models'
+      fullPath: '/api/engine/models'
+      preLoaderRoute: typeof ApiEngineModelsRouteImport
+      parentRoute: typeof ApiEngineRoute
+    }
+    '/api/marketplace/categories': {
+      id: '/api/marketplace/categories'
+      path: '/api/marketplace/categories'
+      fullPath: '/api/marketplace/categories'
+      preLoaderRoute: typeof ApiMarketplaceCategoriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/marketplace/install': {
+      id: '/api/marketplace/install'
+      path: '/api/marketplace/install'
+      fullPath: '/api/marketplace/install'
+      preLoaderRoute: typeof ApiMarketplaceInstallRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/marketplace/search': {
+      id: '/api/marketplace/search'
+      path: '/api/marketplace/search'
+      fullPath: '/api/marketplace/search'
+      preLoaderRoute: typeof ApiMarketplaceSearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mcp/test': {
+      id: '/api/mcp/test'
+      path: '/test'
+      fullPath: '/api/mcp/test'
+      preLoaderRoute: typeof ApiMcpTestRouteImport
+      parentRoute: typeof ApiMcpRoute
+    }
+    '/api/memory-v2/diagnostics': {
+      id: '/api/memory-v2/diagnostics'
+      path: '/api/memory-v2/diagnostics'
+      fullPath: '/api/memory-v2/diagnostics'
+      preLoaderRoute: typeof ApiMemoryV2DiagnosticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/memory-v2/governance': {
+      id: '/api/memory-v2/governance'
+      path: '/api/memory-v2/governance'
+      fullPath: '/api/memory-v2/governance'
+      preLoaderRoute: typeof ApiMemoryV2GovernanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/models/diagnostics': {
+      id: '/api/models/diagnostics'
+      path: '/diagnostics'
+      fullPath: '/api/models/diagnostics'
+      preLoaderRoute: typeof ApiModelsDiagnosticsRouteImport
+      parentRoute: typeof ApiModelsRoute
+    }
+    '/api/models/probes': {
+      id: '/api/models/probes'
+      path: '/probes'
+      fullPath: '/api/models/probes'
+      preLoaderRoute: typeof ApiModelsProbesRouteImport
+      parentRoute: typeof ApiModelsRoute
+    }
+    '/api/notebook/file': {
+      id: '/api/notebook/file'
+      path: '/api/notebook/file'
+      fullPath: '/api/notebook/file'
+      preLoaderRoute: typeof ApiNotebookFileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/notebook/manage': {
+      id: '/api/notebook/manage'
+      path: '/api/notebook/manage'
+      fullPath: '/api/notebook/manage'
+      preLoaderRoute: typeof ApiNotebookManageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/notebook/share': {
+      id: '/api/notebook/share'
+      path: '/api/notebook/share'
+      fullPath: '/api/notebook/share'
+      preLoaderRoute: typeof ApiNotebookShareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/notebook/snapshots': {
+      id: '/api/notebook/snapshots'
+      path: '/api/notebook/snapshots'
+      fullPath: '/api/notebook/snapshots'
+      preLoaderRoute: typeof ApiNotebookSnapshotsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/notebook/tree': {
+      id: '/api/notebook/tree'
+      path: '/api/notebook/tree'
+      fullPath: '/api/notebook/tree'
+      preLoaderRoute: typeof ApiNotebookTreeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/onboarding/progress': {
+      id: '/api/onboarding/progress'
+      path: '/api/onboarding/progress'
+      fullPath: '/api/onboarding/progress'
+      preLoaderRoute: typeof ApiOnboardingProgressRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/processes/$id': {
+      id: '/api/processes/$id'
       path: '/$id'
-      fullPath: '/api/spec-coding/sessions/$id'
-      preLoaderRoute: typeof ApiSpecCodingSessionsIdRouteImport
-      parentRoute: typeof ApiSpecCodingSessionsRoute
+      fullPath: '/api/processes/$id'
+      preLoaderRoute: typeof ApiProcessesIdRouteImport
+      parentRoute: typeof ApiProcessesRoute
     }
-    '/api/schedules/$id/trigger': {
-      id: '/api/schedules/$id/trigger'
-      path: '/trigger'
-      fullPath: '/api/schedules/$id/trigger'
-      preLoaderRoute: typeof ApiSchedulesIdTriggerRouteImport
-      parentRoute: typeof ApiSchedulesIdRoute
-    }
-    '/api/schedules/$id/toggle': {
-      id: '/api/schedules/$id/toggle'
-      path: '/toggle'
-      fullPath: '/api/schedules/$id/toggle'
-      preLoaderRoute: typeof ApiSchedulesIdToggleRouteImport
-      parentRoute: typeof ApiSchedulesIdRoute
-    }
-    '/api/runtime/sqlite/transaction': {
-      id: '/api/runtime/sqlite/transaction'
-      path: '/api/runtime/sqlite/transaction'
-      fullPath: '/api/runtime/sqlite/transaction'
-      preLoaderRoute: typeof ApiRuntimeSqliteTransactionRouteImport
+    '/api/rag/detail': {
+      id: '/api/rag/detail'
+      path: '/api/rag/detail'
+      fullPath: '/api/rag/detail'
+      preLoaderRoute: typeof ApiRagDetailRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/runtime/sqlite/query': {
-      id: '/api/runtime/sqlite/query'
-      path: '/api/runtime/sqlite/query'
-      fullPath: '/api/runtime/sqlite/query'
-      preLoaderRoute: typeof ApiRuntimeSqliteQueryRouteImport
+    '/api/rag/documents': {
+      id: '/api/rag/documents'
+      path: '/api/rag/documents'
+      fullPath: '/api/rag/documents'
+      preLoaderRoute: typeof ApiRagDocumentsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/runtime/sqlite/exec': {
-      id: '/api/runtime/sqlite/exec'
-      path: '/api/runtime/sqlite/exec'
-      fullPath: '/api/runtime/sqlite/exec'
-      preLoaderRoute: typeof ApiRuntimeSqliteExecRouteImport
+    '/api/rag/import': {
+      id: '/api/rag/import'
+      path: '/api/rag/import'
+      fullPath: '/api/rag/import'
+      preLoaderRoute: typeof ApiRagImportRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/runtime/sqlite/databases': {
-      id: '/api/runtime/sqlite/databases'
-      path: '/api/runtime/sqlite/databases'
-      fullPath: '/api/runtime/sqlite/databases'
-      preLoaderRoute: typeof ApiRuntimeSqliteDatabasesRouteImport
+    '/api/rag/knowledge-bases': {
+      id: '/api/rag/knowledge-bases'
+      path: '/api/rag/knowledge-bases'
+      fullPath: '/api/rag/knowledge-bases'
+      preLoaderRoute: typeof ApiRagKnowledgeBasesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/runtime/rag/search': {
-      id: '/api/runtime/rag/search'
-      path: '/api/runtime/rag/search'
-      fullPath: '/api/runtime/rag/search'
-      preLoaderRoute: typeof ApiRuntimeRagSearchRouteImport
+    '/api/rag/search': {
+      id: '/api/rag/search'
+      path: '/api/rag/search'
+      fullPath: '/api/rag/search'
+      preLoaderRoute: typeof ApiRagSearchRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/runtime/rag/knowledge-bases': {
-      id: '/api/runtime/rag/knowledge-bases'
-      path: '/api/runtime/rag/knowledge-bases'
-      fullPath: '/api/runtime/rag/knowledge-bases'
-      preLoaderRoute: typeof ApiRuntimeRagKnowledgeBasesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/runs/by-config/$config': {
-      id: '/api/runs/by-config/$config'
-      path: '/by-config/$config'
-      fullPath: '/api/runs/by-config/$config'
-      preLoaderRoute: typeof ApiRunsByConfigConfigRouteImport
+    '/api/runs/$id': {
+      id: '/api/runs/$id'
+      path: '/$id'
+      fullPath: '/api/runs/$id'
+      preLoaderRoute: typeof ApiRunsIdRouteImport
       parentRoute: typeof ApiRunsRoute
     }
-    '/api/runs/$id/stream': {
-      id: '/api/runs/$id/stream'
-      path: '/stream'
-      fullPath: '/api/runs/$id/stream'
-      preLoaderRoute: typeof ApiRunsIdStreamRouteImport
-      parentRoute: typeof ApiRunsIdRoute
-    }
-    '/api/runs/$id/outputs': {
-      id: '/api/runs/$id/outputs'
-      path: '/outputs'
-      fullPath: '/api/runs/$id/outputs'
-      preLoaderRoute: typeof ApiRunsIdOutputsRouteImport
-      parentRoute: typeof ApiRunsIdRoute
-    }
-    '/api/runs/$id/documents': {
-      id: '/api/runs/$id/documents'
-      path: '/documents'
-      fullPath: '/api/runs/$id/documents'
-      preLoaderRoute: typeof ApiRunsIdDocumentsRouteImport
-      parentRoute: typeof ApiRunsIdRoute
-    }
-    '/api/runs/$id/detail': {
-      id: '/api/runs/$id/detail'
-      path: '/detail'
-      fullPath: '/api/runs/$id/detail'
-      preLoaderRoute: typeof ApiRunsIdDetailRouteImport
-      parentRoute: typeof ApiRunsIdRoute
-    }
-    '/api/runs/$id/delete': {
-      id: '/api/runs/$id/delete'
-      path: '/delete'
-      fullPath: '/api/runs/$id/delete'
-      preLoaderRoute: typeof ApiRunsIdDeleteRouteImport
-      parentRoute: typeof ApiRunsIdRoute
-    }
-    '/api/rag/v1/collections': {
-      id: '/api/rag/v1/collections'
-      path: '/api/rag/v1/collections'
-      fullPath: '/api/rag/v1/collections'
-      preLoaderRoute: typeof ApiRagV1CollectionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/onboarding/admin/progress': {
-      id: '/api/onboarding/admin/progress'
-      path: '/api/onboarding/admin/progress'
-      fullPath: '/api/onboarding/admin/progress'
-      preLoaderRoute: typeof ApiOnboardingAdminProgressRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/team/plan': {
-      id: '/api/office/team/plan'
-      path: '/api/office/team/plan'
-      fullPath: '/api/office/team/plan'
-      preLoaderRoute: typeof ApiOfficeTeamPlanRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/team/current': {
-      id: '/api/office/team/current'
-      path: '/api/office/team/current'
-      fullPath: '/api/office/team/current'
-      preLoaderRoute: typeof ApiOfficeTeamCurrentRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/team/apply': {
-      id: '/api/office/team/apply'
-      path: '/api/office/team/apply'
-      fullPath: '/api/office/team/apply'
-      preLoaderRoute: typeof ApiOfficeTeamApplyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/org/versions': {
-      id: '/api/office/org/versions'
-      path: '/api/office/org/versions'
-      fullPath: '/api/office/org/versions'
-      preLoaderRoute: typeof ApiOfficeOrgVersionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/org/draft': {
-      id: '/api/office/org/draft'
-      path: '/api/office/org/draft'
-      fullPath: '/api/office/org/draft'
-      preLoaderRoute: typeof ApiOfficeOrgDraftRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/org/current': {
-      id: '/api/office/org/current'
-      path: '/api/office/org/current'
-      fullPath: '/api/office/org/current'
-      preLoaderRoute: typeof ApiOfficeOrgCurrentRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/org/clarify': {
-      id: '/api/office/org/clarify'
-      path: '/api/office/org/clarify'
-      fullPath: '/api/office/org/clarify'
-      preLoaderRoute: typeof ApiOfficeOrgClarifyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/office/org/apply': {
-      id: '/api/office/org/apply'
-      path: '/api/office/org/apply'
-      fullPath: '/api/office/org/apply'
-      preLoaderRoute: typeof ApiOfficeOrgApplyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/models/probes/run': {
-      id: '/api/models/probes/run'
-      path: '/run'
-      fullPath: '/api/models/probes/run'
-      preLoaderRoute: typeof ApiModelsProbesRunRouteImport
-      parentRoute: typeof ApiModelsProbesRoute
-    }
-    '/api/models/probes/query': {
-      id: '/api/models/probes/query'
-      path: '/query'
-      fullPath: '/api/models/probes/query'
-      preLoaderRoute: typeof ApiModelsProbesQueryRouteImport
-      parentRoute: typeof ApiModelsProbesRoute
-    }
-    '/api/models/probes/batch': {
-      id: '/api/models/probes/batch'
+    '/api/runs/batch': {
+      id: '/api/runs/batch'
       path: '/batch'
-      fullPath: '/api/models/probes/batch'
-      preLoaderRoute: typeof ApiModelsProbesBatchRouteImport
-      parentRoute: typeof ApiModelsProbesRoute
+      fullPath: '/api/runs/batch'
+      preLoaderRoute: typeof ApiRunsBatchRouteImport
+      parentRoute: typeof ApiRunsRoute
     }
-    '/api/models/probes/$id': {
-      id: '/api/models/probes/$id'
+    '/api/schedules/$id': {
+      id: '/api/schedules/$id'
       path: '/$id'
-      fullPath: '/api/models/probes/$id'
-      preLoaderRoute: typeof ApiModelsProbesIdRouteImport
-      parentRoute: typeof ApiModelsProbesRoute
+      fullPath: '/api/schedules/$id'
+      preLoaderRoute: typeof ApiSchedulesIdRouteImport
+      parentRoute: typeof ApiSchedulesRoute
     }
-    '/api/models/diagnostics/stream': {
-      id: '/api/models/diagnostics/stream'
-      path: '/stream'
-      fullPath: '/api/models/diagnostics/stream'
-      preLoaderRoute: typeof ApiModelsDiagnosticsStreamRouteImport
-      parentRoute: typeof ApiModelsDiagnosticsRoute
-    }
-    '/api/memory-v2/governance/details': {
-      id: '/api/memory-v2/governance/details'
-      path: '/details'
-      fullPath: '/api/memory-v2/governance/details'
-      preLoaderRoute: typeof ApiMemoryV2GovernanceDetailsRouteImport
-      parentRoute: typeof ApiMemoryV2GovernanceRoute
-    }
-    '/api/memory-v2/governance/actions': {
-      id: '/api/memory-v2/governance/actions'
-      path: '/actions'
-      fullPath: '/api/memory-v2/governance/actions'
-      preLoaderRoute: typeof ApiMemoryV2GovernanceActionsRouteImport
-      parentRoute: typeof ApiMemoryV2GovernanceRoute
-    }
-    '/api/engine/models/smoke': {
-      id: '/api/engine/models/smoke'
-      path: '/smoke'
-      fullPath: '/api/engine/models/smoke'
-      preLoaderRoute: typeof ApiEngineModelsSmokeRouteImport
-      parentRoute: typeof ApiEngineModelsRoute
-    }
-    '/api/configs/$filename/copy': {
-      id: '/api/configs/$filename/copy'
-      path: '/copy'
-      fullPath: '/api/configs/$filename/copy'
-      preLoaderRoute: typeof ApiConfigsFilenameCopyRouteImport
-      parentRoute: typeof ApiConfigsFilenameRoute
-    }
-    '/api/collaboration/rooms/direct': {
-      id: '/api/collaboration/rooms/direct'
-      path: '/direct'
-      fullPath: '/api/collaboration/rooms/direct'
-      preLoaderRoute: typeof ApiCollaborationRoomsDirectRouteImport
-      parentRoute: typeof ApiCollaborationRoomsRoute
-    }
-    '/api/collaboration/rooms/$roomId': {
-      id: '/api/collaboration/rooms/$roomId'
-      path: '/$roomId'
-      fullPath: '/api/collaboration/rooms/$roomId'
-      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdRouteImport
-      parentRoute: typeof ApiCollaborationRoomsRoute
-    }
-    '/api/chat/stream/recover': {
-      id: '/api/chat/stream/recover'
-      path: '/recover'
-      fullPath: '/api/chat/stream/recover'
-      preLoaderRoute: typeof ApiChatStreamRecoverRouteImport
-      parentRoute: typeof ApiChatStreamRoute
-    }
-    '/api/chat/stream/active': {
-      id: '/api/chat/stream/active'
-      path: '/active'
-      fullPath: '/api/chat/stream/active'
-      preLoaderRoute: typeof ApiChatStreamActiveRouteImport
-      parentRoute: typeof ApiChatStreamRoute
-    }
-    '/api/chat/sessions/batch-delete': {
-      id: '/api/chat/sessions/batch-delete'
-      path: '/batch-delete'
-      fullPath: '/api/chat/sessions/batch-delete'
-      preLoaderRoute: typeof ApiChatSessionsBatchDeleteRouteImport
-      parentRoute: typeof ApiChatSessionsRoute
-    }
-    '/api/chat/sessions/$id': {
-      id: '/api/chat/sessions/$id'
-      path: '/$id'
-      fullPath: '/api/chat/sessions/$id'
-      preLoaderRoute: typeof ApiChatSessionsIdRouteImport
-      parentRoute: typeof ApiChatSessionsRoute
-    }
-    '/api/channels/wechat-official/qrcode-image': {
-      id: '/api/channels/wechat-official/qrcode-image'
-      path: '/api/channels/wechat-official/qrcode-image'
-      fullPath: '/api/channels/wechat-official/qrcode-image'
-      preLoaderRoute: typeof ApiChannelsWechatOfficialQrcodeImageRouteImport
+    '/api/sidebar-plugins/preferences': {
+      id: '/api/sidebar-plugins/preferences'
+      path: '/api/sidebar-plugins/preferences'
+      fullPath: '/api/sidebar-plugins/preferences'
+      preLoaderRoute: typeof ApiSidebarPluginsPreferencesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/channels/wechat-official/login': {
-      id: '/api/channels/wechat-official/login'
-      path: '/api/channels/wechat-official/login'
-      fullPath: '/api/channels/wechat-official/login'
-      preLoaderRoute: typeof ApiChannelsWechatOfficialLoginRouteImport
+    '/api/spec-coding/ai-draft': {
+      id: '/api/spec-coding/ai-draft'
+      path: '/api/spec-coding/ai-draft'
+      fullPath: '/api/spec-coding/ai-draft'
+      preLoaderRoute: typeof ApiSpecCodingAiDraftRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/channels/wechat-official/bridge': {
-      id: '/api/channels/wechat-official/bridge'
-      path: '/api/channels/wechat-official/bridge'
-      fullPath: '/api/channels/wechat-official/bridge'
-      preLoaderRoute: typeof ApiChannelsWechatOfficialBridgeRouteImport
+    '/api/spec-coding/quality': {
+      id: '/api/spec-coding/quality'
+      path: '/api/spec-coding/quality'
+      fullPath: '/api/spec-coding/quality'
+      preLoaderRoute: typeof ApiSpecCodingQualityRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/channels/integrations/$id': {
-      id: '/api/channels/integrations/$id'
+    '/api/spec-coding/sessions': {
+      id: '/api/spec-coding/sessions'
+      path: '/api/spec-coding/sessions'
+      fullPath: '/api/spec-coding/sessions'
+      preLoaderRoute: typeof ApiSpecCodingSessionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/spec-coding/validate-persisted-root': {
+      id: '/api/spec-coding/validate-persisted-root'
+      path: '/api/spec-coding/validate-persisted-root'
+      fullPath: '/api/spec-coding/validate-persisted-root'
+      preLoaderRoute: typeof ApiSpecCodingValidatePersistedRootRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/uploads/image': {
+      id: '/api/uploads/image'
+      path: '/api/uploads/image'
+      fullPath: '/api/uploads/image'
+      preLoaderRoute: typeof ApiUploadsImageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/users/$id': {
+      id: '/api/users/$id'
       path: '/$id'
-      fullPath: '/api/channels/integrations/$id'
-      preLoaderRoute: typeof ApiChannelsIntegrationsIdRouteImport
-      parentRoute: typeof ApiChannelsIntegrationsRoute
+      fullPath: '/api/users/$id'
+      preLoaderRoute: typeof ApiUsersIdRouteImport
+      parentRoute: typeof ApiUsersRoute
     }
-    '/api/channels/inbound/$integrationId': {
-      id: '/api/channels/inbound/$integrationId'
-      path: '/api/channels/inbound/$integrationId'
-      fullPath: '/api/channels/inbound/$integrationId'
-      preLoaderRoute: typeof ApiChannelsInboundIntegrationIdRouteImport
+    '/api/users/shareable': {
+      id: '/api/users/shareable'
+      path: '/shareable'
+      fullPath: '/api/users/shareable'
+      preLoaderRoute: typeof ApiUsersShareableRouteImport
+      parentRoute: typeof ApiUsersRoute
+    }
+    '/api/workflow-templates/instantiate': {
+      id: '/api/workflow-templates/instantiate'
+      path: '/instantiate'
+      fullPath: '/api/workflow-templates/instantiate'
+      preLoaderRoute: typeof ApiWorkflowTemplatesInstantiateRouteImport
+      parentRoute: typeof ApiWorkflowTemplatesRoute
+    }
+    '/api/workflow/approve': {
+      id: '/api/workflow/approve'
+      path: '/api/workflow/approve'
+      fullPath: '/api/workflow/approve'
+      preLoaderRoute: typeof ApiWorkflowApproveRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/cangjie/sdk/remove': {
-      id: '/api/cangjie/sdk/remove'
-      path: '/remove'
-      fullPath: '/api/cangjie/sdk/remove'
-      preLoaderRoute: typeof ApiCangjieSdkRemoveRouteImport
-      parentRoute: typeof ApiCangjieSdkRoute
+    '/api/workflow/audit-log': {
+      id: '/api/workflow/audit-log'
+      path: '/api/workflow/audit-log'
+      fullPath: '/api/workflow/audit-log'
+      preLoaderRoute: typeof ApiWorkflowAuditLogRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/api/cangjie/sdk/install': {
-      id: '/api/cangjie/sdk/install'
-      path: '/install'
-      fullPath: '/api/cangjie/sdk/install'
-      preLoaderRoute: typeof ApiCangjieSdkInstallRouteImport
-      parentRoute: typeof ApiCangjieSdkRoute
+    '/api/workflow/context': {
+      id: '/api/workflow/context'
+      path: '/api/workflow/context'
+      fullPath: '/api/workflow/context'
+      preLoaderRoute: typeof ApiWorkflowContextRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/api/cangjie/sdk/activate': {
-      id: '/api/cangjie/sdk/activate'
-      path: '/activate'
-      fullPath: '/api/cangjie/sdk/activate'
-      preLoaderRoute: typeof ApiCangjieSdkActivateRouteImport
-      parentRoute: typeof ApiCangjieSdkRoute
+    '/api/workflow/event-log': {
+      id: '/api/workflow/event-log'
+      path: '/api/workflow/event-log'
+      fullPath: '/api/workflow/event-log'
+      preLoaderRoute: typeof ApiWorkflowEventLogRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/api/agora/guests/$id': {
-      id: '/api/agora/guests/$id'
-      path: '/$id'
-      fullPath: '/api/agora/guests/$id'
-      preLoaderRoute: typeof ApiAgoraGuestsIdRouteImport
-      parentRoute: typeof ApiAgoraGuestsRoute
+    '/api/workflow/events': {
+      id: '/api/workflow/events'
+      path: '/api/workflow/events'
+      fullPath: '/api/workflow/events'
+      preLoaderRoute: typeof ApiWorkflowEventsRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/api/agents/$name/workspace-profile': {
-      id: '/api/agents/$name/workspace-profile'
-      path: '/workspace-profile'
-      fullPath: '/api/agents/$name/workspace-profile'
-      preLoaderRoute: typeof ApiAgentsNameWorkspaceProfileRouteImport
+    '/api/workflow/force-complete': {
+      id: '/api/workflow/force-complete'
+      path: '/api/workflow/force-complete'
+      fullPath: '/api/workflow/force-complete'
+      preLoaderRoute: typeof ApiWorkflowForceCompleteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/force-transition': {
+      id: '/api/workflow/force-transition'
+      path: '/api/workflow/force-transition'
+      fullPath: '/api/workflow/force-transition'
+      preLoaderRoute: typeof ApiWorkflowForceTransitionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/git-diff': {
+      id: '/api/workflow/git-diff'
+      path: '/api/workflow/git-diff'
+      fullPath: '/api/workflow/git-diff'
+      preLoaderRoute: typeof ApiWorkflowGitDiffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/human-questions': {
+      id: '/api/workflow/human-questions'
+      path: '/api/workflow/human-questions'
+      fullPath: '/api/workflow/human-questions'
+      preLoaderRoute: typeof ApiWorkflowHumanQuestionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/inject-feedback': {
+      id: '/api/workflow/inject-feedback'
+      path: '/api/workflow/inject-feedback'
+      fullPath: '/api/workflow/inject-feedback'
+      preLoaderRoute: typeof ApiWorkflowInjectFeedbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/iterate': {
+      id: '/api/workflow/iterate'
+      path: '/api/workflow/iterate'
+      fullPath: '/api/workflow/iterate'
+      preLoaderRoute: typeof ApiWorkflowIterateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/preflight': {
+      id: '/api/workflow/preflight'
+      path: '/api/workflow/preflight'
+      fullPath: '/api/workflow/preflight'
+      preLoaderRoute: typeof ApiWorkflowPreflightRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/recall-feedback': {
+      id: '/api/workflow/recall-feedback'
+      path: '/api/workflow/recall-feedback'
+      fullPath: '/api/workflow/recall-feedback'
+      preLoaderRoute: typeof ApiWorkflowRecallFeedbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/rerun-from-step': {
+      id: '/api/workflow/rerun-from-step'
+      path: '/api/workflow/rerun-from-step'
+      fullPath: '/api/workflow/rerun-from-step'
+      preLoaderRoute: typeof ApiWorkflowRerunFromStepRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/resume': {
+      id: '/api/workflow/resume'
+      path: '/api/workflow/resume'
+      fullPath: '/api/workflow/resume'
+      preLoaderRoute: typeof ApiWorkflowResumeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/spec-import': {
+      id: '/api/workflow/spec-import'
+      path: '/api/workflow/spec-import'
+      fullPath: '/api/workflow/spec-import'
+      preLoaderRoute: typeof ApiWorkflowSpecImportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/spec-merge': {
+      id: '/api/workflow/spec-merge'
+      path: '/api/workflow/spec-merge'
+      fullPath: '/api/workflow/spec-merge'
+      preLoaderRoute: typeof ApiWorkflowSpecMergeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/start': {
+      id: '/api/workflow/start'
+      path: '/api/workflow/start'
+      fullPath: '/api/workflow/start'
+      preLoaderRoute: typeof ApiWorkflowStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/state-history': {
+      id: '/api/workflow/state-history'
+      path: '/api/workflow/state-history'
+      fullPath: '/api/workflow/state-history'
+      preLoaderRoute: typeof ApiWorkflowStateHistoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/status': {
+      id: '/api/workflow/status'
+      path: '/api/workflow/status'
+      fullPath: '/api/workflow/status'
+      preLoaderRoute: typeof ApiWorkflowStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/step-logs': {
+      id: '/api/workflow/step-logs'
+      path: '/api/workflow/step-logs'
+      fullPath: '/api/workflow/step-logs'
+      preLoaderRoute: typeof ApiWorkflowStepLogsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workflow/stop': {
+      id: '/api/workflow/stop'
+      path: '/api/workflow/stop'
+      fullPath: '/api/workflow/stop'
+      preLoaderRoute: typeof ApiWorkflowStopRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/download': {
+      id: '/api/workspace/download'
+      path: '/api/workspace/download'
+      fullPath: '/api/workspace/download'
+      preLoaderRoute: typeof ApiWorkspaceDownloadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/file': {
+      id: '/api/workspace/file'
+      path: '/api/workspace/file'
+      fullPath: '/api/workspace/file'
+      preLoaderRoute: typeof ApiWorkspaceFileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/git-browser': {
+      id: '/api/workspace/git-browser'
+      path: '/api/workspace/git-browser'
+      fullPath: '/api/workspace/git-browser'
+      preLoaderRoute: typeof ApiWorkspaceGitBrowserRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/git-diff': {
+      id: '/api/workspace/git-diff'
+      path: '/api/workspace/git-diff'
+      fullPath: '/api/workspace/git-diff'
+      preLoaderRoute: typeof ApiWorkspaceGitDiffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/manage': {
+      id: '/api/workspace/manage'
+      path: '/api/workspace/manage'
+      fullPath: '/api/workspace/manage'
+      preLoaderRoute: typeof ApiWorkspaceManageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/remote-credentials': {
+      id: '/api/workspace/remote-credentials'
+      path: '/api/workspace/remote-credentials'
+      fullPath: '/api/workspace/remote-credentials'
+      preLoaderRoute: typeof ApiWorkspaceRemoteCredentialsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/tree': {
+      id: '/api/workspace/tree'
+      path: '/api/workspace/tree'
+      fullPath: '/api/workspace/tree'
+      preLoaderRoute: typeof ApiWorkspaceTreeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/upload': {
+      id: '/api/workspace/upload'
+      path: '/api/workspace/upload'
+      fullPath: '/api/workspace/upload'
+      preLoaderRoute: typeof ApiWorkspaceUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agents/$name/chat': {
+      id: '/api/agents/$name/chat'
+      path: '/chat'
+      fullPath: '/api/agents/$name/chat'
+      preLoaderRoute: typeof ApiAgentsNameChatRouteImport
       parentRoute: typeof ApiAgentsNameRoute
     }
     '/api/agents/$name/memory': {
@@ -4238,67 +3888,403 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAgentsNameMemoryRouteImport
       parentRoute: typeof ApiAgentsNameRoute
     }
-    '/api/agents/$name/chat': {
-      id: '/api/agents/$name/chat'
-      path: '/chat'
-      fullPath: '/api/agents/$name/chat'
-      preLoaderRoute: typeof ApiAgentsNameChatRouteImport
+    '/api/agents/$name/workspace-profile': {
+      id: '/api/agents/$name/workspace-profile'
+      path: '/workspace-profile'
+      fullPath: '/api/agents/$name/workspace-profile'
+      preLoaderRoute: typeof ApiAgentsNameWorkspaceProfileRouteImport
       parentRoute: typeof ApiAgentsNameRoute
     }
-    '/api/workspace/static/$workspaceToken/$': {
-      id: '/api/workspace/static/$workspaceToken/$'
-      path: '/api/workspace/static/$workspaceToken/$'
-      fullPath: '/api/workspace/static/$workspaceToken/$'
-      preLoaderRoute: typeof ApiWorkspaceStaticWorkspaceTokenSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/workflow/human-questions/$questionId/answer': {
-      id: '/api/workflow/human-questions/$questionId/answer'
-      path: '/$questionId/answer'
-      fullPath: '/api/workflow/human-questions/$questionId/answer'
-      preLoaderRoute: typeof ApiWorkflowHumanQuestionsQuestionIdAnswerRouteImport
-      parentRoute: typeof ApiWorkflowHumanQuestionsRoute
-    }
-    '/api/spec-coding/sessions/$id/import-persisted': {
-      id: '/api/spec-coding/sessions/$id/import-persisted'
-      path: '/import-persisted'
-      fullPath: '/api/spec-coding/sessions/$id/import-persisted'
-      preLoaderRoute: typeof ApiSpecCodingSessionsIdImportPersistedRouteImport
-      parentRoute: typeof ApiSpecCodingSessionsIdRoute
-    }
-    '/api/runtime/sqlite/databases/$name': {
-      id: '/api/runtime/sqlite/databases/$name'
-      path: '/$name'
-      fullPath: '/api/runtime/sqlite/databases/$name'
-      preLoaderRoute: typeof ApiRuntimeSqliteDatabasesNameRouteImport
-      parentRoute: typeof ApiRuntimeSqliteDatabasesRoute
-    }
-    '/api/office/org/draft/$id': {
-      id: '/api/office/org/draft/$id'
+    '/api/agora/guests/$id': {
+      id: '/api/agora/guests/$id'
       path: '/$id'
-      fullPath: '/api/office/org/draft/$id'
-      preLoaderRoute: typeof ApiOfficeOrgDraftIdRouteImport
-      parentRoute: typeof ApiOfficeOrgDraftRoute
+      fullPath: '/api/agora/guests/$id'
+      preLoaderRoute: typeof ApiAgoraGuestsIdRouteImport
+      parentRoute: typeof ApiAgoraGuestsRoute
     }
-    '/api/models/probes/$id/run': {
-      id: '/api/models/probes/$id/run'
-      path: '/run'
-      fullPath: '/api/models/probes/$id/run'
-      preLoaderRoute: typeof ApiModelsProbesIdRunRouteImport
-      parentRoute: typeof ApiModelsProbesIdRoute
+    '/api/cangjie/sdk/activate': {
+      id: '/api/cangjie/sdk/activate'
+      path: '/activate'
+      fullPath: '/api/cangjie/sdk/activate'
+      preLoaderRoute: typeof ApiCangjieSdkActivateRouteImport
+      parentRoute: typeof ApiCangjieSdkRoute
     }
-    '/api/memory-v2/workflows/$runId/handoffs': {
-      id: '/api/memory-v2/workflows/$runId/handoffs'
-      path: '/api/memory-v2/workflows/$runId/handoffs'
-      fullPath: '/api/memory-v2/workflows/$runId/handoffs'
-      preLoaderRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsRouteImport
+    '/api/cangjie/sdk/install': {
+      id: '/api/cangjie/sdk/install'
+      path: '/install'
+      fullPath: '/api/cangjie/sdk/install'
+      preLoaderRoute: typeof ApiCangjieSdkInstallRouteImport
+      parentRoute: typeof ApiCangjieSdkRoute
+    }
+    '/api/cangjie/sdk/remove': {
+      id: '/api/cangjie/sdk/remove'
+      path: '/remove'
+      fullPath: '/api/cangjie/sdk/remove'
+      preLoaderRoute: typeof ApiCangjieSdkRemoveRouteImport
+      parentRoute: typeof ApiCangjieSdkRoute
+    }
+    '/api/channels/inbound/$integrationId': {
+      id: '/api/channels/inbound/$integrationId'
+      path: '/api/channels/inbound/$integrationId'
+      fullPath: '/api/channels/inbound/$integrationId'
+      preLoaderRoute: typeof ApiChannelsInboundIntegrationIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/collaboration/rooms/$roomId/session': {
-      id: '/api/collaboration/rooms/$roomId/session'
+    '/api/channels/integrations/$id': {
+      id: '/api/channels/integrations/$id'
+      path: '/$id'
+      fullPath: '/api/channels/integrations/$id'
+      preLoaderRoute: typeof ApiChannelsIntegrationsIdRouteImport
+      parentRoute: typeof ApiChannelsIntegrationsRoute
+    }
+    '/api/channels/wechat-official/bridge': {
+      id: '/api/channels/wechat-official/bridge'
+      path: '/api/channels/wechat-official/bridge'
+      fullPath: '/api/channels/wechat-official/bridge'
+      preLoaderRoute: typeof ApiChannelsWechatOfficialBridgeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/channels/wechat-official/login': {
+      id: '/api/channels/wechat-official/login'
+      path: '/api/channels/wechat-official/login'
+      fullPath: '/api/channels/wechat-official/login'
+      preLoaderRoute: typeof ApiChannelsWechatOfficialLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/channels/wechat-official/qrcode-image': {
+      id: '/api/channels/wechat-official/qrcode-image'
+      path: '/api/channels/wechat-official/qrcode-image'
+      fullPath: '/api/channels/wechat-official/qrcode-image'
+      preLoaderRoute: typeof ApiChannelsWechatOfficialQrcodeImageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/chat/sessions/$id': {
+      id: '/api/chat/sessions/$id'
+      path: '/$id'
+      fullPath: '/api/chat/sessions/$id'
+      preLoaderRoute: typeof ApiChatSessionsIdRouteImport
+      parentRoute: typeof ApiChatSessionsRoute
+    }
+    '/api/chat/sessions/batch-delete': {
+      id: '/api/chat/sessions/batch-delete'
+      path: '/batch-delete'
+      fullPath: '/api/chat/sessions/batch-delete'
+      preLoaderRoute: typeof ApiChatSessionsBatchDeleteRouteImport
+      parentRoute: typeof ApiChatSessionsRoute
+    }
+    '/api/chat/stream/active': {
+      id: '/api/chat/stream/active'
+      path: '/active'
+      fullPath: '/api/chat/stream/active'
+      preLoaderRoute: typeof ApiChatStreamActiveRouteImport
+      parentRoute: typeof ApiChatStreamRoute
+    }
+    '/api/chat/stream/recover': {
+      id: '/api/chat/stream/recover'
+      path: '/recover'
+      fullPath: '/api/chat/stream/recover'
+      preLoaderRoute: typeof ApiChatStreamRecoverRouteImport
+      parentRoute: typeof ApiChatStreamRoute
+    }
+    '/api/collaboration/rooms/$roomId': {
+      id: '/api/collaboration/rooms/$roomId'
+      path: '/$roomId'
+      fullPath: '/api/collaboration/rooms/$roomId'
+      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdRouteImport
+      parentRoute: typeof ApiCollaborationRoomsRoute
+    }
+    '/api/collaboration/rooms/direct': {
+      id: '/api/collaboration/rooms/direct'
+      path: '/direct'
+      fullPath: '/api/collaboration/rooms/direct'
+      preLoaderRoute: typeof ApiCollaborationRoomsDirectRouteImport
+      parentRoute: typeof ApiCollaborationRoomsRoute
+    }
+    '/api/configs/$filename/copy': {
+      id: '/api/configs/$filename/copy'
+      path: '/copy'
+      fullPath: '/api/configs/$filename/copy'
+      preLoaderRoute: typeof ApiConfigsFilenameCopyRouteImport
+      parentRoute: typeof ApiConfigsFilenameRoute
+    }
+    '/api/engine/models/smoke': {
+      id: '/api/engine/models/smoke'
+      path: '/smoke'
+      fullPath: '/api/engine/models/smoke'
+      preLoaderRoute: typeof ApiEngineModelsSmokeRouteImport
+      parentRoute: typeof ApiEngineModelsRoute
+    }
+    '/api/memory-v2/governance/actions': {
+      id: '/api/memory-v2/governance/actions'
+      path: '/actions'
+      fullPath: '/api/memory-v2/governance/actions'
+      preLoaderRoute: typeof ApiMemoryV2GovernanceActionsRouteImport
+      parentRoute: typeof ApiMemoryV2GovernanceRoute
+    }
+    '/api/memory-v2/governance/details': {
+      id: '/api/memory-v2/governance/details'
+      path: '/details'
+      fullPath: '/api/memory-v2/governance/details'
+      preLoaderRoute: typeof ApiMemoryV2GovernanceDetailsRouteImport
+      parentRoute: typeof ApiMemoryV2GovernanceRoute
+    }
+    '/api/models/diagnostics/stream': {
+      id: '/api/models/diagnostics/stream'
+      path: '/stream'
+      fullPath: '/api/models/diagnostics/stream'
+      preLoaderRoute: typeof ApiModelsDiagnosticsStreamRouteImport
+      parentRoute: typeof ApiModelsDiagnosticsRoute
+    }
+    '/api/models/probes/$id': {
+      id: '/api/models/probes/$id'
+      path: '/$id'
+      fullPath: '/api/models/probes/$id'
+      preLoaderRoute: typeof ApiModelsProbesIdRouteImport
+      parentRoute: typeof ApiModelsProbesRoute
+    }
+    '/api/models/probes/batch': {
+      id: '/api/models/probes/batch'
+      path: '/batch'
+      fullPath: '/api/models/probes/batch'
+      preLoaderRoute: typeof ApiModelsProbesBatchRouteImport
+      parentRoute: typeof ApiModelsProbesRoute
+    }
+    '/api/models/probes/query': {
+      id: '/api/models/probes/query'
+      path: '/query'
+      fullPath: '/api/models/probes/query'
+      preLoaderRoute: typeof ApiModelsProbesQueryRouteImport
+      parentRoute: typeof ApiModelsProbesRoute
+    }
+    '/api/models/probes/run': {
+      id: '/api/models/probes/run'
+      path: '/run'
+      fullPath: '/api/models/probes/run'
+      preLoaderRoute: typeof ApiModelsProbesRunRouteImport
+      parentRoute: typeof ApiModelsProbesRoute
+    }
+    '/api/office/org/apply': {
+      id: '/api/office/org/apply'
+      path: '/api/office/org/apply'
+      fullPath: '/api/office/org/apply'
+      preLoaderRoute: typeof ApiOfficeOrgApplyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/office/org/clarify': {
+      id: '/api/office/org/clarify'
+      path: '/api/office/org/clarify'
+      fullPath: '/api/office/org/clarify'
+      preLoaderRoute: typeof ApiOfficeOrgClarifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/office/org/current': {
+      id: '/api/office/org/current'
+      path: '/api/office/org/current'
+      fullPath: '/api/office/org/current'
+      preLoaderRoute: typeof ApiOfficeOrgCurrentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/office/org/draft': {
+      id: '/api/office/org/draft'
+      path: '/api/office/org/draft'
+      fullPath: '/api/office/org/draft'
+      preLoaderRoute: typeof ApiOfficeOrgDraftRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/office/org/versions': {
+      id: '/api/office/org/versions'
+      path: '/api/office/org/versions'
+      fullPath: '/api/office/org/versions'
+      preLoaderRoute: typeof ApiOfficeOrgVersionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/office/team/apply': {
+      id: '/api/office/team/apply'
+      path: '/api/office/team/apply'
+      fullPath: '/api/office/team/apply'
+      preLoaderRoute: typeof ApiOfficeTeamApplyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/office/team/current': {
+      id: '/api/office/team/current'
+      path: '/api/office/team/current'
+      fullPath: '/api/office/team/current'
+      preLoaderRoute: typeof ApiOfficeTeamCurrentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/office/team/plan': {
+      id: '/api/office/team/plan'
+      path: '/api/office/team/plan'
+      fullPath: '/api/office/team/plan'
+      preLoaderRoute: typeof ApiOfficeTeamPlanRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/onboarding/admin/progress': {
+      id: '/api/onboarding/admin/progress'
+      path: '/api/onboarding/admin/progress'
+      fullPath: '/api/onboarding/admin/progress'
+      preLoaderRoute: typeof ApiOnboardingAdminProgressRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/rag/v1/collections': {
+      id: '/api/rag/v1/collections'
+      path: '/api/rag/v1/collections'
+      fullPath: '/api/rag/v1/collections'
+      preLoaderRoute: typeof ApiRagV1CollectionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/runs/$id/delete': {
+      id: '/api/runs/$id/delete'
+      path: '/delete'
+      fullPath: '/api/runs/$id/delete'
+      preLoaderRoute: typeof ApiRunsIdDeleteRouteImport
+      parentRoute: typeof ApiRunsIdRoute
+    }
+    '/api/runs/$id/detail': {
+      id: '/api/runs/$id/detail'
+      path: '/detail'
+      fullPath: '/api/runs/$id/detail'
+      preLoaderRoute: typeof ApiRunsIdDetailRouteImport
+      parentRoute: typeof ApiRunsIdRoute
+    }
+    '/api/runs/$id/documents': {
+      id: '/api/runs/$id/documents'
+      path: '/documents'
+      fullPath: '/api/runs/$id/documents'
+      preLoaderRoute: typeof ApiRunsIdDocumentsRouteImport
+      parentRoute: typeof ApiRunsIdRoute
+    }
+    '/api/runs/$id/outputs': {
+      id: '/api/runs/$id/outputs'
+      path: '/outputs'
+      fullPath: '/api/runs/$id/outputs'
+      preLoaderRoute: typeof ApiRunsIdOutputsRouteImport
+      parentRoute: typeof ApiRunsIdRoute
+    }
+    '/api/runs/$id/stream': {
+      id: '/api/runs/$id/stream'
+      path: '/stream'
+      fullPath: '/api/runs/$id/stream'
+      preLoaderRoute: typeof ApiRunsIdStreamRouteImport
+      parentRoute: typeof ApiRunsIdRoute
+    }
+    '/api/runs/by-config/$config': {
+      id: '/api/runs/by-config/$config'
+      path: '/by-config/$config'
+      fullPath: '/api/runs/by-config/$config'
+      preLoaderRoute: typeof ApiRunsByConfigConfigRouteImport
+      parentRoute: typeof ApiRunsRoute
+    }
+    '/api/runtime/rag/knowledge-bases': {
+      id: '/api/runtime/rag/knowledge-bases'
+      path: '/api/runtime/rag/knowledge-bases'
+      fullPath: '/api/runtime/rag/knowledge-bases'
+      preLoaderRoute: typeof ApiRuntimeRagKnowledgeBasesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/runtime/rag/search': {
+      id: '/api/runtime/rag/search'
+      path: '/api/runtime/rag/search'
+      fullPath: '/api/runtime/rag/search'
+      preLoaderRoute: typeof ApiRuntimeRagSearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/runtime/sqlite/databases': {
+      id: '/api/runtime/sqlite/databases'
+      path: '/api/runtime/sqlite/databases'
+      fullPath: '/api/runtime/sqlite/databases'
+      preLoaderRoute: typeof ApiRuntimeSqliteDatabasesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/runtime/sqlite/exec': {
+      id: '/api/runtime/sqlite/exec'
+      path: '/api/runtime/sqlite/exec'
+      fullPath: '/api/runtime/sqlite/exec'
+      preLoaderRoute: typeof ApiRuntimeSqliteExecRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/runtime/sqlite/query': {
+      id: '/api/runtime/sqlite/query'
+      path: '/api/runtime/sqlite/query'
+      fullPath: '/api/runtime/sqlite/query'
+      preLoaderRoute: typeof ApiRuntimeSqliteQueryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/runtime/sqlite/transaction': {
+      id: '/api/runtime/sqlite/transaction'
+      path: '/api/runtime/sqlite/transaction'
+      fullPath: '/api/runtime/sqlite/transaction'
+      preLoaderRoute: typeof ApiRuntimeSqliteTransactionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/schedules/$id/toggle': {
+      id: '/api/schedules/$id/toggle'
+      path: '/toggle'
+      fullPath: '/api/schedules/$id/toggle'
+      preLoaderRoute: typeof ApiSchedulesIdToggleRouteImport
+      parentRoute: typeof ApiSchedulesIdRoute
+    }
+    '/api/schedules/$id/trigger': {
+      id: '/api/schedules/$id/trigger'
+      path: '/trigger'
+      fullPath: '/api/schedules/$id/trigger'
+      preLoaderRoute: typeof ApiSchedulesIdTriggerRouteImport
+      parentRoute: typeof ApiSchedulesIdRoute
+    }
+    '/api/spec-coding/sessions/$id': {
+      id: '/api/spec-coding/sessions/$id'
+      path: '/$id'
+      fullPath: '/api/spec-coding/sessions/$id'
+      preLoaderRoute: typeof ApiSpecCodingSessionsIdRouteImport
+      parentRoute: typeof ApiSpecCodingSessionsRoute
+    }
+    '/api/workflow/start/plan': {
+      id: '/api/workflow/start/plan'
+      path: '/plan'
+      fullPath: '/api/workflow/start/plan'
+      preLoaderRoute: typeof ApiWorkflowStartPlanRouteImport
+      parentRoute: typeof ApiWorkflowStartRoute
+    }
+    '/api/agents/$name/chat/session': {
+      id: '/api/agents/$name/chat/session'
       path: '/session'
-      fullPath: '/api/collaboration/rooms/$roomId/session'
-      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdSessionRouteImport
+      fullPath: '/api/agents/$name/chat/session'
+      preLoaderRoute: typeof ApiAgentsNameChatSessionRouteImport
+      parentRoute: typeof ApiAgentsNameChatRoute
+    }
+    '/api/agents/$name/chat/stream': {
+      id: '/api/agents/$name/chat/stream'
+      path: '/stream'
+      fullPath: '/api/agents/$name/chat/stream'
+      preLoaderRoute: typeof ApiAgentsNameChatStreamRouteImport
+      parentRoute: typeof ApiAgentsNameChatRoute
+    }
+    '/api/channels/integrations/$id/bootstrap': {
+      id: '/api/channels/integrations/$id/bootstrap'
+      path: '/bootstrap'
+      fullPath: '/api/channels/integrations/$id/bootstrap'
+      preLoaderRoute: typeof ApiChannelsIntegrationsIdBootstrapRouteImport
+      parentRoute: typeof ApiChannelsIntegrationsIdRoute
+    }
+    '/api/channels/integrations/$id/test-send': {
+      id: '/api/channels/integrations/$id/test-send'
+      path: '/test-send'
+      fullPath: '/api/channels/integrations/$id/test-send'
+      preLoaderRoute: typeof ApiChannelsIntegrationsIdTestSendRouteImport
+      parentRoute: typeof ApiChannelsIntegrationsIdRoute
+    }
+    '/api/channels/wechat-official/login/$id': {
+      id: '/api/channels/wechat-official/login/$id'
+      path: '/$id'
+      fullPath: '/api/channels/wechat-official/login/$id'
+      preLoaderRoute: typeof ApiChannelsWechatOfficialLoginIdRouteImport
+      parentRoute: typeof ApiChannelsWechatOfficialLoginRoute
+    }
+    '/api/collaboration/rooms/$roomId/finish': {
+      id: '/api/collaboration/rooms/$roomId/finish'
+      path: '/finish'
+      fullPath: '/api/collaboration/rooms/$roomId/finish'
+      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdFinishRouteImport
       parentRoute: typeof ApiCollaborationRoomsRoomIdRoute
     }
     '/api/collaboration/rooms/$roomId/participants': {
@@ -4308,60 +4294,81 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCollaborationRoomsRoomIdParticipantsRouteImport
       parentRoute: typeof ApiCollaborationRoomsRoomIdRoute
     }
-    '/api/collaboration/rooms/$roomId/finish': {
-      id: '/api/collaboration/rooms/$roomId/finish'
-      path: '/finish'
-      fullPath: '/api/collaboration/rooms/$roomId/finish'
-      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdFinishRouteImport
+    '/api/collaboration/rooms/$roomId/session': {
+      id: '/api/collaboration/rooms/$roomId/session'
+      path: '/session'
+      fullPath: '/api/collaboration/rooms/$roomId/session'
+      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdSessionRouteImport
       parentRoute: typeof ApiCollaborationRoomsRoomIdRoute
     }
-    '/api/channels/wechat-official/login/$id': {
-      id: '/api/channels/wechat-official/login/$id'
+    '/api/memory-v2/workflows/$runId/handoffs': {
+      id: '/api/memory-v2/workflows/$runId/handoffs'
+      path: '/api/memory-v2/workflows/$runId/handoffs'
+      fullPath: '/api/memory-v2/workflows/$runId/handoffs'
+      preLoaderRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/models/probes/$id/run': {
+      id: '/api/models/probes/$id/run'
+      path: '/run'
+      fullPath: '/api/models/probes/$id/run'
+      preLoaderRoute: typeof ApiModelsProbesIdRunRouteImport
+      parentRoute: typeof ApiModelsProbesIdRoute
+    }
+    '/api/office/org/draft/$id': {
+      id: '/api/office/org/draft/$id'
       path: '/$id'
-      fullPath: '/api/channels/wechat-official/login/$id'
-      preLoaderRoute: typeof ApiChannelsWechatOfficialLoginIdRouteImport
-      parentRoute: typeof ApiChannelsWechatOfficialLoginRoute
+      fullPath: '/api/office/org/draft/$id'
+      preLoaderRoute: typeof ApiOfficeOrgDraftIdRouteImport
+      parentRoute: typeof ApiOfficeOrgDraftRoute
     }
-    '/api/channels/integrations/$id/test-send': {
-      id: '/api/channels/integrations/$id/test-send'
-      path: '/test-send'
-      fullPath: '/api/channels/integrations/$id/test-send'
-      preLoaderRoute: typeof ApiChannelsIntegrationsIdTestSendRouteImport
-      parentRoute: typeof ApiChannelsIntegrationsIdRoute
+    '/api/runtime/sqlite/databases/$name': {
+      id: '/api/runtime/sqlite/databases/$name'
+      path: '/$name'
+      fullPath: '/api/runtime/sqlite/databases/$name'
+      preLoaderRoute: typeof ApiRuntimeSqliteDatabasesNameRouteImport
+      parentRoute: typeof ApiRuntimeSqliteDatabasesRoute
     }
-    '/api/channels/integrations/$id/bootstrap': {
-      id: '/api/channels/integrations/$id/bootstrap'
-      path: '/bootstrap'
-      fullPath: '/api/channels/integrations/$id/bootstrap'
-      preLoaderRoute: typeof ApiChannelsIntegrationsIdBootstrapRouteImport
-      parentRoute: typeof ApiChannelsIntegrationsIdRoute
+    '/api/spec-coding/sessions/$id/import-persisted': {
+      id: '/api/spec-coding/sessions/$id/import-persisted'
+      path: '/import-persisted'
+      fullPath: '/api/spec-coding/sessions/$id/import-persisted'
+      preLoaderRoute: typeof ApiSpecCodingSessionsIdImportPersistedRouteImport
+      parentRoute: typeof ApiSpecCodingSessionsIdRoute
     }
-    '/api/agents/$name/chat/stream': {
-      id: '/api/agents/$name/chat/stream'
-      path: '/stream'
-      fullPath: '/api/agents/$name/chat/stream'
-      preLoaderRoute: typeof ApiAgentsNameChatStreamRouteImport
-      parentRoute: typeof ApiAgentsNameChatRoute
+    '/api/workflow/human-questions/$questionId/answer': {
+      id: '/api/workflow/human-questions/$questionId/answer'
+      path: '/$questionId/answer'
+      fullPath: '/api/workflow/human-questions/$questionId/answer'
+      preLoaderRoute: typeof ApiWorkflowHumanQuestionsQuestionIdAnswerRouteImport
+      parentRoute: typeof ApiWorkflowHumanQuestionsRoute
     }
-    '/api/agents/$name/chat/session': {
-      id: '/api/agents/$name/chat/session'
-      path: '/session'
-      fullPath: '/api/agents/$name/chat/session'
-      preLoaderRoute: typeof ApiAgentsNameChatSessionRouteImport
-      parentRoute: typeof ApiAgentsNameChatRoute
+    '/api/workspace/static/$workspaceToken/$': {
+      id: '/api/workspace/static/$workspaceToken/$'
+      path: '/api/workspace/static/$workspaceToken/$'
+      fullPath: '/api/workspace/static/$workspaceToken/$'
+      preLoaderRoute: typeof ApiWorkspaceStaticWorkspaceTokenSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/api/rag/v1/collections/$id/search': {
-      id: '/api/rag/v1/collections/$id/search'
-      path: '/$id/search'
-      fullPath: '/api/rag/v1/collections/$id/search'
-      preLoaderRoute: typeof ApiRagV1CollectionsIdSearchRouteImport
-      parentRoute: typeof ApiRagV1CollectionsRoute
+    '/api/channels/wechat-official/login/$id/wait': {
+      id: '/api/channels/wechat-official/login/$id/wait'
+      path: '/wait'
+      fullPath: '/api/channels/wechat-official/login/$id/wait'
+      preLoaderRoute: typeof ApiChannelsWechatOfficialLoginIdWaitRouteImport
+      parentRoute: typeof ApiChannelsWechatOfficialLoginIdRoute
     }
-    '/api/rag/v1/collections/$id/schema': {
-      id: '/api/rag/v1/collections/$id/schema'
-      path: '/$id/schema'
-      fullPath: '/api/rag/v1/collections/$id/schema'
-      preLoaderRoute: typeof ApiRagV1CollectionsIdSchemaRouteImport
+    '/api/office/org/versions/$id/restore': {
+      id: '/api/office/org/versions/$id/restore'
+      path: '/$id/restore'
+      fullPath: '/api/office/org/versions/$id/restore'
+      preLoaderRoute: typeof ApiOfficeOrgVersionsIdRestoreRouteImport
+      parentRoute: typeof ApiOfficeOrgVersionsRoute
+    }
+    '/api/rag/v1/collections/$id/import': {
+      id: '/api/rag/v1/collections/$id/import'
+      path: '/$id/import'
+      fullPath: '/api/rag/v1/collections/$id/import'
+      preLoaderRoute: typeof ApiRagV1CollectionsIdImportRouteImport
       parentRoute: typeof ApiRagV1CollectionsRoute
     }
     '/api/rag/v1/collections/$id/rows': {
@@ -4371,33 +4378,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRagV1CollectionsIdRowsRouteImport
       parentRoute: typeof ApiRagV1CollectionsRoute
     }
-    '/api/rag/v1/collections/$id/import': {
-      id: '/api/rag/v1/collections/$id/import'
-      path: '/$id/import'
-      fullPath: '/api/rag/v1/collections/$id/import'
-      preLoaderRoute: typeof ApiRagV1CollectionsIdImportRouteImport
+    '/api/rag/v1/collections/$id/schema': {
+      id: '/api/rag/v1/collections/$id/schema'
+      path: '/$id/schema'
+      fullPath: '/api/rag/v1/collections/$id/schema'
+      preLoaderRoute: typeof ApiRagV1CollectionsIdSchemaRouteImport
       parentRoute: typeof ApiRagV1CollectionsRoute
     }
-    '/api/office/org/versions/$id/restore': {
-      id: '/api/office/org/versions/$id/restore'
-      path: '/$id/restore'
-      fullPath: '/api/office/org/versions/$id/restore'
-      preLoaderRoute: typeof ApiOfficeOrgVersionsIdRestoreRouteImport
-      parentRoute: typeof ApiOfficeOrgVersionsRoute
-    }
-    '/api/channels/wechat-official/login/$id/wait': {
-      id: '/api/channels/wechat-official/login/$id/wait'
-      path: '/wait'
-      fullPath: '/api/channels/wechat-official/login/$id/wait'
-      preLoaderRoute: typeof ApiChannelsWechatOfficialLoginIdWaitRouteImport
-      parentRoute: typeof ApiChannelsWechatOfficialLoginIdRoute
-    }
-    '/api/rag/v1/collections/$id/sources/$sourceId': {
-      id: '/api/rag/v1/collections/$id/sources/$sourceId'
-      path: '/$id/sources/$sourceId'
-      fullPath: '/api/rag/v1/collections/$id/sources/$sourceId'
-      preLoaderRoute: typeof ApiRagV1CollectionsIdSourcesSourceIdRouteImport
+    '/api/rag/v1/collections/$id/search': {
+      id: '/api/rag/v1/collections/$id/search'
+      path: '/$id/search'
+      fullPath: '/api/rag/v1/collections/$id/search'
+      preLoaderRoute: typeof ApiRagV1CollectionsIdSearchRouteImport
       parentRoute: typeof ApiRagV1CollectionsRoute
+    }
+    '/api/collaboration/rooms/$roomId/participants/$agentName/memory': {
+      id: '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
+      path: '/$agentName/memory'
+      fullPath: '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
+      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRouteImport
+      parentRoute: typeof ApiCollaborationRoomsRoomIdParticipantsRoute
     }
     '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details': {
       id: '/api/memory-v2/workflows/$runId/handoffs/$handoffId/details'
@@ -4406,12 +4406,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsHandoffIdDetailsRouteImport
       parentRoute: typeof ApiMemoryV2WorkflowsRunIdHandoffsRoute
     }
-    '/api/collaboration/rooms/$roomId/participants/$agentName/memory': {
-      id: '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
-      path: '/$agentName/memory'
-      fullPath: '/api/collaboration/rooms/$roomId/participants/$agentName/memory'
-      preLoaderRoute: typeof ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRouteImport
-      parentRoute: typeof ApiCollaborationRoomsRoomIdParticipantsRoute
+    '/api/rag/v1/collections/$id/sources/$sourceId': {
+      id: '/api/rag/v1/collections/$id/sources/$sourceId'
+      path: '/$id/sources/$sourceId'
+      fullPath: '/api/rag/v1/collections/$id/sources/$sourceId'
+      preLoaderRoute: typeof ApiRagV1CollectionsIdSourcesSourceIdRouteImport
+      parentRoute: typeof ApiRagV1CollectionsRoute
     }
   }
 }

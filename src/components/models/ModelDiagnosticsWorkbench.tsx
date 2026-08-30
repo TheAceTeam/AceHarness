@@ -34,7 +34,7 @@ import {
   TimerReset,
   XCircle,
 } from 'lucide-react';
-import { Streamdown } from 'streamdown';
+import { Streamdown, type CodeHighlighterPlugin } from 'streamdown';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -72,6 +72,7 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { cn } from '@/lib/core/utils';
+import { normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
 import { syncModelDiagnosticsResultToDb, useModelDiagnosticsRows } from '@/client/db/collections';
 import type {
   DiagnosticDriver,
@@ -117,7 +118,15 @@ const CAPABILITY_ICONS: Record<string, typeof Gauge> = {
 const LOCAL_RESULT_STORAGE_KEY = 'ace-model-diagnostics:last-result';
 const LOCAL_ACTIVE_RUN_STORAGE_KEY = 'ace-model-diagnostics:active-run';
 const DEFAULT_TIMEOUT_MS = 180_000;
-const streamdownPlugins = { cjk, code, math: streamdownMath, mermaid: streamdownMermaid };
+// @streamdown/code currently ships its own Shiki 3.x types while Streamdown's
+// host type resolves the application's Shiki version. The runtime plugin
+// contract is identical; keep the boundary explicit until the packages align.
+const streamdownPlugins = {
+  cjk,
+  code: code as unknown as CodeHighlighterPlugin,
+  math: streamdownMath,
+  mermaid: streamdownMermaid,
+};
 const MODEL_CAPABILITY_OPTIONS = [
   { id: 'json_output', label: 'JSON', description: '嵌套 JSON / 类型 / checksum' },
   { id: 'code_generation', label: '代码', description: 'TypeScript relay 审计函数' },
@@ -833,7 +842,7 @@ function buildSummaryTerminalLines(
 
 export default function ModelDiagnosticsWorkbench({ managedModels }: { managedModels: ManagedModelReference[] }) {
   const { toast, updateToast, dismissToast } = useToast();
-  const [engine, setEngine] = useState('claude-code');
+  const [engine, setEngine] = useState(() => normalizeRuntimeEngineId('claude-code'));
   const [model, setModel] = useState('');
   const [timeoutMs, setTimeoutMs] = useState(String(DEFAULT_TIMEOUT_MS));
   const [includeEngineDebug, setIncludeEngineDebug] = useState(true);
@@ -859,7 +868,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
   const latestDiagnosticsRow = diagnosticsRows[0] || null;
 
   const selectedModel = useMemo(() => (
-    managedModels.find((item) => (getRouteId(item) || item.modelId || item.id) === model) || null
+    managedModels.find((item) => [getRouteId(item), item.modelId, item.id].includes(model)) || null
   ), [managedModels, model]);
   const selectedModelLabel = selectedModel ? routeDisplayName(selectedModel) : (model || '默认模型');
   const selectedModelCapabilitySet = useMemo(() => new Set(selectedModelCapabilityIds), [selectedModelCapabilityIds]);

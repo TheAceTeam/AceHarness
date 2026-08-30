@@ -35,8 +35,10 @@ function uniqueStrings(values: unknown): string[] {
 }
 
 function defaultedUniqueStrings(values: unknown, defaults: readonly string[]): string[] {
-  const normalized = uniqueStrings(values);
-  return normalized.length > 0 ? normalized : [...defaults];
+  // An omitted legacy field receives the compatibility defaults. An explicit
+  // empty array is meaningful: the model did not declare an API endpoint.
+  if (Array.isArray(values)) return uniqueStrings(values);
+  return [...defaults];
 }
 
 function normalizeContextWindow(value: unknown): number {

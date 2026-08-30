@@ -111,9 +111,13 @@ function setCandidate(
   candidates.set(key, list);
 }
 
-function readinessForValue(value: string | undefined, required: boolean): RuntimeReadiness {
+function readinessForValue(
+  value: string | undefined,
+  required: boolean,
+  allowedValues?: readonly string[],
+): RuntimeReadiness {
   if (value != null && value !== '') {
-    return 'ready';
+    return allowedValues && !allowedValues.includes(value) ? 'misconfigured' : 'ready';
   }
   return required ? 'missing' : 'unknown';
 }
@@ -160,7 +164,7 @@ export function resolveRuntimeEnv(input: RuntimeEnvResolutionInput): RuntimeEnvR
       value,
       source: 'process-env',
       secret: Boolean(requirement?.secret),
-      readiness: readinessForValue(value, Boolean(requirement?.required)),
+      readiness: readinessForValue(value, Boolean(requirement?.required), requirement?.allowedValues),
     });
   }
 
@@ -171,7 +175,7 @@ export function resolveRuntimeEnv(input: RuntimeEnvResolutionInput): RuntimeEnvR
       value,
       source: 'agent-default',
       secret: Boolean(requirement?.secret),
-      readiness: readinessForValue(value, Boolean(requirement?.required)),
+      readiness: readinessForValue(value, Boolean(requirement?.required), requirement?.allowedValues),
     });
   }
 
@@ -215,7 +219,7 @@ export function resolveRuntimeEnv(input: RuntimeEnvResolutionInput): RuntimeEnvR
       secret: Boolean(variable.secret ?? variable.secretRef ?? requirement?.secret),
       readiness: variable.secretRef && !secretValue
         ? required ? 'missing' : 'misconfigured'
-        : readinessForValue(value, required),
+        : readinessForValue(value, required, requirement?.allowedValues),
     });
   }
 
@@ -226,7 +230,7 @@ export function resolveRuntimeEnv(input: RuntimeEnvResolutionInput): RuntimeEnvR
       value,
       source: 'turn-override',
       secret: Boolean(requirement?.secret),
-      readiness: readinessForValue(value, Boolean(requirement?.required)),
+      readiness: readinessForValue(value, Boolean(requirement?.required), requirement?.allowedValues),
     });
   }
 
@@ -260,7 +264,7 @@ export function resolveRuntimeEnv(input: RuntimeEnvResolutionInput): RuntimeEnvR
     if (selected.readiness === 'missing' || selected.readiness === 'misconfigured') {
       missing.push(key);
     }
-    if (selected.value != null) {
+    if (selected.value != null && selected.readiness !== 'misconfigured') {
       adapterEnv[key] = selected.value;
     }
     env.push({
@@ -300,4 +304,3 @@ export function checkSecretProfileReadiness(profile: RuntimeSecretProfileDto): R
   }
   return profile.secrets.every((secret) => secret.readiness === 'ready' || !secret.required) ? 'ready' : 'unknown';
 }
-

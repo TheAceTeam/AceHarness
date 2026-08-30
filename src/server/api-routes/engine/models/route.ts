@@ -1,6 +1,14 @@
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { loadConfiguredEnvObject } from '@/lib/core/configured-env';
+import { parse } from 'yaml';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
 import { getAcpxAgentRegistryOverrides, resolveAcpxCommand, resolveAcpxRuntimeAgent, shouldSkipOpencodeSafeCheck } from '@/lib/runtime-agent/adapters/acpx-adapter';
+import { DEEPSEEK_HARNESS_DEFAULT_MODELS } from '@/lib/runtime-agent/deepseek-harness-constants';
+import { createAcpxCompatibleSessionStore } from '@/lib/runtime-agent/adapters/acpx-runtime-client';
+import { qualifyModelId } from '@/lib/models/provider-qualified-id';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
 
 export const dynamic = 'force-dynamic';
@@ -10,6 +18,7 @@ type DiscoveredModel = {
   name: string;
   source?: string;
   recommended?: boolean;
+  endpoints?: string[];
 };
 
 function normalizeEngineId(engine: string): string {
@@ -25,12 +34,14 @@ function uniqueModels(models: DiscoveredModel[]): DiscoveredModel[] {
     const modelId = String(model.modelId || '').trim();
     if (!modelId) continue;
     const current = byId.get(modelId);
-    byId.set(modelId, {
+    const next: DiscoveredModel = {
       modelId,
       name: current?.name || model.name || modelId,
       source: current?.source || model.source,
-      recommended: Boolean(current?.recommended || model.recommended),
-    });
+      endpoints: Array.from(new Set([...(current?.endpoints || []), ...(model.endpoints || [])])),
+    };
+    if (current?.recommended || model.recommended) next.recommended = true;
+    byId.set(modelId, next);
   }
   return Array.from(byId.values());
 }
@@ -45,11 +56,131 @@ function valuesFromUnknown(value: unknown): unknown[] {
   return [];
 }
 
-function addModel(target: DiscoveredModel[], seen: Set<string>, modelId: unknown, name?: unknown): void {
+function addModel(
+  target: DiscoveredModel[],
+  seen: Set<string>,
+  modelId: unknown,
+  name?: unknown,
+  options?: { source?: string; endpoint?: string },
+): void {
   const id = stringValue(modelId);
   if (!id || seen.has(id)) return;
   seen.add(id);
-  target.push({ modelId: id, name: stringValue(name) || id, source: 'acpx' });
+  target.push({
+    modelId: id,
+    name: stringValue(name) || id,
+    source: options?.source || 'acpx',
+    ...(options?.endpoint ? { endpoints: [options.endpoint] } : {}),
+  });
+}
+
+function configuredProviderEndpoints(providerId: string, providerConfig: Record<string, unknown>): string[] {
+  const explicit = [providerConfig.endpoints, providerConfig.endpoint]
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map(stringValue)
+    .filter(Boolean);
+  if (explicit.length > 0) return Array.from(new Set(explicit));
+
+  const provider = providerId.toLowerCase();
+  if (provider === 'deepseek' || provider.includes('deepseek')) return ['deepseek'];
+  if (provider === 'openai' || provider.includes('openai')) return ['openai'];
+
+  // DSH's pi-ai protocol names are transport protocols, not provider ids.
+  // They are only used as a conservative endpoint hint when the route name
+  // itself is opaque (for example, a gateway named `boft`).
+  const api = stringValue(providerConfig.api).toLowerCase();
+  if (api.includes('deepseek')) return ['deepseek'];
+  if (api.startsWith('openai-')) return ['openai'];
+  return [];
+}
+
+function addConfiguredModel(
+  target: DiscoveredModel[],
+  seen: Set<string>,
+  providerId: string,
+  providerConfig: Record<string, unknown>,
+  model: unknown,
+): void {
+  const endpoints = configuredProviderEndpoints(providerId, providerConfig);
+  const endpoint = endpoints[0];
+  if (typeof model === 'string') {
+    addModel(target, seen, qualifyModelId(providerId, model), model, { source: 'config', endpoint });
+    return;
+  }
+  if (!model || typeof model !== 'object') return;
+  const record = model as Record<string, unknown>;
+  const rawModelId = stringValue(record.id ?? record.modelId ?? record.value ?? record.key);
+  addModel(
+    target,
+    seen,
+    qualifyModelId(providerId, rawModelId),
+    record.name ?? record.displayName ?? record.label ?? record.title ?? rawModelId,
+    { source: 'config', endpoint },
+  );
+}
+
+async function loadDeepseekConfiguredModels(): Promise<DiscoveredModel[]> {
+  const configuredEnv = await loadConfiguredEnvObject();
+  const dshHome = configuredEnv.DSH_HOME?.trim() || process.env.DSH_HOME?.trim() || join(homedir(), '.dsh');
+  try {
+    const source = await readFile(`${dshHome}/settings.yaml`, 'utf8');
+    const settings = parse(source);
+    if (!settings || typeof settings !== 'object') return [];
+    const settingMap = settings as Record<string, unknown>;
+    const target: DiscoveredModel[] = [];
+    const seen = new Set<string>();
+    const deepseek = settingMap['llm-deepseek'];
+    if (deepseek && typeof deepseek === 'object') {
+      const config = deepseek as Record<string, unknown>;
+      for (const model of valuesFromUnknown(config.models)) addConfiguredModel(target, seen, 'deepseek-official', config, model);
+    }
+    const providers = settingMap['llm-pi-ai'];
+    if (!providers || typeof providers !== 'object') return [];
+    const providerMap = (providers as Record<string, unknown>).providers;
+    if (!providerMap || typeof providerMap !== 'object') return [];
+
+    for (const [providerId, providerValue] of Object.entries(providerMap as Record<string, unknown>)) {
+      if (!providerValue || typeof providerValue !== 'object') continue;
+      const providerConfig = providerValue as Record<string, unknown>;
+      const models = providerConfig.models;
+      for (const model of valuesFromUnknown(models)) addConfiguredModel(target, seen, providerId, providerConfig, model);
+    }
+    return target;
+  } catch {
+    return [];
+  }
+}
+
+function getDeepseekBundleModels(): DiscoveredModel[] {
+  return DEEPSEEK_HARNESS_DEFAULT_MODELS.map((model) => ({
+    modelId: qualifyModelId('deepseek-official', model.modelId),
+    name: model.name,
+    source: 'bundle',
+    endpoints: ['deepseek'],
+  }));
+}
+
+function normalizeDeepseekAcpModelId(modelId: string, defaultProvider?: string): string {
+  const value = stringValue(modelId);
+  const separator = value.indexOf('::');
+  if (separator > 0) return qualifyModelId(value.slice(0, separator), value.slice(separator + 2));
+  return value.includes('/') ? value : qualifyModelId(defaultProvider || 'deepseek-official', value);
+}
+
+async function loadDeepseekDefaultProvider(): Promise<string | undefined> {
+  const configuredEnv = await loadConfiguredEnvObject();
+  const dshHome = configuredEnv.DSH_HOME?.trim() || process.env.DSH_HOME?.trim() || join(homedir(), '.dsh');
+  try {
+    const settings = parse(await readFile(`${dshHome}/settings.yaml`, 'utf8'));
+    const defaultModel = settings && typeof settings === 'object'
+      ? (settings as Record<string, unknown>)['agent-default-model']
+      : undefined;
+    return defaultModel && typeof defaultModel === 'object'
+      ? stringValue((defaultModel as Record<string, unknown>).provider) || undefined
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function looksLikeModelConfigOption(option: Record<string, unknown>): boolean {
@@ -129,13 +260,20 @@ async function discoverViaAcpxCommand(
   cwd: string,
 ): Promise<DiscoveredModel[]> {
   const startedAt = Date.now();
+  const configuredEnv = await loadConfiguredEnvObject();
+  const deepseekEnv = agentId === 'deepseek-harness'
+    ? {
+      ...configuredEnv,
+      DSH_HOME: configuredEnv.DSH_HOME?.trim() || process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'),
+    }
+    : undefined;
 
   const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
   const runtime = createAcpRuntime({
     cwd,
-    sessionStore: createRuntimeStore({
+    sessionStore: createAcpxCompatibleSessionStore(createRuntimeStore({
       stateDir: getWorkspaceDataFile('acpx-runtime'),
-    }),
+    })),
     agentRegistry: createAgentRegistry({
       overrides: getAcpxAgentRegistryOverrides(),
     }),
@@ -151,11 +289,35 @@ async function discoverViaAcpxCommand(
     agent: command,
     mode: 'oneshot',
     cwd,
+    ...(deepseekEnv ? { sessionOptions: { env: deepseekEnv } } : {}),
   });
 
   try {
     const status = await runtime.getStatus?.({ handle });
-    const models = uniqueModels(extractModelsFromStatus(status));
+    const defaultProvider = agentId === 'deepseek-harness'
+      ? await loadDeepseekDefaultProvider()
+      : undefined;
+    const discoveredModels = uniqueModels(
+      extractModelsFromStatus(status).map((model) => agentId === 'deepseek-harness'
+        ? { ...model, modelId: normalizeDeepseekAcpModelId(model.modelId, defaultProvider) }
+        : model),
+    );
+    // Preserve configured routes and product defaults when the ACP agent is
+    // unavailable during discovery. The OpenMA adapter normally advertises a
+    // live model catalog through session configuration.
+    const configuredModels = agentId === 'deepseek-harness'
+      ? await loadDeepseekConfiguredModels()
+      : [];
+    const deepseekModels = agentId === 'deepseek-harness'
+      ? uniqueModels([
+        ...configuredModels,
+        ...getDeepseekBundleModels(),
+      ])
+      : [];
+    const models = uniqueModels([
+      ...discoveredModels,
+      ...deepseekModels,
+    ]);
     return models;
   } finally {
     await runtime.close({

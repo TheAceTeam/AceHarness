@@ -71,6 +71,7 @@ export type DetectedEngineModel = {
   name: string;
   source?: string;
   recommended?: boolean;
+  endpoints?: string[];
 };
 
 export function selectEngineDefaultModel(
@@ -119,6 +120,7 @@ const RUNTIME_AVAILABILITY_ENGINE_IDS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
 ] as const;
 
 export function useModelsQuery() {

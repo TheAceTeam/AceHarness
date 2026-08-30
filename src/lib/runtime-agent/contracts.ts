@@ -147,6 +147,7 @@ export interface EnvRequirement {
   key: string;
   required: boolean;
   secret: boolean;
+  allowedValues?: readonly string[];
   description?: string;
 }
 
@@ -154,6 +155,8 @@ export interface ResolvedModelRoute {
   modelRouteId: string;
   agentId: string;
   runtime: RuntimeAdapterKind;
+  /** Configured provider route, used internally by provider-aware runtimes. */
+  providerId?: string;
   providerModel: string;
   configOptions: Record<string, unknown>;
   envRequirements: EnvRequirement[];

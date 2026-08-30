@@ -306,6 +306,35 @@ describe('runtime security profiles', () => {
     expect(JSON.stringify(result.snapshot)).not.toContain('process-token');
   });
 
+  test('env resolution rejects values outside a route requirement allowlist', () => {
+    const result = resolveRuntimeEnv({
+      agentId: 'deepseek-harness',
+      modelRouteId: 'route-deepseek',
+      cwd: '/workspace',
+      systemPromptHash: 'sha256:abc',
+      skillsRevision: 'skills-1',
+      mcpRevision: 'mcp-1',
+      requirements: [
+        {
+          key: 'DSH_PERMISSION_MODE',
+          required: false,
+          secret: false,
+          allowedValues: ['workspace-write', 'danger-full-access'],
+        },
+      ],
+      processEnv: { DSH_PERMISSION_MODE: 'invalid-mode' },
+    });
+
+    expect(result.missing).toEqual(['DSH_PERMISSION_MODE']);
+    expect(result.adapterEnv).toEqual({});
+    expect(result.snapshot.env).toContainEqual({
+      key: 'DSH_PERMISSION_MODE',
+      source: 'process-env',
+      secret: false,
+      readiness: 'misconfigured',
+    });
+  });
+
   test('secret profile DTOs expose readiness and refs without secret values', () => {
     const profile = {
       id: 'secret-profile-1',

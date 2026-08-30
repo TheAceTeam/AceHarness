@@ -1,4 +1,6 @@
 import { readFile } from 'fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { loadConfiguredEnvObject } from '@/lib/core/configured-env';
 import { toAcpMcpServers } from '@/lib/mcp/registry';
@@ -19,6 +21,11 @@ import type {
   RuntimeBinding,
   RuntimeProfileSnapshot,
 } from '../contracts';
+import {
+  DEEPSEEK_HARNESS_DSH_HOME_ENV,
+  DEEPSEEK_HARNESS_MODEL_ENV,
+  DEEPSEEK_HARNESS_PROVIDER_ENV,
+} from '../deepseek-harness-constants';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
 import { redactDiagnosticPayload } from '../security/redaction';
 import { formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, shouldSkipOpencodeSafeCheck, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
@@ -71,7 +78,6 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
   const closedSessionKeys = new Set<string>();
   const pendingRuntimeCloses = new Map<string, Promise<void>>();
   const cleanupTimeoutMs = normalizeTimeout(options.cleanupTimeoutMs, DEFAULT_CLEANUP_TIMEOUT_MS);
-
   async function getRuntime(profileSnapshot?: RuntimeProfileSnapshot): Promise<AcpRuntime> {
     if (options.runtime) return options.runtime;
     const permissionConfig = resolveAcpxPermissionConfig(profileSnapshot?.permissionPolicyId);
@@ -95,9 +101,12 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       });
       const modelSelection = resolveAcpModelSelection(
         agentId,
+        session.modelRoute.providerId,
         session.modelRoute.providerModel,
         session.modelRoute.configOptions,
       );
+      // Keep the persisted ACPX handle so multi-turn chat and workflow runs
+      // continue the same DSH session after reconnects.
       const resumeSessionId = resolveResumeSessionId(input.existingHandle);
       let runtime: AcpRuntime | undefined;
       let handle: AcpRuntimeHandle | undefined;
@@ -105,7 +114,32 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       try {
         runtime = await getRuntime(session.profileSnapshot);
         applyProcessEnvForAgent(agentId);
-        const env = await resolveEnv(session, options.loadConfiguredEnv);
+        const configuredEnv = await resolveEnv(session, options.loadConfiguredEnv);
+        // The OpenMA ACP adapter consumes the same DSH_HOME as dsh Web. Keep
+        // credentials/settings in the user's store and pass route overrides
+        // via its documented DSH_* variables.
+        const env = agentId === 'deepseek-harness'
+          ? {
+            ...(configuredEnv ?? {}),
+            // Keep dsh-acp on the same credentials/settings/session store as
+            // dsh Web. Resolving this is path-only and never provisions files.
+            [DEEPSEEK_HARNESS_DSH_HOME_ENV]: configuredEnv?.[DEEPSEEK_HARNESS_DSH_HOME_ENV]?.trim()
+              || process.env[DEEPSEEK_HARNESS_DSH_HOME_ENV]?.trim()
+              || join(homedir(), '.dsh'),
+            ...((session.modelRoute.providerId || providerFromModelRoute(session.modelRoute.providerModel))
+              ? {
+                [DEEPSEEK_HARNESS_PROVIDER_ENV]: session.modelRoute.providerId
+                  || providerFromModelRoute(session.modelRoute.providerModel)!,
+              }
+              : {}),
+            ...(session.modelRoute.providerModel
+              ? { [DEEPSEEK_HARNESS_MODEL_ENV]: resolveDeepseekHarnessModelName(
+                session.modelRoute.providerId,
+                session.modelRoute.providerModel,
+              ) }
+              : {}),
+          }
+          : configuredEnv;
         const createEnsureInput = (sessionKey: string, resumeId?: string) => ({
           sessionKey,
           agent: runtimeAgent,
@@ -869,7 +903,7 @@ async function createRuntime(
  * Encode only the on-disk keys and restore them immediately after loading so
  * agent processes still receive names such as ANTHROPIC_AUTH_TOKEN unchanged.
  */
-function createAcpxCompatibleSessionStore(store: AcpSessionStore): AcpSessionStore {
+export function createAcpxCompatibleSessionStore(store: AcpSessionStore): AcpSessionStore {
   return {
     async load(sessionId) {
       const record = await store.load(sessionId);
@@ -1009,10 +1043,14 @@ function sortJsonValue(value: unknown): unknown {
 
 function resolveAcpModelSelection(
   agentId: string | undefined,
+  providerId: string | undefined,
   providerModel: string,
   configOptions?: Record<string, unknown>,
 ): AcpxModelSelection {
-  const model = String(providerModel || '').trim();
+  const rawModel = String(providerModel || '').trim();
+  const model = String(agentId || '').trim().toLowerCase() === 'deepseek-harness'
+    ? resolveDeepseekHarnessModelName(providerId, rawModel)
+    : rawModel;
   if (String(agentId || '').trim().toLowerCase() !== 'codex') {
     return {
       model: resolveAcpModelName(model, configOptions),
@@ -1030,6 +1068,20 @@ function resolveAcpModelSelection(
       ? [{ key: 'reasoning_effort', value: reasoningEffort }]
       : [],
   };
+}
+
+function resolveDeepseekHarnessModelName(providerId: string | undefined, providerModel: string): string {
+  const model = String(providerModel || '').trim();
+  if (!model) return model;
+  const provider = String(providerId || '').trim();
+  if (provider && model.startsWith(`${provider}/`)) return model.slice(provider.length + 1);
+  const slash = model.indexOf('/');
+  return slash > 0 ? model.slice(slash + 1) : model;
+}
+
+function providerFromModelRoute(providerModel: string): string | undefined {
+  const slash = String(providerModel || '').indexOf('/');
+  return slash > 0 ? String(providerModel).slice(0, slash) : undefined;
 }
 
 function resolveAcpModelName(model: string, configOptions?: Record<string, unknown>): string {
@@ -1434,6 +1486,8 @@ async function resolveEnv(
       env[item.key.trim()] = item.value;
     }
   }
+  // Non-snake-case environment keys are encoded by the session store wrapper
+  // below and restored before ACPX spawns the child process.
   return Object.keys(env).length > 0 ? env : undefined;
 }
 

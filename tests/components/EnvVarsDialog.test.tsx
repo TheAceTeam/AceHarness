@@ -50,6 +50,12 @@ describe('EnvVarsDialog', () => {
     expect(screen.queryByDisplayValue('ANTHROPIC_AUTH_TOKEN')).toBeNull();
     expect(screen.getByRole('tab', { name: 'OpenCode' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: '其他 CLI' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'DeepSeek Harness' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'DeepSeek Harness' }));
+    expect(screen.getByText('DEEPSEEK_API_KEY')).toBeInTheDocument();
+    expect(screen.getByText('DEEPSEEK_BASE_URL')).toBeInTheDocument();
+    expect(screen.getByText('DSH_PERMISSION_MODE')).toBeInTheDocument();
   });
 
   test('saves edited values through the selected scope and closes after success', async () => {

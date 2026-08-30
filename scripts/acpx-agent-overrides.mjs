@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 let overridesResolver;
+let sessionStoreWrapper;
 
 /**
  * Diagnostic commands must use the same resolver as runtime sessions. In
@@ -39,4 +40,13 @@ function runtimeOverridesResolver() {
 
 export function getAcpxAgentRegistryOverrides() {
   return runtimeOverridesResolver()();
+}
+
+export function createAcpxCompatibleSessionStore(store) {
+  if (!sessionStoreWrapper) {
+    runtimeOverridesResolver();
+    const client = require('../src/lib/runtime-agent/adapters/acpx-runtime-client.ts');
+    sessionStoreWrapper = client.createAcpxCompatibleSessionStore;
+  }
+  return sessionStoreWrapper(store);
 }

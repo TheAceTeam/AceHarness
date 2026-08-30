@@ -1,5 +1,6 @@
 import { parse, stringify } from 'yaml';
 import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
+import { parseProviderQualifiedModelId } from '@/lib/models/provider-qualified-id';
 import type { RuntimeSqliteDatabase } from '../sqlite/database';
 import {
   importModelRoutes,
@@ -63,6 +64,7 @@ const preRuntimeAgentIdBySourceName: Record<string, string> = {
   nga: 'nga',
   codeagent: 'codeagent',
   codegenie: 'codegenie',
+  'deepseek-harness': 'deepseek-harness',
   cursor: 'cursor',
   trae: 'trae',
   'cangjie-magic': 'cangjie-magic',
@@ -71,6 +73,7 @@ const preRuntimeAgentIdBySourceName: Record<string, string> = {
 const providerKindById: Record<string, 'anthropic' | 'openai' | 'local' | 'custom'> = {
   anthropic: 'anthropic',
   openai: 'openai',
+  deepseek: 'custom',
 };
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -95,10 +98,11 @@ function contextWindowOrDefault(input: unknown): number {
 }
 
 function endpointsOrDefault(input: unknown): string[] {
+  if (!Array.isArray(input)) return [...DEFAULT_MODEL_ENDPOINTS];
   const endpoints = Array.from(
     new Set(asArray(input).map(normalizeProviderId).filter(Boolean) as string[]),
   );
-  return endpoints.length > 0 ? endpoints : [...DEFAULT_MODEL_ENDPOINTS];
+  return endpoints;
 }
 
 function slug(input: string): string {
@@ -221,7 +225,11 @@ function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: str
     const modelId = asString(model.value);
     if (!modelId) continue;
 
-    const { providerModel, configOptions } = parseProviderModel(modelId);
+    const qualified = parseProviderQualifiedModelId(modelId);
+    const { providerModel: parsedProviderModel, configOptions } = parseProviderModel(qualified.modelId);
+    const providerModel = parsedProviderModel;
+    const qualifiedProviderId = qualified.providerId;
+    const endpoints = endpointsOrDefault(model.endpoints);
     catalog.push({
       id: modelId,
       displayName: asString(model.label) ?? modelId,
@@ -229,14 +237,18 @@ function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: str
       metadata: {
         seedSource: 'preRuntime-models-yaml',
         costMultiplier: asNumber(model.costMultiplier),
+        endpoints,
       },
       now,
     });
 
-    const endpoints = endpointsOrDefault(model.endpoints);
-    for (const endpoint of endpoints) providerIds.add(endpoint);
+    if (!qualifiedProviderId) {
+      for (const endpoint of endpoints) providerIds.add(endpoint);
+    } else {
+      providerIds.add(qualifiedProviderId);
+    }
 
-    const providerChoices = endpoints.length > 0 ? endpoints : [undefined];
+    const providerChoices = qualifiedProviderId ? [qualifiedProviderId] : (endpoints.length > 0 ? endpoints : [undefined]);
     const agentIds = asArray(model.engines)
       .map(asString)
       .filter(Boolean)

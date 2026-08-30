@@ -24,7 +24,7 @@ import {
   useAgentsQuery,
   useGenerateAgentAvatarMutation,
 } from '@/client/query/agents';
-import { useRuntimeEngineSelectionQuery } from '@/client/query/engines';
+import { useRuntimeEngineOptionsQuery, useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { useSkillsQuery } from '@/client/query/skills';
 import { useRagKnowledgeBasesQuery } from '@/client/query/rag';
 import { EXPERT_PACKS } from '@/lib/agent/catalog';
@@ -213,6 +213,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [availableMcpServers, setAvailableMcpServers] = useState<Array<{ name: string; command?: string }>>([]);
   const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<Array<{ id: string; name: string; description?: string; chunkCount?: number }>>([]);
   const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
+  const runtimeEngineOptionsQuery = useRuntimeEngineOptionsQuery();
   const agentsQuery = useAgentsQuery();
   const skillsQuery = useSkillsQuery();
   const ragKnowledgeBasesQuery = useRagKnowledgeBasesQuery();
@@ -817,7 +818,11 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                 size="sm"
                 onClick={() => {
                   const usedEngines = Object.keys(formData.engineModels);
-                  const allEngines = ['claude-code', 'kiro-cli', 'opencode', 'nga', 'codeagent', 'codegenie', 'codex', 'cursor', 'trae-cli', 'magic-cli'];
+                  const configuredEngines = runtimeEngineOptionsQuery.data?.map((option) => option.id).filter(Boolean) || [];
+                  const allEngines = configuredEngines.length > 0 ? configuredEngines : [
+                    'claude', 'kiro', 'opencode', 'nga', 'codeagent', 'codegenie',
+                    'codex', 'cursor', 'trae', 'cangjie-magic', 'deepseek-harness',
+                  ];
                   const available = allEngines.find(e => !usedEngines.includes(e));
                   if (available === undefined) return;
                   const defaultModel = Object.values(formData.engineModels)[0] || '';

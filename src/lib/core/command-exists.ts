@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { isWindows } from '@/lib/core/runtime-platform';
+import { getInstallPath } from '@/lib/core/app-paths';
 import { resolveCommand } from '@/lib/core/resolved-command';
 
 const DEFAULT_SCAN_DIRS_POSIX = ['/root/.local/bin', '/usr/local/bin', '/usr/bin'];
@@ -30,8 +31,10 @@ function getLocalNodeBinDirs(): string[] {
 
 export function getCommonCliSearchPaths(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
+  const installBin = getInstallPath('bin');
   if (isWindows()) return [...getLocalNodeBinDirs(), ...defaultWindowsScanDirs()];
   return [
+    installBin,
     ...getLocalNodeBinDirs(),
     home ? join(home, '.local', 'bin') : '',
     home ? join(home, 'go', 'bin') : '',

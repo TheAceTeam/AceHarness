@@ -50,6 +50,7 @@ import { ModelSelect } from '@/components/ModelSelect';
 import { EngineIcon } from '@/components/EngineIcon';
 import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
+import { normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
 import { useModelProbeRows, useSyncModelProbesToDb } from '@/client/db/collections';
 import type { ModelProbeListResponse, ModelProbeRuntimeStatus, ModelProbeSummary } from '@/lib/models/probe-types';
 
@@ -143,7 +144,7 @@ async function authFetch(input: string, init?: RequestInit): Promise<Response> {
 function createEmptySingleForm(): SingleProbeFormState {
   return {
     name: '',
-    engine: 'claude-code',
+    engine: normalizeRuntimeEngineId('claude-code'),
     driver: 'auto',
     model: '',
     intervalMinutes: String(DEFAULT_POLL_MINUTES),
@@ -156,7 +157,7 @@ function createEmptySingleForm(): SingleProbeFormState {
 function createEmptyBatchForm(): BatchProbeFormState {
   return {
     groupName: 'New Group',
-    engine: 'claude-code',
+    engine: normalizeRuntimeEngineId('claude-code'),
     driver: 'auto',
     intervalMinutes: String(DEFAULT_POLL_MINUTES),
     timeoutMs: '45000',

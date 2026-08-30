@@ -20,6 +20,7 @@ export const AGENT_ICON_PATHS = {
   mux: `${ENGINE_ICON_BASE_PATH}/mux.svg`,
   qoder: `${ENGINE_ICON_BASE_PATH}/qoder.svg`,
   qwen: `${ENGINE_ICON_BASE_PATH}/qwen.svg`,
+  deepseekHarness: `${ENGINE_ICON_BASE_PATH}/deepseek-harness.svg`,
   genericProvider: `${ENGINE_ICON_BASE_PATH}/code-agent.svg`,
 } as const;
 

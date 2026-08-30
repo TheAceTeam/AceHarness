@@ -264,6 +264,76 @@ describe('ModelSelect', () => {
 
     await waitFor(() => expect(onModelChange).toHaveBeenCalledWith(''));
   });
+
+  test('exposes DeepSeek Harness models in the composite engine selector', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/models')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          json: async () => ({
+            models: [{
+              value: 'deepseek-chat',
+              label: 'DeepSeek Chat',
+              costMultiplier: 1,
+              engines: ['deepseek-harness'],
+              endpoints: ['deepseek'],
+            }],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/runtime-agents')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          json: async () => ({
+            agents: [{
+              id: 'deepseek-harness',
+              name: 'deepseek-harness',
+              title: 'DeepSeek Harness',
+              runtimeState: { enabled: true, hidden: false, availability: { status: 'available' } },
+            }],
+          }),
+        } as Response;
+      }
+      if (url.includes('/api/engine/availability')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          json: async () => ({ 'deepseek-harness': true }),
+        } as Response;
+      }
+      if (url.includes('/api/engine')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          json: async () => ({ engine: 'deepseek-harness', defaultModel: 'deepseek-chat' }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'Content-Type': 'application/json' }),
+        json: async () => ({}),
+      } as Response;
+    }));
+
+    renderWithQuery(
+      <EngineModelSelect
+        engine="deepseek-harness"
+        model=""
+        onEngineChange={vi.fn()}
+        onModelChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole('button', { name: 'DeepSeek Harness: DeepSeek Chat' })).toBeInTheDocument();
+  });
 });
 
 function renderWithQuery(ui: React.ReactElement) {

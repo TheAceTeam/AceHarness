@@ -61,6 +61,7 @@ interface DetectedModel {
   selected: boolean;
   label: string;
   costMultiplier: number;
+  endpoints?: string[];
 }
 
 interface Engine {
@@ -95,6 +96,7 @@ const PRODUCT_ENGINE_ORDER = [
   'codex',
   'claude',
   'opencode',
+  'deepseek-harness',
   'cursor',
   'kiro',
   'trae',
@@ -133,6 +135,7 @@ const RUNTIME_AGENT_ICON_PATHS: Record<string, string> = {
   pi: '/engines/pi.svg',
   qoder: '/engines/qoder.svg',
   qwen: '/engines/qwen.svg',
+  'deepseek-harness': '/engines/deepseek-harness.svg',
 };
 
 const STATIC_ENGINE_METADATA: Record<string, Omit<Engine, 'id' | 'status' | 'agentId'>> = {
@@ -250,6 +253,12 @@ const STATIC_ENGINE_METADATA: Record<string, Omit<Engine, 'id' | 'status' | 'age
     description: 'Qwen 编程助手，适合中文代码协作、仓库理解和任务执行。',
     features: ['中文协作', '代码理解', '任务执行'],
     endpoints: ['anthropic', 'openai'],
+  },
+  'deepseek-harness': {
+    name: 'DeepSeek Harness',
+    description: 'DeepSeek Harness 开源智能体运行时框架，专注于插件化能力编排、多模式任务执行与可观测智能体调度。',
+    features: ['插件化能力编排', '多模式任务执行', '流式输出', '可观测智能体调度'],
+    endpoints: ['deepseek'],
   },
 };
 
@@ -484,6 +493,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
         selected: !existing.has(m.modelId),
         label: m.name || m.modelId,
         costMultiplier: models.find(existingModel => existingModel.value === m.modelId)?.costMultiplier ?? 1,
+        endpoints: Array.isArray(m.endpoints) ? m.endpoints : undefined,
       }));
       setDetectedModels(detected);
       setShowImportDialog(true);

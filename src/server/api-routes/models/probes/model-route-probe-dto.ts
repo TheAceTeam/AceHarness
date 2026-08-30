@@ -2,6 +2,17 @@ import { listRuntimeModelsFromSqlite, resolveRuntimeModelRoute } from '@/lib/run
 
 type ProbeLike = Record<string, any>;
 
+const LEGACY_API_ENDPOINTS = new Set(['anthropic', 'openai', 'deepseek']);
+
+function endpointsForRoute(route: { endpoints?: string[]; providerId?: string }): string[] {
+  if (Array.isArray(route.endpoints) && route.endpoints.length > 0) {
+    return Array.from(new Set(route.endpoints.map((item) => String(item || '').trim()).filter(Boolean)));
+  }
+  return route.providerId && LEGACY_API_ENDPOINTS.has(route.providerId)
+    ? [route.providerId]
+    : [];
+}
+
 function readModelRouteId(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined;
 }
@@ -19,7 +30,7 @@ export function normalizeProbeInputForModelRouteId(input: ProbeLike): any {
     model: input.model || route.providerModel,
     endpoints: Array.isArray(input.endpoints) && input.endpoints.length > 0
       ? input.endpoints
-      : route.providerId ? [route.providerId] : [],
+      : endpointsForRoute(route),
   };
 }
 

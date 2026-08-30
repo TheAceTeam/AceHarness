@@ -112,6 +112,135 @@ describe('models API route', () => {
     });
   });
 
+  test('DeepSeek model discovery uses ACP directly', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      vi.resetModules();
+      let runtimeOptions: any;
+      let ensureInput: any;
+      vi.doMock('acpx/runtime', () => ({
+        createAgentRegistry: () => ({}),
+        createRuntimeStore: () => ({}),
+        createAcpRuntime: (options: any) => {
+          runtimeOptions = options;
+          return {
+            ensureSession: vi.fn(async (input: any) => {
+              ensureInput = input;
+              return { sessionKey: input.sessionKey, backend: 'acpx', runtimeSessionName: 'test' };
+            }),
+            getStatus: vi.fn(async () => ({
+              models: { availableModelIds: ['deepseek-chat'] },
+            })),
+            close: vi.fn(async () => undefined),
+          };
+        },
+      }));
+
+      const previousDshHome = process.env.DSH_HOME;
+      process.env.DSH_HOME = path.join(aceHome, 'empty-dsh-home');
+      try {
+        const { GET } = await import('@/server/api-routes/engine/models/route');
+        const response = await GET(makeRequest('/api/engine/models?engine=deepseek-harness'));
+        expect(response.status).toBe(200);
+        expect((await responseJson<{ models: any[] }>(response)).models).toEqual(expect.arrayContaining([
+          expect.objectContaining({ modelId: 'deepseek-official/deepseek-chat', endpoints: [] }),
+        ]));
+        expect(runtimeOptions).toMatchObject({ cwd: process.cwd() });
+        expect(ensureInput).toMatchObject({
+          agent: 'deepseek-harness',
+        });
+        expect(ensureInput.sessionOptions?.env).toMatchObject({
+          DSH_HOME: path.join(aceHome, 'empty-dsh-home'),
+        });
+      } finally {
+        if (previousDshHome === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = previousDshHome;
+      }
+    });
+  });
+
+  test('DeepSeek model discovery includes models from the configured DSH settings providers', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      vi.resetModules();
+      const dshHome = path.join(aceHome, 'user-dsh');
+      await mkdir(dshHome, { recursive: true });
+      await writeFile(path.join(dshHome, 'settings.yaml'), [
+        'llm-pi-ai:',
+        '  providers:',
+        '    boft-deepseek:',
+        '      models:',
+        '        - id: deepseek-v4-flash',
+        '          name: DeepSeek-V4-Flash',
+        '        - id: deepseek-v4-pro',
+        '          name: DeepSeek-V4-Pro',
+        '    boft:',
+        '      api: openai-responses',
+        '      models:',
+        '        - id: gpt-5.6-sol',
+      ].join('\n'));
+      vi.doMock('acpx/runtime', () => ({
+        createAgentRegistry: () => ({}),
+        createRuntimeStore: () => ({}),
+        createAcpRuntime: () => ({
+          ensureSession: vi.fn(async () => ({ sessionKey: 'settings-session', backend: 'acpx', runtimeSessionName: 'test' })),
+          getStatus: vi.fn(async () => ({})),
+          close: vi.fn(async () => undefined),
+        }),
+      }));
+
+      const previousDshHome = process.env.DSH_HOME;
+      process.env.DSH_HOME = dshHome;
+      try {
+        const { GET } = await import('@/server/api-routes/engine/models/route');
+        const response = await GET(makeRequest('/api/engine/models?engine=deepseek-harness'));
+        expect(response.status).toBe(200);
+        expect((await responseJson<{ models: Array<{ modelId: string; source?: string; endpoints?: string[] }> }>(response)).models)
+          .toEqual([
+          { modelId: 'boft-deepseek/deepseek-v4-flash', name: 'DeepSeek-V4-Flash', source: 'config', endpoints: ['deepseek'] },
+          { modelId: 'boft-deepseek/deepseek-v4-pro', name: 'DeepSeek-V4-Pro', source: 'config', endpoints: ['deepseek'] },
+          { modelId: 'boft/gpt-5.6-sol', name: 'gpt-5.6-sol', source: 'config', endpoints: ['openai'] },
+          { modelId: 'deepseek-official/deepseek-v4-flash', name: 'DeepSeek V4 Flash', source: 'bundle', endpoints: ['deepseek'] },
+          { modelId: 'deepseek-official/deepseek-v4-pro', name: 'DeepSeek V4 Pro', source: 'bundle', endpoints: ['deepseek'] },
+          { modelId: 'deepseek-official/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision', source: 'bundle', endpoints: ['deepseek'] },
+          ]);
+      } finally {
+        if (previousDshHome === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = previousDshHome;
+      }
+    });
+  });
+
+  test('DeepSeek model discovery falls back to product default models', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      vi.resetModules();
+      vi.doMock('acpx/runtime', () => ({
+        createAgentRegistry: () => ({}),
+        createRuntimeStore: () => ({}),
+        createAcpRuntime: () => ({
+          ensureSession: vi.fn(async () => ({ sessionKey: 'fallback-session', backend: 'acpx', runtimeSessionName: 'test' })),
+          getStatus: vi.fn(async () => ({})),
+          close: vi.fn(async () => undefined),
+        }),
+      }));
+
+      const previousDshHome = process.env.DSH_HOME;
+      process.env.DSH_HOME = path.join(aceHome, 'empty-dsh-home');
+      try {
+        const { GET } = await import('@/server/api-routes/engine/models/route');
+        const response = await GET(makeRequest('/api/engine/models?engine=deepseek-harness'));
+        expect(response.status).toBe(200);
+        expect((await responseJson<{ models: Array<{ modelId: string; source?: string }> }>(response)).models)
+          .toEqual([
+          { modelId: 'deepseek-official/deepseek-v4-flash', name: 'DeepSeek V4 Flash', source: 'bundle', endpoints: ['deepseek'] },
+          { modelId: 'deepseek-official/deepseek-v4-pro', name: 'DeepSeek V4 Pro', source: 'bundle', endpoints: ['deepseek'] },
+          { modelId: 'deepseek-official/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision', source: 'bundle', endpoints: ['deepseek'] },
+          ]);
+      } finally {
+        if (previousDshHome === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = previousDshHome;
+      }
+    });
+  });
+
   test('POST imports models into SQLite and exports runtime YAML compatibility seed', async () => {
     await withTempDir('aceharness-test-install-', async (installRoot) => {
       await withIsolatedAceHome(async (aceHome) => {
@@ -230,8 +359,8 @@ describe('models API route', () => {
           const savedConfig = parse(await readFile(runtimeModelsPath, 'utf-8')) as {
             routes?: Array<{ modelId: string; agentId?: string; modelRouteId?: string; providerId?: string }>;
           };
-          expect(savedConfig.routes?.map((route) => route.agentId)).toEqual(['opencode', 'opencode']);
-          expect(savedConfig.routes?.map((route) => route.providerId).sort()).toEqual(['anthropic', 'openai']);
+          expect(savedConfig.routes?.map((route) => route.agentId)).toEqual(['opencode']);
+          expect(savedConfig.routes?.map((route) => route.providerId)).toEqual([undefined]);
 
           vi.resetModules();
           const { GET } = await import('@/server/api-routes/models/route');

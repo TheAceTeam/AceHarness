@@ -16,6 +16,7 @@ import {
 import { createAcpxRuntimeClient } from '@/lib/runtime-agent/adapters/acpx-runtime-client';
 import { getAcpxDebugTraceDirectory, writeAcpxDebugTrace } from '@/lib/runtime-agent/acpx-debug-trace';
 import { MagicAdapter, normalizeMagicRuntimeEvent } from '@/lib/runtime-agent/adapters/magic-adapter';
+import { applyProcessEnvForAgent } from '../scripts/check-acp-connectivity.mjs';
 import type {
   AdapterSessionInput,
   AdapterTurnInput,
@@ -87,6 +88,11 @@ describe('runtime adapters', () => {
       command: 'opencode',
       args: ['acp'],
     });
+    expect(resolveAcpxCommand('deepseek-harness')).toEqual({
+      command: 'aceharness-deepseek-acp',
+      args: [],
+      fallbackCommands: ['deepseek-harness.mjs'],
+    });
   });
 
   test('runs against the acpx major the override contract targets', () => {
@@ -107,6 +113,7 @@ describe('runtime adapters', () => {
     expect(overrides.nga.slice(1)).toEqual(['--disable-update', 'acp']);
     expect(overrides.codeagent.at(-1)).toBe('acp');
     expect(overrides.codegenie.at(-1)).toBe('acp');
+    expect(overrides['deepseek-harness'].slice(1)).toEqual([]);
 
     const { createAgentRegistry } = await import('acpx/runtime');
     const registry = createAgentRegistry({ overrides });
@@ -114,6 +121,7 @@ describe('runtime adapters', () => {
     // populate agentArgv — without it resolveAgentCommandParts throws on win32.
     expect(registry.resolve('codegenie')).toEqual(overrides.codegenie);
     expect(Array.isArray(registry.resolve('nga'))).toBe(true);
+    expect(registry.resolve('deepseek-harness')).toEqual(overrides['deepseek-harness']);
   });
 
   test('uses the built-in agent ID for both ACPX session and model discovery launch paths', () => {
@@ -126,6 +134,7 @@ describe('runtime adapters', () => {
     ['nga', 'ACEH_NGA_COMMAND', ['--disable-update', 'acp']],
     ['codeagent', 'ACEH_CODEAGENT_COMMAND', ['acp']],
     ['codegenie', 'ACEH_CODEGENIE_COMMAND', ['acp']],
+    ['deepseek-harness', 'ACEH_DEEPSEEK_HARNESS_COMMAND', []],
   ])('resolves %s override paths containing spaces as ACPX argv', (agentId, overrideKey, args) => {
     const dir = mkdtempSync(join(tmpdir(), 'aceh acpx command with spaces-'));
     const executable = join(dir, process.platform === 'win32' ? `${agentId}.cmd` : agentId);
@@ -697,6 +706,118 @@ describe('runtime adapters', () => {
         },
       },
     ]);
+  });
+
+  test('passes the configured DSH home and documented route variables to DeepSeek sessions', async () => {
+    const ensureSession = vi.fn(async () => ({
+      sessionKey: 'deepseek-profile-session',
+      backend: 'acpx',
+      runtimeSessionName: 'deepseek-profile-session',
+    }));
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({
+      runtime,
+      loadConfiguredEnv: async () => ({
+        DSH_HOME: '/tmp/user-dsh',
+        DSH_PATH: '/usr/local/bin/dsh',
+        DSH_PERMISSION_MODE: 'workspace-write',
+        DSH_SESSION_ROOT: '/tmp/dsh-sessions',
+        DEEPSEEK_API_KEY: 'configured-key',
+        DEEPSEEK_BASE_URL: 'https://api.deepseek.example',
+      }),
+    });
+
+    const session = createSessionInput('deepseek-profile-session', 'deepseek-harness', 'acpx');
+    session.modelRoute.providerId = 'boft-deepseek';
+    await client.ensureSession?.({ session, command: resolveAcpxCommand('deepseek-harness') });
+
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'deepseek-harness',
+      sessionOptions: {
+        model: 'test-model',
+        env: expect.objectContaining({
+          DSH_HOME: '/tmp/user-dsh',
+          DSH_PATH: '/usr/local/bin/dsh',
+          DSH_PROVIDER: 'boft-deepseek',
+          DSH_MODEL: 'test-model',
+          DSH_PERMISSION_MODE: 'workspace-write',
+          DSH_SESSION_ROOT: '/tmp/dsh-sessions',
+          DEEPSEEK_API_KEY: 'configured-key',
+          DEEPSEEK_BASE_URL: 'https://api.deepseek.example',
+        }),
+      },
+    }));
+  });
+
+  test('resumes a persisted DeepSeek session instead of discarding context', async () => {
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+      sessionKey: input.sessionKey,
+      backend: 'acpx',
+      runtimeSessionName: input.sessionKey,
+      cwd: process.cwd(),
+      backendSessionId: 'new-deepseek-session',
+    }));
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput('deepseek-fresh-session', 'deepseek-harness', 'acpx');
+
+    await client.ensureSession?.({
+      session,
+      command: resolveAcpxCommand('deepseek-harness'),
+      existingHandle: {
+        sessionKey: session.runtimeSessionId,
+        backend: 'acpx',
+        runtimeSessionName: session.runtimeSessionId,
+        backendSessionId: 'stale-deepseek-session',
+      },
+    });
+
+    expect(ensureSession).toHaveBeenCalledTimes(1);
+    expect(ensureSession.mock.calls[0]?.[0]).toHaveProperty('resumeSessionId', 'stale-deepseek-session');
+    expect(ensureSession.mock.calls[0]?.[0]).toMatchObject({
+      agent: 'deepseek-harness',
+      sessionOptions: { model: 'test-model' },
+    });
+  });
+
+  test('connectivity diagnostics map the requested DeepSeek model to OpenMa route variables', () => {
+    const previousModel = process.env.DSH_MODEL;
+    const previousProvider = process.env.DSH_PROVIDER;
+    try {
+      delete process.env.DSH_MODEL;
+      delete process.env.DSH_PROVIDER;
+      applyProcessEnvForAgent('deepseek-harness', 'test-model');
+      expect(process.env.DSH_MODEL).toBe('test-model');
+      expect(process.env.DSH_PROVIDER).toBeUndefined();
+    } finally {
+      if (previousModel === undefined) delete process.env.DSH_MODEL;
+      else process.env.DSH_MODEL = previousModel;
+      if (previousProvider === undefined) delete process.env.DSH_PROVIDER;
+      else process.env.DSH_PROVIDER = previousProvider;
+    }
+  });
+
+  test('creates a DeepSeek ACPX session without profile provisioning', async () => {
+    const ensureSession = vi.fn(async () => ({
+      sessionKey: 'deepseek-profile-session',
+      backend: 'acpx',
+      runtimeSessionName: 'deepseek-profile-session',
+    }));
+    const adapter = new AcpxAdapter({ ensureSession });
+
+    await adapter.createOrLoadSession(createSessionInput('deepseek-profile-session', 'deepseek-harness', 'acpx'));
+
+    expect(ensureSession).toHaveBeenCalledTimes(1);
   });
 
   test.each(['claude', 'codex', 'opencode', 'gemini'])('passes configured env to %s ACP sessions', async (agentId) => {

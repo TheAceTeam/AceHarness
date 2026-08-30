@@ -14,6 +14,21 @@ export const CLI_ENVIRONMENT_GROUPS = [
     ],
   },
   {
+    id: 'deepseek',
+    label: 'DeepSeek Harness',
+    description: '管理 DeepSeek Harness 的认证、服务地址和权限模式。',
+    variables: [
+      { key: 'DEEPSEEK_API_KEY', label: 'API 密钥', description: 'DeepSeek Harness 使用的 API 密钥。', secret: true },
+      { key: 'DEEPSEEK_BASE_URL', label: '服务地址', description: '可选的 DeepSeek 兼容 API 服务地址。' },
+      {
+        key: 'DSH_PERMISSION_MODE',
+        label: '权限模式',
+        description: '仅支持 workspace-write 或 danger-full-access。',
+        allowedValues: ['workspace-write', 'danger-full-access'],
+      },
+    ],
+  },
+  {
     id: 'codex',
     label: 'Codex',
     description: '管理 Codex 使用的 API 密钥和服务地址。',

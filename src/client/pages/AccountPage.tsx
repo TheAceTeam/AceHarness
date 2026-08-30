@@ -537,7 +537,7 @@ export function AccountContent({
                   </div>
                   <div className="min-w-0">
                     <DataCardTitle>个人环境变量</DataCardTitle>
-                    <DataCardDescription>管理 Claude、Codex、OpenCode 和其他受支持 CLI 的启动配置。</DataCardDescription>
+                    <DataCardDescription>管理 Claude、Codex、OpenCode、DeepSeek Harness 和其他受支持 CLI 的启动配置。</DataCardDescription>
                   </div>
                 </div>
               </DataCardHeader>

@@ -22,6 +22,11 @@ const ENDPOINT_META: Record<string, EndpointMeta> = {
     iconPath: '/protocols/openai.svg',
     hasWordmark: true,
   },
+  deepseek: {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    iconPath: '/engines/deepseek-harness.svg',
+  },
   cangjie: {
     id: 'cangjie',
     name: 'Cangjie',

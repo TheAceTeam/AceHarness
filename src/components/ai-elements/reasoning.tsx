@@ -23,7 +23,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, type CodeHighlighterPlugin } from "streamdown";
 
 import { Shimmer } from "./shimmer";
 
@@ -204,7 +204,10 @@ export type ReasoningContentProps = ComponentProps<
   children: string;
 };
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+// @streamdown/code currently ships its own Shiki 3.x types while Streamdown's
+// host type resolves the application's Shiki version. The runtime plugin
+// contract is identical; keep the boundary explicit until the packages align.
+const streamdownPlugins = { cjk, code: code as unknown as CodeHighlighterPlugin, math, mermaid };
 
 export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (

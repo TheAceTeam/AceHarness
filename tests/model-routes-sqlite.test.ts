@@ -224,6 +224,48 @@ models:
     });
   });
 
+  test('keeps provider-qualified catalog ids while routing the bare provider model', () => {
+    const yaml = `
+models:
+  - value: boft-deepseek/deepseek-v4-flash
+    label: DeepSeek V4 Flash
+    endpoints:
+      - deepseek
+    engines:
+      - deepseek-harness
+`;
+    const parsed = parseModelRoutesYamlSeed(yaml, '2026-07-09T00:00:00.000Z');
+    expect(parsed.catalog[0]).toMatchObject({
+      id: 'boft-deepseek/deepseek-v4-flash',
+      metadata: { endpoints: ['deepseek'] },
+    });
+    expect(parsed.routes[0]).toMatchObject({
+      modelId: 'boft-deepseek/deepseek-v4-flash',
+      providerId: 'boft-deepseek',
+      providerModel: 'deepseek-v4-flash',
+      agentId: 'deepseek-harness',
+    });
+  });
+
+  test('preserves an explicitly empty endpoint list during migration', () => {
+    const yaml = `
+models:
+  - value: deepseek-chat
+    label: DeepSeek Chat
+    endpoints: []
+    engines:
+      - deepseek-harness
+`;
+    const parsed = parseModelRoutesYamlSeed(yaml, '2026-07-09T00:00:00.000Z');
+    expect(parsed.catalog[0]?.metadata).toMatchObject({ endpoints: [] });
+    expect(parsed.routes).toEqual([expect.objectContaining({
+      modelId: 'deepseek-chat',
+      agentId: 'deepseek-harness',
+      providerId: undefined,
+      providerModel: 'deepseek-chat',
+    })]);
+  });
+
   test('bundled default model catalog is empty until users import available models', async () => {
     const source = await readFile(path.join(process.cwd(), 'configs', 'models', 'models.yaml'), 'utf-8');
     const parsed = parseModelRoutesYamlSeed(source, '2026-07-09T00:00:00.000Z');

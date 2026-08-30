@@ -19,10 +19,16 @@ describe('package contract', () => {
   test('package exposes the intended global install entrypoints', async () => {
     expect(packageJson.name).toBe('@cangjielang/aceharness');
     expect(packageJson.main).toBe('scripts/start-tanstack-start.mjs');
+    expect(packageJson.exports).toMatchObject({
+      '.': './scripts/start-tanstack-start.mjs',
+      './package.json': './package.json',
+    });
     expect(packageJson.bin?.ace).toBe('bin/ace.js');
+    expect(packageJson.bin?.['aceharness-deepseek-acp']).toBe('bin/deepseek-harness.mjs');
 
     await expect(projectPathExists(packageJson.main)).resolves.toBe(true);
     await expect(projectPathExists(packageJson.bin.ace)).resolves.toBe(true);
+    await expect(projectPathExists(packageJson.bin['aceharness-deepseek-acp'])).resolves.toBe(true);
   });
 
   test('package files include runtime assets required by the CLI and app', () => {

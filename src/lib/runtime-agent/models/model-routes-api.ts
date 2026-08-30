@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import { stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { clearModelsCache, normalizeModelOptions, type ModelOption } from '@/lib/core/models';
-import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
+import { DEFAULT_MODEL_CONTEXT_WINDOW } from '@/lib/models/defaults';
 import { getRuntimeModelsConfigPath } from '@/lib/run/runtime-configs';
 import { openRuntimeSqliteDatabase, type RuntimeSqliteDatabase } from '../sqlite/database';
 import { ensureModelRouteSchema } from './model-route-schema';
@@ -79,6 +79,14 @@ function contextWindowOrDefault(value: unknown): number {
     : DEFAULT_MODEL_CONTEXT_WINDOW;
 }
 
+function endpointsFromCatalog(model: { id: string; metadata?: Record<string, unknown> }): string[] {
+  const endpoints = model.metadata?.endpoints;
+  if (Array.isArray(endpoints)) {
+    return Array.from(new Set(endpoints.map((value) => String(value || '').trim()).filter(Boolean)));
+  }
+  return [];
+}
+
 function toRouteDtos(db: RuntimeSqliteDatabase): RuntimeModelRouteDto[] {
   const catalog = listModelCatalogEntries(db);
   const catalogById = new Map(catalog.map((model) => [model.id, model]));
@@ -89,7 +97,7 @@ function toRouteDtos(db: RuntimeSqliteDatabase): RuntimeModelRouteDto[] {
       value: route.modelId,
       label: model?.displayName ?? route.modelId,
       costMultiplier: costMultiplierFromMetadata(model?.metadata),
-      endpoints: route.providerId ? [route.providerId] : [],
+      endpoints: endpointsFromCatalog(model ?? { id: route.modelId }),
       engines: [route.agentId],
       contextWindow: contextWindowOrDefault(model?.contextWindow),
       status: route.status === 'active' ? 'active' as const : 'inactive' as const,
@@ -126,7 +134,7 @@ function toModelDtos(db: RuntimeSqliteDatabase): RuntimeModelRouteDto[] {
         value: model.id,
         label: model.displayName,
         costMultiplier: costMultiplierFromMetadata(model.metadata),
-        endpoints: Array.from(new Set(modelRoutes.map((route) => route.providerId).filter((endpoint): endpoint is string => Boolean(endpoint)))),
+        endpoints: endpointsFromCatalog(model),
         engines: Array.from(new Set(modelRoutes.map((route) => route.agentId).filter(Boolean))),
         contextWindow: contextWindowOrDefault(model.contextWindow),
         status: modelRoutes.some((route) => route.status === 'active') ? 'active' as const : 'inactive' as const,
@@ -150,7 +158,7 @@ function toModelDtos(db: RuntimeSqliteDatabase): RuntimeModelRouteDto[] {
       value: model.id,
       label: model.displayName,
       costMultiplier: costMultiplierFromMetadata(model.metadata),
-      endpoints: [...DEFAULT_MODEL_ENDPOINTS],
+      endpoints: endpointsFromCatalog(model),
       engines: [],
       contextWindow: contextWindowOrDefault(model.contextWindow),
       status: 'active' as const,

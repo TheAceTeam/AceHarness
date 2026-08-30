@@ -20,7 +20,11 @@ export type AgentId =
   | 'mux'
   | 'qoder'
   | 'qwen'
+  | 'deepseek-harness'
   | (string & {});
+
+/** npm bin shipped by ACEHarness for the DeepSeek Harness ACP adapter. */
+export const DEEPSEEK_HARNESS_LAUNCHER_COMMAND = 'aceharness-deepseek-acp';
 
 export type AgentRuntime = 'acpx' | 'magic';
 export type AgentTier = 'core' | 'verified' | 'hidden';
@@ -42,6 +46,7 @@ export interface AgentEnvSchemaVariable {
   name: string;
   required: boolean;
   secret?: boolean;
+  allowedValues?: readonly string[];
   description?: string;
 }
 
@@ -187,6 +192,28 @@ const EMPTY_ENV_SCHEMA: AgentEnvSchema = {
   variables: [],
 };
 
+const DEEPSEEK_ENV_SCHEMA: AgentEnvSchema = {
+  variables: [
+    {
+      name: 'DEEPSEEK_API_KEY',
+      required: true,
+      secret: true,
+      description: 'DeepSeek Harness 使用的 API 密钥。',
+    },
+    {
+      name: 'DEEPSEEK_BASE_URL',
+      required: false,
+      description: '可选的 DeepSeek 兼容 API 服务地址。',
+    },
+    {
+      name: 'DSH_PERMISSION_MODE',
+      required: false,
+      allowedValues: ['read-only', 'workspace-write', 'danger-full-access'],
+      description: 'DSH 权限模式。',
+    },
+  ],
+};
+
 const MODEL_ROUTE_SCHEMA: ModelConfigSchema = {
   supportsModelRoute: true,
 };
@@ -218,6 +245,7 @@ function acpxAgent(input: {
   iconPath: string;
   family?: string;
   capabilities?: AgentCapabilities;
+  envSchema?: AgentEnvSchema;
 }): AgentDefinition {
   return {
     id: input.id,
@@ -231,7 +259,7 @@ function acpxAgent(input: {
     iconPath: input.iconPath,
     tier: input.tier,
     capabilities: input.capabilities ?? FULL_ACPX_CAPABILITIES,
-    envSchema: EMPTY_ENV_SCHEMA,
+    envSchema: input.envSchema ?? EMPTY_ENV_SCHEMA,
     modelConfigSchema: MODEL_ROUTE_SCHEMA,
     availabilityProbe: commandProbe(input.command, ['--version'], input.fallbackCommands ?? []),
   };
@@ -336,6 +364,26 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
   acpxAgent({ id: 'mux', displayName: 'Mux', tier: 'verified', command: 'mux', iconPath: AGENT_ICON_PATHS.mux }),
   acpxAgent({ id: 'qoder', displayName: 'Qoder', tier: 'verified', command: 'qoder', iconPath: AGENT_ICON_PATHS.qoder }),
   acpxAgent({ id: 'qwen', displayName: 'Qwen', tier: 'verified', command: 'qwen', iconPath: AGENT_ICON_PATHS.qwen }),
+  acpxAgent({
+    id: 'deepseek-harness',
+    displayName: 'DeepSeek Harness',
+    tier: 'verified',
+    command: DEEPSEEK_HARNESS_LAUNCHER_COMMAND,
+    // During repository development the ACEHarness npm bin shim may not exist;
+    // probe the dependency's package-local dsh-acp executable as a fallback.
+    fallbackCommands: ['deepseek-harness.mjs'],
+    // dsh-acp owns its complete option parser; ACPX must not append a generic
+    // `acp` subcommand or the retired ACEHarness profile selector.
+    args: [],
+    commandOverrideEnv: 'ACEH_DEEPSEEK_HARNESS_COMMAND',
+    iconPath: AGENT_ICON_PATHS.deepseekHarness,
+    family: 'deepseek-harness',
+    capabilities: {
+      ...FULL_ACPX_CAPABILITIES,
+      permissions: 'agent-managed',
+    },
+    envSchema: DEEPSEEK_ENV_SCHEMA,
+  }),
 ] as const;
 
 export const BUILTIN_AGENT_DEFINITIONS_BY_ID: ReadonlyMap<AgentId, AgentDefinition> = new Map(

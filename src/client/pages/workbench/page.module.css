@@ -643,6 +643,11 @@
   background: var(--workbench-app-bg);
 }
 
+/* Design mode uses an overlay inspector drawer, so it only has navigation and canvas columns. */
+.designWorkbenchLayout.designDrawerLayout {
+  grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr);
+}
+
 .designInspectorCollapsed {
   grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr) 44px;
 }

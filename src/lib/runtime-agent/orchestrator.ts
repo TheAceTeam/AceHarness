@@ -1117,6 +1117,7 @@ function toContractModelRoute(route: ResolvedModelRouteRecord): ResolvedModelRou
     modelRouteId: route.modelRouteId,
     agentId: route.agentId,
     runtime: route.runtime,
+    providerId: route.providerId,
     providerModel: route.providerModel,
     configOptions: route.configOptions,
     envRequirements: route.envRequirements.map((item) => {

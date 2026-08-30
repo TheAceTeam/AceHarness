@@ -34,7 +34,17 @@ const ENGINE_ENDPOINT_HINTS: Record<string, string[]> = {
   'claude-code-acp': ['anthropic'],
   codeagent: ['anthropic'],
   'codex': ['openai'],
+  'deepseek-harness': ['deepseek'],
 };
+const LEGACY_API_ENDPOINTS = new Set(['anthropic', 'openai', 'deepseek']);
+
+function endpointsForRoute(route: ResolvedModelRouteRecord | null): string[] {
+  if (!route) return [];
+  if (route.endpoints?.length) return uniqueStrings(route.endpoints);
+  return route.providerId && LEGACY_API_ENDPOINTS.has(route.providerId)
+    ? [route.providerId]
+    : [];
+}
 
 let writeLock: Promise<void> = Promise.resolve();
 const runningProbeIds = new Set<string>();
@@ -193,7 +203,10 @@ function routeDisplayFields(route: ResolvedModelRouteRecord | null, fallback: {
       modelRouteId: route.modelRouteId,
       engine: route.agentId,
       model: route.providerModel,
-      endpoints: route.providerId ? [route.providerId] : fallback.endpoints,
+      // Provider IDs identify the configured DSH/provider route and are not
+      // necessarily API endpoints (for example, `boft-deepseek`). Prefer the
+      // catalog endpoint metadata and retain provider fallback for legacy rows.
+      endpoints: endpointsForRoute(route).length > 0 ? endpointsForRoute(route) : fallback.endpoints,
     };
   }
   return {
@@ -237,15 +250,17 @@ async function resolveProbeEndpoints(input: {
 }): Promise<string[]> {
   const explicit = uniqueStrings(input.endpoints);
   if (explicit.length > 0) return explicit;
-  if (input.modelRouteId) {
-    const route = resolveStoredModelRoute({ modelRouteId: input.modelRouteId });
-    const fromRoute = uniqueStrings(route?.providerId ? [route.providerId] : []);
+  const route = input.modelRouteId
+    ? resolveStoredModelRoute({ modelRouteId: input.modelRouteId })
+    : null;
+  if (route) {
+    const fromRoute = endpointsForRoute(route);
     if (fromRoute.length > 0) return fromRoute;
   }
   if (input.currentProbe?.endpoints?.length) return uniqueStrings(input.currentProbe.endpoints);
 
   const models = await getModelOptions().catch(() => []);
-  const matched = models.find((item) => item.value === input.model);
+  const matched = models.find((item) => item.value === input.model || item.value === route?.modelId);
   const fromModels = uniqueStrings(matched?.endpoints || []);
   if (fromModels.length > 0) return fromModels;
   return buildFallbackEndpoints(input.engine || input.currentProbe?.engine || '');

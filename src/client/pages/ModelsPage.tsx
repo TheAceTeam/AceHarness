@@ -121,12 +121,16 @@ function normalizeClientModelEngines(engines: unknown): string[] {
   );
 }
 
-function normalizeClientModelOptions(models: any[]): Model[] {
+export function normalizeClientModelOptions(models: any[]): Model[] {
   return models.map((model) => ({
-    id: String(model.modelRouteId || model.value || ''),
-    name: String(model.label || model.value || ''),
+    // Catalog rows use the stable model identity. A route id identifies only
+    // one engine/provider mapping and must not replace the catalog id here.
+    id: String(model.modelId || model.value || ''),
+    name: String(model.label || model.modelId || model.value || ''),
     modelRouteId: typeof model.modelRouteId === 'string' ? model.modelRouteId : null,
-    modelId: typeof model.modelId === 'string' ? model.modelId : String(model.value || ''),
+    modelId: typeof model.modelId === 'string' && model.modelId.trim()
+      ? model.modelId
+      : String(model.value || ''),
     agentId: typeof model.agentId === 'string' ? model.agentId : null,
     providerModel: typeof model.providerModel === 'string' ? model.providerModel : null,
     runtime: typeof model.runtime === 'string' ? model.runtime : null,
@@ -1173,7 +1177,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
                 <FormField
                   label="模型 ID"
                   required
-                  control={<Input value={editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, id: e.target.value })} />}
+                  control={<Input value={editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, id: e.target.value, modelId: e.target.value })} />}
                 />
               </div>
             ),

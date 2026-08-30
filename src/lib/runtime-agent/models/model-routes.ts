@@ -54,6 +54,8 @@ export interface ResolvedModelRouteRecord {
   runtime: RuntimeAdapterKind;
   providerId?: string;
   providerModel: string;
+  /** API endpoint metadata from the catalog, distinct from providerId. */
+  endpoints?: string[];
   configOptions: Record<string, unknown>;
   envRequirements: unknown[];
   capabilities: Record<string, unknown>;
@@ -106,6 +108,10 @@ function routeFromRow(row: any): ModelRouteEntry {
 }
 
 function resolvedRouteFromRow(row: any): ResolvedModelRouteRecord {
+  const metadata = parseJson<JsonObject>(row.catalog_metadata_json, {});
+  const endpoints = Array.isArray(metadata.endpoints)
+    ? Array.from(new Set(metadata.endpoints.map((value) => String(value || '').trim()).filter(Boolean)))
+    : undefined;
   return {
     modelRouteId: String(row.id),
     modelId: String(row.model_id),
@@ -114,6 +120,7 @@ function resolvedRouteFromRow(row: any): ResolvedModelRouteRecord {
     runtime: row.runtime as RuntimeAdapterKind,
     providerId: optionalString(row.provider_id),
     providerModel: String(row.provider_model),
+    endpoints,
     configOptions: parseJson<JsonObject>(row.config_options_json, {}),
     envRequirements: parseJson<unknown[]>(row.env_requirements_json, []),
     capabilities: parseJson<JsonObject>(row.capabilities_json, {}),
@@ -250,7 +257,7 @@ export function resolveModelRoute(db: RuntimeSqliteDatabase, input: ResolveModel
 
   if (input.modelRouteId) {
     const explicit = db.prepare(`
-      SELECT route.*, catalog.display_name
+      SELECT route.*, catalog.display_name, catalog.metadata_json AS catalog_metadata_json
       FROM model_routes AS route
       JOIN model_catalog AS catalog ON catalog.id = route.model_id
       WHERE route.id = ? AND route.status = 'active'
@@ -262,7 +269,7 @@ export function resolveModelRoute(db: RuntimeSqliteDatabase, input: ResolveModel
   // 新增：fallback - 有 agentId 但没有 modelId/modelRouteId 时，取第一个可用路由
   if (input.agentId && !input.modelId && !input.modelRouteId) {
     const fallbackRow = db.prepare(`
-      SELECT route.*, catalog.display_name
+      SELECT route.*, catalog.display_name, catalog.metadata_json AS catalog_metadata_json
       FROM model_routes AS route
       JOIN model_catalog AS catalog ON catalog.id = route.model_id
       WHERE route.agent_id = ?
@@ -286,7 +293,7 @@ export function resolveModelRoute(db: RuntimeSqliteDatabase, input: ResolveModel
   }  
 
   const row = db.prepare(`
-    SELECT route.*, catalog.display_name
+    SELECT route.*, catalog.display_name, catalog.metadata_json AS catalog_metadata_json
     FROM model_routes AS route
     JOIN model_catalog AS catalog ON catalog.id = route.model_id
     WHERE route.agent_id = ?

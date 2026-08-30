@@ -540,6 +540,7 @@ describe('TanStack Virtual, DB and AI client adapters', () => {
     expect(localSkillsCollection.get('rollback-skill')?.name).toBe('rollback-skill');
 
     syncModelCatalogToDb([{ id: 'rollback-model', name: 'Rollback Model', endpoints: [], engines: [], status: 'active' }]);
+    expect(modelCatalogCollection.get('rollback-model')?.endpoints).toEqual([]);
     const modelSnapshot = getModelCatalogSnapshot();
     syncModelCatalogToDb([]);
     expect(modelCatalogCollection.get('rollback-model')).toBeUndefined();

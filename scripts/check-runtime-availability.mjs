@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getAcpxAgentRegistryOverrides } from './acpx-agent-overrides.mjs';
@@ -24,6 +25,7 @@ const DEFAULT_AGENTS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
 ];
 
 const options = parseArgs(process.argv.slice(2));
@@ -76,6 +78,10 @@ This check uses acpx/runtime doctor probes.
 }
 
 async function probe(agentId) {
+  // The standalone OpenMA launcher exposes its own version probe; use it for
+  // availability instead of asking the generic ACPX doctor to infer support.
+  if (agentId === 'deepseek-harness') return probeDeepseekLauncher();
+
   const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
   const runtime = createAcpRuntime({
     cwd: process.cwd(),
@@ -110,4 +116,46 @@ async function probe(agentId) {
       details: [],
     };
   }
+}
+
+function probeDeepseekLauncher() {
+  const configured = AGENT_OVERRIDES['deepseek-harness'];
+  const executable = configured?.[0] || 'aceharness-deepseek-acp';
+  const args = ['--version'];
+  return new Promise((resolveReport) => {
+    let output = '';
+    let settled = false;
+    const child = spawn(executable, args, {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    const finish = (report) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveReport({
+        agentId: 'deepseek-harness',
+        runtime: 'acpx',
+        ...report,
+        details: [`command=${executable} ${args.join(' ')}`, 'standalone OpenMA ACP launcher; DSH_HOME is reused at session start'],
+      });
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ available: false, code: 'COMMAND_TIMEOUT', message: 'launcher --version timed out' });
+    }, 15000);
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    child.once('error', (error) => {
+      finish({ available: false, code: 'COMMAND_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) });
+    });
+    child.once('close', (code, signal) => {
+      const message = output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+      finish(code === 0
+        ? { available: true, code: 'COMMAND_AVAILABLE', message: message || 'launcher is available' }
+        : { available: false, code: 'COMMAND_FAILED', message: message || `launcher exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}` });
+    });
+  });
 }

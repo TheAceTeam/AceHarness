@@ -100,3 +100,10 @@ export {
 } from './security/redaction';
 
 export type { RedactionOptions, RedactionResult } from './security/redaction';
+
+export {
+  DEEPSEEK_HARNESS_DSH_HOME_ENV,
+  DEEPSEEK_HARNESS_MODEL_ENV,
+  DEEPSEEK_HARNESS_PROVIDER_ENV,
+  DEEPSEEK_HARNESS_SESSION_ROOT_ENV,
+} from './deepseek-harness-constants';

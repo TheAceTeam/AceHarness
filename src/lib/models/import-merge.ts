@@ -8,6 +8,8 @@ export type DetectedModelImportItem = {
   selected?: boolean;
 };
 
+const ENGINE_DEFAULT_ENDPOINTS: Record<string, string[]> = {};
+
 function uniqueStrings(values: unknown[]): string[] {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
 }
@@ -18,6 +20,7 @@ export function mergeDetectedModelsForImport(input: {
   engine: string;
 }): ModelOption[] {
   const engine = String(input.engine || '').trim();
+  const defaultEndpoints = ENGINE_DEFAULT_ENDPOINTS[engine] || [];
   const mergedMap = new Map(input.models.map((model) => [model.value, { ...model }]));
 
   for (const detected of input.detectedModels) {
@@ -31,7 +34,7 @@ export function mergeDetectedModelsForImport(input: {
         ...existing,
         label: detected.label || existing.label,
         costMultiplier: detected.costMultiplier ?? existing.costMultiplier ?? 1,
-        endpoints: uniqueStrings([...(existing.endpoints || []), ...(detected.endpoints || [])]),
+        endpoints: uniqueStrings([...(existing.endpoints || []), ...defaultEndpoints, ...(detected.endpoints || [])]),
         engines: uniqueStrings([...(existing.engines || []), engine]),
       });
       continue;
@@ -41,7 +44,7 @@ export function mergeDetectedModelsForImport(input: {
       value: modelId,
       label: detected.label || modelId,
       costMultiplier: detected.costMultiplier ?? 1,
-      endpoints: uniqueStrings(detected.endpoints || []),
+      endpoints: uniqueStrings([...defaultEndpoints, ...(detected.endpoints || [])]),
       engines: engine ? [engine] : [],
     });
   }

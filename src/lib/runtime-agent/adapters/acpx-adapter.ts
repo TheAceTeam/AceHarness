@@ -204,7 +204,7 @@ export function getAcpxAgentRegistryOverrides(): Record<string, string[]> {
   // process PATH, which misses a CLI installed only on an ACEHarness-configured
   // search path. Parts are returned unwrapped because acpx does its own .cmd
   // handling via buildSpawnCommandOptions.
-  const resolve = (agentId: 'nga' | 'codeagent' | 'codegenie'): string[] => {
+  const resolve = (agentId: 'nga' | 'codeagent' | 'codegenie' | 'deepseek-harness'): string[] => {
     const definition = getBuiltinAgentDefinition(agentId);
     if (!definition?.command) throw new Error(`Missing ACPX command metadata for ${agentId}`);
     const env = buildConfiguredProcessEnvSync();
@@ -232,6 +232,7 @@ export function getAcpxAgentRegistryOverrides(): Record<string, string[]> {
     nga: resolve('nga'),
     codeagent: resolve('codeagent'),
     codegenie: resolve('codegenie'),
+    'deepseek-harness': resolve('deepseek-harness'),
   };
 }
 
