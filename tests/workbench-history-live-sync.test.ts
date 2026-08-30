@@ -18,6 +18,7 @@ import {
   resolveStartPreflightStrategy,
   resolveWorkbenchRuntimeWorkflowConfig,
   shouldShowWorkbenchHumanAttention,
+  isActionableWorkbenchHumanQuestion,
   resolveInitialAdversarialIntent,
   getRunReviewIntentPresentation,
   buildWorkbenchRunDetailNavItems,
@@ -335,15 +336,19 @@ describe('Workbench stop progress', () => {
     });
   });
 
-  test('keeps full human-approval evidence behind a bounded disclosure', async () => {
-    const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
+  test('keeps full human-approval evidence accessible from the decision card', async () => {
+    const [workbenchSource, questionCardSource] = await Promise.all([
+      readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8'),
+      readFile(new URL('../src/components/workflow/HumanQuestionCard.tsx', import.meta.url), 'utf8'),
+    ]);
 
-    expect(source).toContain('aria-label="审批说明"');
-    expect(source).toContain('max-h-48 overflow-y-auto overscroll-contain');
-    expect(source).toContain('Agent 核验清单');
-    expect(source).toContain('让 Agent 自动核验并返回');
-    expect(source).toContain('让 Agent 核验 PR 与 CI 状态');
-    expect(source).toContain('我已人工确认，继续');
+    expect(questionCardSource).toContain('aria-label="完整审批依据"');
+    expect(questionCardSource).toContain('查看完整审批依据');
+    expect(questionCardSource).toContain("presentation === 'decision'");
+    expect(workbenchSource).toContain('presentation="decision"');
+    expect(workbenchSource).toContain('让 Agent 自动核验并返回');
+    expect(workbenchSource).toContain('让 Agent 核验 PR 与 CI 状态');
+    expect(workbenchSource).toContain('我已人工确认，继续');
   });
 
   test('does not present stale human approval as actionable after a run stops', () => {
@@ -359,6 +364,27 @@ describe('Workbench stop progress', () => {
       hasApproval: false,
       isHumanReviewLocation: true,
     })).toBe(true);
+  });
+
+  test('does not restore a transition approval after the run has left the approval state', () => {
+    const question = {
+      id: 'hq-stale',
+      runId: 'run-stale',
+      configFile: 'workflow.yaml',
+      status: 'unanswered' as const,
+      kind: 'approval' as const,
+      title: '等待人工审查',
+      message: '请选择下一状态',
+      createdAt: '2026-08-30T00:00:00.000Z',
+      answerSchema: { type: 'approval-transition' as const },
+    };
+    expect(isActionableWorkbenchHumanQuestion(question, '__human_approval__')).toBe(true);
+    expect(isActionableWorkbenchHumanQuestion(question, '修复与验证')).toBe(false);
+    expect(isActionableWorkbenchHumanQuestion({
+      ...question,
+      kind: 'clarification',
+      answerSchema: { type: 'text' },
+    }, '修复与验证')).toBe(true);
   });
 
   test('keeps only user-facing phases and discards ACP/session diagnostics', () => {

@@ -2740,8 +2740,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.supervisorFlow = isLightweightWorkflowConfig(workflowConfig)
           ? []
           : (existingState.supervisorFlow || this.supervisorFlow);
-        this.humanQuestions = existingState.humanQuestions || [];
-        this.pendingHumanQuestionId = existingState.pendingHumanQuestionId || existingState.pendingCheckpoint?.humanQuestionId || null;
+        this.restorePendingHumanQuestionFromRunState(existingState);
         this.humanAnswersContext = existingState.humanAnswersContext || [];
         this.prReadinessObservations = existingState.prReadinessObservations || {};
         if (isLightweightWorkflowConfig(workflowConfig)) {
@@ -2956,6 +2955,38 @@ export class StateMachineWorkflowManager extends EventEmitter {
   getPendingHumanQuestion(): HumanQuestion | null {
     if (!this.pendingHumanQuestionId) return null;
     return this.humanQuestions.find((question) => question.id === this.pendingHumanQuestionId && question.status === 'unanswered') || null;
+  }
+
+  /**
+   * An approval-transition is valid only while the run is in the synthetic
+   * human-approval state. A force jump used to retain the old question id,
+   * leaving the UI with an actionable-looking card that the server correctly
+   * rejected. Keep the question as audit history, but retire it whenever the
+   * restored run has already moved on.
+   */
+  private restorePendingHumanQuestionFromRunState(runState: PersistedRunState): void {
+    this.humanQuestions = runState.humanQuestions || [];
+    const pendingQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
+    const pendingQuestion = pendingQuestionId
+      ? this.humanQuestions.find((question) => question.id === pendingQuestionId)
+      : null;
+    const staleApprovalTransition = pendingQuestion?.status === 'unanswered'
+      && pendingQuestion.answerSchema.type === 'approval-transition'
+      && this.currentState !== '__human_approval__';
+
+    if (staleApprovalTransition) {
+      this.humanQuestions = this.humanQuestions.map((question) => (
+        question.id === pendingQuestionId
+          ? { ...question, status: 'dismissed' as const }
+          : question
+      ));
+      this.pendingHumanQuestionId = null;
+      return;
+    }
+
+    this.pendingHumanQuestionId = pendingQuestion?.status === 'unanswered'
+      ? pendingQuestionId
+      : null;
   }
 
   private formatHumanQuestionAnswer(answer: HumanQuestionAnswer): string {
@@ -10754,8 +10785,7 @@ try {
     this.currentSupervisorAgent = isLightweightRun ? '' : DEFAULT_SUPERVISOR_NAME;
     this.latestSupervisorReview = isLightweightRun ? null : (runState.latestSupervisorReview || null);
     this.supervisorFlow = isLightweightRun ? [] : (runState.supervisorFlow || []);
-    this.humanQuestions = runState.humanQuestions || [];
-    this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
+    this.restorePendingHumanQuestionFromRunState(runState);
     this.humanAnswersContext = runState.humanAnswersContext || [];
     this.prReadinessObservations = runState.prReadinessObservations || {};
     this.specRevisionVote = isLightweightRun ? null : (runState.specRevisionVote || null);

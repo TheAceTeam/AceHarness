@@ -733,6 +733,17 @@ export function shouldShowWorkbenchHumanAttention(input: {
   return input.hasPendingQuestion || input.hasApproval || input.isHumanReviewLocation;
 }
 
+/** A transition approval cannot be submitted after its run has left the approval checkpoint. */
+export function isActionableWorkbenchHumanQuestion(
+  question: HumanQuestion | null | undefined,
+  currentState?: string | null,
+): question is HumanQuestion {
+  if (!question || question.status !== 'unanswered') return false;
+  return question.answerSchema?.type !== 'approval-transition'
+    || !currentState
+    || currentState === '__human_approval__';
+}
+
 export interface WorkbenchHumanApprovalPresentation {
   recommendation: 'verify-first' | 'ready-to-continue' | 'submit-and-monitor-ci';
   headline: string;
@@ -7034,17 +7045,23 @@ export default function WorkbenchPage({
       setMasterSpecPath(status.masterSpecPath);
       setFinalReview((status as any).finalReview || null);
       setQualityChecks((status as any).qualityChecks || []);
-      const statusCurrentState = String((status as any).currentState || '');
+      const statusCurrentState = String((status as any).currentState || status.currentPhase || '');
       const statusPendingHumanQuestion = (status as any).pendingHumanQuestion || null;
-      const statusHasActiveHumanApproval = statusCurrentState === '__human_approval__' || Boolean((status as any).pendingCheckpoint);
-      const nextPendingHumanQuestion = statusPendingHumanQuestion
-        || (statusHasActiveHumanApproval ? ((status as any).pendingHumanQuestion || null) : null);
-      const shouldRestorePendingHumanQuestion = nextPendingHumanQuestion
-        && nextPendingHumanQuestion.status === 'unanswered';
+      const nextPendingHumanQuestion = isActionableWorkbenchHumanQuestion(
+        statusPendingHumanQuestion,
+        statusCurrentState,
+      )
+        ? statusPendingHumanQuestion
+        : null;
+      const shouldRestorePendingHumanQuestion = Boolean(nextPendingHumanQuestion);
       if (shouldRestorePendingHumanQuestion) {
         setPendingHumanQuestionIfChanged(nextPendingHumanQuestion);
       } else {
         clearPendingHumanQuestion();
+        if (statusCurrentState !== '__human_approval__') {
+          humanApprovalSignatureRef.current = null;
+          setHumanApprovalData(null);
+        }
       }
 
       {
@@ -7576,13 +7593,18 @@ export default function WorkbenchPage({
     if (!activeRuntimeRunId || dbUnansweredHumanQuestionRows.length === 0) return;
     const [latestQuestion] = dbUnansweredHumanQuestionRows;
     if (!latestQuestion) return;
-    setPendingHumanQuestionIfChanged({
+    const nextQuestion = {
       ...latestQuestion,
       answerSchema: latestQuestion.answerSchema as any,
       answer: latestQuestion.answer as any,
       source: latestQuestion.source as any,
-    } as HumanQuestion);
-  }, [activeRuntimeRunId, dbUnansweredHumanQuestionRows, setPendingHumanQuestionIfChanged]);
+    } as HumanQuestion;
+    if (isActionableWorkbenchHumanQuestion(nextQuestion, currentPhase)) {
+      setPendingHumanQuestionIfChanged(nextQuestion);
+    } else {
+      clearPendingHumanQuestion();
+    }
+  }, [activeRuntimeRunId, clearPendingHumanQuestion, currentPhase, dbUnansweredHumanQuestionRows, setPendingHumanQuestionIfChanged]);
 
   const applyWorkflowStatusSnapshot = useCallback((snapshot: any) => {
     if (!snapshot) return;
@@ -7711,7 +7733,16 @@ export default function WorkbenchPage({
       setLatestSupervisorReview(snapshot.latestSupervisorReview);
     }
     if (snapshot.pendingHumanQuestion !== undefined) {
-      setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
+      const snapshotCurrentState = typeof snapshot.currentState === 'string'
+        ? snapshot.currentState
+        : typeof snapshot.currentPhase === 'string'
+          ? snapshot.currentPhase
+          : undefined;
+      setPendingHumanQuestionIfChanged(
+        isActionableWorkbenchHumanQuestion(snapshot.pendingHumanQuestion, snapshotCurrentState)
+          ? snapshot.pendingHumanQuestion
+          : null,
+      );
     }
   }, [dispatch, resolveRuntimeRunId, setPendingHumanQuestionIfChanged, specCodingDisabled, syncRuntimePayloadToDb, syncWorkflowEventLogUntil]);
 
@@ -13860,7 +13891,7 @@ export default function WorkbenchPage({
   );
 
   const renderRunLiveOutputPanel = () => {
-    if (pendingHumanQuestion?.status === 'unanswered') {
+    if (isActionableWorkbenchHumanQuestion(pendingHumanQuestion, currentPhase)) {
       return (
         <div className="h-full min-h-0 overflow-y-auto bg-muted/10 p-4">
           <HumanQuestionCard

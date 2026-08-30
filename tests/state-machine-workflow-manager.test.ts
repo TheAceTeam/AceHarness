@@ -1140,6 +1140,47 @@ describe('subworkflow step dispatch', () => {
     vi.doUnmock('@/lib/workflow/subworkflow-config');
   });
 
+  test('retires a stale transition approval when a continuation restores another state', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const runState = {
+      runId: 'run-stale-approval',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'running',
+      startTime: '2024-01-01T00:00:00.000Z',
+      currentState: '__human_approval__',
+      currentPhase: '__human_approval__',
+      completedSteps: [],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [],
+      iterationStates: {},
+      processes: [],
+      humanQuestions: [{
+        id: 'hq-old-approval',
+        runId: 'run-stale-approval',
+        configFile: 'test.yaml',
+        status: 'unanswered',
+        kind: 'approval',
+        title: '等待人工审查',
+        message: '请选择下一状态',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        requiresWorkflowPause: true,
+        answerSchema: { type: 'approval-transition', required: true },
+      }],
+      pendingHumanQuestionId: 'hq-old-approval',
+    } as any;
+
+    await (manager as any).restoreRunStateForContinuation(runState, '修复与验证');
+
+    expect((manager as any).currentState).toBe('修复与验证');
+    expect((manager as any).pendingHumanQuestionId).toBeNull();
+    expect((manager as any).getPendingHumanQuestion()).toBeNull();
+    expect((manager as any).humanQuestions).toEqual([
+      expect.objectContaining({ id: 'hq-old-approval', status: 'dismissed' }),
+    ]);
+  });
+
   test('fails closed when a planned run cannot read its child snapshot', async () => {
     vi.resetModules();
     const createSnapshot = vi.fn();
