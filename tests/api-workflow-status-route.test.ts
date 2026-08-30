@@ -65,4 +65,38 @@ describe('workflow status route', () => {
     }
     expect(mocks.getManager).not.toHaveBeenCalled();
   });
+
+  test('does not expose an approval question after the persisted run left its approval state', async () => {
+    mocks.loadRunState.mockResolvedValue({
+      runId: 'run-stale-approval',
+      configFile: 'demo.yaml',
+      status: 'running',
+      currentState: '修复与验证',
+      currentPhase: '修复与验证',
+      pendingHumanQuestionId: 'hq-old-approval',
+      humanQuestions: [{
+        id: 'hq-old-approval',
+        status: 'unanswered',
+        answerSchema: { type: 'approval-transition' },
+      }],
+      agents: [],
+      stepLogs: [],
+      completedSteps: [],
+      failedSteps: [],
+      iterationStates: {},
+    });
+    const { GET } = await import('@/server/api-routes/workflow/status/route');
+
+    for (const compactQuery of ['', '&compact=1']) {
+      const response = await GET(new Request(
+        `http://localhost/api/workflow/status?configFile=demo.yaml&runId=run-stale-approval${compactQuery}`,
+      ));
+
+      await expect(response.json()).resolves.toMatchObject({
+        runId: 'run-stale-approval',
+        currentState: '修复与验证',
+        pendingHumanQuestion: null,
+      });
+    }
+  });
 });

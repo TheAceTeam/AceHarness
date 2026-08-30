@@ -30,6 +30,22 @@ type WorkflowStructureMapping = {
   };
 };
 
+function getActionablePersistedHumanQuestion(runState: any) {
+  const pendingQuestion = runState.pendingHumanQuestionId
+    ? runState.humanQuestions?.find((question: any) => (
+      question.id === runState.pendingHumanQuestionId && question.status === 'unanswered'
+    )) || null
+    : runState.pendingCheckpoint?.humanQuestion || null;
+  if (
+    pendingQuestion?.status === 'unanswered'
+    && pendingQuestion.answerSchema?.type === 'approval-transition'
+    && runState.currentState !== '__human_approval__'
+  ) {
+    return null;
+  }
+  return pendingQuestion;
+}
+
 async function buildWorkflowStructureMapping(configFile: string, specCoding: SpecCodingDocument): Promise<WorkflowStructureMapping | null> {
   try {
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
@@ -214,9 +230,7 @@ async function resolveWorkflowStatusPayload(configFile?: string | null, requeste
     if (requestedRunId) {
       const runState = await loadRunState(requestedRunId, { hydrateLargeOutputs: false });
       if (runState && runState.configFile === configFile) {
-        const pendingHumanQuestion = runState.pendingHumanQuestionId
-          ? runState.humanQuestions?.find((question) => question.id === runState.pendingHumanQuestionId && question.status === 'unanswered') || null
-          : runState.pendingCheckpoint?.humanQuestion || null;
+        const pendingHumanQuestion = getActionablePersistedHumanQuestion(runState);
         const pendingQuestionWithSession = pendingHumanQuestion
           ? {
               ...pendingHumanQuestion,
@@ -284,9 +298,7 @@ async function resolveWorkflowLiveStatusPayload(configFile?: string | null, requ
           runId: runState.runId,
           currentConfigFile: runState.configFile,
           currentPhase: runState.currentPhase || runState.currentState || null,
-          pendingHumanQuestion: runState.pendingHumanQuestionId
-            ? runState.humanQuestions?.find((question) => question.id === runState.pendingHumanQuestionId && question.status === 'unanswered') || null
-            : runState.pendingCheckpoint?.humanQuestion || null,
+          pendingHumanQuestion: getActionablePersistedHumanQuestion(runState),
         }, configFile);
       }
 
