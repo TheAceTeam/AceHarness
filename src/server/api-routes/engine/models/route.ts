@@ -6,7 +6,10 @@ import { loadConfiguredEnvObject } from '@/lib/core/configured-env';
 import { parse } from 'yaml';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
 import { getAcpxAgentRegistryOverrides, resolveAcpxCommand, resolveAcpxRuntimeAgent, shouldSkipOpencodeSafeCheck } from '@/lib/runtime-agent/adapters/acpx-adapter';
-import { DEEPSEEK_HARNESS_DEFAULT_MODELS } from '@/lib/runtime-agent/deepseek-harness-constants';
+import {
+  DEEPSEEK_HARNESS_DEFAULT_MODELS,
+  DEEPSEEK_HARNESS_REASONING_EFFORTS,
+} from '@/lib/runtime-agent/deepseek-harness-constants';
 import { createAcpxCompatibleSessionStore } from '@/lib/runtime-agent/adapters/acpx-runtime-client';
 import { qualifyModelId } from '@/lib/models/provider-qualified-id';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
@@ -110,11 +113,13 @@ function addConfiguredModel(
   if (!model || typeof model !== 'object') return;
   const record = model as Record<string, unknown>;
   const rawModelId = stringValue(record.id ?? record.modelId ?? record.value ?? record.key);
+  const displayName = stringValue(record.name ?? record.displayName ?? record.label ?? record.title ?? rawModelId)
+    .replace(/::/g, '/');
   addModel(
     target,
     seen,
     qualifyModelId(providerId, rawModelId),
-    record.name ?? record.displayName ?? record.label ?? record.title ?? rawModelId,
+    displayName,
     { source: 'config', endpoint },
   );
 }
@@ -161,10 +166,12 @@ function getDeepseekBundleModels(): DiscoveredModel[] {
 }
 
 function normalizeDeepseekAcpModelId(modelId: string, defaultProvider?: string): string {
-  const value = stringValue(modelId);
-  const separator = value.indexOf('::');
-  if (separator > 0) return qualifyModelId(value.slice(0, separator), value.slice(separator + 2));
+  const value = stringValue(modelId).replace(/::/g, '/');
   return value.includes('/') ? value : qualifyModelId(defaultProvider || 'deepseek-official', value);
+}
+
+function normalizeDeepseekAcpModelName(name: string): string {
+  return stringValue(name).replace(/::/g, '/');
 }
 
 async function loadDeepseekDefaultProvider(): Promise<string | undefined> {
@@ -238,6 +245,48 @@ function extractModelsFromStatus(status: unknown): DiscoveredModel[] {
   return target;
 }
 
+function extractDeepseekReasoningEfforts(status: unknown): string[] {
+  if (!status || typeof status !== 'object') return [];
+  const record = status as Record<string, unknown>;
+  const configOptions = [
+    ...valuesFromUnknown(record.configOptions),
+    ...valuesFromUnknown((record.details as Record<string, unknown> | undefined)?.configOptions),
+  ];
+  const values: string[] = [];
+  for (const option of configOptions) {
+    if (!option || typeof option !== 'object') continue;
+    const item = option as Record<string, unknown>;
+    const id = stringValue(item.id).toLowerCase();
+    const category = stringValue(item.category).toLowerCase();
+    if (id !== 'effort' && id !== 'reasoning_effort' && category !== 'thought_level') continue;
+    for (const candidate of [
+      ...valuesFromUnknown(item.options),
+      ...valuesFromUnknown(item.choices),
+      ...valuesFromUnknown(item.items),
+      ...valuesFromUnknown(item.values),
+    ]) {
+      const value = typeof candidate === 'string'
+        ? candidate.trim().toLowerCase()
+        : candidate && typeof candidate === 'object'
+          ? stringValue((candidate as Record<string, unknown>).value ?? (candidate as Record<string, unknown>).id).toLowerCase()
+          : '';
+      if (value && DEEPSEEK_HARNESS_REASONING_EFFORTS.includes(value as any) && !values.includes(value)) {
+        values.push(value);
+      }
+    }
+  }
+  return values;
+}
+
+function expandDeepseekModelsWithEfforts(models: DiscoveredModel[], efforts: string[]): DiscoveredModel[] {
+  if (efforts.length === 0) return models;
+  return models.flatMap((model) => efforts.map((effort) => ({
+    ...model,
+    modelId: `${model.modelId}[${effort}]`,
+    name: `${model.name} (${effort})`,
+  })));
+}
+
 async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
   const definition = getBuiltinAgentDefinition(agentId);
   if (!definition || definition.runtime !== 'acpx') {
@@ -299,7 +348,11 @@ async function discoverViaAcpxCommand(
       : undefined;
     const discoveredModels = uniqueModels(
       extractModelsFromStatus(status).map((model) => agentId === 'deepseek-harness'
-        ? { ...model, modelId: normalizeDeepseekAcpModelId(model.modelId, defaultProvider) }
+        ? {
+          ...model,
+          modelId: normalizeDeepseekAcpModelId(model.modelId, defaultProvider),
+          name: normalizeDeepseekAcpModelName(model.name),
+        }
         : model),
     );
     // Preserve configured routes and product defaults when the ACP agent is
@@ -318,7 +371,12 @@ async function discoverViaAcpxCommand(
       ...discoveredModels,
       ...deepseekModels,
     ]);
-    return models;
+    if (agentId !== 'deepseek-harness') return models;
+    let efforts = extractDeepseekReasoningEfforts(status);
+    // DSH supports these effort routes even when ACP status does not expose
+    // a config option, so users can choose the level in the model selector.
+    if (efforts.length === 0) efforts = [...DEEPSEEK_HARNESS_REASONING_EFFORTS];
+    return expandDeepseekModelsWithEfforts(models, efforts);
   } finally {
     await runtime.close({
       handle,

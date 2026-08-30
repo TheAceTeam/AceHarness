@@ -4,6 +4,7 @@ import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import type { RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
 export { getAceToolTitle } from '@/lib/chat/ace-tool-titles';
+export { formatAceReasoning } from '@/lib/chat/ace-reasoning';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -135,10 +136,6 @@ function inputText(value: unknown, fallback = ''): string {
   if (extracted) return safeToolResultText(extracted);
   if (typeof value === 'object') return safeToolResultText(stringifyStructured(value));
   return safeToolResultText(String(value));
-}
-
-export function formatAceReasoning(text: string): string {
-  return wrapAceProcessBlock('reasoning', {}, text || '');
 }
 
 /** Serialize one runtime tool lifecycle event into the shared transcript format. */

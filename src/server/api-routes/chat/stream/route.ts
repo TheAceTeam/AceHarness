@@ -33,7 +33,7 @@ import {
 } from '@/lib/chat/request-options';
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
-import { formatAceRuntimeToolEvent } from '@/lib/chat/ace-process-formatters';
+import { formatAceReasoning, formatAceRuntimeToolEvent } from '@/lib/chat/ace-process-formatters';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
 import { isCreationAssistantSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
@@ -522,7 +522,10 @@ export async function POST(request: Request) {
               if (!session) return session;
               const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
               if (!currentAssistant) return session;
-              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), String(evt.content || ''));
+              const nextRawContent = appendStreamChunk(
+                String(currentAssistant.rawContent || ''),
+                formatAceReasoning(String(evt.content || '')),
+              );
               return {
                 ...session,
                 updatedAt: Date.now(),

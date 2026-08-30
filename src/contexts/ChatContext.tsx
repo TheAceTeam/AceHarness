@@ -13,6 +13,7 @@ import {
   type SessionWorkbenchState,
 } from '@/lib/core/home-sidebar-state';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
+import { formatAceReasoning } from '@/lib/chat/ace-reasoning';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
@@ -1164,15 +1165,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
-            const content = String(parseSseJsonEventData(e.data).content || '');
-            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
-            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
+            const data = parseSseJsonEventData(e.data);
+            const content = String(data?.content || '');
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content: formatAceReasoning(content) }, {
               chatId: streamState.chatId,
               sessionId: recoveredSession.runtimeSessionId,
               frontendSessionId: activeSessionId,
               streamScope: 'chat-recovery',
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, formatAceReasoning(content));
             setActiveSession(prev => {
               if (!prev) return prev;
               return {
@@ -2757,10 +2759,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
             resetInactivityTimer();
-            const content = String(parseSseJsonEventData(e.data).content || '');
-            accumulatedRawContent = appendStreamChunk(accumulatedRawContent, content);
-            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
-            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
+            const data = parseSseJsonEventData(e.data);
+            const content = String(data?.content || '');
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', { content: formatAceReasoning(content) }, {
               chatId,
               provider: resolvedEngine,
               model: currentModel,
@@ -2769,6 +2770,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               streamScope: 'chat-message',
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
+            const reasoningBlock = formatAceReasoning(content);
+            accumulatedRawContent = appendStreamChunk(accumulatedRawContent, reasoningBlock);
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, reasoningBlock);
             void applyToTargetSession(s => ({
               ...s, messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, rawContent: accumulatedRawStream } : m),
             }));

@@ -20,12 +20,19 @@ export const CLI_ENVIRONMENT_GROUPS = [
     variables: [
       { key: 'DEEPSEEK_API_KEY', label: 'API 密钥', description: 'DeepSeek Harness 使用的 API 密钥。', secret: true },
       { key: 'DEEPSEEK_BASE_URL', label: '服务地址', description: '可选的 DeepSeek 兼容 API 服务地址。' },
+      { key: 'DSH_PATH', label: 'Harness 路径', description: 'DeepSeek Harness 安装路径或 dsh 可执行文件路径。' },
+      { key: 'DSH_HOME', label: '配置目录', description: 'DeepSeek Harness 用户配置和凭据目录。' },
+      { key: 'DSH_MAX_TOKENS', label: '最大输出 Token', description: '单次请求的最大输出 token 数。' },
       {
         key: 'DSH_PERMISSION_MODE',
         label: '权限模式',
-        description: '仅支持 workspace-write 或 danger-full-access。',
-        allowedValues: ['workspace-write', 'danger-full-access'],
+        description: 'DeepSeek Harness 的 ACP 权限模式。',
+        allowedValues: ['read-only', 'workspace-write', 'danger-full-access'],
       },
+      { key: 'DSH_SESSION_ROOT', label: '会话目录', description: 'ACP 会话持久化目录。' },
+      { key: 'DSH_SYSTEM_PROMPT', label: '系统提示词', description: 'DeepSeek Harness 的系统提示词覆盖。' },
+      { key: 'DSH_BASH_TIMEOUT_MS', label: 'Bash 超时', description: '前台 Bash 命令超时时间（毫秒）。' },
+      { key: 'DSH_ACP_DEBUG', label: 'ACP 调试日志', description: '开启 DeepSeek ACP 调试日志。' },
     ],
   },
   {

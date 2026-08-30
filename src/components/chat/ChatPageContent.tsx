@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import dynamic from '@/lib/navigation/dynamic';
 import { FolderOpen, GitBranch, MessageSquareText, Settings2 } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
+import { formatAceReasoning } from '@/lib/chat/ace-reasoning';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ChatSessionMenu } from '@/components/chat/ChatSessionMenu';
@@ -1963,7 +1964,7 @@ export function ChatPageContent({
           stream.events.addEventListener('thinking', ((event: MessageEvent) => {
             const data = parseAceSseEventData(event.data);
             const content = String(data?.content || '');
-            const row = storeChatStreamSseEventAsAgentMessage('thinking', data, {
+            const row = storeChatStreamSseEventAsAgentMessage('thinking', { ...data, content: formatAceReasoning(content) }, {
               chatId: stream.streamId,
               stepKey: agentName,
               provider: data?.engine || participant?.engine,
@@ -1972,7 +1973,7 @@ export function ChatPageContent({
               streamScope: 'agent-chat',
             }, aiPrevious);
             aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-            if (content) applyPartial(content);
+            if (content) applyPartial(formatAceReasoning(content));
           }) as EventListener);
 
           stream.events.addEventListener('delta', ((event: MessageEvent) => {
@@ -4293,4 +4294,3 @@ export function ChatPageContent({
     </div>
   );
 }
-

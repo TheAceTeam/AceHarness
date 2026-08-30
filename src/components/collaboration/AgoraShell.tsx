@@ -33,6 +33,7 @@ import { AgoraChatPanel } from '@/components/collaboration/agora/AgoraChatPanel'
 import { ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
 import { detectOpeningRole, type OpeningRole } from '@/lib/agora/opening-copy';
 import { mergeFinalRawStreamContent } from '@/lib/chat/ai-process-blocks';
+import { formatAceReasoning } from '@/lib/chat/ace-reasoning';
 import { parseAceSseEventData, storeChatStreamSseEventAsAgentMessage, type AceStreamChunk } from '@/client/ai/messages';
 import { describeEventSourceError } from '@/lib/core/safe-event-source';
 
@@ -802,8 +803,7 @@ export function AgoraShell({
       stream.events.addEventListener('thinking', ((event: MessageEvent) => {
         const data = parseAceSseEventData(event.data);
         const content = String(data?.content || '');
-        partialContent += content;
-        const row = storeChatStreamSseEventAsAgentMessage('thinking', data, {
+        const row = storeChatStreamSseEventAsAgentMessage('thinking', { ...data, content: formatAceReasoning(content) }, {
           chatId: stream.streamId,
           stepKey: runtimeName,
           provider: data?.engine,
@@ -813,7 +813,11 @@ export function AgoraShell({
           streamScope: 'agora-agent-chat',
         }, aiPrevious);
         aiPrevious = { id: row.id, content: row.content, toolCalls: row.toolCalls };
-        lifecycle?.onDelta?.(content, partialContent);
+        if (content) {
+          const reasoningBlock = formatAceReasoning(content);
+          partialContent += reasoningBlock;
+          lifecycle?.onDelta?.(reasoningBlock, partialContent);
+        }
       }) as EventListener);
 
       stream.events.addEventListener('done', ((event: MessageEvent) => {

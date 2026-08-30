@@ -377,10 +377,12 @@ export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState<DashboardUser | null>(null);
   const [conversationView, setConversationView] = useState<SessionDirectoryView>('conversation');
   const [secondarySidebarOpen, setSecondarySidebarOpen] = useState(true);
-  const [mainSidebarOpen, setMainSidebarOpen] = useState(readStoredSidebarOpen);
+  // Keep the SSR and hydration markup identical; persisted state is restored
+  // after mount so a browser cookie cannot change the first render.
+  const [mainSidebarOpen, setMainSidebarOpen] = useState(true);
   const [dashboardSidebarWidth, setDashboardSidebarWidth] = useState(DASHBOARD_SIDEBAR_WIDTH_DEFAULT);
   const [dashboardSidebarResizing, setDashboardSidebarResizing] = useState(false);
-  const [navigationMode, setNavigationModeState] = useState<DashboardNavigationMode>(readStoredNavigationMode);
+  const [navigationMode, setNavigationModeState] = useState<DashboardNavigationMode>('modern');
   const [activeDockTab, setActiveDockTab] = useState<DashboardDockTab | null>({ id: 'chat', title: t('dashboard.quickActions.chatMode'), kind: 'chat' });
   const [acpxTraceEnabled, setAcpxTraceEnabled] = useState(false);
   const [acpxTraceDirectory, setAcpxTraceDirectory] = useState('');
@@ -391,6 +393,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setDashboardSidebarWidth(readStoredDashboardSidebarWidth());
+  }, []);
+
+  useEffect(() => {
+    setMainSidebarOpen(readStoredSidebarOpen());
+    setNavigationModeState(readStoredNavigationMode());
   }, []);
 
   const panelParam = searchParams.get('panel');

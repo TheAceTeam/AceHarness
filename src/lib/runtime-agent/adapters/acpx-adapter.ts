@@ -351,6 +351,26 @@ export class AcpxAdapter implements RuntimeAdapter {
       ?? extractAcpRuntimeHandleValue(nativeBinding?.raw)
       ?? extractAcpRuntimeHandle(input.existingBinding);
     const raw = nativeBinding?.raw ?? input.existingBinding?.raw ?? { agentId: input.agentId, command };
+    const routeMetadata = {
+      agentId: input.agentId,
+      providerId: input.modelRoute.providerId,
+      providerModel: input.modelRoute.providerModel,
+      configOptions: input.modelRoute.configOptions,
+    };
+    let persistedRaw: unknown = raw;
+    if (input.agentId === 'deepseek-harness') {
+      if (handle && isPlainRecord(raw)) {
+        persistedRaw = { ...raw, handle, aceharnessModelRoute: routeMetadata };
+      } else if (handle) {
+        persistedRaw = { agentId: input.agentId, command, handle, aceharnessModelRoute: routeMetadata };
+      } else if (isPlainRecord(raw)) {
+        persistedRaw = { ...raw, aceharnessModelRoute: routeMetadata };
+      }
+    } else if (handle && isPlainRecord(raw)) {
+      persistedRaw = { ...raw, handle };
+    } else if (handle) {
+      persistedRaw = { agentId: input.agentId, command, handle };
+    }
 
     return {
       id: input.existingBinding?.id ?? `${input.runtimeSessionId}:acpx:${input.agentId}:1`,
@@ -362,7 +382,7 @@ export class AcpxAdapter implements RuntimeAdapter {
         ?? (handle ? extractExternalIds(handle) : undefined)
         ?? input.existingBinding?.externalIds
         ?? {},
-      raw: handle && isPlainRecord(raw) ? { ...raw, handle } : handle ? { agentId: input.agentId, command, handle } : raw,
+      raw: persistedRaw,
       createdAt: input.existingBinding?.createdAt ?? now,
       updatedAt: now,
     };

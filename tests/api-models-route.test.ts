@@ -128,7 +128,7 @@ describe('models API route', () => {
               return { sessionKey: input.sessionKey, backend: 'acpx', runtimeSessionName: 'test' };
             }),
             getStatus: vi.fn(async () => ({
-              models: { availableModelIds: ['deepseek-chat'] },
+              models: { availableModelIds: ['deepseek-chat', 'boft-deepseek::deepseek-v4-flash'] },
             })),
             close: vi.fn(async () => undefined),
           };
@@ -142,7 +142,13 @@ describe('models API route', () => {
         const response = await GET(makeRequest('/api/engine/models?engine=deepseek-harness'));
         expect(response.status).toBe(200);
         expect((await responseJson<{ models: any[] }>(response)).models).toEqual(expect.arrayContaining([
-          expect.objectContaining({ modelId: 'deepseek-official/deepseek-chat', endpoints: [] }),
+          expect.objectContaining({ modelId: 'deepseek-official/deepseek-chat[off]', endpoints: [] }),
+          expect.objectContaining({ modelId: 'deepseek-official/deepseek-chat[high]', endpoints: [] }),
+          expect.objectContaining({ modelId: 'deepseek-official/deepseek-chat[max]', endpoints: [] }),
+          expect.objectContaining({
+            modelId: 'boft-deepseek/deepseek-v4-flash[off]',
+            name: 'boft-deepseek/deepseek-v4-flash (off)',
+          }),
         ]));
         expect(runtimeOptions).toMatchObject({ cwd: process.cwd() });
         expect(ensureInput).toMatchObject({
@@ -193,15 +199,52 @@ describe('models API route', () => {
         const { GET } = await import('@/server/api-routes/engine/models/route');
         const response = await GET(makeRequest('/api/engine/models?engine=deepseek-harness'));
         expect(response.status).toBe(200);
-        expect((await responseJson<{ models: Array<{ modelId: string; source?: string; endpoints?: string[] }> }>(response)).models)
-          .toEqual([
-          { modelId: 'boft-deepseek/deepseek-v4-flash', name: 'DeepSeek-V4-Flash', source: 'config', endpoints: ['deepseek'] },
-          { modelId: 'boft-deepseek/deepseek-v4-pro', name: 'DeepSeek-V4-Pro', source: 'config', endpoints: ['deepseek'] },
-          { modelId: 'boft/gpt-5.6-sol', name: 'gpt-5.6-sol', source: 'config', endpoints: ['openai'] },
-          { modelId: 'deepseek-official/deepseek-v4-flash', name: 'DeepSeek V4 Flash', source: 'bundle', endpoints: ['deepseek'] },
-          { modelId: 'deepseek-official/deepseek-v4-pro', name: 'DeepSeek V4 Pro', source: 'bundle', endpoints: ['deepseek'] },
-          { modelId: 'deepseek-official/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision', source: 'bundle', endpoints: ['deepseek'] },
-          ]);
+        const models = (await responseJson<{ models: Array<{ modelId: string; source?: string; endpoints?: string[] }> }>(response)).models;
+        expect(models).toHaveLength(18);
+        expect(models).toEqual(expect.arrayContaining([
+          { modelId: 'boft-deepseek/deepseek-v4-flash[off]', name: 'DeepSeek-V4-Flash (off)', source: 'config', endpoints: ['deepseek'] },
+          { modelId: 'boft-deepseek/deepseek-v4-flash[high]', name: 'DeepSeek-V4-Flash (high)', source: 'config', endpoints: ['deepseek'] },
+          { modelId: 'boft-deepseek/deepseek-v4-flash[max]', name: 'DeepSeek-V4-Flash (max)', source: 'config', endpoints: ['deepseek'] },
+          { modelId: 'boft/gpt-5.6-sol[off]', name: 'gpt-5.6-sol (off)', source: 'config', endpoints: ['openai'] },
+          { modelId: 'deepseek-official/deepseek-v4-flash[max]', name: 'DeepSeek V4 Flash (max)', source: 'bundle', endpoints: ['deepseek'] },
+        ]));
+      } finally {
+        if (previousDshHome === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = previousDshHome;
+      }
+    });
+  });
+
+  test('DeepSeek model discovery expands advertised reasoning efforts into route ids', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      vi.resetModules();
+      vi.doMock('acpx/runtime', () => ({
+        createAgentRegistry: () => ({}),
+        createRuntimeStore: () => ({}),
+        createAcpRuntime: () => ({
+          ensureSession: vi.fn(async () => ({ sessionKey: 'effort-session', backend: 'acpx', runtimeSessionName: 'test' })),
+          getStatus: vi.fn(async () => ({
+            models: { availableModelIds: ['deepseek-v4-flash'] },
+            configOptions: [{
+              id: 'effort',
+              category: 'thought_level',
+              type: 'select',
+              options: ['off', 'high', 'max'],
+            }],
+          })),
+          close: vi.fn(async () => undefined),
+        }),
+      }));
+      const previousDshHome = process.env.DSH_HOME;
+      process.env.DSH_HOME = path.join(aceHome, 'empty-dsh-home');
+      try {
+        const { GET } = await import('@/server/api-routes/engine/models/route');
+        const response = await GET(makeRequest('/api/engine/models?engine=deepseek-harness'));
+        expect(response.status).toBe(200);
+        const body = await responseJson<{ models: Array<{ modelId: string }> }>(response);
+        expect(body.models.map((model) => model.modelId)).toContainEqual('deepseek-official/deepseek-v4-flash[off]');
+        expect(body.models.map((model) => model.modelId)).toContainEqual('deepseek-official/deepseek-v4-flash[high]');
+        expect(body.models.map((model) => model.modelId)).toContainEqual('deepseek-official/deepseek-v4-flash[max]');
       } finally {
         if (previousDshHome === undefined) delete process.env.DSH_HOME;
         else process.env.DSH_HOME = previousDshHome;
@@ -228,12 +271,19 @@ describe('models API route', () => {
         const { GET } = await import('@/server/api-routes/engine/models/route');
         const response = await GET(makeRequest('/api/engine/models?engine=deepseek-harness'));
         expect(response.status).toBe(200);
-        expect((await responseJson<{ models: Array<{ modelId: string; source?: string }> }>(response)).models)
-          .toEqual([
-          { modelId: 'deepseek-official/deepseek-v4-flash', name: 'DeepSeek V4 Flash', source: 'bundle', endpoints: ['deepseek'] },
-          { modelId: 'deepseek-official/deepseek-v4-pro', name: 'DeepSeek V4 Pro', source: 'bundle', endpoints: ['deepseek'] },
-          { modelId: 'deepseek-official/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision', source: 'bundle', endpoints: ['deepseek'] },
-          ]);
+        const models = (await responseJson<{ models: Array<{ modelId: string; source?: string }> }>(response)).models;
+        expect(models).toHaveLength(9);
+        expect(models.map((model) => model.modelId)).toEqual([
+          'deepseek-official/deepseek-v4-flash[off]',
+          'deepseek-official/deepseek-v4-flash[high]',
+          'deepseek-official/deepseek-v4-flash[max]',
+          'deepseek-official/deepseek-v4-pro[off]',
+          'deepseek-official/deepseek-v4-pro[high]',
+          'deepseek-official/deepseek-v4-pro[max]',
+          'deepseek-official/deepseek-v4-flash-vision-exp[off]',
+          'deepseek-official/deepseek-v4-flash-vision-exp[high]',
+          'deepseek-official/deepseek-v4-flash-vision-exp[max]',
+        ]);
       } finally {
         if (previousDshHome === undefined) delete process.env.DSH_HOME;
         else process.env.DSH_HOME = previousDshHome;

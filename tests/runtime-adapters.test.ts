@@ -770,6 +770,23 @@ describe('runtime adapters', () => {
     } satisfies AcpRuntime;
     const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
     const session = createSessionInput('deepseek-fresh-session', 'deepseek-harness', 'acpx');
+    session.existingBinding = {
+      id: 'deepseek-binding',
+      runtimeSessionId: session.runtimeSessionId,
+      runtime: 'acpx',
+      role: 'primary',
+      generation: 1,
+      externalIds: {},
+      raw: {
+        aceharnessModelRoute: {
+          agentId: 'deepseek-harness',
+          providerModel: 'test-model',
+          configOptions: {},
+        },
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
     await client.ensureSession?.({
       session,
@@ -787,6 +804,68 @@ describe('runtime adapters', () => {
     expect(ensureSession.mock.calls[0]?.[0]).toMatchObject({
       agent: 'deepseek-harness',
       sessionOptions: { model: 'test-model' },
+    });
+  });
+
+  test('starts a fresh DeepSeek session when provider, model, or effort changes', async () => {
+    const ensureSession = vi.fn(async (input: AcpRuntimeEnsureInput) => ({
+      sessionKey: input.sessionKey,
+      backend: 'acpx',
+      runtimeSessionName: input.sessionKey,
+    }));
+    const runtime = {
+      ensureSession,
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput('deepseek-route-change', 'deepseek-harness', 'acpx');
+    session.modelRoute.providerId = 'boft-deepseek';
+    session.modelRoute.providerModel = 'deepseek-v4-flash[max]';
+    session.existingBinding = {
+      id: 'deepseek-binding',
+      runtimeSessionId: session.runtimeSessionId,
+      runtime: 'acpx',
+      role: 'primary',
+      generation: 1,
+      externalIds: {},
+      raw: {
+        aceharnessModelRoute: {
+          agentId: 'deepseek-harness',
+          providerId: 'boft',
+          providerModel: 'gpt-5.6-sol[high]',
+          configOptions: {},
+        },
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await client.ensureSession?.({
+      session,
+      command: resolveAcpxCommand('deepseek-harness'),
+      existingHandle: {
+        sessionKey: session.runtimeSessionId,
+        backend: 'acpx',
+        runtimeSessionName: session.runtimeSessionId,
+        backendSessionId: 'old-provider-session',
+      },
+    });
+
+    expect(ensureSession).toHaveBeenCalledTimes(1);
+    const request = ensureSession.mock.calls[0]?.[0];
+    expect(request).not.toHaveProperty('resumeSessionId');
+    expect(request?.sessionKey).toMatch(/^deepseek-route-change:recovery:/);
+    expect(request).toMatchObject({
+      sessionOptions: {
+        model: 'deepseek-v4-flash',
+        env: expect.objectContaining({
+          DSH_PROVIDER: 'boft-deepseek',
+          DSH_MODEL: 'deepseek-v4-flash',
+          DSH_REASONING_EFFORT: 'max',
+        }),
+      },
     });
   });
 
@@ -1119,6 +1198,50 @@ describe('runtime adapters', () => {
       key: 'reasoning_effort',
       value: 'low',
     }));
+  });
+
+  test('acpx runtime client maps DeepSeek bracket models to the startup effort environment', async () => {
+    const ensureSession = vi.fn(async () => ({
+      sessionKey: 'runtime-session-deepseek',
+      backend: 'acpx',
+      runtimeSessionName: 'runtime-session-deepseek',
+      cwd: process.cwd(),
+    }));
+    const runtime = {
+      ensureSession,
+      setConfigOption: vi.fn(async () => undefined),
+      startTurn: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput('runtime-session-deepseek', 'deepseek-harness', 'acpx');
+    session.modelRoute = {
+      ...session.modelRoute,
+      providerId: 'boft-deepseek',
+      providerModel: 'boft-deepseek/deepseek-v4-flash[off]',
+    };
+    session.profileSnapshot = {
+      ...session.profileSnapshot,
+      modelRouteId: 'deepseek-harness__boft-deepseek-deepseek-v4-flash-off',
+    };
+
+    await client.ensureSession?.({
+      session,
+      command: resolveAcpxCommand('deepseek-harness'),
+    });
+
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionOptions: expect.objectContaining({
+        model: 'deepseek-v4-flash',
+        env: expect.objectContaining({
+          DSH_PROVIDER: 'boft-deepseek',
+          DSH_MODEL: 'deepseek-v4-flash',
+          DSH_REASONING_EFFORT: 'off',
+        }),
+      }),
+    }));
+    expect(runtime.setConfigOption).not.toHaveBeenCalled();
   });
 
   test('acpx runtime client exposes ACP session initialization diagnostics', async () => {

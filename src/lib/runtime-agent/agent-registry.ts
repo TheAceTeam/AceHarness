@@ -206,10 +206,45 @@ const DEEPSEEK_ENV_SCHEMA: AgentEnvSchema = {
       description: '可选的 DeepSeek 兼容 API 服务地址。',
     },
     {
+      name: 'DSH_PATH',
+      required: false,
+      description: 'DeepSeek Harness 安装路径或 dsh 可执行文件路径。',
+    },
+    {
+      name: 'DSH_HOME',
+      required: false,
+      description: 'DeepSeek Harness 用户配置和凭据目录。',
+    },
+    {
+      name: 'DSH_MAX_TOKENS',
+      required: false,
+      description: '单次请求的最大输出 token 数。',
+    },
+    {
       name: 'DSH_PERMISSION_MODE',
       required: false,
       allowedValues: ['read-only', 'workspace-write', 'danger-full-access'],
       description: 'DSH 权限模式。',
+    },
+    {
+      name: 'DSH_SESSION_ROOT',
+      required: false,
+      description: 'ACP 会话持久化目录。',
+    },
+    {
+      name: 'DSH_SYSTEM_PROMPT',
+      required: false,
+      description: 'DeepSeek Harness 的系统提示词覆盖。',
+    },
+    {
+      name: 'DSH_BASH_TIMEOUT_MS',
+      required: false,
+      description: '前台 Bash 命令超时时间（毫秒）。',
+    },
+    {
+      name: 'DSH_ACP_DEBUG',
+      required: false,
+      description: '开启 DeepSeek ACP 调试日志。',
     },
   ],
 };

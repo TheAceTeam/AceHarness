@@ -25,6 +25,8 @@ import {
   DEEPSEEK_HARNESS_DSH_HOME_ENV,
   DEEPSEEK_HARNESS_MODEL_ENV,
   DEEPSEEK_HARNESS_PROVIDER_ENV,
+  DEEPSEEK_HARNESS_REASONING_EFFORT_ENV,
+  DEEPSEEK_HARNESS_REASONING_EFFORTS,
 } from '../deepseek-harness-constants';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
 import { redactDiagnosticPayload } from '../security/redaction';
@@ -105,9 +107,17 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
         session.modelRoute.providerModel,
         session.modelRoute.configOptions,
       );
-      // Keep the persisted ACPX handle so multi-turn chat and workflow runs
-      // continue the same DSH session after reconnects.
-      const resumeSessionId = resolveResumeSessionId(input.existingHandle);
+      // Keep the persisted ACPX handle for the same model route, but never
+      // resume a DeepSeek session created for a different provider/model or
+      // reasoning effort. ACPX applies sessionOptions only on session/new;
+      // loadSession cannot switch the model underneath an existing handle.
+      const existingResumeSessionId = resolveResumeSessionId(input.existingHandle);
+      const resumeSessionId = shouldResumeDeepseekSession(session, existingResumeSessionId)
+        ? existingResumeSessionId
+        : undefined;
+      const sessionKey = existingResumeSessionId && !resumeSessionId && agentId === 'deepseek-harness'
+        ? createFreshAcpSessionKey(session.runtimeSessionId)
+        : session.runtimeSessionId;
       let runtime: AcpRuntime | undefined;
       let handle: AcpRuntimeHandle | undefined;
 
@@ -138,6 +148,14 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
                 session.modelRoute.providerModel,
               ) }
               : {}),
+            ...(parseDeepseekHarnessModelRoute(session.modelRoute.providerId, session.modelRoute.providerModel).reasoningEffort
+              ? {
+                [DEEPSEEK_HARNESS_REASONING_EFFORT_ENV]: parseDeepseekHarnessModelRoute(
+                  session.modelRoute.providerId,
+                  session.modelRoute.providerModel,
+                ).reasoningEffort!,
+              }
+              : {}),
           }
           : configuredEnv;
         const createEnsureInput = (sessionKey: string, resumeId?: string) => ({
@@ -155,7 +173,7 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
           },
         });
         try {
-          handle = await runtime.ensureSession(createEnsureInput(session.runtimeSessionId, resumeSessionId));
+          handle = await runtime.ensureSession(createEnsureInput(sessionKey, resumeSessionId));
         } catch (error) {
           if (!resumeSessionId || !isAcpResumeUnavailableError(error)) throw error;
 
@@ -1048,9 +1066,19 @@ function resolveAcpModelSelection(
   configOptions?: Record<string, unknown>,
 ): AcpxModelSelection {
   const rawModel = String(providerModel || '').trim();
-  const model = String(agentId || '').trim().toLowerCase() === 'deepseek-harness'
-    ? resolveDeepseekHarnessModelName(providerId, rawModel)
-    : rawModel;
+  const isDeepseekHarness = String(agentId || '').trim().toLowerCase() === 'deepseek-harness';
+  const deepseekRoute = isDeepseekHarness
+    ? parseDeepseekHarnessModelRoute(providerId, rawModel)
+    : undefined;
+  const model = deepseekRoute?.model || rawModel;
+  if (isDeepseekHarness) {
+    return {
+      model: resolveAcpModelName(model, configOptions),
+      // DeepSeek ACP reads DSH_REASONING_EFFORT at process startup. It does
+      // not expose a portable session/set_config_option contract for effort.
+      postInitializationConfig: [],
+    };
+  }
   if (String(agentId || '').trim().toLowerCase() !== 'codex') {
     return {
       model: resolveAcpModelName(model, configOptions),
@@ -1071,12 +1099,25 @@ function resolveAcpModelSelection(
 }
 
 function resolveDeepseekHarnessModelName(providerId: string | undefined, providerModel: string): string {
-  const model = String(providerModel || '').trim();
-  if (!model) return model;
+  return parseDeepseekHarnessModelRoute(providerId, providerModel).model;
+}
+
+function parseDeepseekHarnessModelRoute(providerId: string | undefined, providerModel: string): {
+  model: string;
+  reasoningEffort?: typeof DEEPSEEK_HARNESS_REASONING_EFFORTS[number];
+} {
+  let model = String(providerModel || '').trim();
+  if (!model) return { model };
   const provider = String(providerId || '').trim();
-  if (provider && model.startsWith(`${provider}/`)) return model.slice(provider.length + 1);
+  if (provider && model.startsWith(`${provider}/`)) model = model.slice(provider.length + 1);
   const slash = model.indexOf('/');
-  return slash > 0 ? model.slice(slash + 1) : model;
+  if (slash > 0) model = model.slice(slash + 1);
+  const match = model.match(/^(.*)\[(off|high|max)\]$/i);
+  if (!match) return { model };
+  return {
+    model: match[1].trim(),
+    reasoningEffort: match[2].toLowerCase() as typeof DEEPSEEK_HARNESS_REASONING_EFFORTS[number],
+  };
 }
 
 function providerFromModelRoute(providerModel: string): string | undefined {
@@ -1461,6 +1502,35 @@ function resolveResumeSessionId(handle: AcpRuntimeHandle | undefined): string | 
     : typeof agentSessionId === 'string'
       ? agentSessionId
       : undefined;
+}
+
+function shouldResumeDeepseekSession(
+  session: AdapterSessionInput,
+  existingResumeSessionId: string | undefined,
+): boolean {
+  if (!existingResumeSessionId) return true;
+  if (session.profileSnapshot.agentId !== 'deepseek-harness') return true;
+
+  const raw = session.existingBinding?.raw;
+  if (!isRecord(raw) || !isRecord(raw.aceharnessModelRoute)) return false;
+
+  const persisted = raw.aceharnessModelRoute;
+  const currentRoute = parseDeepseekHarnessModelRoute(
+    session.modelRoute.providerId,
+    session.modelRoute.providerModel,
+  );
+  const persistedRoute = parseDeepseekHarnessModelRoute(
+    typeof persisted.providerId === 'string' ? persisted.providerId : undefined,
+    typeof persisted.providerModel === 'string' ? persisted.providerModel : '',
+  );
+  const currentProvider = session.modelRoute.providerId || providerFromModelRoute(session.modelRoute.providerModel) || '';
+  const persistedProvider = typeof persisted.providerId === 'string'
+    ? persisted.providerId
+    : providerFromModelRoute(typeof persisted.providerModel === 'string' ? persisted.providerModel : '') || '';
+
+  return currentProvider === persistedProvider
+    && currentRoute.model === persistedRoute.model
+    && (currentRoute.reasoningEffort || 'off') === (persistedRoute.reasoningEffort || 'off');
 }
 
 async function resolveEnv(
