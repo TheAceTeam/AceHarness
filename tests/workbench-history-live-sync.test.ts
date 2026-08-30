@@ -23,6 +23,7 @@ import {
   getRunReviewIntentPresentation,
   buildWorkbenchRunDetailNavItems,
   buildWorkbenchHumanApprovalPresentation,
+  shouldClearCurrentStepForHumanApproval,
   resolveWorkbenchLiveStreamStepKeys,
   type WorkbenchStopProgressStep,
 } from '@/client/pages/workbench/WorkbenchClient';
@@ -336,6 +337,29 @@ describe('Workbench stop progress', () => {
     });
   });
 
+  test('makes a recovered repair decision explain that it continues review feedback work', () => {
+    expect(buildWorkbenchHumanApprovalPresentation({
+      decision: {
+        action: 'repair',
+        targetState: '修复与验证',
+        rationale: '运行在修复与验证中断。',
+        blockers: [],
+        evidence: ['中断状态：修复与验证'],
+        instruction: '让 Agent 从「修复与验证」继续处理已路由到该状态的代码、测试或检视意见；完成后由状态机继续 PR 与评审跟踪。',
+      },
+    })).toEqual({
+      recommendation: 'verify-first',
+      headline: '继续处理已归类的检视意见',
+      supportingText: '让 Agent 从「修复与验证」继续处理已路由到该状态的代码、测试或检视意见；完成后由状态机继续 PR 与评审跟踪。',
+      checklist: ['中断状态：修复与验证'],
+    });
+  });
+
+  test('clears stale step text while the workflow waits for a human decision', () => {
+    expect(shouldClearCurrentStepForHumanApproval('__human_approval__')).toBe(true);
+    expect(shouldClearCurrentStepForHumanApproval('修复与验证')).toBe(false);
+  });
+
   test('keeps full human-approval evidence accessible from the decision card', async () => {
     const [workbenchSource, questionCardSource] = await Promise.all([
       readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8'),
@@ -346,7 +370,7 @@ describe('Workbench stop progress', () => {
     expect(questionCardSource).toContain('查看完整审批依据');
     expect(questionCardSource).toContain("presentation === 'decision'");
     expect(workbenchSource).toContain('presentation="decision"');
-    expect(workbenchSource).toContain('让 Agent 自动核验并返回');
+    expect(workbenchSource).toContain('让 Agent 继续处理检视意见');
     expect(workbenchSource).toContain('让 Agent 核验 PR 与 CI 状态');
     expect(workbenchSource).toContain('我已人工确认，继续');
   });

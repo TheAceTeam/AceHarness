@@ -10358,6 +10358,28 @@ try {
     return this.runContinuationInBackground((markStartupReady) => this.resume(runId, markStartupReady));
   }
 
+  private buildFailedRunRecoveryDecision(
+    failedState: string,
+    targetState: string,
+    originalReason?: string,
+  ): WorkflowTransitionDecision {
+    const recoveryIsRemediation = /修复|验证|整改|根因|复现/.test(targetState);
+    return {
+      action: recoveryIsRemediation ? 'repair' : 'advance',
+      targetState,
+      rationale: `运行在「${failedState || targetState}」中断；保留既有证据并从该状态继续，避免重复前序阶段。`,
+      blockers: [],
+      evidence: [
+        `中断状态：${failedState || targetState}`,
+        originalReason ? `中断原因：${originalReason}` : '中断原因已记录在运行日志中。',
+      ],
+      instruction: recoveryIsRemediation
+        ? `让 Agent 从「${targetState}」继续处理已路由到该状态的代码、测试或检视意见；完成后由状态机继续 PR 与评审跟踪。`
+        : `让 Agent 从「${targetState}」继续执行，不重跑已完成的前序状态。`,
+      source: 'state-machine',
+    };
+  }
+
   /**
    * Recover a terminal failed run into the durable human-approval checkpoint.
    *
@@ -10412,6 +10434,17 @@ try {
 
       const recoveredAt = new Date().toISOString();
       const originalReason = String(runState.statusReason || '').trim();
+
+      // A failed-run recovery is not a blank restart. Keep the intended
+      // state-boundary action with the checkpoint so the operator can see
+      // whether the next click continues delivery work (for example, review
+      // feedback already routed to repair) or merely advances the workflow.
+      const recoveryDecision = this.buildFailedRunRecoveryDecision(
+        failedState,
+        suggestedNextState,
+        originalReason,
+      );
+
       const recoverySummary = instruction?.trim()
         || originalReason
         || '该运行此前已终止；请核对保留的证据并决定下一状态。';
@@ -10462,6 +10495,7 @@ try {
             verdict: 'conditional_pass',
             issues: [],
             summary: recoverySummary,
+            decision: recoveryDecision,
           },
         },
       };
@@ -10553,7 +10587,7 @@ try {
     }
     this.currentWorkflowConfig = workflowConfig;
     const resumeStepKey = this.getResumeStepKeyForRun(runState, workflowConfig);
-    if (resumeStepKey && this.currentState) {
+    if (resumeStepKey && this.currentState && this.currentState !== '__human_approval__') {
       this.resumeStateName = this.currentState;
       this.resumeStepKey = resumeStepKey;
       this.currentStep = resumeStepKey;
@@ -10621,7 +10655,24 @@ try {
         : (configuredStates.includes(persistedSuggestedNextState)
           ? persistedSuggestedNextState
           : prevStateConfig?.transitions?.[0]?.to || availableStates[0] || '');
-      const restoredApprovalResult = runState.pendingCheckpoint?.result || { issues: [] };
+      const persistedApprovalResult = runState.pendingCheckpoint?.result || { issues: [] };
+      const restoredApprovalResult = recoveredFromFailedRun && !persistedApprovalResult.decision
+        ? {
+          ...persistedApprovalResult,
+          decision: this.buildFailedRunRecoveryDecision(
+            String(previousState || suggestedNextState),
+            suggestedNextState,
+            String(persistedApprovalResult.summary || runState.statusReason || '').trim(),
+          ),
+        }
+        : persistedApprovalResult;
+      if (recoveredFromFailedRun && !persistedApprovalResult.decision && this.pendingHumanQuestionId) {
+        this.humanQuestions = this.humanQuestions.map((question) => (
+          question.id === this.pendingHumanQuestionId
+            ? { ...question, result: restoredApprovalResult }
+            : question
+        ));
+      }
       const recoveryAdvice = recoveredFromFailedRun
         ? runState.pendingCheckpoint?.supervisorAdvice || [
           `运行 ${runId} 已从失败终态转入人工处理。`,

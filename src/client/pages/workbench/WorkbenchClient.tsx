@@ -733,6 +733,10 @@ export function shouldShowWorkbenchHumanAttention(input: {
   return input.hasPendingQuestion || input.hasApproval || input.isHumanReviewLocation;
 }
 
+export function shouldClearCurrentStepForHumanApproval(currentState: unknown): boolean {
+  return String(currentState || '').trim() === '__human_approval__';
+}
+
 /** A transition approval cannot be submitted after its run has left the approval checkpoint. */
 export function isActionableWorkbenchHumanQuestion(
   question: HumanQuestion | null | undefined,
@@ -788,7 +792,18 @@ export function buildWorkbenchHumanApprovalPresentation(input: {
       ].slice(0, 4),
     };
   }
-  if (action === 'repair' || action === 'retry' || action === 'needs_human' || action === 'wait_external') {
+  if (action === 'repair') {
+    const isReviewRemediation = /修复|验证/.test(targetState) && /检视意见|评审/.test(instruction);
+    return {
+      recommendation: 'verify-first',
+      headline: isReviewRemediation
+        ? '继续处理已归类的检视意见'
+        : targetState ? `继续在「${targetState}」处理未闭合事项` : '继续处理未闭合事项',
+      supportingText: instruction || rationale || '由 Agent 在隔离工作区完成修复和验证后，再由状态机决定后续路径。',
+      checklist: decisionChecklist.length > 0 ? decisionChecklist : (evidence.length > 0 ? evidence : ['完成当前裁决要求的修复与验证。']),
+    };
+  }
+  if (action === 'retry' || action === 'needs_human' || action === 'wait_external') {
     return {
       recommendation: 'verify-first',
       headline: targetState ? `已裁决先进入「${targetState}」处理未闭合事项` : '已裁决先处理未闭合事项',
@@ -6755,7 +6770,8 @@ export default function WorkbenchPage({
       if (typeof payload.currentPhase === 'string' || typeof payload.currentState === 'string') {
         dispatch({ type: 'SET_CURRENT_PHASE', payload: payload.currentPhase || payload.currentState || '' });
       }
-      if (statusIsTerminal) {
+      const waitingForHumanApproval = shouldClearCurrentStepForHumanApproval(payload.currentPhase || payload.currentState);
+      if (statusIsTerminal || waitingForHumanApproval) {
         dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       } else if (typeof payload.currentStep === 'string') {
         dispatch({ type: 'SET_CURRENT_STEP', payload: payload.currentStep });
@@ -6955,7 +6971,8 @@ export default function WorkbenchPage({
       if (typeof (status as any).currentState === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: (status as any).currentState });
       else if (typeof status.currentPhase === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: status.currentPhase });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
-      if (statusIsTerminal) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+      const waitingForHumanApproval = shouldClearCurrentStepForHumanApproval((status as any).currentState || status.currentPhase);
+      if (statusIsTerminal || waitingForHumanApproval) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       else if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       if (status.agents?.length) dispatch({ type: 'SET_AGENTS', payload: status.agents });
@@ -7633,7 +7650,8 @@ export default function WorkbenchPage({
     } else if (snapshot.status && !statusIsActive) {
       dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
     }
-    if (statusIsTerminal) {
+    const waitingForHumanApproval = shouldClearCurrentStepForHumanApproval(nextPhase);
+    if (statusIsTerminal || waitingForHumanApproval) {
       dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
     } else if (typeof snapshot.currentStep === 'string') {
       dispatch({ type: 'SET_CURRENT_STEP', payload: snapshot.currentStep });
@@ -9354,7 +9372,13 @@ export default function WorkbenchPage({
   };
 
   const resolveHumanApprovalRemediationTarget = () => {
+    const structuredDecision = (pendingHumanQuestion?.result as any)?.decision || humanApprovalData?.result?.decision;
+    const structuredAction = String(structuredDecision?.action || '').trim();
+    const structuredTarget = String(structuredDecision?.targetState || structuredDecision?.target_state || '').trim();
     const options = pendingHumanQuestion?.availableStates || humanApprovalData?.availableStates || [];
+    if ((structuredAction === 'repair' || structuredAction === 'retry') && options.includes(structuredTarget)) {
+      return structuredTarget;
+    }
     return options.find((state) => /修复|验证|整改|返工|处理/.test(String(state))) || '';
   };
 
@@ -13580,6 +13604,9 @@ export default function WorkbenchPage({
       || null;
     const remediationTarget = resolveHumanApprovalRemediationTarget();
     const shouldRecommendRemediation = approvalPresentation.recommendation === 'verify-first' && Boolean(remediationTarget);
+    const isReviewRemediation = String((structuredDecision as any)?.action || '').trim() === 'repair'
+      && /修复|验证/.test(String(remediationTarget || ''))
+      && /检视意见|评审/.test(approvalPresentation.supportingText);
     const shouldSubmitAndMonitorCi = approvalPresentation.recommendation === 'submit-and-monitor-ci' && Boolean(suggestedAction);
     return (
       <div className="shrink-0 border-b border-orange-300 bg-orange-50 px-5 py-4 text-orange-950 shadow-[inset_4px_0_0_#f97316] dark:border-orange-400/25 dark:bg-orange-500/10 dark:text-orange-50">
@@ -13648,7 +13675,9 @@ export default function WorkbenchPage({
                     disabled={submittingHumanQuestion}
                   >
                     <span className="material-symbols-outlined mr-1 text-sm">build</span>
-                    {shouldRecommendRemediation ? `让 Agent 自动核验并返回「${remediationTarget}」` : `返回「${remediationTarget}」`}
+                    {shouldRecommendRemediation
+                      ? (isReviewRemediation ? '让 Agent 继续处理检视意见' : `让 Agent 继续「${remediationTarget}」`)
+                      : `返回「${remediationTarget}」`}
                   </Button>
                 ) : null}
                 {!shouldSubmitAndMonitorCi ? (

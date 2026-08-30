@@ -2183,6 +2183,12 @@ describe('state machine resume', () => {
       pendingCheckpoint: expect.objectContaining({
         checkpoint: 'failed-run-recovery',
         suggestedNextState: '实施',
+        result: expect.objectContaining({
+          decision: expect.objectContaining({
+            action: 'advance',
+            targetState: '实施',
+          }),
+        }),
       }),
       stateHistory: expect.arrayContaining([
         expect.objectContaining({ from: '实施', to: '__human_approval__' }),
@@ -2253,6 +2259,12 @@ describe('state machine resume', () => {
     expect(createHumanQuestion).toHaveBeenCalledWith(expect.objectContaining({
       suggestedNextState: '实施',
       source: { type: 'failed-run-recovery', restored: true },
+      result: expect.objectContaining({
+        decision: expect.objectContaining({
+          action: 'advance',
+          targetState: '实施',
+        }),
+      }),
     }));
     expect(approvals).toEqual(expect.arrayContaining([
       expect.objectContaining({ suggestedNextState: '实施', nextState: '实施' }),
