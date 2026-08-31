@@ -28,12 +28,46 @@ export type GitCodeCiGateRecoverySnapshot = {
   ciRunning: boolean;
   /** Persisted evidence says ACEHarness already retried for this exact head. */
   retryAlreadyAttempted: boolean;
+  /**
+   * The latest exact trigger comment predates the bot's current
+   * "please reply start build" event. Such a comment was not consumable by
+   * the bot and must not consume the one post-ready trigger allowance.
+   */
+  latestTriggerPredatesBotReady?: boolean;
+  /** A replacement trigger was already sent after that exact bot-ready event. */
+  postReadyTriggerAlreadyAttempted?: boolean;
   /** Current step, approval, or user input explicitly permits CI triggering. */
   triggerAuthorized: boolean;
+  /**
+   * Evidence-backed classification of the latest terminal gate failure.  This
+   * must be produced from the current PR head, labels, bot output and task
+   * logs; it is deliberately not inferred merely from a failed label.
+   */
+  failureKind?: GitCodeCiGateFailureKind;
+  /** Number of completed failed gate runs observed for this exact head. */
+  currentHeadFailureCount?: number;
+  /**
+   * For a code defect, records that the repair was locally verified and the
+   * current PR head is the newly pushed repair head, rather than the old one.
+   */
+  repairedAndVerifiedForCurrentHead?: boolean;
 };
 
+export type GitCodeCiGateFailureKind =
+  | 'suspected_transient'
+  | 'code_defect'
+  | 'external_dependency'
+  | 'unknown';
+
 export type GitCodeCiGateRecoveryDecision = {
-  action: 'trigger_once' | 'monitor' | 'wait_authorization' | 'external_blocked' | 'not_applicable';
+  action:
+    | 'trigger_once'
+    | 'monitor'
+    | 'wait_authorization'
+    | 'repair_required'
+    | 'human_review_required'
+    | 'external_blocked'
+    | 'not_applicable';
   reason: string;
 };
 
@@ -66,6 +100,7 @@ export type GitCodePullRequestReviewComment = {
 
 export type GitCodePullRequestReadinessStatus =
   | 'merged'
+  | 'gate_recovery_required'
   | 'repair_required'
   | 'waiting_external'
   | 'ready_for_merge'
@@ -107,9 +142,10 @@ export function validateGitCodeCiTriggerCommand(command: unknown): GitCodeCiComm
 }
 
 /**
- * A narrow, idempotent recovery rule for GitCode's strict comment-triggered
- * gate. A trailing newline is intentionally treated as a distinct body: the
- * observed bot behavior is byte-sensitive, not whitespace-normalizing.
+ * An evidence-bounded recovery rule for GitCode's strict comment-triggered
+ * gate.  It distinguishes a likely transient failure from a source defect:
+ * one retry is safe only for the former, whereas a source defect must first
+ * be repaired, locally verified, amended and pushed as a new PR head.
  */
 export function decideGitCodeCiGateRecovery(
   snapshot: GitCodeCiGateRecoverySnapshot,
@@ -121,6 +157,73 @@ export function decideGitCodeCiGateRecovery(
   }
   if (snapshot.ciRunning || labels.has('ci-running')) {
     return { action: 'monitor', reason: '门禁已进入运行态，只能轮询结果，不能再次发送触发评论。' };
+  }
+  const failureKind = snapshot.failureKind;
+  const failureCount = snapshot.currentHeadFailureCount ?? (snapshot.retryAlreadyAttempted ? 2 : 1);
+
+  // A comment sent before the bot observes the new head is not a retry of the
+  // current ready-to-trigger event. Treating it as one strands a repaired PR
+  // in waiting-start-build and incorrectly asks the user to repeat a routine
+  // platform operation. This remains bounded by the authoritative bot event,
+  // current-head authorization, and one post-ready attempt.
+  const mayRetryAfterBotReady = snapshot.latestTriggerPredatesBotReady === true
+    && snapshot.postReadyTriggerAlreadyAttempted !== true
+    && snapshot.botRequestedRetry
+    && snapshot.triggerAuthorized
+    && failureKind !== 'external_dependency'
+    && failureKind !== 'unknown';
+  if (mayRetryAfterBotReady) {
+    return {
+      action: 'trigger_once',
+      reason: '最近一次精确 start build 早于机器人对当前 head 的就绪事件，未被消费；可在该事件后补发一次，并记录 bot-ready 事件与 CI-running 回执。',
+    };
+  }
+
+  if (failureKind === 'code_defect') {
+    if (!snapshot.repairedAndVerifiedForCurrentHead) {
+      return {
+        action: 'repair_required',
+        reason: '已归因为代码缺陷：必须先在本地修复并验证，amend 到现有 PR 提交、force-with-lease 推送并回读新的 PR head；不得对旧 head 直接重跑门禁。',
+      };
+    }
+    if (snapshot.retryAlreadyAttempted) {
+      return {
+        action: 'human_review_required',
+        reason: `修复后的当前 head ${snapshot.headSha} 已执行过一次受控触发但仍未闭合；停止自动重试并交由人工核对新的失败证据。`,
+      };
+    }
+    if (!snapshot.triggerAuthorized) {
+      return { action: 'wait_authorization', reason: '已完成本地修复、验证和新 head 推送，但当前运行没有触发 CI 的明确授权。' };
+    }
+    return {
+      action: 'trigger_once',
+      reason: '已归因为代码缺陷且已在修复后的新 head 完成本地验证；可对该新 head 精确触发一次门禁。',
+    };
+  }
+
+  if (failureKind === 'suspected_transient') {
+    if (snapshot.retryAlreadyAttempted || failureCount >= 2) {
+      return {
+        action: 'human_review_required',
+        reason: `当前 head ${snapshot.headSha} 已出现 ${failureCount} 次同类失败；一次受控重试仍复现，不能继续按随机问题处理，需人工判断环境、依赖或隐藏代码原因。`,
+      };
+    }
+    if (!snapshot.triggerAuthorized) {
+      return { action: 'wait_authorization', reason: '疑似一次性环境/平台波动，但当前运行没有触发 CI 的明确授权。' };
+    }
+    return {
+      action: 'trigger_once',
+      reason: '已基于当前 head 的失败日志归因为疑似一次性环境/平台波动；可记录证据后受控重试一次。',
+    };
+  }
+
+  if (failureKind === 'external_dependency' || failureKind === 'unknown') {
+    return {
+      action: 'human_review_required',
+      reason: failureKind === 'external_dependency'
+        ? '失败指向外部依赖或基础设施，不能把它当作随机问题盲目重跑；需要人工确认依赖状态与后续处置。'
+        : '失败原因尚未形成可复核分类；必须先补充当前 head 的日志和证据，再决定修复、重试或升级人工。',
+    };
   }
   if (!snapshot.botRequestedRetry) {
     return { action: 'external_blocked', reason: '平台未请求重新触发；保留 waiting 状态并报告，不要猜测性刷评论。' };
@@ -152,18 +255,25 @@ export function decideGitCodeCiGateRecovery(
  * match: an issue is not evidence that a CI gate has passed.
  */
 export function findGitCodePullRequestRef(text: unknown): GitCodePullRequestRef | null {
-  if (typeof text !== 'string') return null;
-  const match = text.match(/https?:\/\/gitcode\.com\/([^/\s?#]+)\/([^/\s?#]+)\/(?:pull|merge_requests)\/(\d+)(?:[/?#][^\s]*)?/i);
-  if (!match) return null;
-  const [, owner, repo, rawNumber] = match;
-  const number = Number.parseInt(rawNumber, 10);
-  if (!owner || !repo || !Number.isSafeInteger(number) || number <= 0) return null;
-  return {
-    owner,
-    repo,
-    number,
-    url: `https://gitcode.com/${owner}/${repo}/pull/${number}`,
-  };
+  return findGitCodePullRequestRefs(text)[0] || null;
+}
+
+/** Extract every distinct PR reference so a joint delivery cannot be reduced to its first repository. */
+export function findGitCodePullRequestRefs(text: unknown): GitCodePullRequestRef[] {
+  if (typeof text !== 'string') return [];
+  const refs: GitCodePullRequestRef[] = [];
+  const seen = new Set<string>();
+  const pattern = /https?:\/\/gitcode\.com\/([^/\s?#]+)\/([^/\s?#]+)\/(?:pull|merge_requests)\/(\d+)(?:[/?#][^\s]*)?/gi;
+  for (const match of text.matchAll(pattern)) {
+    const [, owner, repo, rawNumber] = match;
+    const number = Number.parseInt(rawNumber, 10);
+    if (!owner || !repo || !Number.isSafeInteger(number) || number <= 0) continue;
+    const url = `https://gitcode.com/${owner}/${repo}/pull/${number}`;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    refs.push({ owner, repo, number, url });
+  }
+  return refs;
 }
 
 /**
@@ -230,6 +340,10 @@ export function createGitCodePullRequestReadinessObservation(input: {
   }
   if (gate.status === 'failed') {
     blockers.push(gate.reason);
+    // A gate label by itself does not prove a source defect.  Route the
+    // workflow through its evidence-gathering recovery step before deciding
+    // between one bounded retry, source repair, or human escalation.
+    return { ...gate, readiness: 'gate_recovery_required', blockers, unresolvedReviewComments, mergeableState };
   }
   if (unresolvedReviewComments.length > 0) {
     blockers.push(`存在 ${unresolvedReviewComments.length} 条未解决的行级检视意见。`);
@@ -294,11 +408,17 @@ export function buildGitCodeCiCommandPolicyPrompt(skillPath: string): string {
     '发送后必须读取/查询 PR 门禁，确认本次提交对应的 CI 已实际创建；未创建时如实报告，不要把评论已发送当作门禁已触发。',
     '',
     '## GitCode 门禁恢复流转（强制）',
-    '先读取当前 PR 的 head、标签和最新评论。只有同时满足：`waiting-start-build`、没有 `CI-running`、机器人已在当前 head 后请求重新触发、当前步骤有触发授权，才进入恢复判断。',
-    '把最新评论正文按原始字符串比对：若它是 `start build\\n` 等“trim 后正确、原文不正确”的变体，针对该 head 最多发送一次无换行的精确 `start build`。先在 `.aceharness-evidence/gitcode-ci-retry.json` 记录 head、评论正文、时间和 `retryCount: 1`，防止跨步骤重复触发。',
-    '发出后轮询标签和机器人评论：发现 `CI-running` 或流水线启动通知则转为 `wait_external` 监控；若仍无确认，输出 `external_blocked`，说明“机器人未消费精确指令”，不要循环发送。',
-    '若最新评论已经是字节级精确的 `start build`，不得重发；直接作为外部依赖异常上报。',
+    '先读取当前 PR 的 head、标签、机器人评论、失败任务日志，以及本 head 的已失败次数。输出结构化归因：`failureKind` 只能是 `suspected_transient`、`code_defect`、`external_dependency` 或 `unknown`，并列出证据；仅凭“失败”或等待时长不能归为随机问题。',
+    '对 `suspected_transient`：仅在 `waiting-start-build`、没有 `CI-running`、当前步骤有触发授权、同一 head 此类失败尚未重试过一次时，才可重试一次。先在 `.aceharness-evidence/gitcode-ci-retry.json` 记录 head、失败证据、时间、`failureKind`、`failureCountForHead: 1` 和 `retryCount: 1`。第二次在同一 head 复现则输出 `human_review_required`，不得再发评论。',
+    '对 `code_defect`：绝不能对旧 head 直接重跑。先回到修复与验证：本地修复、运行相关验证、用 `git commit --amend` 更新已有 PR 提交、以 `git push --force-with-lease` 推送，并回读新 PR head。只有“已验证的新 head”且有触发授权时，才可精确触发一次。',
+    '对 `external_dependency` 或 `unknown`：输出 `human_review_required`，附失败日志和所需人工判断；不得猜测性触发。',
+    '协议拼写恢复是例外：如果当前 head 的最新评论是 `start build\\n` 等“trim 后正确、原文不正确”的变体，可按同样的一次上限发送无尾随字符的精确 `start build`。',
+    '触发时序也必须记录：`botReadyEventId`、`botReadyAt`、`triggerCommentId`、`triggerAt` 和是否已出现 `CI-running`。若精确 `start build` 早于机器人针对当前 head 的“请回复 start build”事件，说明该评论未被消费；在有触发授权且尚未在该 bot-ready 事件后发送过时，可自动补发一次。该补发不计入随机失败重试；补发后仍无 `CI-running` 才输出 `external_blocked`，不得循环发送。',
     '运行时会拦截已观测到的无效 GitCode 评论命令并取消本回合，防止它继续被当作成功交付。',
+    '',
+    '## 联合 PR 与测试仓约束（强制）',
+    '用户启动时只提供 Issue 来源。若修复需要新增或更新独立测试仓（例如 `cangjie_test`）的回归用例，工作流必须在上下文固化阶段自动发现测试归属并写入内部 `jointPrContract` / `gateContract.requiredPrs`；测试仓 PR 是同一 Issue 的联合交付成员，不是可随意延期的 follow-up。创建或更新对应测试仓 PR，并让它与主仓 PR 一并通过门禁、检视和合入前检查。',
+    '主仓 PR 在任何必需联合 PR 缺失、未推送、门禁失败、存在未解决检视意见或未合入时，均不得被裁决为交付完成。只有用户明确豁免，且豁免理由、风险与跟踪项已写入 Gate 契约时，才可不创建测试仓 PR。',
     '',
     ...buildGitCodePrCommitTopologyPolicyPrompt(),
   ].join('\n');

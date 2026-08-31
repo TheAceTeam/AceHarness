@@ -35,6 +35,6 @@ spec:
       default: ""
   dependencies:
     agents: [default-supervisor, issue-reproducer, architect, code-hunter, code-judge, developer, tester, stress-tester, documentation-writer]
-    skills: []
+    skills: [aceharness-gitcode-ci-delivery]
     mcpServers: []
     subworkflows: []

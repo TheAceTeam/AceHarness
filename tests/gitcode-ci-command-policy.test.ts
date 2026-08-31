@@ -5,13 +5,20 @@ import {
   createGitCodePullRequestReadinessObservation,
   decideGitCodeCiGateRecovery,
   findGitCodePullRequestRef,
+  findGitCodePullRequestRefs,
   findGitCodeCiToolCommandViolation,
   buildGitCodeCiCommandPolicyPrompt,
   GITCODE_CI_TRIGGER_COMMAND,
   validateGitCodeCiTriggerCommand,
 } from '@/lib/workflow/gitcode-ci-command-policy';
+import { isSessionQuotaFailure } from '@/lib/state-machine/workflow-manager';
 
 describe('GitCode CI command policy', () => {
+  test('recognizes a provider session quota message as a handoff signal', () => {
+    expect(isSessionQuotaFailure("You've hit your session limit · resets 4pm (Asia/Shanghai)")).toBe(true);
+    expect(isSessionQuotaFailure('Codecheck 检查失败')).toBe(false);
+  });
+
   test('accepts only the exact GitCode CI comment body', () => {
     expect(validateGitCodeCiTriggerCommand(GITCODE_CI_TRIGGER_COMMAND)).toEqual({
       ok: true,
@@ -59,6 +66,84 @@ describe('GitCode CI command policy', () => {
       .toMatchObject({ action: 'monitor' });
   });
 
+  test('replaces an unconsumed pre-bot trigger once after the bot-ready event', () => {
+    const snapshot = {
+      headSha: '17ea2e6',
+      labels: ['waiting-start-build'],
+      latestTriggerBody: 'start build',
+      botRequestedRetry: true,
+      ciRunning: false,
+      retryAlreadyAttempted: true,
+      latestTriggerPredatesBotReady: true,
+      postReadyTriggerAlreadyAttempted: false,
+      triggerAuthorized: true,
+      failureKind: 'code_defect' as const,
+      repairedAndVerifiedForCurrentHead: true,
+    };
+
+    expect(decideGitCodeCiGateRecovery(snapshot)).toMatchObject({ action: 'trigger_once' });
+    expect(decideGitCodeCiGateRecovery({ ...snapshot, postReadyTriggerAlreadyAttempted: true }))
+      .toMatchObject({ action: 'human_review_required' });
+    expect(decideGitCodeCiGateRecovery({ ...snapshot, failureKind: 'external_dependency' as const }))
+      .toMatchObject({ action: 'human_review_required' });
+  });
+
+  test('retries a suspected transient gate failure once, then requires human review for the same head', () => {
+    const snapshot = {
+      headSha: 'e717b5d',
+      labels: ['build-test-failed', 'waiting-start-build'],
+      latestTriggerBody: 'start build',
+      botRequestedRetry: true,
+      ciRunning: false,
+      retryAlreadyAttempted: false,
+      triggerAuthorized: true,
+      failureKind: 'suspected_transient' as const,
+      currentHeadFailureCount: 1,
+    };
+
+    expect(decideGitCodeCiGateRecovery(snapshot)).toMatchObject({ action: 'trigger_once' });
+    expect(decideGitCodeCiGateRecovery({
+      ...snapshot,
+      retryAlreadyAttempted: true,
+      currentHeadFailureCount: 2,
+    })).toMatchObject({ action: 'human_review_required' });
+  });
+
+  test('requires a verified amended repair before a code-defect CI retrigger', () => {
+    const snapshot = {
+      headSha: 'repair-head',
+      labels: ['build-test-failed', 'waiting-start-build'],
+      botRequestedRetry: true,
+      ciRunning: false,
+      retryAlreadyAttempted: false,
+      triggerAuthorized: true,
+      failureKind: 'code_defect' as const,
+      currentHeadFailureCount: 1,
+      repairedAndVerifiedForCurrentHead: false,
+    };
+
+    expect(decideGitCodeCiGateRecovery(snapshot)).toMatchObject({ action: 'repair_required' });
+    expect(decideGitCodeCiGateRecovery({
+      ...snapshot,
+      repairedAndVerifiedForCurrentHead: true,
+    })).toMatchObject({ action: 'trigger_once' });
+  });
+
+  test('does not retry an unknown or external dependency failure without human review', () => {
+    const base = {
+      headSha: 'blocked-head',
+      labels: ['build-test-failed', 'waiting-start-build'],
+      botRequestedRetry: true,
+      ciRunning: false,
+      retryAlreadyAttempted: false,
+      triggerAuthorized: true,
+    };
+    expect(decideGitCodeCiGateRecovery({ ...base, failureKind: 'unknown' }))
+      .toMatchObject({ action: 'human_review_required' });
+    expect(decideGitCodeCiGateRecovery({ ...base, failureKind: 'external_dependency' }))
+      .toMatchObject({ action: 'human_review_required' });
+  });
+
   test('accepts only a canonical PR link as gate-observation input', () => {
     expect(findGitCodePullRequestRef('https://gitcode.com/Cangjie/cangjie_compiler/pull/2085/discuss'))
       .toEqual({
@@ -68,6 +153,17 @@ describe('GitCode CI command policy', () => {
         url: 'https://gitcode.com/Cangjie/cangjie_compiler/pull/2085',
       });
     expect(findGitCodePullRequestRef('https://gitcode.com/Cangjie/UsersForum/issues/3350')).toBeNull();
+  });
+
+  test('keeps every PR in a joint delivery instead of collapsing to the first link', () => {
+    expect(findGitCodePullRequestRefs([
+      'https://gitcode.com/Cangjie/cangjie_compiler/pull/2085',
+      'https://gitcode.com/Cangjie/cangjie_test/merge_requests/1514',
+      'https://gitcode.com/Cangjie/cangjie_compiler/pull/2085',
+    ].join('\n'))).toEqual([
+      { owner: 'Cangjie', repo: 'cangjie_compiler', number: 2085, url: 'https://gitcode.com/Cangjie/cangjie_compiler/pull/2085' },
+      { owner: 'Cangjie', repo: 'cangjie_test', number: 1514, url: 'https://gitcode.com/Cangjie/cangjie_test/pull/1514' },
+    ]);
   });
 
   test('requires both build and codecheck labels before auto-advancing a gate', () => {
@@ -99,6 +195,17 @@ describe('GitCode CI command policy', () => {
     });
   });
 
+  test('routes a failed gate to evidence-based recovery before treating it as a source repair', () => {
+    expect(createGitCodePullRequestReadinessObservation({
+      labels: ['build-test-failed', 'waiting-start-build'],
+      headSha: 'e717b5d',
+      mergeableState: { ci_state_passed: false },
+    })).toMatchObject({
+      readiness: 'gate_recovery_required',
+      blockers: expect.arrayContaining(['GitCode 门禁标签显示失败。']),
+    });
+  });
+
   test('distinguishes waiting for reviewers from a PR ready for another user to merge', () => {
     const base = {
       labels: ['build-test-passed', 'codecheck-passed'],
@@ -126,6 +233,10 @@ describe('GitCode CI command policy', () => {
     expect(prompt).toContain('一个 PR、一个提交');
     expect(prompt).toContain('git commit --amend');
     expect(prompt).toContain('git push --force-with-lease');
+    expect(prompt).toContain('failureKind');
+    expect(prompt).toContain('suspected_transient');
+    expect(prompt).toContain('jointPrContract');
+    expect(prompt).toContain('用户启动时只提供 Issue 来源');
     expect(prompt).toContain('只有“尚未创建 PR 的首次交付”');
   });
 });

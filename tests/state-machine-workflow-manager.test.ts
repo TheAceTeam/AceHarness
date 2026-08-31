@@ -3207,6 +3207,7 @@ describe('state machine execution flow', () => {
     expect(finalJudgePrompt).toContain('`start build`');
     expect(finalJudgePrompt).toContain('GitCode 门禁恢复流转（强制）');
     expect(finalJudgePrompt).toContain('gitcode-ci-retry.json');
+    expect(finalJudgePrompt).toContain('failureKind');
   });
 
   test('human help prompt is injected only when workflow option is enabled', async () => {
@@ -5215,6 +5216,16 @@ describe('human approval flow', () => {
     expect((manager as any).findGitCodePullRequestForApproval(question)).toMatchObject({
       owner: 'Cangjie', repo: 'cangjie_compiler', number: 2085,
     });
+    (manager as any).currentRequirements =
+      '同一 Issue 下必须包含测试仓 PR：https://gitcode.com/Cangjie/cangjie_test/pull/1514';
+    const pullRequests = (manager as any).findGitCodePullRequestsForApproval(question);
+    expect(pullRequests).toContainEqual(expect.objectContaining({
+      owner: 'Cangjie', repo: 'cangjie_compiler', number: 2085,
+    }));
+    expect(pullRequests).toContainEqual(expect.objectContaining({
+      owner: 'Cangjie', repo: 'cangjie_test', number: 1514,
+    }));
+    expect((manager as any).requiresJointTestPullRequest(question)).toBe(true);
     expect((manager as any).getAutoResolvableGitCodeGateApproval({
       ...question,
       source: { type: 'checkpoint-advice', reason: 'ordinary-review', fromState: '设计' },

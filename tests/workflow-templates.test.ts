@@ -130,6 +130,9 @@ describe('workflow templates', () => {
       expect(body.template.workflow.context.taskInput.fields.filter((field: any) => field.required)).toEqual([
         expect.objectContaining({ id: 'issueUrl' }),
       ]);
+      expect(body.template.workflow.context.taskInput.fields.find((field: any) => field.id === 'jointPrContract'))
+        .toBeUndefined();
+      expect(body.template.workflow.context.skills).toContain('aceharness-gitcode-ci-delivery');
       expect(body.template.workflow.workflow.states.map((state: any) => state.name)).toEqual(expect.arrayContaining([
         '上下文固化',
         '最小化用例',
@@ -140,8 +143,26 @@ describe('workflow templates', () => {
         .toMatchObject({ required: false, description: expect.stringContaining('conditional_pass') });
       expect(body.template.workflow.workflow.states.find((state: any) => state.name === '描述与门禁')?.steps[0].task)
         .toContain('不能直接提交 PR');
-      expect(body.template.workflow.workflow.states.find((state: any) => state.name === 'PR 合入前检查与跟踪')?.steps[2].task)
-        .toContain('未解决检视意见');
+      const contextSteps = body.template.workflow.workflow.states
+        .find((state: any) => state.name === '上下文固化')?.steps || [];
+      expect(contextSteps.find((step: any) => step.name === '固化联合交付范围')?.task)
+        .toContain('不得要求用户填写测试仓地址');
+      const repairSteps = body.template.workflow.workflow.states
+        .find((state: any) => state.name === '根因与修复')?.steps || [];
+      expect(repairSteps.find((step: any) => step.name === '补充联合测试仓回归')?.task)
+        .toContain('DEPENDENCE/EXEC/ERRCHECK/ASSERT');
+      const prTrackingSteps = body.template.workflow.workflow.states
+        .find((state: any) => state.name === 'PR 合入前检查与跟踪')?.steps || [];
+      expect(prTrackingSteps.find((step: any) => step.name === '归因门禁失败与受控恢复')?.task)
+        .toContain('suspected_transient');
+      expect(prTrackingSteps.find((step: any) => step.name === '归因门禁失败与受控恢复')?.task)
+        .toContain('botReadyEventId');
+      expect(prTrackingSteps.find((step: any) => step.name === '同步 PR 合入前事实')?.task)
+        .toContain('evidenceDigest');
+      expect(prTrackingSteps.find((step: any) => step.name === '处理评审线程闭环')?.task)
+        .toContain('不得代为 Resolve 他人线程');
+      expect(prTrackingSteps.find((step: any) => step.name === '同步 PR 合入前事实')?.task)
+        .toContain('gateContract.requiredPrs');
     });
   });
 

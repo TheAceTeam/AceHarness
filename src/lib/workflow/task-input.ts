@@ -160,7 +160,12 @@ export function normalizeWorkflowTaskInputFieldDefinitions(input: unknown): Work
 }
 
 export function resolveWorkflowTaskInputFields(input: unknown): WorkflowTaskInputFieldDefinition[] {
-  const configured = normalizeWorkflowTaskInputFieldDefinitions(input);
+  // `jointPrContract` is workflow evidence discovered from the Issue and
+  // repository profiles. Older templates briefly exposed it as a user field;
+  // hide that legacy definition instead of asking users to know test-repo
+  // topology before the workflow has inspected the Issue.
+  const configured = normalizeWorkflowTaskInputFieldDefinitions(input)
+    .filter((field) => field.id !== 'jointPrContract');
   if (configured.length === 0) return DEFAULT_WORKFLOW_TASK_INPUT_FIELDS;
   // Issue-first manifests created before the minimal-launch migration can still
   // persist every discovery contract as `required: true`.  Do the migration at
@@ -197,7 +202,9 @@ export function partitionWorkflowStartTaskInputFields(
 } {
   const issueDriven = fields.some((field) => field.id === 'issueUrl');
   if (!issueDriven) return { issueDriven: false, primary: fields, optionalKnown: [] };
-  const primary = fields.filter((field) => field.required || field.id === 'issueUrl' || field.id === 'targetBranch');
+  const primary = fields.filter((field) => field.required
+    || field.id === 'issueUrl'
+    || field.id === 'targetBranch');
   return {
     issueDriven: true,
     primary,

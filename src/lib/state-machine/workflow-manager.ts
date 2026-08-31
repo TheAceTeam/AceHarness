@@ -69,7 +69,7 @@ import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import {
   buildGitCodeCiCommandPolicyPrompt,
   createGitCodePullRequestReadinessObservation,
-  findGitCodePullRequestRef,
+  findGitCodePullRequestRefs,
   findGitCodeCiToolCommandViolation,
   GITCODE_CI_DELIVERY_SKILL,
   type GitCodePullRequestReadinessObservation,
@@ -911,6 +911,17 @@ function isTransientEngineFailure(message: string): boolean {
     || /(?:HTTP\s*)?(?:429|500|502|503|504)\b/i.test(normalized)
     || /engine (?:unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
     || /引擎(?:不可用|连接.*失败|连接.*断开)/.test(normalized);
+}
+
+/**
+ * A provider can end a turn with a human-readable quota message instead of a
+ * transport error. It is neither task evidence nor a valid final answer.
+ * Detect it separately so the runner can perform one fresh-session handoff
+ * instead of repeatedly asking the exhausted session to add a conclusion.
+ */
+export function isSessionQuotaFailure(message: string): boolean {
+  const normalized = String(message || '');
+  return /(?:you(?:'ve| have) hit your session limit|session limit.*resets?|usage limit.*resets?|会话(?:额度|配额|上限).*(?:耗尽|已达上限)|会话.*(?:额度|配额).*(?:耗尽|已达上限))/i.test(normalized);
 }
 
 function isRecoverableStepExecutionError(message: string): boolean {
@@ -3280,6 +3291,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private findGitCodePullRequestForApproval(question: HumanQuestion): GitCodePullRequestRef | null {
+    return this.findGitCodePullRequestsForApproval(question)[0] || null;
+  }
+
+  private findGitCodePullRequestsForApproval(question: HumanQuestion): GitCodePullRequestRef[] {
     const inputs = [
       question.result?.summary,
       question.message,
@@ -3293,11 +3308,28 @@ export class StateMachineWorkflowManager extends EventEmitter {
       ...Object.values(this.taskInput.fields || {}),
       ...this.stepLogs.slice(-40).reverse().flatMap((log) => [log.output, log.error]),
     ];
+    const refs: GitCodePullRequestRef[] = [];
+    const seen = new Set<string>();
     for (const input of inputs) {
-      const ref = findGitCodePullRequestRef(input);
-      if (ref) return ref;
+      for (const ref of findGitCodePullRequestRefs(input)) {
+        if (seen.has(ref.url)) continue;
+        seen.add(ref.url);
+        refs.push(ref);
+      }
     }
-    return null;
+    return refs;
+  }
+
+  private requiresJointTestPullRequest(question: HumanQuestion): boolean {
+    const declared = [
+      this.taskInput.fields?.gateContract,
+      this.taskInput.fields?.deliveryPolicy,
+      this.currentRequirements,
+      question.message,
+      question.result?.summary,
+      ...this.stepLogs.slice(-40).reverse().flatMap((log) => [log.output, log.error]),
+    ].filter((value): value is string => typeof value === 'string').join('\n').toLowerCase();
+    return /cangjie[_-]?test|测试仓|test\s*(repo|repository|pr)/.test(declared);
   }
 
   private async observeGitCodePullRequestReadiness(ref: GitCodePullRequestRef): Promise<GitCodePullRequestReadinessObservation | null> {
@@ -3496,6 +3528,66 @@ export class StateMachineWorkflowManager extends EventEmitter {
     });
   }
 
+  /**
+   * A failed gate is not automatically a source defect.  Resume the state
+   * that owns PR tracking so its dedicated recovery step can classify the
+   * evidence and perform at most one authorized retry before escalating.
+   */
+  private async routeApprovalToGitCodeGateRecovery(input: {
+    question: HumanQuestion;
+    targetState: string;
+    ref: GitCodePullRequestRef;
+    observation: GitCodePullRequestReadinessObservation;
+  }): Promise<void> {
+    const index = this.humanQuestions.findIndex((item) => item.id === input.question.id);
+    const existing = index >= 0 ? this.humanQuestions[index] : null;
+    if (!existing || existing.status !== 'unanswered' || this.pendingHumanQuestionId !== existing.id) return;
+    const instruction = [
+      `系统已观察到 GitCode PR ${input.ref.url} 的当前 head 门禁失败。`,
+      ...input.observation.blockers.map((blocker) => `- ${blocker}`),
+      `先回到「${input.targetState}」执行门禁失败归因与受控恢复：仅疑似一次性问题可同 head 重试一次；代码缺陷必须修复、验证、amend 推送新 head 后再触发；原因未知或第二次复现转人工。`,
+    ].join('\n');
+    const answer: HumanQuestionAnswer = {
+      selectedState: input.targetState,
+      instruction,
+      raw: {
+        source: 'gitcode-pr-readiness-observer',
+        recovery: 'gate_recovery_required',
+        pr: input.ref.url,
+        headSha: input.observation.headSha,
+        labels: input.observation.labels,
+        blockers: input.observation.blockers,
+        checkedAt: input.observation.checkedAt,
+      },
+    };
+    const updated: HumanQuestion = { ...existing, status: 'answered', answer, answeredAt: new Date().toISOString() };
+    this.humanQuestions[index] = updated;
+    this.pendingHumanQuestionId = null;
+    this.pendingForceTransition = input.targetState;
+    this.pendingForceInstruction = instruction;
+    await this.persistState();
+    await this.appendRuntimeTranscriptEvent({
+      type: 'external-pr-gate-recovery-required',
+      title: 'GitCode 门禁失败，转入归因与受控恢复',
+      body: instruction,
+      tags: ['gitcode', 'ci', 'gate-recovery-required', 'auto-transition'],
+      dedupeKey: `workflow-gitcode-pr-gate-recovery-${existing.id}-${input.observation.headSha || 'unknown'}`,
+      speakerName: '系统 PR 就绪观察器',
+      speakerType: 'system',
+    });
+    this.emit('human-question-answered', { question: updated, answer, automated: true });
+    this.emit('external-pr-readiness-observed', {
+      status: input.observation.status,
+      readiness: input.observation.readiness,
+      pr: input.ref.url,
+      headSha: input.observation.headSha,
+      labels: input.observation.labels,
+      blockers: input.observation.blockers,
+      nextState: input.targetState,
+      automated: true,
+    });
+  }
+
   private async reportOpenGitCodePullRequestReadiness(input: {
     question: HumanQuestion;
     ref: GitCodePullRequestRef;
@@ -3558,33 +3650,62 @@ export class StateMachineWorkflowManager extends EventEmitter {
         const now = Date.now();
         if (gateApproval && now >= nextGateObservationAt) {
           nextGateObservationAt = now + GITCODE_GATE_OBSERVE_INTERVAL_MS;
-          const ref = this.findGitCodePullRequestForApproval(pendingQuestion);
-          if (ref) {
-            const observation = await this.observeGitCodePullRequestReadiness(ref);
-            if (!observation) continue;
-            const newReviewCommentIds = this.recordGitCodePullRequestReadiness(ref, observation);
-            if (observation.readiness === 'merged' && observation.status === 'passed') {
+          const refs = this.findGitCodePullRequestsForApproval(pendingQuestion);
+          if (refs.length > 0) {
+            const observed = await Promise.all(refs.map(async (ref) => ({
+              ref,
+              observation: await this.observeGitCodePullRequestReadiness(ref),
+            })));
+            const entries = observed.filter((entry): entry is {
+              ref: GitCodePullRequestRef;
+              observation: GitCodePullRequestReadinessObservation;
+            } => Boolean(entry.observation));
+            if (entries.length === 0) continue;
+            const hasTestPr = refs.some((ref) => /cangjie[_-]?test/i.test(ref.repo));
+            const missingRequiredTestPr = this.requiresJointTestPullRequest(pendingQuestion) && !hasTestPr;
+            const gateRecovery = entries.find((entry) => entry.observation.readiness === 'gate_recovery_required');
+            const repair = entries.find((entry) => entry.observation.readiness === 'repair_required');
+            const waiting = entries.find((entry) => entry.observation.readiness !== 'merged') || entries[0];
+            const newReviewCommentIds = this.recordGitCodePullRequestReadiness(waiting.ref, waiting.observation);
+            if (!missingRequiredTestPr && entries.length === refs.length
+              && entries.every((entry) => entry.observation.readiness === 'merged' && entry.observation.status === 'passed')) {
               await this.resolveApprovalFromGitCodePrReadiness({
                 question: pendingQuestion,
                 targetState: gateApproval.targetState,
-                ref,
-                observation,
+                ref: waiting.ref,
+                observation: waiting.observation,
               });
               continue;
             }
-            if (observation.readiness === 'repair_required' && gateApproval.repairTargetState) {
+            if (gateRecovery) {
+              await this.routeApprovalToGitCodeGateRecovery({
+                question: pendingQuestion,
+                targetState: gateApproval.fromState,
+                ref: gateRecovery.ref,
+                observation: gateRecovery.observation,
+              });
+              continue;
+            }
+            if (repair && gateApproval.repairTargetState) {
               await this.routeApprovalToGitCodePrRepair({
                 question: pendingQuestion,
                 targetState: gateApproval.repairTargetState,
-                ref,
-                observation,
+                ref: repair.ref,
+                observation: repair.observation,
                 newReviewCommentIds,
               });
               continue;
             }
+            const observation = missingRequiredTestPr
+              ? {
+                ...waiting.observation,
+                readiness: 'waiting_external' as const,
+                blockers: [...waiting.observation.blockers, '联合交付契约要求测试仓 PR，但尚未发现 cangjie_test 的关联 PR。'],
+              }
+              : waiting.observation;
             await this.reportOpenGitCodePullRequestReadiness({
               question: pendingQuestion,
-              ref,
+              ref: waiting.ref,
               observation,
               newReviewCommentIds,
             });
@@ -9383,6 +9504,7 @@ try {
     let autoRecoveryAttempts = 0;
     let transientEngineRetryAttempts = 0;
     let rateLimitEngineRetryAttempts = 0;
+    let sessionQuotaContinuationAttempts = 0;
     let humanHelpStreamInterrupted = false;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
     const snapshotTerminalUsage = (output = accumulatedOutput || accumulatedStreamPreview): AgentStepExecutionResult => ({
@@ -9396,6 +9518,37 @@ try {
     const terminalUsageError = (message: string, output?: string): WorkflowStepTerminalUsageError => (
       new WorkflowStepTerminalUsageError(message, snapshotTerminalUsage(output))
     );
+    const continueAfterSessionQuota = (quotaMessage: string): boolean => {
+      if (sessionQuotaContinuationAttempts >= 1) return false;
+      sessionQuotaContinuationAttempts += 1;
+      const inheritedOutput = (accumulatedOutput || accumulatedStreamPreview).slice(-12_000);
+      currentSessionId = undefined;
+      currentPrompt = [
+        context,
+        '# 会话续接（系统生成）',
+        `上一会话因额度耗尽而中止：${quotaMessage.slice(0, 500)}`,
+        '这是一次新的会话交接，不要重复完整调查。复用已产生的证据，仅补齐当前步骤尚未完成的最小核验，并在本轮输出结构化结论。',
+        inheritedOutput ? `## 上一会话末尾的已知进展\n${inheritedOutput}` : '',
+      ].filter(Boolean).join('\n\n');
+      currentProcessId = stepId || currentProcessId;
+      currentProcessStreamLength = 0;
+      lastStreamAt = Date.now();
+      watchdogTriggeredForProcess = '';
+      this.upsertCurrentProcess({
+        pid: Date.now(),
+        id: currentProcessId,
+        agent: runtimeAgentName,
+        step: streamStepName,
+        stepId,
+        startTime: new Date().toISOString(),
+      });
+      this.emit('log', {
+        agent: runtimeAgentName,
+        level: 'warning',
+        message: `步骤 "${streamStepName}" 的会话额度耗尽，已建立一次新会话交接并保留末尾证据。`,
+      });
+      return true;
+    };
     const accumulateRuntimeResult = (result: WorkflowRuntimeJsonResult): void => {
       accumulatedCost += result.cost_usd || 0;
       accumulatedDuration += result.duration_ms || 0;
@@ -9735,6 +9888,10 @@ try {
 
       if (result.is_error) {
         const errorMsg = result.result || '引擎执行失败（无输出）';
+        if (isSessionQuotaFailure(errorMsg)) {
+          if (continueAfterSessionQuota(errorMsg)) continue;
+          throw terminalUsageError(`会话额度已耗尽，且步骤 "${streamStepName}" 的一次自动交接仍未完成：${errorMsg}`, result.result || accumulatedStreamPreview);
+        }
         const rateLimited = isRateLimitFailure(errorMsg);
         const retryAttempts = rateLimited ? rateLimitEngineRetryAttempts : transientEngineRetryAttempts;
         const retryMaxAttempts = rateLimited ? RATE_LIMIT_ENGINE_RETRY_MAX_ATTEMPTS : TRANSIENT_ENGINE_RETRY_MAX_ATTEMPTS;
@@ -9816,6 +9973,10 @@ try {
         rateLimitEngineRetryAttempts = 0;
       }
       const roundOutput = result.result || '';
+      if (isSessionQuotaFailure(roundOutput)) {
+        if (continueAfterSessionQuota(roundOutput)) continue;
+        throw terminalUsageError(`会话额度已耗尽，且步骤 "${streamStepName}" 的一次自动交接仍未完成：${roundOutput}`, roundOutput || accumulatedStreamPreview);
+      }
       const humanHelpRequests = this.parseHumanHelpRequests(roundOutput, config);
       if (humanHelpRequests.length === 0) {
         accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + roundOutput;

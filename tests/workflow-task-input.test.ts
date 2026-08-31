@@ -85,11 +85,12 @@ describe('workflow task input', () => {
     }, fields)).toEqual([]);
   });
 
-  test('keeps issue launch minimal while grouping known contracts as optional overrides', () => {
+  test('keeps workflow-derived joint delivery out of the Issue launch surface', () => {
     const fields = resolveWorkflowTaskInputFields({
       fields: [
         { id: 'issueUrl', label: '问题单 / PR 链接', type: 'url', required: true },
         { id: 'targetBranch', label: '目标分支（可选覆盖）' },
+        { id: 'jointPrContract', label: '联合 PR / 测试仓契约', type: 'textarea' },
         { id: 'reproductionContract', label: '复现契约', type: 'textarea' },
         { id: 'gateContract', label: 'Gate 契约', type: 'textarea' },
       ],
@@ -106,6 +107,7 @@ describe('workflow task input', () => {
         { id: 'gateContract', required: false },
       ],
     });
+    expect(fields.map((field) => field.id)).not.toContain('jointPrContract');
   });
 
   test('migrates legacy Issue-first required fields to optional run-time discovery inputs', () => {

@@ -2851,6 +2851,7 @@ export default function WorkbenchPage({
   } | null>(null);
   const [liveStream, setLiveStream] = useState<string[]>([]);
   const [liveToolEvents, setLiveToolEvents] = useState<RuntimeToolEvent[]>([]);
+  const [showCompletedLiveToolEvents, setShowCompletedLiveToolEvents] = useState(false);
   const [showLiveStream, setShowLiveStream] = useState(false);
   const [liveStreamFullscreen, setLiveStreamFullscreen] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<RunRightPanelTab>(() => readWorkflowRunPanelTabs(configFile).right || 'detail');
@@ -3566,7 +3567,9 @@ export default function WorkbenchPage({
   const liveStreamStepRef = useRef<string>('');
   const runtimeEventSeqRef = useRef(0);
   const liveStreamScrollRef = useRef<HTMLDivElement | null>(null);
-  const LIVE_STREAM_PAGE_SIZE = 30;
+  // Keep the live area focused on the newest evidence and next action. Older
+  // narration and completed tool calls remain available on demand.
+  const LIVE_STREAM_PAGE_SIZE = 12;
   const [liveStreamVisibleCount, setLiveStreamVisibleCount] = useState(LIVE_STREAM_PAGE_SIZE);
   const liveStreamUserScrolledUp = useRef(false);
   const [liveStreamScrollLocked, setLiveStreamScrollLocked] = useState(false);
@@ -10753,7 +10756,9 @@ export default function WorkbenchPage({
       );
     };
 
-    if (liveStream.length === 0 && inlineFeedbacks.length === 0 && liveToolEvents.length === 0) {
+    const hasVisibleToolEvent = showCompletedLiveToolEvents
+      || liveToolEvents.some((tool) => tool.status === 'running');
+    if (liveStream.length === 0 && inlineFeedbacks.length === 0 && !hasVisibleToolEvent) {
       if (isRunning) return <div className="py-3">{renderLiveThinkingIndicator()}</div>;
       return <div className="py-8 text-center text-sm text-muted-foreground">(等待输出...)</div>;
     }
@@ -10869,7 +10874,10 @@ export default function WorkbenchPage({
     // entries in the live transcript. The final lifecycle update only changes
     // the card state; createdAt keeps the card at the original call position.
     const timelineItems: Item[] = [...filteredItems];
-    for (const [toolIndex, tool] of mergedTools.entries()) {
+    const visibleTools = showCompletedLiveToolEvents
+      ? mergedTools
+      : mergedTools.filter((tool) => tool.status === 'running');
+    for (const [toolIndex, tool] of visibleTools.entries()) {
       const toolItem: ToolItem = { type: 'tool', tool, index: `${tool.id}:${toolIndex}` };
       const toolTimestamp = getTimelineTimestamp(toolItem);
       const insertionIndex = toolTimestamp === null
@@ -11145,6 +11153,18 @@ export default function WorkbenchPage({
         >
           <span className="material-symbols-outlined text-base">refresh</span>
         </Button>
+        {liveToolEvents.length > 0 ? (
+          <Button
+            variant={showCompletedLiveToolEvents ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-8 shrink-0 gap-1.5 px-2 text-xs"
+            onClick={() => setShowCompletedLiveToolEvents((visible) => !visible)}
+            title={showCompletedLiveToolEvents ? '隐藏已完成工具调用' : '显示已完成工具调用'}
+          >
+            <span className="material-symbols-outlined text-base">construction</span>
+            <span>{showCompletedLiveToolEvents ? '隐藏工具' : `工具 ${liveToolEvents.length}`}</span>
+          </Button>
+        ) : null}
         <Button
           variant={liveStreamScrollLocked ? 'secondary' : 'ghost'}
           size="sm"
