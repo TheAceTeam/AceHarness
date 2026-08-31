@@ -4727,6 +4727,89 @@ export class StateMachineWorkflowManager extends EventEmitter {
     };
   }
 
+  /**
+   * Keep a compact, system-generated receipt next to verbose agent documents.
+   * Routing relies on this receipt, never on a UI guess made from narrative text.
+   */
+  private async persistTransitionContractArtifact(
+    state: StateMachineState,
+    result: StateExecutionResult,
+  ): Promise<void> {
+    if (!this.currentRunId || !state.transitionContract) return;
+
+    const generatedAt = new Date().toISOString();
+    const report = result.transitionContract || {
+      completed: [],
+      remaining: state.transitionContract.completionCriteria,
+      evidence: [],
+      progress: [],
+    };
+    const receipt = {
+      version: 1,
+      state: state.name,
+      verdict: result.verdict,
+      completionCriteria: state.transitionContract.completionCriteria,
+      selfLoop: state.transitionContract.selfLoop
+        ? {
+          maxAttempts: state.transitionContract.selfLoop.maxAttempts,
+          progressCriteria: state.transitionContract.selfLoop.progressCriteria,
+        }
+        : undefined,
+      report,
+      generatedAt,
+    };
+    const evidenceByCriterion = new Map(report.evidence.map((item) => [item.criterion, item.reference]));
+    const completed = new Set(report.completed);
+    const missing = Array.from(new Set([
+      ...report.remaining,
+      ...state.transitionContract.completionCriteria.filter((criterion) => !completed.has(criterion)),
+    ]));
+    const markdown = [
+      '<!-- transition-contract-receipt',
+      JSON.stringify(receipt),
+      '-->',
+      '# 状态流转契约回执',
+      '',
+      '> 系统生成。它是本状态的流转依据；详细过程与原始日志仍在同目录的步骤文档中。',
+      '',
+      '## 当前裁决',
+      `- 状态：${state.name}`,
+      `- verdict：${result.verdict}`,
+      `- 完成：${completed.size}/${state.transitionContract.completionCriteria.length}`,
+      `- 缺失：${missing.length > 0 ? missing.join('；') : '无'}`,
+      '',
+      '## 完成条件与证据',
+      ...state.transitionContract.completionCriteria.map((criterion) => (
+        `- [${completed.has(criterion) ? 'x' : ' '}] ${criterion}${evidenceByCriterion.has(criterion) ? `（证据：${evidenceByCriterion.get(criterion)}）` : ''}`
+      )),
+      '',
+      '## 本轮新增进展',
+      ...(report.progress.length > 0
+        ? report.progress.map((item) => `- ${item.criterion}：${item.value}`)
+        : ['- 无']),
+      '',
+      '## 下一动作',
+      result.verdict === 'pass' && missing.length === 0
+        ? '- 契约已闭合，可沿状态机的 pass 边继续。'
+        : state.transitionContract.selfLoop && report.progress.length > 0
+          ? `- 条件尚未闭合；仅在进展未重复且未超过 ${state.transitionContract.selfLoop.maxAttempts} 次预算时，才可按声明的自循环策略重试。`
+          : '- 条件尚未闭合；不要根据长篇步骤文档猜测重试，应补齐回执或转人工确认。',
+      '',
+    ].join('\n');
+    const safeState = state.name.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 48) || 'state';
+    const fileName = `${generatedAt.replace(/[:.]/g, '-').slice(0, 19)}-${safeState}-transition-contract.md`;
+    const absolutePath = join(getWorkspaceRunsDir(), this.currentRunId, 'outputs', fileName);
+    try {
+      await mkdir(dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, markdown, 'utf-8');
+    } catch (error: any) {
+      this.emit('log', {
+        level: 'warning',
+        message: `无法写入状态流转契约回执：${error?.message || String(error)}`,
+      });
+    }
+  }
+
   private parseVerdictFromConclusion(raw: string): 'pass' | 'conditional_pass' | 'fail' | null {
     return this.extractVerdictJson(raw)?.verdict || null;
   }
@@ -6248,6 +6331,7 @@ try {
           if (this.shouldStop) {
             break;
           }
+          await this.persistTransitionContractArtifact(stateConfig, finalResult);
           this.assertStateCanTransition(finalResult);
           const forcedTarget = this.pendingForceTransition;
           if (forcedTarget) {
@@ -6315,6 +6399,7 @@ try {
       if (this.shouldStop) {
         break;
       }
+      await this.persistTransitionContractArtifact(stateConfig, result);
       this.assertStateCanTransition(result);
 
       // Evaluate transitions

@@ -121,6 +121,24 @@ export interface DocumentHighlight {
   points: string[];
 }
 
+export interface TransitionContractReceipt {
+  version: 1;
+  state: string;
+  verdict: 'pass' | 'conditional_pass' | 'fail';
+  completionCriteria: string[];
+  selfLoop?: {
+    maxAttempts: number;
+    progressCriteria: string[];
+  };
+  report: {
+    completed: string[];
+    remaining: string[];
+    evidence: Array<{ criterion: string; reference: string }>;
+    progress: Array<{ criterion: string; value: string }>;
+  };
+  generatedAt?: string;
+}
+
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/;
 
 const DOCUMENT_PHASE_LABELS: Record<string, string> = {
@@ -172,6 +190,59 @@ function cleanHighlightPoint(value: string): string {
     .replace(/\s+/g, ' ')
     .trim();
   return cleaned.length > 220 ? `${cleaned.slice(0, 217).trimEnd()}...` : cleaned;
+}
+
+const TRANSITION_CONTRACT_RECEIPT_RE = /<!--\s*transition-contract-receipt\s*([\s\S]*?)-->/i;
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+}
+
+function asReceiptItems(value: unknown, field: 'reference' | 'value'): Array<{ criterion: string; [key: string]: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const criterion = String((item as Record<string, unknown>).criterion || '').trim();
+    const detail = String((item as Record<string, unknown>)[field] || '').trim();
+    return criterion && detail ? [{ criterion, [field]: detail }] : [];
+  });
+}
+
+/** Reads the system-generated receipt without treating narrative Markdown as state. */
+export function extractTransitionContractReceipt(content: string): TransitionContractReceipt | null {
+  const match = String(content || '').match(TRANSITION_CONTRACT_RECEIPT_RE);
+  if (!match) return null;
+  try {
+    const raw = JSON.parse(match[1]);
+    const verdict = raw?.verdict;
+    if (raw?.version !== 1 || !String(raw?.state || '').trim() || !['pass', 'conditional_pass', 'fail'].includes(verdict)) {
+      return null;
+    }
+    const selfLoop = raw?.selfLoop && Number.isInteger(raw.selfLoop.maxAttempts)
+      ? {
+        maxAttempts: raw.selfLoop.maxAttempts,
+        progressCriteria: asStringList(raw.selfLoop.progressCriteria),
+      }
+      : undefined;
+    return {
+      version: 1,
+      state: String(raw.state).trim(),
+      verdict,
+      completionCriteria: asStringList(raw.completionCriteria),
+      selfLoop,
+      report: {
+        completed: asStringList(raw?.report?.completed),
+        remaining: asStringList(raw?.report?.remaining),
+        evidence: asReceiptItems(raw?.report?.evidence, 'reference') as Array<{ criterion: string; reference: string }>,
+        progress: asReceiptItems(raw?.report?.progress, 'value') as Array<{ criterion: string; value: string }>,
+      },
+      generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Extract a compact, deterministic overview without changing the original run document. */
@@ -260,17 +331,21 @@ const HIGHLIGHT_PRESENTATION: Record<DocumentHighlightKind, { label: string; ico
 
 function DocumentHighlightsView({ highlights }: { highlights: DocumentHighlight[] }) {
   if (highlights.length === 0) return null;
+  const primaryHighlights = highlights.slice(0, 3).map((highlight) => ({
+    ...highlight,
+    points: highlight.points.slice(0, 1),
+  }));
   return (
-    <section className="mb-5 rounded-xl border border-border/70 bg-muted/15 p-3" aria-label="文档重点速览">
-      <div className="mb-3 flex items-center gap-2">
+    <section className="mb-4 rounded-xl border border-border/70 bg-muted/15 p-3" aria-label="文档重点速览">
+      <div className="mb-2 flex items-center gap-2">
         <span className="material-symbols-outlined text-base text-primary">filter_alt</span>
         <div>
-          <div className="text-sm font-semibold">重点速览</div>
-          <div className="text-[11px] text-muted-foreground">按结论、风险、行动和证据自动聚合，完整原文见下方</div>
+          <div className="text-sm font-semibold">文档速览</div>
+          <div className="text-[11px] text-muted-foreground">从原文抽取，不能替代上方的结构化流转回执</div>
         </div>
       </div>
       <div className="grid gap-2">
-        {highlights.map((highlight, index) => {
+        {primaryHighlights.map((highlight, index) => {
           const presentation = HIGHLIGHT_PRESENTATION[highlight.kind];
           return (
             <article key={`${highlight.heading}-${index}`} className={`rounded-lg border p-3 ${presentation.className}`}>
@@ -293,15 +368,112 @@ function DocumentHighlightsView({ highlights }: { highlights: DocumentHighlight[
           );
         })}
       </div>
+      {highlights.length > primaryHighlights.length ? (
+        <details className="mt-2 rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs">
+          <summary className="cursor-pointer font-medium text-muted-foreground">查看其余 {highlights.length - primaryHighlights.length} 项原文提取</summary>
+          <div className="mt-2 grid gap-2">
+            {highlights.slice(primaryHighlights.length).map((highlight, index) => {
+              const presentation = HIGHLIGHT_PRESENTATION[highlight.kind];
+              return (
+                <div key={`${highlight.heading}-${index}`} className={`rounded-md border p-2 ${presentation.className}`}>
+                  <div className="mb-1 text-[11px] font-semibold">{presentation.label} · {highlight.heading}</div>
+                  <ul className="space-y-1 text-[11px] leading-4 text-foreground/80">
+                    {highlight.points.map((point, pointIndex) => <li key={`${point}-${pointIndex}`}>· {point}</li>)}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function TransitionContractView({
+  receipt,
+  isRuntimeOutput,
+}: {
+  receipt: TransitionContractReceipt | null;
+  isRuntimeOutput: boolean;
+}) {
+  if (!receipt && !isRuntimeOutput) return null;
+  if (!receipt) {
+    return (
+      <section className="mb-4 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-3" aria-label="流转契约状态">
+        <div className="flex items-start gap-2">
+          <span className="material-symbols-outlined text-base text-amber-600">rule</span>
+          <div>
+            <div className="text-sm font-semibold">流转契约：旧运行未留回执</div>
+            <p className="mt-0.5 text-xs leading-5 text-muted-foreground">这份步骤文档没有“完成条件 / 缺失项 / 新进展 / 证据”的机器可读回执，因此系统不能从长文推断是否可流转或继续重试。</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const completed = new Set(receipt.report.completed);
+  const evidenceByCriterion = new Map(receipt.report.evidence.map((item) => [item.criterion, item.reference]));
+  const missing = Array.from(new Set([
+    ...receipt.report.remaining,
+    ...receipt.completionCriteria.filter((criterion) => !completed.has(criterion)),
+  ]));
+  const allComplete = missing.length === 0 && receipt.completionCriteria.length > 0;
+  const verdictLabel = receipt.verdict === 'pass' ? '可沿 pass 路径流转' : receipt.verdict === 'conditional_pass' ? '条件未闭合' : '当前裁决失败';
+  const tone = allComplete && receipt.verdict === 'pass'
+    ? 'border-emerald-500/30 bg-emerald-500/[0.07]'
+    : 'border-amber-500/30 bg-amber-500/[0.06]';
+
+  return (
+    <section className={`mb-4 rounded-xl border p-3 ${tone}`} aria-label="流转契约回执">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="material-symbols-outlined text-base text-primary">fact_check</span>
+        <span className="text-sm font-semibold">流转契约回执</span>
+        <Badge variant="outline" className="h-5 border-current/20 bg-background/50 px-1.5 text-[10px]">{receipt.state}</Badge>
+        <Badge variant={allComplete && receipt.verdict === 'pass' ? 'default' : 'outline'} className="h-5 px-1.5 text-[10px]">{verdictLabel}</Badge>
+        <span className="ml-auto text-[11px] text-muted-foreground">完成 {completed.size}/{receipt.completionCriteria.length} · 缺失 {missing.length}</span>
+      </div>
+      <div className="mt-2 grid gap-2 text-xs md:grid-cols-2">
+        <div className="rounded-md border border-border/60 bg-background/45 p-2">
+          <div className="mb-1 font-medium">完成条件</div>
+          <ul className="space-y-1 text-muted-foreground">
+            {receipt.completionCriteria.map((criterion) => (
+              <li key={criterion} className="flex gap-1.5">
+                <span className={`material-symbols-outlined text-sm ${completed.has(criterion) ? 'text-emerald-600' : 'text-amber-600'}`}>{completed.has(criterion) ? 'check_circle' : 'radio_button_unchecked'}</span>
+                <span className="min-w-0">{criterion}{evidenceByCriterion.has(criterion) ? <span className="block truncate text-[10px] opacity-80">证据：{evidenceByCriterion.get(criterion)}</span> : null}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="rounded-md border border-border/60 bg-background/45 p-2">
+          <div className="mb-1 font-medium">仍缺 / 本轮进展</div>
+          {missing.length > 0 ? <div className="text-amber-700 dark:text-amber-400">仍缺：{missing.join('；')}</div> : <div className="text-emerald-700 dark:text-emerald-400">所有声明的完成条件已闭合</div>}
+          {receipt.report.progress.length > 0 ? (
+            <ul className="mt-1.5 space-y-1 text-muted-foreground">
+              {receipt.report.progress.map((item) => <li key={`${item.criterion}:${item.value}`}><span className="font-medium">{item.criterion}</span>：{item.value}</li>)}
+            </ul>
+          ) : receipt.selfLoop ? <div className="mt-1.5 text-[11px] text-muted-foreground">本轮没有可用于重试的新进展；声明的重试上限为 {receipt.selfLoop.maxAttempts} 次。</div> : null}
+        </div>
+      </div>
+      {receipt.report.evidence.length > 0 ? (
+        <details className="mt-2 text-xs text-muted-foreground">
+          <summary className="cursor-pointer font-medium">查看全部 {receipt.report.evidence.length} 条证据引用</summary>
+          <ul className="mt-1.5 space-y-1">{receipt.report.evidence.map((item) => <li key={`${item.criterion}:${item.reference}`}>· {item.criterion}：{item.reference}</li>)}</ul>
+        </details>
+      ) : null}
     </section>
   );
 }
 
 function getDisplayFileName(file: DocFile): string {
+  if (/transition-contract/i.test(file.baseName || file.filename)) {
+    return file.phaseName ? `${file.phaseName} · 流转契约回执` : '状态流转契约回执';
+  }
   return stripTimestampPrefix(file.baseName || file.filename);
 }
 
 function getDocumentIcon(file: DocFile): string {
+  if (/transition-contract/i.test(file.baseName || file.filename)) return 'fact_check';
   return hasTimestamp(file.filename) ? 'article' : 'fact_check';
 }
 
@@ -751,9 +923,9 @@ export default function DocumentsPanel({
   }, [folderGroups]);
 
   const recommendedFile = useMemo(() => {
-    const candidates = priorityGroup?.files.filter((file) => !hasTimestamp(file.filename)) || [];
+    const candidates = priorityGroup?.files || [];
     return [...candidates].sort((a, b) => {
-      const score = (file: DocFile) => /汇总|总结|执行摘要|summary|report|checkpoint/i.test(file.filename) ? 1 : 0;
+      const score = (file: DocFile) => /transition-contract/i.test(file.filename) ? 2 : /汇总|总结|执行摘要|summary|report|checkpoint/i.test(file.filename) ? 1 : 0;
       return score(b) - score(a) || new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime();
     })[0] || null;
   }, [priorityGroup]);
@@ -824,6 +996,10 @@ export default function DocumentsPanel({
 
   const previewHighlights = useMemo(
     () => extractDocumentHighlights(previewContent),
+    [previewContent],
+  );
+  const previewTransitionContractReceipt = useMemo(
+    () => extractTransitionContractReceipt(previewContent),
     [previewContent],
   );
   const openLinkedRunDocument = useCallback(async (absolutePath: string) => {
@@ -1642,11 +1818,15 @@ export default function DocumentsPanel({
               <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>
             ) : (
               <div onClickCapture={handlePreviewLinkCapture}>
+                <TransitionContractView
+                  receipt={previewTransitionContractReceipt}
+                  isRuntimeOutput={previewFile.documentSource === 'runtime-output'}
+                />
                 <DocumentHighlightsView highlights={previewHighlights} />
-                {previewHighlights.length > 0 ? (
+                {(previewHighlights.length > 0 || previewTransitionContractReceipt) ? (
                   <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                     <span className="h-px flex-1 bg-border" />
-                    完整内容
+                    原始步骤文档
                     <span className="h-px flex-1 bg-border" />
                   </div>
                 ) : null}
@@ -1725,11 +1905,15 @@ export default function DocumentsPanel({
                 <div className="py-10 text-center text-xs text-muted-foreground">加载中...</div>
               ) : (
                 <div onClickCapture={handlePreviewLinkCapture}>
+                  <TransitionContractView
+                    receipt={previewTransitionContractReceipt}
+                    isRuntimeOutput={previewFile.documentSource === 'runtime-output'}
+                  />
                   <DocumentHighlightsView highlights={previewHighlights} />
-                  {previewHighlights.length > 0 ? (
+                  {(previewHighlights.length > 0 || previewTransitionContractReceipt) ? (
                     <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       <span className="h-px flex-1 bg-border" />
-                      完整内容
+                      原始步骤文档
                       <span className="h-px flex-1 bg-border" />
                     </div>
                   ) : null}

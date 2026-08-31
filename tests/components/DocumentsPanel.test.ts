@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   extractDocumentHighlights,
+  extractTransitionContractReceipt,
   findRunDocumentByWorkspacePath,
   formatDocumentPhaseLabel,
   getDocumentFolderGroup,
@@ -100,6 +101,33 @@ describe('DocumentsPanel summary highlights', () => {
     expect(highlights).toHaveLength(1);
     expect(highlights[0]).toMatchObject({ kind: 'summary', heading: '重点摘要' });
     expect(highlights[0].points).toHaveLength(3);
+  });
+});
+
+describe('DocumentsPanel transition-contract receipts', () => {
+  test('reads the system receipt and leaves narrative Markdown out of routing data', () => {
+    const receipt = extractTransitionContractReceipt(`
+<!-- transition-contract-receipt
+{"version":1,"state":"描述与门禁","verdict":"conditional_pass","completionCriteria":["PR head 已推送","CI 已创建"],"selfLoop":{"maxAttempts":1,"progressCriteria":["新的 CI run ID"]},"report":{"completed":["PR head 已推送"],"remaining":["CI 已创建"],"evidence":[{"criterion":"PR head 已推送","reference":"sha:e717b5d"}],"progress":[{"criterion":"新的 CI run ID","value":"run:42"}]}}
+-->
+# 很长的步骤说明
+这段说明不属于结构化流转数据。
+`);
+
+    expect(receipt).toMatchObject({
+      state: '描述与门禁',
+      verdict: 'conditional_pass',
+      completionCriteria: ['PR head 已推送', 'CI 已创建'],
+      report: {
+        completed: ['PR head 已推送'],
+        remaining: ['CI 已创建'],
+        evidence: [{ criterion: 'PR head 已推送', reference: 'sha:e717b5d' }],
+      },
+    });
+  });
+
+  test('does not fabricate a receipt for legacy narrative output', () => {
+    expect(extractTransitionContractReceipt('# 步骤成果总结\n\n- 已完成若干检查。')).toBeNull();
   });
 });
 
