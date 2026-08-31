@@ -814,8 +814,8 @@ export function buildWorkbenchHumanApprovalPresentation(input: {
   if (action === 'advance') {
     return {
       recommendation: 'ready-to-continue',
-      headline: targetState ? `已裁决继续到「${targetState}」` : '已裁决继续工作流',
-      supportingText: instruction || rationale || '状态机将按已声明路径继续执行。',
+      headline: targetState ? `等待你确认进入「${targetState}」` : '等待你确认继续工作流',
+      supportingText: instruction || rationale || '尚未开始下一状态；确认后状态机才会按已声明路径继续执行。',
       checklist: evidence.length > 0 ? evidence : ['当前状态证据已满足继续条件。'],
     };
   }
@@ -13781,6 +13781,7 @@ export default function WorkbenchPage({
                       completedSteps={completedSteps}
                       failedSteps={failedSteps}
                       stateHistory={smStateHistory}
+                      pendingTargetState={humanApprovalData?.nextState || pendingHumanQuestion?.suggestedNextState || null}
                       workflowStatus={workflowStatus}
                     />
                   ) : (

@@ -5,6 +5,15 @@ import type { StateMachineState } from '@/lib/core/schemas';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/core/utils';
 
+type RuntimeTransitionRecord = {
+  from?: string;
+  to?: string;
+  verdict?: string;
+  timestamp?: string;
+  reason?: string;
+  issues?: Array<unknown>;
+};
+
 type RuntimeStateStructurePanelProps = {
   states: StateMachineState[];
   currentState?: string | null;
@@ -12,7 +21,8 @@ type RuntimeStateStructurePanelProps = {
   activeSteps?: string[];
   completedSteps?: string[];
   failedSteps?: string[];
-  stateHistory?: Array<{ from?: string; to?: string; verdict?: string; timestamp?: string }>;
+  stateHistory?: RuntimeTransitionRecord[];
+  pendingTargetState?: string | null;
   workflowStatus?: string | null;
 };
 
@@ -97,6 +107,30 @@ function stepToneLabel(tone: RuntimeStepTone, adversarial: boolean) {
   return adversarial ? '产出 / Defender' : '执行 / Produce';
 }
 
+function transitionVerdict(record: RuntimeTransitionRecord) {
+  const explicit = String(record?.verdict || '').trim();
+  if (explicit) return explicit;
+  const reason = String(record?.reason || '');
+  if (reason.includes('条件性通过')) return 'conditional_pass';
+  if (reason.includes('所有检查通过')) return 'pass';
+  if (reason.includes('裁决失败')) return 'fail';
+  return '';
+}
+
+function transitionTime(timestamp?: string) {
+  if (!timestamp) return '时间未记录';
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? timestamp : date.toLocaleString('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+}
+
+function transitionReason(record: RuntimeTransitionRecord) {
+  const reason = String(record?.reason || '').trim();
+  if (!reason) return '未记录裁决说明';
+  return reason.length > 150 ? `${reason.slice(0, 150)}…` : reason;
+}
+
 export default function RuntimeStateStructurePanel({
   states,
   currentState,
@@ -105,20 +139,30 @@ export default function RuntimeStateStructurePanel({
   completedSteps = [],
   failedSteps = [],
   stateHistory = [],
+  pendingTargetState,
   workflowStatus,
 }: RuntimeStateStructurePanelProps) {
   const [selectedStateName, setSelectedStateName] = useState<string | null>(currentState || states[0]?.name || null);
+  const [showAllTransitions, setShowAllTransitions] = useState(false);
+  const isAwaitingHumanApproval = currentState === '__human_approval__';
+  const approvalSourceState = useMemo(() => (
+    [...stateHistory].reverse().find((entry) => entry.to === '__human_approval__')?.from || null
+  ), [stateHistory]);
+  const stateToFocus = isAwaitingHumanApproval ? approvalSourceState : currentState;
 
   useEffect(() => {
-    if (currentState && states.some((state) => state.name === currentState)) {
-      setSelectedStateName(currentState);
+    if (stateToFocus && states.some((state) => state.name === stateToFocus)) {
+      setSelectedStateName(stateToFocus);
       return;
     }
     setSelectedStateName((selected) => states.some((state) => state.name === selected) ? selected : states[0]?.name || null);
-  }, [currentState, states]);
+  }, [stateToFocus, states]);
 
   const selectedState = states.find((state) => state.name === selectedStateName) || states[0] || null;
   const reachedStates = useMemo(() => new Set(stateHistory.flatMap((entry) => [entry.from, entry.to]).filter(Boolean)), [stateHistory]);
+  const recentTransitions = useMemo(() => (
+    [...stateHistory].reverse().slice(0, showAllTransitions ? 24 : 5)
+  ), [showAllTransitions, stateHistory]);
   const terminalWorkflowStatus = ['completed', 'failed', 'stopped', 'crashed', 'cancelled'].includes(String(workflowStatus || '').toLowerCase());
   const activeRuntimeKeys = activeSteps.length > 0
     ? activeSteps.filter(Boolean)
@@ -252,6 +296,54 @@ export default function RuntimeStateStructurePanel({
           ) : null}
         </header>
 
+        <div className="mt-4 rounded-xl border border-blue-500/15 bg-blue-500/[0.045] p-3" data-testid="runtime-transition-history">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold">当前与最近流转</h3>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {isAwaitingHumanApproval
+                  ? `当前停在人工审查；确认后才会开始${pendingTargetState ? `「${pendingTargetState}」` : '下一状态'}。`
+                  : `当前执行「${currentState || selectedState.name}」。`}
+              </p>
+            </div>
+            <Badge variant="outline" className={isAwaitingHumanApproval
+              ? 'border-orange-500/20 bg-orange-500/10 text-orange-800 dark:text-orange-200'
+              : 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300'}>
+              {isAwaitingHumanApproval ? '等待人工确认' : '运行位置'}
+            </Badge>
+          </div>
+          {recentTransitions.length ? (
+            <ol className="mt-3 space-y-2" aria-label="最近状态流转记录">
+              {recentTransitions.map((record, index) => {
+                const verdict = transitionVerdict(record);
+                const isSelfLoop = record.from === record.to;
+                const issueCount = Array.isArray(record.issues) ? record.issues.length : 0;
+                return (
+                  <li key={`${record.timestamp || 'transition'}-${record.from || 'from'}-${record.to || 'to'}-${index}`} className="rounded-lg border border-border/55 bg-background/70 px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                      <span className="text-muted-foreground">{transitionTime(record.timestamp)}</span>
+                      <span className="font-medium">{record.from || '开始'}</span>
+                      <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 15 }}>arrow_forward</span>
+                      <span className="font-medium">{record.to || '下一状态'}</span>
+                      {verdict ? <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">{verdict}</code> : null}
+                      {isSelfLoop ? <Badge variant="outline" className="h-5 border-orange-500/20 bg-orange-500/10 text-[10px] text-orange-800 dark:text-orange-200">本状态补充</Badge> : null}
+                      {issueCount > 0 ? <span className="text-muted-foreground">问题 {issueCount}</span> : null}
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{transitionReason(record)}</p>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="mt-3 text-xs text-muted-foreground">尚未记录状态转移；首次裁决后会在这里直接显示。</p>
+          )}
+          {stateHistory.length > 5 ? (
+            <button type="button" className="mt-2 text-xs font-medium text-blue-700 hover:underline dark:text-blue-300" onClick={() => setShowAllTransitions((visible) => !visible)}>
+              {showAllTransitions ? '收起较早记录' : `查看全部 ${stateHistory.length} 条记录`}
+            </button>
+          ) : null}
+        </div>
+
         <div className="mt-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold">状态内执行结构</h3>
@@ -307,8 +399,8 @@ export default function RuntimeStateStructurePanel({
 
         <div className="mt-6 border-t pt-5">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold">状态转移</h3>
-            <span className="text-xs text-muted-foreground">已发生 {stateHistory.filter((entry) => entry.from === selectedState.name).length} 次</span>
+            <h3 className="text-sm font-semibold">可用流转规则</h3>
+            <span className="text-xs text-muted-foreground">本状态历史发生 {stateHistory.filter((entry) => entry.from === selectedState.name).length} 次</span>
           </div>
           {(selectedState.transitions || []).length ? (
             <div className="space-y-2">

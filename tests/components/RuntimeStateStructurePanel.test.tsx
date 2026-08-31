@@ -47,7 +47,7 @@ describe('RuntimeStateStructurePanel', () => {
     expect(screen.getByText('执行任务')).toBeInTheDocument();
     expect(screen.getByText('独立裁决')).toBeInTheDocument();
     expect(screen.getByText('pass')).toBeInTheDocument();
-    expect(screen.getByText('conditional_pass')).toBeInTheDocument();
+    expect(screen.getAllByText('conditional_pass').length).toBeGreaterThan(0);
     expect(screen.getByText('已触发 1 次')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /执行与对抗/ })).toHaveAttribute('data-selected', 'true');
     expect(screen.getByRole('button', { name: /执行与对抗/ })).toHaveClass('bg-blue-500');
@@ -97,6 +97,41 @@ describe('RuntimeStateStructurePanel', () => {
     expect(stateButton).toHaveAttribute('data-runtime-status', 'running');
     expect(attackerCard).toHaveAttribute('data-runtime-status', 'running');
     expect(judgeCard).toHaveAttribute('data-runtime-status', 'pending');
+  });
+
+  test('makes a paused approval and its actual self-loop history visible without opening topology', () => {
+    render(
+      <RuntimeStateStructurePanel
+        states={[
+          {
+            name: '修复与验证',
+            isInitial: true,
+            isFinal: false,
+            steps: [{ name: '实施修复', agent: 'developer' }],
+            transitions: [
+              { to: 'PR提交', condition: { verdict: 'pass' } },
+              { to: '修复与验证', condition: { verdict: 'conditional_pass' } },
+            ],
+          },
+          { name: 'PR提交', isInitial: false, isFinal: false, steps: [], transitions: [] },
+        ] as any}
+        currentState="__human_approval__"
+        pendingTargetState="修复与验证"
+        stateHistory={[
+          { from: '修复与验证', to: '修复与验证', verdict: 'conditional_pass', reason: '需要补齐 LLT_lsp 验证', timestamp: '2026-08-31T01:00:00.000Z', issues: [{}] },
+          { from: '修复与验证', to: '__human_approval__', reason: '需要人工审查: 条件性通过', timestamp: '2026-08-31T02:00:00.000Z', issues: [] },
+        ]}
+        workflowStatus="running"
+      />,
+    );
+
+    expect(screen.getByTestId('runtime-transition-history')).toBeInTheDocument();
+    expect(screen.getByText('当前停在人工审查；确认后才会开始「修复与验证」。')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: '最近状态流转记录' })).toHaveTextContent('修复与验证');
+    expect(screen.getByRole('list', { name: '最近状态流转记录' })).toHaveTextContent('需要补齐 LLT_lsp 验证');
+    expect(screen.getByText('本状态补充')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修复与验证/ })).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByText('可用流转规则')).toBeInTheDocument();
   });
 
   test('keeps the current failed step red when the run really failed', () => {
