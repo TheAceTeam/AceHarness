@@ -93,7 +93,8 @@ interface DocFolderGroup {
 type DocTreeRow =
   | { type: 'summary'; key: string; group: DocTreeGroup; file: DocFile }
   | { type: 'group'; key: string; group: DocTreeGroup }
-  | { type: 'detail'; key: string; group: DocTreeGroup; file: DocFile };
+  | { type: 'detail'; key: string; group: DocTreeGroup; file: DocFile; isLatest: boolean }
+  | { type: 'date-divider'; key: string; dateLabel: string; isLatestDay: boolean };
 
 interface DocumentsPanelProps {
   runId: string | null;
@@ -483,11 +484,33 @@ function getDocumentIconClass(file: DocFile): string {
     : 'text-emerald-600 dark:text-emerald-400';
 }
 
-/** Parse timestamp prefix: "2026-03-30T11-06-14-" → "03-30 11:06" */
+/** Parse timestamp prefix: "2026-03-30T11-06-14-" → "2026-03-30 11:06" */
 function parseTimestamp(filename: string): string {
   const m = filename.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-/);
   if (!m) return '';
-  return `${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+}
+
+function validDocumentDate(value: string): Date | null {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+/** One time source per row: file update time controls ordering and always includes the day. */
+export function formatDocumentUpdatedAt(file: Pick<DocFile, 'modifiedTime'>): string {
+  const date = validDocumentDate(file.modifiedTime);
+  if (!date) return '日期未知';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(date).replace(/\//g, '-');
+}
+
+export function getDocumentUpdateDay(file: Pick<DocFile, 'modifiedTime'>): string {
+  const date = validDocumentDate(file.modifiedTime);
+  if (!date) return '日期未知';
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date).replace(/\//g, '-');
 }
 
 const roleBadge: Record<string, string> = {
@@ -935,6 +958,16 @@ export default function DocumentsPanel({
     return activeGroup ? (folderGroups.find(group => group.key === activeGroup)?.files || []) : [...tabFiles];
   }, [activeGroup, folderGroups, tabFiles]);
 
+  const latestScopedDocumentKey = useMemo(() => {
+    const latest = scopedFiles.reduce<DocFile | null>((candidate, file) => {
+      if (!candidate) return file;
+      return new Date(file.modifiedTime).getTime() > new Date(candidate.modifiedTime).getTime()
+        ? file
+        : candidate;
+    }, null);
+    return latest ? getDocKey(latest) : null;
+  }, [scopedFiles]);
+
   const processedFiles = useMemo(() => {
     let filtered = [...scopedFiles];
     if (searchQuery.trim()) {
@@ -976,8 +1009,19 @@ export default function DocumentsPanel({
         rows.push({ type: 'group', key: `group:${group.key}`, group });
       }
       if (expandedGroups.has(group.key)) {
-        group.details.forEach((file) => {
-          rows.push({ type: 'detail', key: `detail:${group.key}:${getDocKey(file)}`, group, file });
+        let previousDay: string | null = null;
+        group.details.forEach((file, index) => {
+          const day = getDocumentUpdateDay(file);
+          if (day !== previousDay) {
+            rows.push({
+              type: 'date-divider',
+              key: `date:${group.key}:${day}`,
+              dateLabel: day,
+              isLatestDay: index === 0,
+            });
+            previousDay = day;
+          }
+          rows.push({ type: 'detail', key: `detail:${group.key}:${getDocKey(file)}`, group, file, isLatest: index === 0 });
         });
       }
     });
@@ -1549,13 +1593,14 @@ export default function DocumentsPanel({
   // --- File row ---
   const fileRow = (
     file: DocFile,
-    options?: { indent?: number; prefix?: ReactNode; muted?: boolean }
+    options?: { indent?: number; prefix?: ReactNode; muted?: boolean; current?: '结论' | '执行' }
   ) => {
     const docKey = getDocKey(file);
     const editable = isRootRunFile(file, runId);
     const isRenaming = renamingFile === docKey;
     const isSelected = selected.has(docKey);
     const isActive = previewFile && getDocKey(previewFile) === docKey;
+    const isLatestInScope = latestScopedDocumentKey === docKey;
     const rowStyle = options?.indent ? { paddingLeft: `${12 + options.indent}px` } : undefined;
 
     return (
@@ -1598,13 +1643,23 @@ export default function DocumentsPanel({
         {recommendedFile && getDocKey(recommendedFile) === docKey ? (
           <Badge className="h-4 shrink-0 px-1 text-[9px]">推荐</Badge>
         ) : null}
-        {hasTimestamp(file.filename) && (
-          <Badge variant="outline" className="text-[9px] h-4 px-1 shrink-0 text-muted-foreground">
-            {parseTimestamp(file.filename)}
+        {isLatestInScope ? (
+          <Badge className="h-4 shrink-0 bg-primary px-1 text-[9px]">最新</Badge>
+        ) : null}
+        {options?.current ? (
+          <Badge className="h-4 shrink-0 border border-emerald-500/25 bg-emerald-500/10 px-1 text-[9px] text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300">
+            当前{options.current}
           </Badge>
-        )}
-        <span className="text-[10px] text-muted-foreground shrink-0 w-14 text-right">{(file.size / 1024).toFixed(1)}K</span>
-        <span className="text-[10px] text-muted-foreground shrink-0 w-20 text-right">{new Date(file.modifiedTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+        ) : null}
+        {hasTimestamp(file.filename) ? (
+          <span className="hidden shrink-0 text-[9px] text-muted-foreground xl:inline" title={`执行开始：${parseTimestamp(file.filename)}`}>
+            执行 {parseTimestamp(file.filename)}
+          </span>
+        ) : null}
+        <span className="text-[10px] text-muted-foreground shrink-0 w-[82px] text-right" title={`最后更新：${file.modifiedTime || '未知'}`}>
+          {formatDocumentUpdatedAt(file)}
+        </span>
+        <span className="text-[10px] text-muted-foreground shrink-0 w-12 text-right">{(file.size / 1024).toFixed(1)}K</span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
             <Button variant="ghost" size="sm" className="h-5 w-5 p-0 shrink-0"><span className="material-symbols-outlined text-sm">more_vert</span></Button>
@@ -1671,9 +1726,9 @@ export default function DocumentsPanel({
             onCheckedChange={toggleSelectAll}
             className="h-3 w-3"
           />
-          <span className="flex-1">总结 / 详情</span>
-          <span className="w-14 text-right">大小</span>
-          <span className="w-20 text-right">时间</span>
+          <span className="flex-1">当前结论 / 历史执行</span>
+          <span className="w-[82px] text-right">更新于</span>
+          <span className="w-12 text-right">大小</span>
           <span className="w-5" />
         </div>
         <VirtualList
@@ -1688,6 +1743,7 @@ export default function DocumentsPanel({
             if (row.type === 'summary') {
               return fileRow(row.file, {
                 prefix: row.group.detailCount > 0 ? treeChevron(row.group) : <span className="w-4 shrink-0" />,
+                current: '结论',
               });
             }
             if (row.type === 'detail') {
@@ -1695,7 +1751,18 @@ export default function DocumentsPanel({
                 indent: 22,
                 prefix: <span className="material-symbols-outlined text-[12px] text-muted-foreground shrink-0">subdirectory_arrow_right</span>,
                 muted: true,
+                current: row.isLatest ? '执行' : undefined,
               });
+            }
+            if (row.type === 'date-divider') {
+              return (
+                <div className="flex items-center gap-2 border-b border-border/25 bg-muted/25 px-3 py-1 text-[10px] text-muted-foreground" style={{ paddingLeft: '52px' }}>
+                  <span className="h-px flex-1 bg-border/60" />
+                  <span className="font-medium">{row.dateLabel}</span>
+                  {row.isLatestDay ? <Badge variant="outline" className="h-4 border-emerald-500/30 bg-emerald-500/[0.06] px-1 text-[9px] text-emerald-700 dark:text-emerald-300">最新批次</Badge> : null}
+                  <span className="h-px flex-1 bg-border/60" />
+                </div>
+              );
             }
             return (
               <div
@@ -1736,11 +1803,11 @@ export default function DocumentsPanel({
           <span className="flex-1 cursor-pointer" onClick={() => toggleSort('name')}>
             文件名 {sortField === 'name' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
           </span>
-          <span className="w-14 text-right cursor-pointer" onClick={() => toggleSort('size')}>
-            大小 {sortField === 'size' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
+          <span className="w-[82px] text-right cursor-pointer" onClick={() => toggleSort('time')}>
+            更新于 {sortField === 'time' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
           </span>
-          <span className="w-20 text-right cursor-pointer" onClick={() => toggleSort('time')}>
-            时间 {sortField === 'time' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
+          <span className="w-12 text-right cursor-pointer" onClick={() => toggleSort('size')}>
+            大小 {sortField === 'size' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
           </span>
           <span className="w-5" />
         </div>

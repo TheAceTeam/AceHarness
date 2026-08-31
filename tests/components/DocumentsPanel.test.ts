@@ -3,7 +3,9 @@ import {
   extractDocumentHighlights,
   extractTransitionContractReceipt,
   findRunDocumentByWorkspacePath,
+  formatDocumentUpdatedAt,
   formatDocumentPhaseLabel,
+  getDocumentUpdateDay,
   getDocumentFolderGroup,
   type DocFile,
 } from '@/components/DocumentsPanel';
@@ -128,6 +130,20 @@ describe('DocumentsPanel transition-contract receipts', () => {
 
   test('does not fabricate a receipt for legacy narrative output', () => {
     expect(extractTransitionContractReceipt('# 步骤成果总结\n\n- 已完成若干检查。')).toBeNull();
+  });
+});
+
+describe('DocumentsPanel execution timestamps', () => {
+  test('always shows the calendar day in the list timestamp', () => {
+    const file = { modifiedTime: '2026-08-31T17:12:00.000+08:00' } as DocFile;
+    expect(formatDocumentUpdatedAt(file)).toMatch(/08-31.*17:12/);
+    expect(getDocumentUpdateDay(file)).toMatch(/2026-08-31/);
+  });
+
+  test('does not turn a missing timestamp into a misleading current time', () => {
+    const file = { modifiedTime: '' } as DocFile;
+    expect(formatDocumentUpdatedAt(file)).toBe('日期未知');
+    expect(getDocumentUpdateDay(file)).toBe('日期未知');
   });
 });
 
