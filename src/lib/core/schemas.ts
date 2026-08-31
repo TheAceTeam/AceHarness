@@ -761,6 +761,32 @@ export const stateTransitionSchema = z.object({
   label: z.string().optional(), // 转移边的标签
 });
 
+// A state transition contract makes a retry auditable: the workflow declares
+// what completion means, what counts as fresh progress, and the finite retry
+// budget before any Agent is invoked. It is opt-in at workflow level so saved
+// legacy run snapshots remain runnable.
+export const stateTransitionContractSchema = z.object({
+  completionCriteria: z.array(z.string().min(1)).min(1),
+  selfLoop: z.object({
+    maxAttempts: z.number().int().min(1).max(20),
+    progressCriteria: z.array(z.string().min(1)).min(1),
+    onExhausted: z.enum(['human_approval']).default('human_approval'),
+  }).optional(),
+});
+
+export const stateTransitionContractReportSchema = z.object({
+  completed: z.array(z.string().min(1)).default([]),
+  remaining: z.array(z.string().min(1)).default([]),
+  evidence: z.array(z.object({
+    criterion: z.string().min(1),
+    reference: z.string().min(1),
+  })).default([]),
+  progress: z.array(z.object({
+    criterion: z.string().min(1),
+    value: z.string().min(1),
+  })).default([]),
+});
+
 // 状态机状态 Schema
 export const stateMachineStateSchema = z.object({
   id: z.string().min(1).optional(),
@@ -776,6 +802,7 @@ export const stateMachineStateSchema = z.object({
   isInitial: z.boolean().default(false), // 是否为初始状态
   isFinal: z.boolean().default(false), // 是否为终止状态
   maxSelfTransitions: z.number().min(1).max(100).optional(), // 最大自我转换次数，超出后自动熔断
+  transitionContract: stateTransitionContractSchema.optional(),
   reviewPolicy: reviewPolicySchema.optional(),
   executionMode: z.enum(['sequential', 'parallel']).optional(), // 并发设计元数据；当前执行器不保证真实并发
   joinPolicy: joinPolicySchema.optional(),
@@ -810,6 +837,7 @@ export const stateMachineWorkflowSchema = z.object({
      * an existing one — never a side effect of editing or saving.
      */
     reviewProtocol: z.literal('state-level').optional(),
+    transitionContractVersion: z.literal(1).optional(),
     states: z.array(stateMachineStateSchema).min(1, '至少需要一个状态'),
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50), // 最大状态转移次数，防止死循环
@@ -906,6 +934,8 @@ export const unifiedWorkflowConfigSchema = stateMachineWorkflowSchema;
 export type Issue = z.infer<typeof issueSchema>;
 export type TransitionCondition = z.infer<typeof transitionConditionSchema>;
 export type StateTransition = z.infer<typeof stateTransitionSchema>;
+export type StateTransitionContract = z.infer<typeof stateTransitionContractSchema>;
+export type StateTransitionContractReport = z.infer<typeof stateTransitionContractReportSchema>;
 export type StateMachineState = z.infer<typeof stateMachineStateSchema>;
 export type IssueRoutingRule = z.infer<typeof issueRoutingRuleSchema>;
 export type StateMachineWorkflowConfig = z.infer<typeof stateMachineWorkflowSchema>;
@@ -924,4 +954,5 @@ export interface StateTransitionRecord {
   reason: string;
   issues: Issue[];
   timestamp: string;
+  transitionContract?: StateTransitionContractReport;
 }

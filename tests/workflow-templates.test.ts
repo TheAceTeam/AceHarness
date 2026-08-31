@@ -139,6 +139,19 @@ describe('workflow templates', () => {
         '描述与门禁',
         'PR 合入前检查与跟踪',
       ]));
+      expect(body.template.workflow.workflow.transitionContractVersion).toBe(1);
+      const gateState = body.template.workflow.workflow.states
+        .find((state: any) => state.name === 'PR 合入前检查与跟踪');
+      expect(gateState).toMatchObject({
+        maxSelfTransitions: 1,
+        transitionContract: {
+          completionCriteria: expect.arrayContaining(['all-required-prs-merged', 'required-gates-passed']),
+          selfLoop: {
+            maxAttempts: 1,
+            progressCriteria: ['ci-or-review-state-changed'],
+          },
+        },
+      });
       expect(body.template.workflow.context.taskInput.fields.find((field: any) => field.id === 'gateContract'))
         .toMatchObject({ required: false, description: expect.stringContaining('conditional_pass') });
       expect(body.template.workflow.workflow.states.find((state: any) => state.name === '描述与门禁')?.steps[0].task)

@@ -45,6 +45,7 @@ import { stateMachineWorkflowSchema } from '@/lib/core/schemas';
 import type {
   StateMachineWorkflowConfig, StateMachineState, StateTransition,
   Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
+  StateTransitionContractReport,
 } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
 import {
@@ -379,6 +380,8 @@ export interface StateExecutionResult {
   stepOutputs: string[];
   summary: string;
   executionFailed?: boolean;
+  /** The final judge's machine-readable receipt for the state transition contract. */
+  transitionContract?: StateTransitionContractReport;
   /** Filled before the result can drive a state transition or human checkpoint. */
   decision?: WorkflowTransitionDecision;
 }
@@ -400,6 +403,7 @@ export interface StateTransitionRecord {
   reason: string;
   issues: Issue[];
   timestamp: string;
+  transitionContract?: StateTransitionContractReport;
 }
 
 export function stripNonAiStreamArtifacts(text: string): string {
@@ -3750,6 +3754,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       reason: `需要人工审查: ${this.getTransitionReason(result)}`,
       issues: result.issues,
       timestamp: new Date().toISOString(),
+      transitionContract: result.transitionContract,
     });
     this.transitionCount++;
     this.emit('transition', {
@@ -4658,7 +4663,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return extractStructuredJsonObject(raw);
   }
 
-  private extractVerdictJson(raw: string): { verdict: 'pass' | 'conditional_pass' | 'fail' } | null {
+  private extractFinalVerdictPayload(raw: string): Record<string, any> | null {
     const fencedJsonPattern = /```(json)?\s*([\s\S]*?)```/gi;
     const candidates: any[] = [];
     let match: RegExpExecArray | null;
@@ -4684,10 +4689,42 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     for (let index = candidates.length - 1; index >= 0; index -= 1) {
       const verdict = normalizeWorkflowVerdict(candidates[index]?.verdict);
-      if (verdict) return { verdict };
+      if (verdict) return candidates[index] as Record<string, any>;
     }
 
     return null;
+  }
+
+  private extractVerdictJson(raw: string): { verdict: 'pass' | 'conditional_pass' | 'fail' } | null {
+    const payload = this.extractFinalVerdictPayload(raw);
+    const verdict = normalizeWorkflowVerdict(payload?.verdict);
+    return verdict ? { verdict } : null;
+  }
+
+  private extractTransitionContractReport(raw: string): StateTransitionContractReport | undefined {
+    const payload = this.extractFinalVerdictPayload(raw);
+    const candidate = payload?.transition_contract || payload?.transitionContract;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return undefined;
+
+    const items = (value: unknown, key: 'criterion' | 'reference' | 'value') => (
+      Array.isArray(value)
+        ? value.map((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+          const criterion = String((item as any).criterion || '').trim();
+          const field = String((item as any)[key] || '').trim();
+          return criterion && field ? { criterion, [key]: field } : null;
+        }).filter(Boolean)
+        : []
+    );
+    const names = (value: unknown) => Array.isArray(value)
+      ? value.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    return {
+      completed: names((candidate as any).completed),
+      remaining: names((candidate as any).remaining),
+      evidence: items((candidate as any).evidence, 'reference') as StateTransitionContractReport['evidence'],
+      progress: items((candidate as any).progress, 'value') as StateTransitionContractReport['progress'],
+    };
   }
 
   private parseVerdictFromConclusion(raw: string): 'pass' | 'conditional_pass' | 'fail' | null {
@@ -6305,6 +6342,26 @@ try {
       } else {
         this.runSupervisorReviewInBackground('state-review', stateConfig, result, config, nextState);
       }
+      const contractViolation = !wasForced
+        ? this.getTransitionContractViolation(stateConfig, result, nextState)
+        : null;
+      if (contractViolation) {
+        nextState = stateConfig.name;
+        result.decision = {
+          action: 'needs_human',
+          targetState: stateConfig.name,
+          rationale: contractViolation,
+          blockers: [contractViolation],
+          evidence: result.transitionContract?.evidence.map((item) => `${item.criterion}: ${item.reference}`).slice(0, 8)
+            || [`verdict: ${result.verdict}`],
+          instruction: '补齐状态契约回执或选择人工确认的后续状态；系统不会自动发起下一轮同状态执行。',
+          source: 'state-machine',
+        };
+        this.emit('log', {
+          level: 'warning',
+          message: `状态流转契约未满足，暂停而不自循环：${contractViolation}`,
+        });
+      }
       if (!wasForced && nextState !== '__human_approval__') {
         this.queueSpecRevisionVote({
           trigger: 'state-complete',
@@ -6399,6 +6456,8 @@ try {
       // states may additionally opt into a pause on conditional self-loop so a
       // confirmed "needs human action" signal never becomes blind polling.
       const requiresApproval = !wasForced && (
+        result.decision?.action === 'needs_human'
+        ||
         (stateConfig.requireHumanApproval && nextState !== this.currentState)
         || (stateConfig.requireHumanApprovalOnConditionalPass
           && result.verdict === 'conditional_pass'
@@ -6407,16 +6466,20 @@ try {
 
       if (requiresApproval) {
         const fromStateName = this.currentState;
-        const checkpointAdvice = await this.collectSupervisorReview('checkpoint-advice', stateConfig, result, config, nextState);
+        const checkpointAdvice = result.decision?.action === 'needs_human'
+          ? null
+          : await this.collectSupervisorReview('checkpoint-advice', stateConfig, result, config, nextState);
         await this.pauseForHumanApproval({
           config,
           fromStateName,
           nextState,
           result,
-          title: stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
+          title: result.decision?.action === 'needs_human'
+            ? '状态流转契约待确认'
+            : stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
             ? '外部依赖待人工处理'
             : '等待人工审查',
-          message: checkpointAdvice || (
+          message: result.decision?.instruction || checkpointAdvice || (
             stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
               ? `状态「${fromStateName}」确认需要人工处理外部依赖，工作流已暂停。\n\n${result.summary || '请确认下一步状态。'}`
               : `Supervisor 建议进入 ${nextState}，请确认下一步状态。`
@@ -6425,7 +6488,9 @@ try {
             type: 'checkpoint-advice',
             fromState: fromStateName,
             suggestedNextState: nextState,
-            reason: stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
+            reason: result.decision?.action === 'needs_human'
+              ? 'transition-contract-not-satisfied'
+              : stateConfig.requireHumanApprovalOnConditionalPass && nextState === fromStateName
               ? 'conditional-pass-needs-human-action'
               : undefined,
           },
@@ -6440,6 +6505,7 @@ try {
           reason: this.getTransitionReason(result),
           issues: result.issues,
           timestamp: new Date().toISOString(),
+          transitionContract: result.transitionContract,
         });
 
         this.transitionCount++;
@@ -7052,6 +7118,9 @@ try {
     // Add issues to tracker
     this.issueTracker.push(...issues);
     const summary = this.generateStateSummary(state, issues);
+    const transitionContract = state.transitionContract
+      ? this.extractTransitionContractReport(stepOutputs.at(-1) || '')
+      : undefined;
     await this.appendRuntimeTranscriptEvent({
       type: verdict === 'fail' ? 'state-failed' : 'state-complete',
       title: verdict === 'fail' ? `状态失败：${state.name}` : `状态完成：${state.name}`,
@@ -7067,6 +7136,7 @@ try {
       stepOutputs,
       summary,
       executionFailed,
+      transitionContract,
     };
   }
 
@@ -8779,6 +8849,9 @@ try {
     step: WorkflowStep,
   ): string {
     const previous = compactRuntimeOutputPreview(previousOutput || '', 8000).output;
+    const transitionContract = state.transitionContract
+      ? this.buildTransitionContractPrompt(state)
+      : '';
     return [
       originalContext,
       '\n# 系统补充要求：缺少最终裁决 JSON',
@@ -8789,12 +8862,41 @@ try {
       '{',
       '  "verdict": "pass",',
       '  "remaining_issues": 0,',
-      '  "summary": "一句话总结"',
+      `  "summary": "一句话总结"${transitionContract}`,
       '}',
       '```',
       '如果不能通过，请把 verdict 改为 conditional_pass 或 fail，并同步填写 remaining_issues。',
       '\n# 你上一轮输出',
       previous || '[上一轮没有可用输出]',
+    ].join('\n');
+  }
+
+  private buildTransitionContractPrompt(state: StateMachineState): string {
+    const contract = state.transitionContract;
+    if (!contract) return '';
+    const completion = contract.completionCriteria.map((criterion) => JSON.stringify(criterion)).join(', ');
+    const progress = contract.selfLoop?.progressCriteria.map((criterion) => JSON.stringify(criterion)).join(', ') || '';
+    return [
+      ',',
+      '  "transition_contract": {',
+      `    "completed": [${completion}],`,
+      '    "remaining": [],',
+      `    "evidence": [${contract.completionCriteria.map((criterion) => `{ "criterion": ${JSON.stringify(criterion)}, "reference": "可复核的命令、SHA、评论 ID 或工件路径" }`).join(', ')}],`,
+      `    "progress": [${progress ? `{ "criterion": ${progress.split(', ')[0]}, "value": "本轮新增且可比较的证据值" }` : ''}]`,
+      '  }',
+    ].join('\n');
+  }
+
+  private buildTransitionContractGuidance(state: StateMachineState): string {
+    const contract = state.transitionContract;
+    if (!contract) return '';
+    return [
+      '\n\n# 状态流转契约（强制）',
+      `- completionCriteria 只能使用：${contract.completionCriteria.join('、')}。pass 时必须全部写入 transition_contract.completed，并为每项提供 evidence；否则不得给 pass。`,
+      contract.selfLoop
+        ? `- 若本轮流向当前状态，必须至少填一项 transition_contract.progress，criterion 只能使用：${contract.selfLoop.progressCriteria.join('、')}；value 必须是相对上轮的新 SHA、评论 ID、测试结果或工件引用。预算最多 ${contract.selfLoop.maxAttempts} 次；没有新 progress 不得请求下一轮重跑。`
+        : '- 本状态没有自循环预算；请依据完成条件选择已声明的前进或回退路径。',
+      '- 不得编造证据；无法提供回执时系统会直接转人工审查，而不是自动重试。',
     ].join('\n');
   }
 
@@ -9176,7 +9278,13 @@ try {
         .filter((transition) => transition.condition?.verdict)
         .map((transition) => `- ${transition.condition.verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`)
         .join('\n') || '- 当前状态未配置 verdict 转移。';
-      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+      const transitionContract = state.transitionContract
+        ? this.buildTransitionContractPrompt(state)
+        : '';
+      const transitionContractGuidance = state.transitionContract
+        ? this.buildTransitionContractGuidance(state)
+        : '';
+      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"${transitionContract}\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。${transitionContractGuidance}\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     if (stepRunId) {
@@ -10348,6 +10456,35 @@ try {
     if (invalidStates.length > 0) {
       throw new Error(`状态机运行前校验失败：非终止状态必须完整配置 pass / conditional_pass / fail 三条转移路径。异常状态：${invalidStates.join('；')}`);
     }
+    this.assertStateTransitionContracts(config);
+  }
+
+  private assertStateTransitionContracts(config: StateMachineWorkflowConfig): void {
+    if (config.workflow.transitionContractVersion !== 1) return;
+    const invalidStates: string[] = [];
+    for (const state of config.workflow.states || []) {
+      if (state.isFinal) continue;
+      const contract = state.transitionContract;
+      if (!contract) {
+        invalidStates.push(`${state.name}（缺少 transitionContract）`);
+        continue;
+      }
+      const hasSelfLoop = state.transitions.some((transition) => transition.to === state.name);
+      if (hasSelfLoop && !contract.selfLoop) {
+        invalidStates.push(`${state.name}（存在自循环但未声明 selfLoop 契约）`);
+        continue;
+      }
+      if (!hasSelfLoop && contract.selfLoop) {
+        invalidStates.push(`${state.name}（没有自循环却声明 selfLoop 契约）`);
+        continue;
+      }
+      if (contract.selfLoop && state.maxSelfTransitions !== contract.selfLoop.maxAttempts) {
+        invalidStates.push(`${state.name}（maxSelfTransitions 必须等于 selfLoop.maxAttempts）`);
+      }
+    }
+    if (invalidStates.length > 0) {
+      throw new Error(`状态机流转契约校验失败：${invalidStates.join('；')}`);
+    }
   }
 
   private parseIssuesFromOutput(
@@ -10388,6 +10525,65 @@ try {
     }
 
     throw new Error('缺少严格最终裁决 JSON');
+  }
+
+  private getTransitionContractViolation(
+    state: StateMachineState,
+    result: StateExecutionResult,
+    nextState: string,
+  ): string | null {
+    const contract = state.transitionContract;
+    if (!contract) return null;
+    const report = result.transitionContract;
+    if (!report) {
+      return `状态「${state.name}」缺少 transition_contract 结构化回执。`;
+    }
+
+    const completionCriteria = new Set(contract.completionCriteria);
+    const unexpectedCompleted = report.completed.find((criterion) => !completionCriteria.has(criterion));
+    const unexpectedEvidence = report.evidence.find((item) => !completionCriteria.has(item.criterion));
+    if (unexpectedCompleted || unexpectedEvidence) {
+      return `状态「${state.name}」回执引用了未声明的完成条件「${unexpectedCompleted || unexpectedEvidence?.criterion}」。`;
+    }
+
+    if (result.verdict === 'pass') {
+      const missingCompletion = contract.completionCriteria.filter((criterion) => !report.completed.includes(criterion));
+      const evidenceCriteria = new Set(report.evidence.map((item) => item.criterion));
+      const missingEvidence = contract.completionCriteria.filter((criterion) => !evidenceCriteria.has(criterion));
+      if (missingCompletion.length > 0 || missingEvidence.length > 0 || report.remaining.length > 0) {
+        return `状态「${state.name}」声称 pass，但完成条件或证据未闭合：${[
+          missingCompletion.length > 0 ? `未完成 ${missingCompletion.join('、')}` : '',
+          missingEvidence.length > 0 ? `缺证据 ${missingEvidence.join('、')}` : '',
+          report.remaining.length > 0 ? `仍有 ${report.remaining.join('、')}` : '',
+        ].filter(Boolean).join('；')}。`;
+      }
+    }
+
+    if (nextState !== state.name) return null;
+    const selfLoop = contract.selfLoop;
+    if (!selfLoop) {
+      return `状态「${state.name}」未声明可重试的自循环契约，不能自动再次执行。`;
+    }
+    const invalidProgress = report.progress.find((item) => !selfLoop.progressCriteria.includes(item.criterion));
+    if (invalidProgress || report.progress.length === 0) {
+      return invalidProgress
+        ? `状态「${state.name}」progress 使用了未声明的条件「${invalidProgress.criterion}」。`
+        : `状态「${state.name}」本轮没有提供任何新增进展证据，不能自动自循环。`;
+    }
+    const fingerprint = report.progress
+      .map((item) => `${item.criterion}:${item.value}`)
+      .sort()
+      .join('|');
+    const priorFingerprints = this.stateHistory
+      .filter((record) => record.from === state.name && record.to === state.name)
+      .map((record) => (record.transitionContract?.progress || [])
+        .map((item) => `${item.criterion}:${item.value}`)
+        .sort()
+        .join('|'));
+    if (fingerprint && priorFingerprints.includes(fingerprint)) {
+      return `状态「${state.name}」本轮 progress 与前一轮完全相同，属于无进展重试。`;
+    }
+    return null;
   }
 
   private getTransitionReason(result: StateExecutionResult): string {

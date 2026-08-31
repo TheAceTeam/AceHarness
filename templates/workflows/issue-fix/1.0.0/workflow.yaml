@@ -2,6 +2,7 @@ workflow:
   name: 联合 PR 缺陷修复
   description: 协同定位关联 PR 的缺陷并完成修复和回归验证
   mode: state-machine
+  transitionContractVersion: 1
   maxTransitions: 30
   supervisor:
     enabled: true
@@ -15,6 +16,12 @@ workflow:
       description: 从问题单、仓库 Profile 和远端元数据固化任务标题、默认目标分支、基线与已知约束
       isInitial: true
       isFinal: false
+      maxSelfTransitions: 1
+      transitionContract:
+        completionCriteria: [issue-source-resolved, joint-pr-scope-resolved]
+        selfLoop:
+          maxAttempts: 1
+          progressCriteria: [issue-or-profile-evidence-added]
       position: { x: 60, y: 180 }
       steps:
         - { name: 固化问题上下文, agent: issue-reproducer, role: defender, task: 以本次问题单链接为入口，读取 Issue/PR、项目默认分支和仓库 Profile；推导任务标题与目标分支，记录远端基线、关联 PR 和已知约束。用户提供的目标分支仅作为覆盖项。 }
@@ -29,6 +36,12 @@ workflow:
       description: 建立稳定、最小且可观测的复现场景；按需发现复现契约和构建命令
       isInitial: false
       isFinal: false
+      maxSelfTransitions: 1
+      transitionContract:
+        completionCriteria: [reproduction-command-recorded, reproduction-result-recorded]
+        selfLoop:
+          maxAttempts: 1
+          progressCriteria: [reproduction-evidence-changed]
       position: { x: 330, y: 180 }
       steps:
         - { name: 构造最小复现, agent: issue-reproducer, role: defender, task: 根据已固化上下文和仓库现状构造最小复现；优先从项目脚本、Profile 和 Skill 发现命令，用户提供的复现契约仅作为覆盖。 }
@@ -42,6 +55,12 @@ workflow:
       description: 收敛根因、实施最小修复并完成代码评审
       isInitial: false
       isFinal: false
+      maxSelfTransitions: 1
+      transitionContract:
+        completionCriteria: [root-cause-linked-to-change, main-and-test-prs-updated]
+        selfLoop:
+          maxAttempts: 1
+          progressCriteria: [head-or-test-evidence-changed]
       position: { x: 600, y: 180 }
       steps:
         - { name: 实施修复, agent: developer, role: defender, task: 针对已确认根因实施聚焦修复。若上下文固化判定需要独立测试仓（如 cangjie_test）回归用例，必须同步创建或更新同一 Issue 的测试仓联合 PR，不能以独立 follow-up 替代；每个已存在 PR 都按仓库规约 amend 现有提交并 force-with-lease 推送。保留各仓变更、PR、决策和证据的可追溯记录。 }
@@ -56,6 +75,8 @@ workflow:
       description: 执行复现关闭、回归和边界验证；按需发现构建和验证命令
       isInitial: false
       isFinal: false
+      transitionContract:
+        completionCriteria: [reproduction-closed, regression-evidence-recorded]
       position: { x: 870, y: 180 }
       steps:
         - { name: 回归验证, agent: tester, role: defender, skills: [aceharness-gitcode-ci-delivery], task: 验证原问题关闭并执行相关回归测试；优先从仓库脚本、Profile 和 Skill 发现验证命令。对 cangjie_test 用例，先发现真实测试框架入口与 CANGJIE_HOME 产物，按主机和产物选择匹配 cfg；macOS 链接型用例先确认 SDKROOT。必须优先运行带 --verbose 的完整测试框架并记录实际命令、SCAN/ASSERT 结果；只有框架或交叉环境确实不可用时才能退化为定向 compile-only，并明确它不是完整端到端通过，不能把它作为联合 PR 已验证的结论。 }
@@ -69,6 +90,12 @@ workflow:
       description: 生成 PR 描述并解析平台、仓库和项目的 Gate 契约
       isInitial: false
       isFinal: false
+      maxSelfTransitions: 1
+      transitionContract:
+        completionCriteria: [gate-contract-recorded, required-prs-complete]
+        selfLoop:
+          maxAttempts: 1
+          progressCriteria: [gate-contract-or-required-pr-evidence-changed]
       position: { x: 1040, y: 180 }
       steps:
         - { name: 解析交付与门禁, agent: documentation-writer, role: defender, task: 汇总变更和验证证据，读取上下文固化产生的内部 jointPrContract，解析 PR/仓库/平台配置形成结构化 gateContract，必须列出 requiredPrs。若上下文判定需要独立测试仓回归用例，测试仓 PR 必须与主仓 PR 关联同一 Issue 并纳入 requiredPrs；不能标为 follow-up。缺少可解析的 Gate 契约或必需测试仓 PR 时必须给出 conditional_pass，说明待补充项，不能直接提交 PR。 }
@@ -82,6 +109,12 @@ workflow:
       description: 在 PR 已创建后持续完成门禁触发、门禁状态、检视意见、审批与合入状态的全部前置检查
       isInitial: false
       isFinal: false
+      maxSelfTransitions: 1
+      transitionContract:
+        completionCriteria: [all-required-prs-merged, required-gates-passed]
+        selfLoop:
+          maxAttempts: 1
+          progressCriteria: [ci-or-review-state-changed]
       position: { x: 1250, y: 180 }
       steps:
         - { name: 同步 PR 合入前事实, agent: documentation-writer, role: defender, task: 读取 gateContract.requiredPrs 中每个联合 PR 的 head、门禁标签、流水线状态、未解决行级检视意见、讨论解决状态、评审/审批/测试人要求、冲突与可合入状态。所有必需联合 PR 均通过并合入前，不得把任一主仓 PR 视为交付完成。输出逐仓结构化 evidenceDigest：headSha、checkedAt、gateStatus、pipelineId、未解决评论 ID、requiredPrs 完整性、外部依赖 owner 和下一动作；head 不一致或 checkedAt 早于当前 head 推送时必须标记为 stale，不能复用旧结论。 }

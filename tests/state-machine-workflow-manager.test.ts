@@ -2130,6 +2130,54 @@ describe('state machine live feedback', () => {
     expect(finalStepContext).toContain('"verdict": "pass | conditional_pass | fail"');
     expect(finalStepContext).toContain('当前步骤是状态 "需求拆解" 的最后一个步骤');
   });
+
+  test('requires a state contract receipt before a configured self-loop can run again', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const state: any = {
+      name: '门禁观察',
+      steps: [],
+      transitions: [
+        { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
+        { condition: { verdict: 'conditional_pass' }, to: '门禁观察', priority: 2 },
+        { condition: { verdict: 'fail' }, to: '修复', priority: 3 },
+      ],
+      maxSelfTransitions: 1,
+      transitionContract: {
+        completionCriteria: ['required-gates-passed'],
+        selfLoop: { maxAttempts: 1, progressCriteria: ['ci-state-changed'] },
+      },
+    };
+    const result: any = {
+      stateName: '门禁观察',
+      verdict: 'conditional_pass',
+      issues: [],
+      stepOutputs: [],
+      summary: '等待 CI',
+    };
+
+    expect((StateMachineWorkflowManager.prototype as any).getTransitionContractViolation.call(
+      manager, state, result, '门禁观察',
+    )).toContain('缺少 transition_contract');
+
+    result.transitionContract = {
+      completed: [],
+      remaining: ['required-gates-passed'],
+      evidence: [],
+      progress: [{ criterion: 'ci-state-changed', value: 'pipeline:42:running' }],
+    };
+    expect((StateMachineWorkflowManager.prototype as any).getTransitionContractViolation.call(
+      manager, state, result, '门禁观察',
+    )).toBeNull();
+
+    (manager as any).stateHistory = [{
+      from: '门禁观察', to: '门禁观察', reason: '条件性通过', issues: [], timestamp: '2026-08-31T00:00:00.000Z',
+      transitionContract: result.transitionContract,
+    }];
+    expect((StateMachineWorkflowManager.prototype as any).getTransitionContractViolation.call(
+      manager, state, result, '门禁观察',
+    )).toContain('完全相同');
+  });
 });
 
 describe('state machine resume', () => {
