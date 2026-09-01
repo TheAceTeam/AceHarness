@@ -771,6 +771,9 @@ export const stateTransitionContractSchema = z.object({
     maxAttempts: z.number().int().min(1).max(20),
     progressCriteria: z.array(z.string().min(1)).min(1),
     onExhausted: z.enum(['human_approval']).default('human_approval'),
+    // A retry budget is a control-plane boundary, not an invitation to guess
+    // another retry. The workflow may name where a person re-evaluates cause.
+    escalationTarget: z.string().min(1).optional(),
   }).optional(),
 });
 

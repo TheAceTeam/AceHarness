@@ -26,6 +26,10 @@ function formatKind(kind: HumanQuestion['kind']) {
 
 function buildDefaultAnswer(question: HumanQuestion): HumanQuestionAnswer {
   if (question.answerSchema.type === 'approval-transition') {
+    const isExhaustedRetry = question.source?.reason === 'self-transition-circuit-breaker';
+    const suggestedState = question.suggestedNextState || '';
+    const sourceState = question.previousState || question.source?.stateName || '';
+    if (isExhaustedRetry && suggestedState === sourceState) return { selectedState: '' };
     return { selectedState: question.suggestedNextState || question.availableStates?.[0] || '' };
   }
   if (question.answerSchema.type === 'single-choice') {
@@ -79,14 +83,17 @@ export default function HumanQuestionCard({
   const [answer, setAnswer] = useState<HumanQuestionAnswer>(() => defaultAnswer);
   const [approvalAcknowledged, setApprovalAcknowledged] = useState(false);
   const options: Array<{ label: string; value: string; description?: string }> = question.answerSchema.options || question.availableStates?.map((state) => ({ label: state, value: state })) || [];
+  const isExhaustedRetry = question.source?.reason === 'self-transition-circuit-breaker';
+  const sourceState = String(question.previousState || question.source?.stateName || '').trim();
+  const hasSafeRecommendation = Boolean(question.suggestedNextState && question.suggestedNextState !== sourceState);
   const orderedOptions = useMemo(() => {
-    if (question.answerSchema.type !== 'approval-transition' || !question.suggestedNextState) return options;
+    if (question.answerSchema.type !== 'approval-transition' || !question.suggestedNextState || (isExhaustedRetry && question.suggestedNextState === sourceState)) return options;
     return [...options].sort((left, right) => {
       const leftRecommended = left.value === question.suggestedNextState ? 0 : 1;
       const rightRecommended = right.value === question.suggestedNextState ? 0 : 1;
       return leftRecommended - rightRecommended;
     });
-  }, [options, question.answerSchema.type, question.suggestedNextState]);
+  }, [options, question.answerSchema.type, question.suggestedNextState, isExhaustedRetry, sourceState]);
   const ready = useMemo(() => (
     isAnswerReady(question, answer)
     && (question.answerSchema.type !== 'approval-transition' || approvalAcknowledged)
@@ -156,6 +163,22 @@ export default function HumanQuestionCard({
 
   const content = (
     <>
+      {isDecisionPresentation && isExhaustedRetry ? (
+        <TaskItem>
+          <div className="rounded-lg border border-amber-300 bg-amber-50/80 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/20">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div><div className="text-xs font-medium text-muted-foreground">当前所在</div><div className="mt-1 font-semibold">人工审查</div></div>
+              <div><div className="text-xs font-medium text-muted-foreground">刚完成的状态</div><div className="mt-1 font-semibold">{sourceState || '未知'}</div></div>
+              <div><div className="text-xs font-medium text-muted-foreground">为什么暂停</div><div className="mt-1 font-semibold">重试次数已用尽</div></div>
+            </div>
+            <div className="mt-3 border-t border-amber-200 pt-3 leading-6 dark:border-amber-800">
+              {hasSafeRecommendation
+                ? <>下一步请重新裁决并进入 <strong>「{question.suggestedNextState}」</strong>；不要再次选择「{sourceState}」。</>
+                : <>此旧记录没有保存可靠的升级路径。请不要再次选择「{sourceState}」；先核对完整审批依据中的阻塞项，再明确选择一个不同状态。</>}
+            </div>
+          </div>
+        </TaskItem>
+      ) : null}
       <TaskItem>
         {!isDecisionPresentation && workflowPath.length > 0 ? (
           <div className="mb-3 rounded-lg border bg-muted/25 px-3 py-2">

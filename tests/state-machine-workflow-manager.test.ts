@@ -5126,6 +5126,62 @@ describe('circuit breaker with supervisor review', () => {
     ]));
   });
 
+  test('recommends the declared failure route after a retry budget is exhausted', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async () => ({
+      success: true,
+      output: '```json\n{"verdict": "conditional_pass"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '修复与验证',
+            isInitial: true,
+            maxSelfTransitions: 1,
+            transitionContract: {
+              completionCriteria: ['repair-verified'],
+              selfLoop: { maxAttempts: 1, progressCriteria: ['new-evidence'] },
+            },
+            steps: [{ name: 'repair-step', agent: 'developer', task: 'Repair', role: 'judge' }],
+            transitions: [
+              { condition: { verdict: 'pass' }, to: 'PR提交', priority: 1 },
+              { condition: { verdict: 'conditional_pass' }, to: '修复与验证', priority: 2 },
+              { condition: { verdict: 'fail' }, to: '根因与方案', priority: 3 },
+            ],
+          },
+          { name: '根因与方案', isFinal: true, steps: [], transitions: [] },
+          { name: 'PR提交', isFinal: true, steps: [], transitions: [] },
+        ],
+      },
+    });
+    const approvals: any[] = [];
+    manager.on('human-approval-required', (payload: any) => approvals.push(payload));
+    (manager as any).getTransitionContractViolation = vi.fn().mockReturnValue(null);
+    (manager as any).createHumanQuestion = vi.fn().mockImplementation(async (input: any) => ({ ...input, id: 'circuit-question', status: 'unanswered' }));
+    (manager as any).waitForHumanApproval = vi.fn().mockImplementation(async () => {
+      (manager as any).pendingForceTransition = '根因与方案';
+      (manager as any).shouldStop = true;
+    });
+
+    await (manager as any).executeStateMachine(config, 'Repair issue');
+
+    expect(approvals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        suggestedNextState: '根因与方案',
+        humanQuestion: expect.objectContaining({
+          title: '重试上限已到，需要重新裁决',
+          suggestedNextState: '根因与方案',
+          source: expect.objectContaining({ escalationTarget: '根因与方案' }),
+          result: expect.objectContaining({
+            decision: expect.objectContaining({ action: 'needs_human', targetState: '根因与方案' }),
+          }),
+        }),
+      }),
+    ]));
+  });
+
   test('conditional-pass external dependency can pause before consuming self-transition retries', async () => {
     const engine = new MockEngine();
     engine.executeImpl = async () => ({
@@ -5541,7 +5597,7 @@ describe('escalation on unmatched verdict', () => {
     vi.clearAllMocks();
   });
 
-  test('conditional_pass without a matching route stops at the circuit breaker instead of falling through', async () => {
+  test('conditional_pass without a matching route pauses for a human instead of falling through', async () => {
     const engine = new MockEngine({
       success: true,
       output: '```json\n{"verdict": "conditional_pass"}\n```',
@@ -5549,7 +5605,9 @@ describe('escalation on unmatched verdict', () => {
     const manager = await createManagerForTest(engine);
 
     const escalationEvents: any[] = [];
+    const approvals: any[] = [];
     manager.on('escalation', (data: any) => escalationEvents.push(data));
+    manager.on('human-approval-required', (data: any) => approvals.push(data));
 
     const config = makeConfig();
     // Remove fail transition, keep only pass — conditional_pass has no matching rule
@@ -5558,15 +5616,24 @@ describe('escalation on unmatched verdict', () => {
     ];
     // Set low maxSelfTransitions to avoid long test
     config.workflow.states[0].maxSelfTransitions = 1;
+    (manager as any).createHumanQuestion = vi.fn().mockImplementation(async (input: any) => ({ ...input, id: 'q-circuit', status: 'unanswered' }));
+    (manager as any).waitForHumanApproval = vi.fn().mockImplementation(async () => {
+      (manager as any).pendingForceTransition = '设计';
+      (manager as any).shouldStop = true;
+    });
 
-    await expect((manager as any).executeStateMachine(config, 'Build a feature'))
-      .rejects.toThrow(/无匹配的其他转移路径/);
+    await expect((manager as any).executeStateMachine(config, 'Build a feature')).resolves.toBeUndefined();
 
     // conditional_pass still emits its escalation, but must not reuse the pass route.
     expect(escalationEvents.length).toBeGreaterThanOrEqual(1);
     expect(escalationEvents[0].reason).toContain('conditional_pass');
     expect(escalationEvents[0].reason).toContain('继续迭代');
-    expect((manager as any).currentState).toBe('设计');
+    expect(approvals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        suggestedNextState: '设计',
+        humanQuestion: expect.objectContaining({ title: '重试上限已到，需要重新裁决' }),
+      }),
+    ]));
   });
 
   test('no matching transition for non-conditional verdict triggers human fallback', async () => {

@@ -6513,19 +6513,51 @@ try {
             });
             continue;
           } else {
+            const escalationTarget = this.getCircuitBreakerEscalationTarget(stateConfig);
+            const latestReviewDecision = this.getLatestStructuredSupervisorDecision(fromState);
+            const previousDecision = result.decision;
+            result.decision = {
+              action: 'needs_human',
+              targetState: escalationTarget,
+              rationale: `状态「${fromState}」的可重试预算已耗尽，不能再自动或默认重跑。${escalationTarget ? `应由人工确认是否进入「${escalationTarget}」重新裁决。` : '当前工作流没有声明升级路径。'}`,
+              blockers: latestReviewDecision?.blockers?.length
+                ? latestReviewDecision.blockers
+                : (previousDecision?.blockers?.length ? previousDecision.blockers : [
+                  `状态「${fromState}」已连续 ${currentSelfCount} 次自循环，达到上限 ${maxSelfTransitions}。`,
+                ]),
+              evidence: latestReviewDecision?.evidence?.length
+                ? latestReviewDecision.evidence
+                : (previousDecision?.evidence?.length ? previousDecision.evidence : [
+                  `verdict: ${result.verdict}`,
+                  `retry budget: ${currentSelfCount}/${maxSelfTransitions}`,
+                ]),
+              instruction: escalationTarget
+                ? `不要再次选择「${fromState}」。先核对本轮阻塞项与失败证据，再进入「${escalationTarget}」重新裁决根因和可执行方案。`
+                : `不要再次选择「${fromState}」。当前没有安全的升级路径，请先补齐本轮阻塞项和状态机契约后再决定。`,
+              source: 'state-machine',
+            };
             await this.pauseForHumanApproval({
               config,
               fromStateName: fromState,
-              nextState: fromState,
+              nextState: escalationTarget || fromState,
               result,
-              title: '自循环无进展，需要人工处理',
+              title: '重试上限已到，需要重新裁决',
               message: [
                 `状态「${fromState}」已连续 ${currentSelfCount} 次自循环，达到上限 ${maxSelfTransitions}。`,
-                '没有与本次 verdict 匹配的其他自动路径；工作流已暂停，不会继续轮询或标记为失败。',
+                escalationTarget
+                  ? `不要再次选择「${fromState}」。建议进入「${escalationTarget}」重新裁决未闭合原因和下一步方案。`
+                  : '没有声明可安全升级的路径；工作流已暂停，不会继续轮询或标记为失败。',
                 result.summary ? `本轮结论：${result.summary}` : '',
-                '请确认外部依赖（例如门禁是否已启动、平台命令是否精确匹配），然后选择继续当前状态、回退修复，或转入归档。',
+                result.decision.instruction,
               ].filter(Boolean).join('\n\n'),
-              source: { type: 'human-approval', reason: 'self-transition-circuit-breaker', stateName: fromState },
+              source: {
+                type: 'human-approval',
+                reason: 'self-transition-circuit-breaker',
+                stateName: fromState,
+                escalationTarget: escalationTarget || undefined,
+                retryCount: currentSelfCount,
+                retryBudget: maxSelfTransitions,
+              },
             });
             continue;
           }
@@ -10423,6 +10455,43 @@ try {
       source,
     };
     return normalizedTarget || result.stateName;
+  }
+
+  private getCircuitBreakerEscalationTarget(state: StateMachineState): string | null {
+    const configuredTarget = String(state.transitionContract?.selfLoop?.escalationTarget || '').trim();
+    if (configuredTarget && configuredTarget !== state.name) return configuredTarget;
+
+    // Legacy templates do not name an escalation target. Their declared fail
+    // edge is still the least-surprising place to re-evaluate an unresolved
+    // cause; use it only as a human recommendation, never automatically.
+    const failureRoute = [...state.transitions]
+      .sort((left, right) => left.priority - right.priority)
+      .find((transition) => transition.to !== state.name && transition.condition?.verdict === 'fail');
+    return failureRoute?.to || null;
+  }
+
+  private getLatestStructuredSupervisorDecision(stateName: string): Partial<WorkflowTransitionDecision> | null {
+    for (const item of [...this.supervisorFlow].reverse()) {
+      if (item.type !== 'state-review' || item.stateName !== stateName || !item.question) continue;
+      const parsed = this.extractJsonObject(item.question);
+      const candidate = parsed?.decision && typeof parsed.decision === 'object' ? parsed.decision : parsed;
+      if (!candidate || typeof candidate !== 'object') continue;
+      const action = String((candidate as any).action || '').trim() as WorkflowTransitionDecisionAction;
+      if (!['advance', 'repair', 'retry', 'wait_external', 'needs_human', 'submit_and_monitor_ci'].includes(action)) continue;
+      return {
+        action,
+        targetState: String((candidate as any).targetState || (candidate as any).target_state || '').trim() || null,
+        rationale: String((candidate as any).rationale || '').trim(),
+        blockers: Array.isArray((candidate as any).blockers)
+          ? (candidate as any).blockers.map((entry: unknown) => String(entry).trim()).filter(Boolean).slice(0, 8)
+          : [],
+        evidence: Array.isArray((candidate as any).evidence)
+          ? (candidate as any).evidence.map((entry: unknown) => String(entry).trim()).filter(Boolean).slice(0, 8)
+          : [],
+        instruction: String((candidate as any).instruction || '').trim(),
+      };
+    }
+    return null;
   }
 
   private applySupervisorTransitionDecision(
