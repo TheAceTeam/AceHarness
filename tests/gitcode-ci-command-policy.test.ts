@@ -129,6 +129,24 @@ describe('GitCode CI command policy', () => {
     })).toMatchObject({ action: 'trigger_once' });
   });
 
+  test('routes a missing required test or delivery item to repair instead of retrying the old head', () => {
+    const snapshot = {
+      headSha: 'delivery-gap-head',
+      labels: ['build-test-failed', 'waiting-start-build'],
+      botRequestedRetry: true,
+      ciRunning: false,
+      retryAlreadyAttempted: false,
+      triggerAuthorized: true,
+      failureKind: 'test_or_delivery_gap' as const,
+      currentHeadFailureCount: 1,
+      repairedAndVerifiedForCurrentHead: false,
+    };
+
+    expect(decideGitCodeCiGateRecovery(snapshot)).toMatchObject({ action: 'repair_required' });
+    expect(decideGitCodeCiGateRecovery({ ...snapshot, repairedAndVerifiedForCurrentHead: true }))
+      .toMatchObject({ action: 'trigger_once' });
+  });
+
   test('does not retry an unknown or external dependency failure without human review', () => {
     const base = {
       headSha: 'blocked-head',

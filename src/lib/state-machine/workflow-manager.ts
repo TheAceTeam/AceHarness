@@ -9011,7 +9011,7 @@ try {
       '\n\n# 状态流转契约（强制）',
       `- completionCriteria 只能使用：${contract.completionCriteria.join('、')}。pass 时必须全部写入 transition_contract.completed，并为每项提供 evidence；否则不得给 pass。`,
       contract.selfLoop
-        ? `- 若本轮流向当前状态，必须至少填一项 transition_contract.progress，criterion 只能使用：${contract.selfLoop.progressCriteria.join('、')}；value 必须是相对上轮的新 SHA、评论 ID、测试结果或工件引用。预算最多 ${contract.selfLoop.maxAttempts} 次；没有新 progress 不得请求下一轮重跑。`
+        ? `- 若本轮流向当前状态，必须至少填一项 transition_contract.progress，criterion 只能使用：${contract.selfLoop.progressCriteria.join('、')}；value 必须是相对上轮的新 SHA、评论 ID、测试结果或工件引用。预算最多 ${contract.selfLoop.maxAttempts} 次；没有新 progress 不得请求下一轮重跑。${contract.selfLoop.escalationTarget ? `预算耗尽后会暂停人工确认，并建议进入「${contract.selfLoop.escalationTarget}」重新归因；不要再次建议当前状态。` : ''}`
         : '- 本状态没有自循环预算；请依据完成条件选择已声明的前进或回退路径。',
       '- 不得编造证据；无法提供回执时系统会直接转人工审查，而不是自动重试。',
     ].join('\n');
@@ -10634,6 +10634,13 @@ try {
       }
       if (contract.selfLoop && state.maxSelfTransitions !== contract.selfLoop.maxAttempts) {
         invalidStates.push(`${state.name}（maxSelfTransitions 必须等于 selfLoop.maxAttempts）`);
+      }
+      const escalationTarget = contract.selfLoop?.escalationTarget?.trim();
+      if (escalationTarget && !config.workflow.states.some((candidate) => candidate.name === escalationTarget)) {
+        invalidStates.push(`${state.name}（selfLoop.escalationTarget「${escalationTarget}」不存在）`);
+      }
+      if (escalationTarget === state.name) {
+        invalidStates.push(`${state.name}（selfLoop.escalationTarget 不能指向自身）`);
       }
     }
     if (invalidStates.length > 0) {

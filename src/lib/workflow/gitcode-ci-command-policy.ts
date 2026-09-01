@@ -56,6 +56,7 @@ export type GitCodeCiGateRecoverySnapshot = {
 export type GitCodeCiGateFailureKind =
   | 'suspected_transient'
   | 'code_defect'
+  | 'test_or_delivery_gap'
   | 'external_dependency'
   | 'unknown';
 
@@ -179,11 +180,13 @@ export function decideGitCodeCiGateRecovery(
     };
   }
 
-  if (failureKind === 'code_defect') {
+  if (failureKind === 'code_defect' || failureKind === 'test_or_delivery_gap') {
     if (!snapshot.repairedAndVerifiedForCurrentHead) {
       return {
         action: 'repair_required',
-        reason: '已归因为代码缺陷：必须先在本地修复并验证，amend 到现有 PR 提交、force-with-lease 推送并回读新的 PR head；不得对旧 head 直接重跑门禁。',
+        reason: failureKind === 'code_defect'
+          ? '已归因为代码缺陷：必须先在本地修复并验证，amend 到现有 PR 提交、force-with-lease 推送并回读新的 PR head；不得对旧 head 直接重跑门禁。'
+          : '已归因为测试或联合交付缺口：必须先补齐必需测试/交付、验证并推送新的 PR head；不得把缺失交付当作随机问题重跑旧 head。',
       };
     }
     if (snapshot.retryAlreadyAttempted) {
@@ -197,7 +200,9 @@ export function decideGitCodeCiGateRecovery(
     }
     return {
       action: 'trigger_once',
-      reason: '已归因为代码缺陷且已在修复后的新 head 完成本地验证；可对该新 head 精确触发一次门禁。',
+      reason: failureKind === 'code_defect'
+        ? '已归因为代码缺陷且已在修复后的新 head 完成本地验证；可对该新 head 精确触发一次门禁。'
+        : '已补齐测试或联合交付缺口且已在新 head 完成本地验证；可对该新 head 精确触发一次门禁。',
     };
   }
 
@@ -408,9 +413,9 @@ export function buildGitCodeCiCommandPolicyPrompt(skillPath: string): string {
     '发送后必须读取/查询 PR 门禁，确认本次提交对应的 CI 已实际创建；未创建时如实报告，不要把评论已发送当作门禁已触发。',
     '',
     '## GitCode 门禁恢复流转（强制）',
-    '先读取当前 PR 的 head、标签、机器人评论、失败任务日志，以及本 head 的已失败次数。输出结构化归因：`failureKind` 只能是 `suspected_transient`、`code_defect`、`external_dependency` 或 `unknown`，并列出证据；仅凭“失败”或等待时长不能归为随机问题。',
+    '先读取当前 PR 的 head、标签、机器人评论、失败任务日志，以及本 head 的已失败次数。输出结构化归因：`failureKind` 只能是 `suspected_transient`、`code_defect`、`test_or_delivery_gap`、`external_dependency` 或 `unknown`，并列出证据；每个失败任务、平台和联合 PR 必须单独归因，不能仅凭“失败”或等待时长归为随机问题。',
     '对 `suspected_transient`：仅在 `waiting-start-build`、没有 `CI-running`、当前步骤有触发授权、同一 head 此类失败尚未重试过一次时，才可重试一次。先在 `.aceharness-evidence/gitcode-ci-retry.json` 记录 head、失败证据、时间、`failureKind`、`failureCountForHead: 1` 和 `retryCount: 1`。第二次在同一 head 复现则输出 `human_review_required`，不得再发评论。',
-    '对 `code_defect`：绝不能对旧 head 直接重跑。先回到修复与验证：本地修复、运行相关验证、用 `git commit --amend` 更新已有 PR 提交、以 `git push --force-with-lease` 推送，并回读新 PR head。只有“已验证的新 head”且有触发授权时，才可精确触发一次。',
+    '对 `code_defect` 或 `test_or_delivery_gap`：绝不能对旧 head 直接重跑。先回到修复与验证：本地修复或补齐必需测试/联合交付、运行相关验证、用 `git commit --amend` 更新已有 PR 提交、以 `git push --force-with-lease` 推送，并回读新 PR head。只有“已验证的新 head”且有触发授权时，才可精确触发一次。',
     '对 `external_dependency` 或 `unknown`：输出 `human_review_required`，附失败日志和所需人工判断；不得猜测性触发。',
     '协议拼写恢复是例外：如果当前 head 的最新评论是 `start build\\n` 等“trim 后正确、原文不正确”的变体，可按同样的一次上限发送无尾随字符的精确 `start build`。',
     '触发时序也必须记录：`botReadyEventId`、`botReadyAt`、`triggerCommentId`、`triggerAt` 和是否已出现 `CI-running`。若精确 `start build` 早于机器人针对当前 head 的“请回复 start build”事件，说明该评论未被消费；在有触发授权且尚未在该 bot-ready 事件后发送过时，可自动补发一次。该补发不计入随机失败重试；补发后仍无 `CI-running` 才输出 `external_blocked`，不得循环发送。',

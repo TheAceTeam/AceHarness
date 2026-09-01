@@ -138,6 +138,7 @@ describe('workflow templates', () => {
         '最小化用例',
         '描述与门禁',
         'PR 合入前检查与跟踪',
+        '失败归因与处置',
       ]));
       expect(body.template.workflow.workflow.transitionContractVersion).toBe(1);
       const gateState = body.template.workflow.workflow.states
@@ -149,6 +150,7 @@ describe('workflow templates', () => {
           selfLoop: {
             maxAttempts: 1,
             progressCriteria: ['ci-or-review-state-changed'],
+            escalationTarget: '失败归因与处置',
           },
         },
       });
@@ -169,6 +171,8 @@ describe('workflow templates', () => {
       expect(prTrackingSteps.find((step: any) => step.name === '归因门禁失败与受控恢复')?.task)
         .toContain('suspected_transient');
       expect(prTrackingSteps.find((step: any) => step.name === '归因门禁失败与受控恢复')?.task)
+        .toContain('test_or_delivery_gap');
+      expect(prTrackingSteps.find((step: any) => step.name === '归因门禁失败与受控恢复')?.task)
         .toContain('botReadyEventId');
       expect(prTrackingSteps.find((step: any) => step.name === '同步 PR 合入前事实')?.task)
         .toContain('evidenceDigest');
@@ -176,6 +180,24 @@ describe('workflow templates', () => {
         .toContain('不得代为 Resolve 他人线程');
       expect(prTrackingSteps.find((step: any) => step.name === '同步 PR 合入前事实')?.task)
         .toContain('gateContract.requiredPrs');
+      const dispositionState = body.template.workflow.workflow.states
+        .find((state: any) => state.name === '失败归因与处置');
+      expect(dispositionState).toMatchObject({
+        transitionContract: {
+          completionCriteria: expect.arrayContaining([
+            'failure-evidence-snapshot-recorded',
+            'failure-classification-recorded',
+            'bounded-disposition-recorded',
+          ]),
+        },
+      });
+      expect(dispositionState.transitions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ to: 'PR 合入前检查与跟踪', condition: { verdict: 'pass' } }),
+        expect.objectContaining({ to: '根因与修复', condition: { verdict: 'conditional_pass' } }),
+        expect.objectContaining({ to: '最小化用例', condition: { verdict: 'fail' } }),
+      ]));
+      expect(dispositionState.steps.find((step: any) => step.name === '裁决失败处置路径')?.task)
+        .toContain('禁止用 conditional_pass 留在本状态');
     });
   });
 

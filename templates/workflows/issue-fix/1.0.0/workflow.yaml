@@ -22,6 +22,7 @@ workflow:
         selfLoop:
           maxAttempts: 1
           progressCriteria: [issue-or-profile-evidence-added]
+          escalationTarget: 最小化用例
       position: { x: 60, y: 180 }
       steps:
         - { name: 固化问题上下文, agent: issue-reproducer, role: defender, task: 以本次问题单链接为入口，读取 Issue/PR、项目默认分支和仓库 Profile；推导任务标题与目标分支，记录远端基线、关联 PR 和已知约束。用户提供的目标分支仅作为覆盖项。 }
@@ -42,6 +43,7 @@ workflow:
         selfLoop:
           maxAttempts: 1
           progressCriteria: [reproduction-evidence-changed]
+          escalationTarget: 上下文固化
       position: { x: 330, y: 180 }
       steps:
         - { name: 构造最小复现, agent: issue-reproducer, role: defender, task: 根据已固化上下文和仓库现状构造最小复现；优先从项目脚本、Profile 和 Skill 发现命令，用户提供的复现契约仅作为覆盖。 }
@@ -61,6 +63,7 @@ workflow:
         selfLoop:
           maxAttempts: 1
           progressCriteria: [head-or-test-evidence-changed]
+          escalationTarget: 失败归因与处置
       position: { x: 600, y: 180 }
       steps:
         - { name: 实施修复, agent: developer, role: defender, task: 针对已确认根因实施聚焦修复。若上下文固化判定需要独立测试仓（如 cangjie_test）回归用例，必须同步创建或更新同一 Issue 的测试仓联合 PR，不能以独立 follow-up 替代；每个已存在 PR 都按仓库规约 amend 现有提交并 force-with-lease 推送。保留各仓变更、PR、决策和证据的可追溯记录。 }
@@ -69,7 +72,7 @@ workflow:
         - { name: 修复裁决, agent: code-judge, role: judge, task: 综合实现与审查结果，给出 verdict }
       transitions:
         - { to: 验证, condition: { verdict: pass }, priority: 10, label: 修复通过 }
-        - { to: 根因与修复, condition: { verdict: conditional_pass }, priority: 20, label: 继续修正 }
+        - { to: 根因与修复, condition: { verdict: conditional_pass }, priority: 20, label: 仅一次的新增证据修正 }
         - { to: 最小化用例, condition: { verdict: fail }, priority: 30, label: 根因复核 }
     - name: 验证
       description: 执行复现关闭、回归和边界验证；按需发现构建和验证命令
@@ -84,7 +87,7 @@ workflow:
         - { name: 验证裁决, agent: code-judge, role: judge, task: 基于测试证据和残余风险给出 verdict }
       transitions:
         - { to: 描述与门禁, condition: { verdict: pass }, priority: 10, label: 验证通过 }
-        - { to: 根因与修复, condition: { verdict: conditional_pass }, priority: 20, label: 返回修复 }
+        - { to: 失败归因与处置, condition: { verdict: conditional_pass }, priority: 20, label: 验证未闭合，先归因处置 }
         - { to: 最小化用例, condition: { verdict: fail }, priority: 30, label: 重新定位 }
     - name: 描述与门禁
       description: 生成 PR 描述并解析平台、仓库和项目的 Gate 契约
@@ -96,6 +99,7 @@ workflow:
         selfLoop:
           maxAttempts: 1
           progressCriteria: [gate-contract-or-required-pr-evidence-changed]
+          escalationTarget: 失败归因与处置
       position: { x: 1040, y: 180 }
       steps:
         - { name: 解析交付与门禁, agent: documentation-writer, role: defender, task: 汇总变更和验证证据，读取上下文固化产生的内部 jointPrContract，解析 PR/仓库/平台配置形成结构化 gateContract，必须列出 requiredPrs。若上下文判定需要独立测试仓回归用例，测试仓 PR 必须与主仓 PR 关联同一 Issue 并纳入 requiredPrs；不能标为 follow-up。缺少可解析的 Gate 契约或必需测试仓 PR 时必须给出 conditional_pass，说明待补充项，不能直接提交 PR。 }
@@ -115,17 +119,34 @@ workflow:
         selfLoop:
           maxAttempts: 1
           progressCriteria: [ci-or-review-state-changed]
+          escalationTarget: 失败归因与处置
       position: { x: 1250, y: 180 }
       steps:
         - { name: 同步 PR 合入前事实, agent: documentation-writer, role: defender, task: 读取 gateContract.requiredPrs 中每个联合 PR 的 head、门禁标签、流水线状态、未解决行级检视意见、讨论解决状态、评审/审批/测试人要求、冲突与可合入状态。所有必需联合 PR 均通过并合入前，不得把任一主仓 PR 视为交付完成。输出逐仓结构化 evidenceDigest：headSha、checkedAt、gateStatus、pipelineId、未解决评论 ID、requiredPrs 完整性、外部依赖 owner 和下一动作；head 不一致或 checkedAt 早于当前 head 推送时必须标记为 stale，不能复用旧结论。 }
-        - { name: 归因门禁失败与受控恢复, agent: gate-monitor, role: defender, task: 若门禁失败或 waiting-start-build，必须基于当前 head、失败日志、机器人评论和同一 head 的失败次数输出 failureKind（仅可为 suspected_transient、code_defect、external_dependency、unknown）及证据。本步骤明确授权：仅在全部受控条件满足时，自动发送字节级精确的 start build。记录 botReadyEventId、botReadyAt、triggerCommentId、triggerAt、headSha、failureCountForHead、retryCount 和 CI-running/pipelineId 回执。suspected_transient 仅可在当前 head 受控重试一次；第二次同类失败必须升级人工，不得再触发。code_defect 必须先回流修复：本地修复、验证、amend、force-with-lease 推送并确认新 head 后，才能对新 head 精确触发一次 start build。若精确评论早于机器人针对当前 head 的就绪事件，视为未消费；在有授权且该 bot-ready 事件后尚未触发过时，自动补发一次，此补发不计随机失败重试。external_dependency 或 unknown 必须生成人工判断项并写明 owner/关联仓，不能盲目重试。每次触发都确认 CI 已创建；两分钟无 CI-running 才 external_blocked。 }
+        - { name: 归因门禁失败与受控恢复, agent: gate-monitor, role: defender, task: 若门禁失败或 waiting-start-build，必须基于当前 head、失败日志、机器人评论和同一 head 的失败次数输出 failureKind（仅可为 suspected_transient、code_defect、test_or_delivery_gap、external_dependency、unknown）及证据。每个失败任务、平台和联合 PR 单独分类；不能由一个 PR 的其他成功任务推断失败是随机，也不能将缺少测试仓交付误报为主仓代码缺陷。本步骤明确授权：仅在全部受控条件满足时，自动发送字节级精确的 start build。记录 botReadyEventId、botReadyAt、triggerCommentId、triggerAt、headSha、failureCountForHead、retryCount 和 CI-running/pipelineId 回执。suspected_transient 仅可在当前 head 受控重试一次；第二次同类失败必须升级人工，不得再触发。code_defect 或 test_or_delivery_gap 必须先回流补齐：本地修复或补齐联合交付、验证、amend、force-with-lease 推送并确认新 head 后，才能对新 head 精确触发一次 start build。若精确评论早于机器人针对当前 head 的就绪事件，视为未消费；在有授权且该 bot-ready 事件后尚未触发过时，自动补发一次，此补发不计随机失败重试。external_dependency 或 unknown 必须生成人工判断项并写明 owner/关联仓，不能盲目重试。每次触发都确认 CI 已创建；两分钟无 CI-running 才 external_blocked。 }
         - { name: 处理评审线程闭环, agent: documentation-writer, role: defender, task: 对已在当前 PR head 修复的每条行级意见，在原讨论线程逐条回复：修复提交、文件行号、验证证据，并请求提出人或有 Resolve 权限的评审人 Resolve；不得代为 Resolve 他人线程。无法在本 PR 完成的测试/跨仓意见必须创建或关联可追踪的后续项，并明确请求评审人确认该处理方式。 }
-        - { name: 挑战 PR 合入就绪度, agent: code-hunter, role: attacker, task: 审核是否存在未解决检视意见、门禁失败、缺失评审/审批、冲突或未推送变更。对门禁失败复核归因是否有当前 head 的日志证据：代码缺陷必须回流修复；疑似随机问题仅允许一次重试；第二次复现、外部依赖或原因未知必须要求人工介入。出现任何可修复阻塞项时给出 fail 并列出评论 ID、文件行号或门禁证据；仅等待外部评审或合入时给出 conditional_pass。 }
-        - { name: 裁决 PR 合入前状态, agent: code-judge, role: judge, task: 只有当前 PR 已合入且必需门禁均通过时给出 pass。已确定的代码缺陷或可修复检视意见必须给出 fail 回到根因与修复；CI 运行中、等待评审/审批或等待有权限者合入时给出 conditional_pass 留在本状态。疑似随机失败仅在一次受控重试已启动后可 conditional_pass；同一 head 第二次失败、外部依赖或原因未知必须输出 human_review_required 并停止自动重试。 }
+        - { name: 挑战 PR 合入就绪度, agent: code-hunter, role: attacker, task: 审核是否存在未解决检视意见、门禁失败、缺失评审/审批、冲突或未推送变更。对门禁失败复核归因是否有当前 head、失败任务和平台维度的日志证据；不得把一次失败自动定为代码缺陷或随机问题。出现已证实的可修复阻塞、二次同类失败、外部依赖、原因未知或联合交付缺口时给出 fail 并列出评论 ID、文件行号或门禁证据，交由「失败归因与处置」决定修复、受控重试或人工裁决；仅 CI 正在运行、等待评审/审批或等待有权限者合入时给出 conditional_pass。 }
+        - { name: 裁决 PR 合入前状态, agent: code-judge, role: judge, task: 只有当前 PR 已合入且必需门禁均通过时给出 pass。CI 运行中、等待评审/审批或等待有权限者合入时给出 conditional_pass 留在本状态。任何尚未闭合的门禁失败、可修复检视意见、联合交付缺口或冲突证据都给出 fail 并进入「失败归因与处置」；该状态会依据证据决定是否需要修复，不能在这里直接把所有失败回流代码修复。 }
       transitions:
         - { to: 完成, condition: { verdict: pass }, priority: 10, label: PR 已合入且交付闭合 }
         - { to: PR 合入前检查与跟踪, condition: { verdict: conditional_pass }, priority: 20, label: 等待 PR 外部条件 }
-        - { to: 根因与修复, condition: { verdict: fail }, priority: 30, label: 回流修复 PR 阻塞项 }
+        - { to: 失败归因与处置, condition: { verdict: fail }, priority: 30, label: 失败先证据化归因 }
+    - name: 失败归因与处置
+      description: 对代码、测试交付、评审、平台依赖与疑似偶发失败进行证据化分类，形成唯一且有预算的后续动作
+      isInitial: false
+      isFinal: false
+      transitionContract:
+        completionCriteria: [failure-evidence-snapshot-recorded, failure-classification-recorded, bounded-disposition-recorded]
+      position: { x: 1080, y: 420 }
+      steps:
+        - { name: 固化失败证据快照, agent: documentation-writer, role: defender, task: 对每个受影响的联合 PR、当前 head、失败任务和平台分别记录 evidenceDigest：headSha、checkedAt、失败日志/评论/检查 ID、最近成功或基线对照、此后代码与测试交付变化、失败次数、关联仓和 owner。head 不同、日志缺失或跨任务混用时标记为 unknown；不得用历史摘要替代当前 head 的原始证据。 }
+        - { name: 分类并制定受控处置, agent: gate-monitor, role: defender, task: 以证据快照为唯一输入，为每项失败输出 failureDisposition：kind 只能为 code_defect、test_or_delivery_gap、suspected_transient、external_dependency、review_decision_required、unknown；必须包含 affectedPrs、headSha、evidenceRefs、baselineComparison、owner、nextAction、retryBudget。code_defect 或 test_or_delivery_gap 仅列入待修复范围，不可重试旧 head；suspected_transient 仅当同一 head 首次、失败签名可比较且平台允许时可授权一次重试；external_dependency 或 review_decision_required 仅记录等待对象与截止后的升级动作；unknown 不得猜测重试或修改代码。 }
+        - { name: 挑战失败归因, agent: code-hunter, role: attacker, task: 独立检查每个 failureDisposition 是否混淆了失败任务、平台、head、联合 PR 或时间线。缺少原始日志、基线对照、owner 或重试预算时否决归因；发现代码/测试改动后才出现的新失败时要求进入修复，不得标记随机；同一 head 第二次同类失败时否决随机重试。 }
+        - { name: 裁决失败处置路径, agent: code-judge, role: judge, task: 按统一映射给出 verdict：仅外部等待、评审人 Resolve、或已启动且未消费的一次受控重试为 pass，回到「PR 合入前检查与跟踪」监控；已证实的代码缺陷或测试/联合交付缺口为 conditional_pass，进入「根因与修复」并只处理 failureDisposition 列出的范围；证据冲突、未知或不可稳定定位为 fail，回到「最小化用例」重建可复核事实。禁止用 conditional_pass 留在本状态，也禁止把低优先级文档或 Resolve 等待包装成代码修复。 }
+      transitions:
+        - { to: PR 合入前检查与跟踪, condition: { verdict: pass }, priority: 10, label: 外部条件或受控重试已明确 }
+        - { to: 根因与修复, condition: { verdict: conditional_pass }, priority: 20, label: 仅回流已证实的修复范围 }
+        - { to: 最小化用例, condition: { verdict: fail }, priority: 30, label: 证据不足，重新建立可复现事实 }
     - name: 完成
       description: 记录根因、修复和验证结论
       isInitial: false
