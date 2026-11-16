@@ -42,6 +42,7 @@ import ConfirmDialog from "@/components/ConfirmDialog"
 import NotebookSaveDialog, { type NotebookDirectoryOption } from "@/components/notebook/NotebookSaveDialog"
 import { queryKeys } from "@/client/query/query-keys"
 import { syncWorkspaceTreeToDb, useWorkspaceTreeRows } from "@/client/db/collections"
+import styles from "./FileTreeSidebar.module.css"
 
 export interface ClipboardItem {
   path: string
@@ -2672,7 +2673,7 @@ export function FileTreeSidebar({
   const isCreatingAtRoot = creatingIn?.dir === ""
   return (
     <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh: refreshLoadedTree, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, refreshToken, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload, autoRefreshIntervalMs, setAutoRefreshIntervalMs, sortMode }}>
-      <div className="flex flex-col h-full bg-card">
+      <div className={cn("flex h-full min-w-0 flex-col bg-card", isNotebook && styles.notebookTree)}>
         <input
           ref={fileInputRef}
           type="file"
@@ -2694,34 +2695,36 @@ export function FileTreeSidebar({
             event.currentTarget.value = ""
           }}
         />
-        <div className={cn("flex items-center gap-2 border-b shrink-0", isNotebook ? "px-4 py-3" : "px-3 py-2")}>
+        <div className={cn("flex shrink-0 items-center border-b", isNotebook ? styles.notebookToolbar : "gap-2 px-3 py-2")}>
           {!isNotebook ? (
             <>
               <img src={`${FILE_TYPE_ICON_DIR}/folder.svg`} alt="" aria-hidden className="h-4 w-4 shrink-0" />
               <span className="truncate flex-1 text-sm font-semibold">{workspaceName}</span>
             </>
-          ) : (
-            <div className="flex-1" />
-          )}
+          ) : null}
           {isNotebook && onNotebookViewChange ? (
-            <div className="inline-flex items-center rounded-md border bg-background p-0.5">
+            <div className="inline-flex shrink-0 items-center rounded-md border bg-background p-0.5" role="group" aria-label="Notebook 视图">
               <button
                 type="button"
-                className={cn("inline-flex h-7 items-center gap-1 rounded px-2 text-xs transition-colors", notebookView === "list" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60")}
+                className={cn(styles.notebookButton, "rounded transition-colors", notebookView === "list" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60")}
                 onClick={() => onNotebookViewChange("list")}
+                title="列表"
+                aria-label="列表"
                 aria-pressed={notebookView === "list"}
               >
-                <List className="h-3.5 w-3.5" />
-                列表
+                <List className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className={styles.notebookButtonLabel}>列表</span>
               </button>
               <button
                 type="button"
-                className={cn("inline-flex h-7 items-center gap-1 rounded px-2 text-xs transition-colors", notebookView === "desktop" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60")}
+                className={cn(styles.notebookButton, "rounded transition-colors", notebookView === "desktop" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60")}
                 onClick={() => onNotebookViewChange("desktop")}
+                title="桌面"
+                aria-label="桌面"
                 aria-pressed={notebookView === "desktop"}
               >
-                <LayoutGrid className="h-3.5 w-3.5" />
-                桌面
+                <LayoutGrid className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className={styles.notebookButtonLabel}>桌面</span>
               </button>
             </div>
           ) : null}
@@ -2787,7 +2790,7 @@ export function FileTreeSidebar({
             <>
               <button
                 type="button"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border hover:bg-accent disabled:opacity-50"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border hover:bg-accent disabled:opacity-50"
                 onClick={handleExpandTopLevel}
                 title={shouldExpandTopLevel ? "展开一层" : "收起一层"}
                 aria-label={shouldExpandTopLevel ? "展开一层" : "收起一层"}
@@ -2797,21 +2800,25 @@ export function FileTreeSidebar({
               </button>
               <button
                 type="button"
-                className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent disabled:opacity-50"
+                className={cn(styles.notebookButton, "rounded-md border hover:bg-accent disabled:opacity-50")}
                 onClick={() => { void handleQuickCreateNotebook("folder") }}
                 title="创建文件夹"
+                aria-label="创建文件夹"
                 disabled={!notebookCanWrite}
               >
-                <FolderPlus className="mr-1 h-3.5 w-3.5" />文件夹
+                <FolderPlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className={styles.notebookButtonLabel}>文件夹</span>
               </button>
               <button
                 type="button"
-                className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent disabled:opacity-50"
+                className={cn(styles.notebookButton, "rounded-md border hover:bg-accent disabled:opacity-50")}
                 onClick={() => { void handleQuickCreateNotebook("file") }}
                 title="创建文档"
+                aria-label="创建文档"
                 disabled={!notebookCanWrite}
               >
-                <FilePlus className="mr-1 h-3.5 w-3.5" />文档
+                <FilePlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className={styles.notebookButtonLabel}>文档</span>
               </button>
             </>
           )}

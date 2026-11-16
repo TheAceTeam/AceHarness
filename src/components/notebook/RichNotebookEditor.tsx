@@ -16,10 +16,10 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics';
 import { TrailingNode } from '@tiptap/extensions/trailing-node';
 import { UndoRedo } from '@tiptap/extensions/undo-redo';
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Extension, Node, mergeAttributes } from '@tiptap/core';
 import { DragHandle } from '@tiptap/extension-drag-handle-react';
 import type { Node as PmNode } from '@tiptap/pm/model';
-import { TextSelection } from '@tiptap/pm/state';
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { Markdown } from '@tiptap/markdown';
 import ReactFlow, { Background, Controls, MiniMap, MarkerType, Position, type Edge as RFEdge, type Node as RFNode } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -61,6 +61,25 @@ import { NotebookAiSuggestionBlock, NotebookCodeBlock, NotebookMathBlock, Notebo
 import { NotebookAskAISheet } from './NotebookAskAISheet';
 import { NotebookOutput, buildNotebookOutput, createNotebookCellId, createNotebookOutputId, displayNotebookCellId, normalizeNotebookLanguage } from '@/lib/notebook/markdown';
 import { uploadImageFile } from '@/lib/core/client-image-upload';
+
+const notebookSourceUpdate = new PluginKey('notebookSourceUpdate');
+
+const NotebookReadOnly = Extension.create({
+  name: 'notebookReadOnly',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      filterTransaction: (transaction) => transaction.getMeta(notebookSourceUpdate) === true
+        || (!transaction.docChanged && !transaction.storedMarksSet),
+    })];
+  },
+});
+
+function setNotebookSourceContent(editor: Editor, markdown: string) {
+  editor.chain()
+    .setMeta(notebookSourceUpdate, true)
+    .setContent(markdown, { contentType: 'markdown', emitUpdate: false })
+    .run();
+}
 
 const lowlight = createLowlight();
 
@@ -621,7 +640,8 @@ export function RichNotebookEditor({
   onDependencyGraphOpenChange = () => {},
 }: RichNotebookEditorProps) {
   const { toast } = useToast();
-  const collaborationEnabled = scope === 'global' || Boolean(shareToken);
+  const readOnly = permission === 'read';
+  const collaborationEnabled = !readOnly && (scope === 'global' || Boolean(shareToken));
   const changeSourceRef = useRef<'internal' | 'external'>('external');
   const lastKnownContentRef = useRef(content);
   const derivedRefreshFrameRef = useRef<number | null>(null);
@@ -633,14 +653,18 @@ export function RichNotebookEditor({
     name: '',
     color: pickCaretColor('current-user'),
   });
-  const [collabSession, setCollabSession] = useState<{ doc: Y.Doc; provider: WebsocketProvider } | null>(null);
+  const [collabSession, setCollabSession] = useState<{
+    doc: Y.Doc;
+    provider: WebsocketProvider;
+    markReady: () => void;
+  } | null>(null);
+  const syncPending = collaborationEnabled && !collabDisabled && !collabReady;
   const [collabUsers, setCollabUsers] = useState<Array<{ clientId: number; name: string; color: string }>>([]);
   const [cellRunState, setCellRunState] = useState<Record<string, 'idle' | 'running' | 'success' | 'failed'>>({});
   const [outputBackedSuccess, setOutputBackedSuccess] = useState<Record<string, boolean>>({});
   const cellRunStateRef = useRef<Record<string, 'idle' | 'running' | 'success' | 'failed'>>({});
   const outputBackedSuccessRef = useRef<Record<string, boolean>>({});
   const editorRef = useRef<Editor | null>(null);
-  const contentReadyFallbackRef = useRef<number | null>(null);
   // dependencyGraphOpen is controlled by parent menu
   const [dependencyNodes, setDependencyNodes] = useState<RFNode[]>([]);
   const [dependencyEdges, setDependencyEdges] = useState<RFEdge[]>([]);
@@ -717,11 +741,16 @@ export function RichNotebookEditor({
       setAuthToken(token);
       return;
     }
+    let disposed = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5_000);
     fetch('/api/auth/me', {
       headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
     })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
+        if (disposed) return;
         if (!data?.user?.id || !data?.user?.username) {
           setAuthToken(null);
           setCollabReady(true);
@@ -737,12 +766,19 @@ export function RichNotebookEditor({
         setAuthToken(token);
       })
       .catch(() => {
+        if (disposed) return;
         cachedCollabIdentity = null;
         setAuthToken(null);
         setCollabReady(true);
         setCollabDisabled(true);
         toast('error', '获取当前用户失败，协作已禁用');
-      });
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, [collabDisabled, collaborationEnabled, toast]);
 
   useEffect(() => {
@@ -753,16 +789,13 @@ export function RichNotebookEditor({
       setCollabUsers([]);
       return;
     }
-    if (!authToken) {
-      setCollabReady(true);
-      setCollabSession(null);
-      return;
-    }
+    if (!authToken) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const baseUrl = `${protocol}//${window.location.host}${withBasePath('/api/notebook/collab')}`;
     const doc = new Y.Doc();
     const provider = new WebsocketProvider(baseUrl, 'room', doc, {
+      connect: false,
       params: {
         scope,
         file: filePath,
@@ -771,47 +804,50 @@ export function RichNotebookEditor({
       },
     });
 
-    setCollabReady(false);
-    setCollabSession({ doc, provider });
+    let pending = true;
+    let connected = false;
+    let timeout: number;
+    const settle = () => {
+      if (!pending) return false;
+      pending = false;
+      window.clearTimeout(timeout);
+      return true;
+    };
     const fallbackToLocal = (reason: string) => {
-      provider.destroy();
-      doc.destroy();
-      setCollabSession((prev) => (prev?.provider === provider ? null : prev));
+      if (!settle()) return;
+      setCollabSession(null);
       setCollabUsers([]);
       setCollabReady(true);
       setCollabDisabled(true);
       toast('warning', reason);
     };
-    const connectTimeout = window.setTimeout(() => {
-      fallbackToLocal('协作连接超时，已切换为本地编辑模式');
-    }, 5_000);
-    const clearConnectFallback = () => {
-      window.clearTimeout(connectTimeout);
-    };
-    const startContentReadyFallback = () => {
-      if (contentReadyFallbackRef.current != null) return;
-      contentReadyFallbackRef.current = window.setTimeout(() => {
-        contentReadyFallbackRef.current = null;
+    const handleStatus = (event: { status: string }) => {
+      if (!pending || connected || event.status !== 'connected') return;
+      connected = true;
+      window.clearTimeout(timeout);
+      timeout = window.setTimeout(() => {
         fallbackToLocal('协作内容同步超时，已切换为本地编辑模式');
       }, 8_000);
     };
-    const handleStatus = (event: { status: string }) => {
-      if (event.status !== 'connected') return;
-      clearConnectFallback();
-      startContentReadyFallback();
-    };
+    timeout = window.setTimeout(() => {
+      fallbackToLocal('协作连接超时，已切换为本地编辑模式');
+    }, 5_000);
+    setCollabReady(false);
+    setCollabUsers([]);
+    setCollabSession({
+      doc,
+      provider,
+      markReady: () => {
+        if (settle()) setCollabReady(true);
+      },
+    });
     provider.on('status', handleStatus);
+    provider.connect();
     return () => {
-      window.clearTimeout(connectTimeout);
-      if (contentReadyFallbackRef.current != null) {
-        window.clearTimeout(contentReadyFallbackRef.current);
-        contentReadyFallbackRef.current = null;
-      }
+      settle();
       provider.off('status', handleStatus);
       provider.destroy();
       doc.destroy();
-      setCollabSession((prev) => (prev?.provider === provider ? null : prev));
-      setCollabUsers([]);
     };
   }, [authToken, collabDisabled, collaborationEnabled, filePath, scope, shareToken, toast]);
 
@@ -1113,6 +1149,7 @@ export function RichNotebookEditor({
       }),
       InlineMath.configure({
         onClick: (node, pos) => {
+          if (readOnly) return;
           const current = String((node as any)?.attrs?.latex || '');
           setInlineMathEditLatex(current);
           setInlineMathEditPos(pos);
@@ -1169,6 +1206,7 @@ export function RichNotebookEditor({
       }),
       TrailingNode.configure({ node: 'paragraph', notAfter: ['paragraph'] }),
     ];
+    if (readOnly) base.push(NotebookReadOnly);
     if (collabSession) {
       base.push(
         Collaboration.configure({
@@ -1226,6 +1264,7 @@ export function RichNotebookEditor({
       defaultLanguage: 'text',
       HTMLAttributes: { class: 'hljs' },
       onRunCell: async (payload: { pos: number; cellId: string; language: string; code: string; dependsOn?: string[] }, currentEditor?: Editor) => {
+        if (readOnly) return { output: null, success: false };
         const dependsOn = payload.dependsOn || [];
         const unmetDependencies = dependsOn.filter((id) => resolveCellStatus(id, currentEditor) !== 'success');
         if (unmetDependencies.length > 0) {
@@ -1281,7 +1320,7 @@ export function RichNotebookEditor({
       }),
     );
     return base;
-  }, [cellRunState, collabSession, collabUser.color, collabUser.id, collabUser.name, filePath, onRunCell, outputBackedSuccess, replaceSuggestionNodeWithText, resolveCellStatus, setCellRunStateWithRef, toast]);
+  }, [cellRunState, collabSession, collabUser.color, collabUser.id, collabUser.name, filePath, onRunCell, outputBackedSuccess, readOnly, replaceSuggestionNodeWithText, resolveCellStatus, setCellRunStateWithRef, toast]);
 
   const canWriteEditorContent = useCallback((targetEditor: {
     isDestroyed?: boolean;
@@ -1297,7 +1336,7 @@ export function RichNotebookEditor({
   const editor = useEditor({
     immediatelyRender: false,
     extensions: notebookExtensions,
-    editable: permission !== 'read' && (!collabSession || collabReady),
+    editable: !readOnly && !syncPending,
     content: initialEditorContent,
     contentType: 'markdown',
     editorProps: {
@@ -1306,6 +1345,7 @@ export function RichNotebookEditor({
       },
       handleDOMEvents: {
         mousedown: (_view, event) => {
+          if (readOnly) return false;
           const target = event.target as HTMLElement | null;
           const imageEl = target?.closest?.('img');
           if (imageEl) {
@@ -1323,6 +1363,7 @@ export function RichNotebookEditor({
           return false;
         },
         click: (_view, event) => {
+          if (readOnly) return false;
           const target = event.target as HTMLElement | null;
           const imageEl = target?.closest?.('img');
           if (imageEl) {
@@ -1340,6 +1381,7 @@ export function RichNotebookEditor({
         },
       },
       handlePaste: (_view, event) => {
+        if (readOnly) return false;
         const clipboard = event.clipboardData;
         if (!clipboard) return false;
         const files = Array.from(clipboard.files || []).filter((file) => file.type?.startsWith('image/'));
@@ -1366,7 +1408,7 @@ export function RichNotebookEditor({
         return false;
       },
       handleDrop: (view, event, _slice, moved) => {
-        if (moved) return false;
+        if (readOnly || moved) return false;
         const dt = event.dataTransfer;
         if (!dt) return false;
         const files = Array.from(dt.files || []).filter((file) => file.type?.startsWith('image/'));
@@ -1382,7 +1424,7 @@ export function RichNotebookEditor({
     onCreate: ({ editor }) => {
       editorRef.current = editor;
       if (!collabSession && content && !editor.isDestroyed && typeof editor.commands?.setContent === 'function') {
-        editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
+        setNotebookSourceContent(editor, content);
       }
       if (!collaborationEnabled) {
         setCollabReady(true);
@@ -1391,6 +1433,7 @@ export function RichNotebookEditor({
       refreshDerivedNotebookState(editor);
     },
     onUpdate: ({ editor }) => {
+      if (readOnly) return;
       changeSourceRef.current = 'internal';
       const orphanRanges = findOrphanOutputRanges(editor);
       if (orphanRanges.length > 0) {
@@ -1410,7 +1453,11 @@ export function RichNotebookEditor({
       lastKnownContentRef.current = markdown;
       onChange(markdown);
     },
-  }, [collabSession?.provider, collabSession?.doc, collabReady, collaborationEnabled, permission, filePath, scope, shareToken, collabUser.name, collabUser.color]);
+  }, [collabSession?.provider, collabSession?.doc, collaborationEnabled, permission, filePath, scope, shareToken, collabUser.name, collabUser.color]);
+
+  useEffect(() => {
+    editor?.setEditable(!readOnly && !syncPending, false);
+  }, [editor, readOnly, syncPending]);
 
   useEffect(() => {
     editorRef.current = editor || null;
@@ -1501,13 +1548,13 @@ export function RichNotebookEditor({
       return;
     }
     if (content === currentEditor.getMarkdown()) return;
-    currentEditor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
+    setNotebookSourceContent(currentEditor, content);
     lastKnownContentRef.current = content;
     refreshDerivedNotebookState(currentEditor);
   }, [canWriteEditorContent, collabDisabled, collabSession, content, editor, refreshDerivedNotebookState]);
 
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || readOnly) return;
     const { tr, doc } = editor.state;
     let changed = false;
     const seenCellIds = new Set<string>();
@@ -1534,22 +1581,18 @@ export function RichNotebookEditor({
         }
       });
     }
-  }, [editor]);
+  }, [editor, readOnly]);
 
   useEffect(() => {
     if (!editor || !collabSession) return;
     const { doc, provider } = collabSession;
     const config = doc.getMap('config');
     const markReady = () => {
-      if (contentReadyFallbackRef.current != null) {
-        window.clearTimeout(contentReadyFallbackRef.current);
-        contentReadyFallbackRef.current = null;
-      }
-      setCollabReady(true);
+      collabSession.markReady();
       scheduleDerivedNotebookStateRefresh(editor);
     };
     const trySeedInitialContent = () => {
-      if (editor.isDestroyed) return;
+      if (!provider.synced || editor.isDestroyed) return;
       if (config.get('initialContentLoaded') === true) {
         markReady();
         return;
@@ -1593,6 +1636,7 @@ export function RichNotebookEditor({
     };
     provider.on('sync', onProviderSync);
     provider.awareness.on('change', onAwarenessChange);
+    trySeedInitialContent();
     return () => {
       provider.off('sync', onProviderSync);
       provider.awareness.off('change', onAwarenessChange);
@@ -3090,8 +3134,6 @@ export function RichNotebookEditor({
     return <div className="flex items-center justify-center h-full text-muted-foreground">加载 Notebook 编辑器...</div>;
   }
 
-  const syncPending = collaborationEnabled && !collabDisabled && !collabReady;
-
   if (syncPending) {
     return (
       <>
@@ -3347,7 +3389,7 @@ export function RichNotebookEditor({
     <div className="notebook-rich-editor h-full min-w-0 flex [&_.tiptap_p]:my-3 [&_.tiptap_code]:font-mono">
       <div className="relative min-w-0 flex h-full flex-1 flex-col">
       <div className="sticky top-0 z-20 flex min-h-10 items-center gap-1 border-b bg-background/95 px-3 py-2 backdrop-blur">
-          <div className={`flex items-center gap-1 ${toolbarDisabled ? 'pointer-events-none opacity-45' : ''}`}>
+          {!readOnly && <div className={`flex items-center gap-1 ${toolbarDisabled ? 'pointer-events-none opacity-45' : ''}`}>
           {!isCodeContext && !isImageContext && (
             <>
               <button type="button" className={`rounded px-2 py-1 text-xs hover:bg-accent ${editor.isActive('bold') ? 'bg-accent' : ''}`} onClick={() => editor.chain().focus().toggleBold().run()} title="加粗">
@@ -3414,12 +3456,12 @@ export function RichNotebookEditor({
           )}
           {!isCodeContext && <TableSizeMenuButton dense onInsert={insertTableWithSize} />}
           {renderAiActionMenu(true)}
-          </div>
+          </div>}
           <div className="ml-auto flex items-center gap-1">
             {uploadingImages > 0 && (
               <span className="mr-2 text-[11px] text-muted-foreground">图片上传中...</span>
             )}
-            {aiSuggestionCount > 0 && (
+            {!readOnly && aiSuggestionCount > 0 && (
               <>
                 <button
                   type="button"
@@ -3470,11 +3512,12 @@ export function RichNotebookEditor({
             </button>
           </div>
       </div>
-      <BubbleMenu
+      {!readOnly && <BubbleMenu
         editor={editor}
         pluginKey="notebookBubbleMenu"
         updateDelay={100}
         shouldShow={({ editor: e }) => {
+          if (!e.isEditable) return false;
           const inOutput = e.isActive('notebookOutput')
             || e.state.selection.$from.parent.type.name === 'notebookOutput'
             || e.state.selection.$to.parent.type.name === 'notebookOutput';
@@ -3537,8 +3580,8 @@ export function RichNotebookEditor({
           )}
           {renderAiActionMenu(true, true)}
         </div>
-      </BubbleMenu>
-      <DragHandle editor={editor} onNodeChange={handleNodeChange}>
+      </BubbleMenu>}
+      {!readOnly && <DragHandle editor={editor} onNodeChange={handleNodeChange}>
         <DropdownMenu
           open={menuOpen}
           onOpenChange={(next) => {
@@ -3744,7 +3787,7 @@ export function RichNotebookEditor({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </DragHandle>
+      </DragHandle>}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
           <ResizablePanel panelRef={editorPanelRef} defaultSize={dependencyGraphOpen ? '70%' : '100%'} minSize="25%">
@@ -3803,7 +3846,7 @@ export function RichNotebookEditor({
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
-      {slashMenuOpen && slashPos && (
+      {!readOnly && slashMenuOpen && slashPos && (
         <div
           ref={slashMenuRef}
           className="fixed z-[85] w-[320px] max-h-[320px] overflow-auto rounded-md border bg-popover p-1 shadow-xl"

@@ -1,0 +1,41 @@
+.notebookTree {
+  container: notebook-tree / inline-size;
+}
+
+.notebookToolbar {
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.375rem;
+}
+
+.notebookButton {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.notebookButtonLabel {
+  display: none;
+}
+
+@container notebook-tree (min-width: 20rem) {
+  .notebookToolbar {
+    gap: 0.375rem;
+    padding: 0.5rem 0.625rem;
+  }
+
+  .notebookButton {
+    width: auto;
+    padding-inline: 0.375rem;
+  }
+
+  .notebookButtonLabel {
+    display: inline;
+  }
+}

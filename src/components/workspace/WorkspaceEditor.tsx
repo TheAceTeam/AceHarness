@@ -606,6 +606,11 @@ export function WorkspaceEditor({
 
   const layoutId = mode === "notebook" ? `workspace-editor-${notebookBrowserView}` : "workspace-editor"
   const isNotebookDesktop = mode === "notebook" && notebookBrowserView === "desktop"
+  const treePanelSizes = isNotebookDesktop
+    ? { defaultSize: "50%", minSize: "28%", maxSize: "60%" }
+    : mode === "notebook"
+      ? { defaultSize: 184, minSize: 128, maxSize: "45%" }
+      : { defaultSize: "20%", minSize: "12%", maxSize: "40%" }
   const workspaceRootTreeParams = React.useMemo(
     () => ({ depth: 0, offset: 0, limit: WORKSPACE_TREE_PAGE_SIZE, sort: defaultTreeSortMode }),
     [defaultTreeSortMode],
@@ -1178,9 +1183,7 @@ export function WorkspaceEditor({
         <ResizablePanel
           id="workspace-tree"
           panelRef={treePanelRef}
-          defaultSize={isNotebookDesktop ? "50%" : "20%"}
-          minSize={isNotebookDesktop ? "28%" : "12%"}
-          maxSize={isNotebookDesktop ? "60%" : "40%"}
+          {...treePanelSizes}
           collapsible
           collapsedSize="0%"
           onResize={() => setTreeCollapsed(treePanelRef.current?.isCollapsed() ?? false)}
@@ -1221,7 +1224,7 @@ export function WorkspaceEditor({
             : <ChevronLeft className="h-2.5 w-2.5" />
           }
         />
-        <ResizablePanel id="workspace-editor-panel" defaultSize={isNotebookDesktop ? "50%" : "80%"} minSize="40%">
+        <ResizablePanel id="workspace-editor-panel" defaultSize={isNotebookDesktop ? "50%" : mode === "notebook" ? undefined : "80%"} minSize="40%">
           <EditorPanel
             filePath={selectedFile}
             workspacePath={workspacePath}
