@@ -1,9 +1,10 @@
-import { MatrixSkill, MarketplaceSkill } from '@/types/marketplace';
-import { API_ENDPOINTS } from '@/constants/marketplace';
+import type { MatrixSkill, MarketplaceSkill } from '@/types/marketplace';
 
 export function adaptMatrixSkill(skill: MatrixSkill): MarketplaceSkill {
   return {
+    source: 'matrix',
     id: skill.id,
+    installName: skill.enName || skill.name,
     name: skill.name,
     enName: skill.enName,
     description: skill.description?.substring(0, 200) || '',
@@ -13,7 +14,6 @@ export function adaptMatrixSkill(skill: MatrixSkill): MarketplaceSkill {
     categoryIds: skill.categoryList?.map(c => c.id) || [],
     author: skill.author || skill.owner.account,
     version: '1.0.0',
-    downloadUrl: API_ENDPOINTS.INSTALL(skill.name),
     stars: skill.favor,
     downloads: skill.download,
     updatedAt: skill.updateTime,

@@ -113,6 +113,7 @@ import { Route as ApiMemoryV2GovernanceRouteImport } from './routes/api.memory-v
 import { Route as ApiMemoryV2DiagnosticsRouteImport } from './routes/api.memory-v2.diagnostics'
 import { Route as ApiMcpTestRouteImport } from './routes/api.mcp.test'
 import { Route as ApiMarketplaceSearchRouteImport } from './routes/api.marketplace.search'
+import { Route as ApiMarketplaceSourcesRouteImport } from './routes/api.marketplace.sources'
 import { Route as ApiMarketplaceInstallRouteImport } from './routes/api.marketplace.install'
 import { Route as ApiMarketplaceCategoriesRouteImport } from './routes/api.marketplace.categories'
 import { Route as ApiEngineModelsRouteImport } from './routes/api.engine.models'
@@ -760,6 +761,11 @@ const ApiMcpTestRoute = ApiMcpTestRouteImport.update({
 const ApiMarketplaceSearchRoute = ApiMarketplaceSearchRouteImport.update({
   id: '/api/marketplace/search',
   path: '/api/marketplace/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMarketplaceSourcesRoute = ApiMarketplaceSourcesRouteImport.update({
+  id: '/api/marketplace/sources',
+  path: '/api/marketplace/sources',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMarketplaceInstallRoute = ApiMarketplaceInstallRouteImport.update({
@@ -1472,6 +1478,7 @@ export interface FileRoutesByFullPath {
   '/api/marketplace/categories': typeof ApiMarketplaceCategoriesRoute
   '/api/marketplace/install': typeof ApiMarketplaceInstallRoute
   '/api/marketplace/search': typeof ApiMarketplaceSearchRoute
+  '/api/marketplace/sources': typeof ApiMarketplaceSourcesRoute
   '/api/mcp/test': typeof ApiMcpTestRoute
   '/api/memory-v2/diagnostics': typeof ApiMemoryV2DiagnosticsRoute
   '/api/memory-v2/governance': typeof ApiMemoryV2GovernanceRouteWithChildren
@@ -1695,6 +1702,7 @@ export interface FileRoutesByTo {
   '/api/marketplace/categories': typeof ApiMarketplaceCategoriesRoute
   '/api/marketplace/install': typeof ApiMarketplaceInstallRoute
   '/api/marketplace/search': typeof ApiMarketplaceSearchRoute
+  '/api/marketplace/sources': typeof ApiMarketplaceSourcesRoute
   '/api/mcp/test': typeof ApiMcpTestRoute
   '/api/memory-v2/diagnostics': typeof ApiMemoryV2DiagnosticsRoute
   '/api/memory-v2/governance': typeof ApiMemoryV2GovernanceRouteWithChildren
@@ -1919,6 +1927,7 @@ export interface FileRoutesById {
   '/api/marketplace/categories': typeof ApiMarketplaceCategoriesRoute
   '/api/marketplace/install': typeof ApiMarketplaceInstallRoute
   '/api/marketplace/search': typeof ApiMarketplaceSearchRoute
+  '/api/marketplace/sources': typeof ApiMarketplaceSourcesRoute
   '/api/mcp/test': typeof ApiMcpTestRoute
   '/api/memory-v2/diagnostics': typeof ApiMemoryV2DiagnosticsRoute
   '/api/memory-v2/governance': typeof ApiMemoryV2GovernanceRouteWithChildren
@@ -2144,6 +2153,7 @@ export interface FileRouteTypes {
     | '/api/marketplace/categories'
     | '/api/marketplace/install'
     | '/api/marketplace/search'
+    | '/api/marketplace/sources'
     | '/api/mcp/test'
     | '/api/memory-v2/diagnostics'
     | '/api/memory-v2/governance'
@@ -2367,6 +2377,7 @@ export interface FileRouteTypes {
     | '/api/marketplace/categories'
     | '/api/marketplace/install'
     | '/api/marketplace/search'
+    | '/api/marketplace/sources'
     | '/api/mcp/test'
     | '/api/memory-v2/diagnostics'
     | '/api/memory-v2/governance'
@@ -2590,6 +2601,7 @@ export interface FileRouteTypes {
     | '/api/marketplace/categories'
     | '/api/marketplace/install'
     | '/api/marketplace/search'
+    | '/api/marketplace/sources'
     | '/api/mcp/test'
     | '/api/memory-v2/diagnostics'
     | '/api/memory-v2/governance'
@@ -2791,6 +2803,7 @@ export interface RootRouteChildren {
   ApiMarketplaceCategoriesRoute: typeof ApiMarketplaceCategoriesRoute
   ApiMarketplaceInstallRoute: typeof ApiMarketplaceInstallRoute
   ApiMarketplaceSearchRoute: typeof ApiMarketplaceSearchRoute
+  ApiMarketplaceSourcesRoute: typeof ApiMarketplaceSourcesRoute
   ApiMemoryV2DiagnosticsRoute: typeof ApiMemoryV2DiagnosticsRoute
   ApiMemoryV2GovernanceRoute: typeof ApiMemoryV2GovernanceRouteWithChildren
   ApiNotebookFileRoute: typeof ApiNotebookFileRoute
@@ -3592,6 +3605,13 @@ declare module '@tanstack/react-router' {
       path: '/api/marketplace/search'
       fullPath: '/api/marketplace/search'
       preLoaderRoute: typeof ApiMarketplaceSearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/marketplace/sources': {
+      id: '/api/marketplace/sources'
+      path: '/api/marketplace/sources'
+      fullPath: '/api/marketplace/sources'
+      preLoaderRoute: typeof ApiMarketplaceSourcesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/marketplace/install': {
@@ -5116,6 +5136,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMarketplaceCategoriesRoute: ApiMarketplaceCategoriesRoute,
   ApiMarketplaceInstallRoute: ApiMarketplaceInstallRoute,
   ApiMarketplaceSearchRoute: ApiMarketplaceSearchRoute,
+  ApiMarketplaceSourcesRoute: ApiMarketplaceSourcesRoute,
   ApiMemoryV2DiagnosticsRoute: ApiMemoryV2DiagnosticsRoute,
   ApiMemoryV2GovernanceRoute: ApiMemoryV2GovernanceRouteWithChildren,
   ApiNotebookFileRoute: ApiNotebookFileRoute,

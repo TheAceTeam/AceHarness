@@ -1,10 +1,14 @@
 import { MatrixSearchRequest, MatrixSearchResponse } from '@/types/marketplace';
-import { API_ENDPOINTS } from '@/constants/marketplace';
+import { MATRIX_API_BASE } from '@/constants/marketplace';
 
 export class MarketplaceClient {
+  constructor(private readonly baseUrl = MATRIX_API_BASE) {}
+
   async searchSkills(params: MatrixSearchRequest): Promise<MatrixSearchResponse> {
-    const response = await fetch(API_ENDPOINTS.SEARCH, {
+    const response = await fetch(this.baseUrl + '/skills', {
       method: 'POST',
+      signal: AbortSignal.timeout(12_000),
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
       },
@@ -25,7 +29,10 @@ export class MarketplaceClient {
   }
 
   async downloadSkill(skillName: string): Promise<ArrayBuffer> {
-    const response = await fetch(API_ENDPOINTS.INSTALL(skillName));
+    const response = await fetch(this.baseUrl + '/' + encodeURIComponent(skillName) + '/install?format=zip', {
+      signal: AbortSignal.timeout(30_000),
+      redirect: this.baseUrl === MATRIX_API_BASE ? 'follow' : 'error',
+    });
 
     if (!response.ok) {
       throw new Error(`Failed to download skill: ${response.statusText}`);

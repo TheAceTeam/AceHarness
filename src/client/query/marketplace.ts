@@ -1,28 +1,46 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { MarketplaceSkill } from '@/types/marketplace';
+import type { InstallRequest, MarketplaceCategory, MarketplaceSourceConfig, MarketplaceSource, SearchResponse } from '@/types/marketplace';
 import { apiRequest } from './api-client';
 import { queryKeys } from './query-keys';
 
 export type MarketplaceSearchParams = {
+  source: MarketplaceSource;
   keyword: string;
   category: string;
   pageNum: number;
   pageSize: number;
 };
 
-export type MarketplaceSearchResponse = {
-  success: boolean;
-  data?: {
-    skills: MarketplaceSkill[];
-    total: number;
-  };
-  error?: string;
-};
+type MarketplaceSourcesResponse = { sources: MarketplaceSourceConfig[]; canManage: boolean };
 
-export function useMarketplaceCategoriesQuery() {
+export function useMarketplaceSourcesQuery(enabled: boolean) {
   return useQuery({
-    queryKey: queryKeys.marketplace.categories(),
-    queryFn: () => apiRequest<{ success: boolean; data?: { categories: any[] }; error?: string }>('/api/marketplace/categories'),
+    queryKey: queryKeys.marketplace.sources(),
+    queryFn: ({ signal }) => apiRequest<MarketplaceSourcesResponse>('/api/marketplace/sources', { signal }),
+    enabled,
+  });
+}
+
+export function useMarketplaceSourceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string } | Pick<MarketplaceSourceConfig, 'label' | 'url' | 'protocol'>) => 'id' in input
+      ? apiRequest<{ source?: MarketplaceSourceConfig }>('/api/marketplace/sources?' + new URLSearchParams({ id: input.id }), { method: 'DELETE' })
+      : apiRequest<{ source?: MarketplaceSourceConfig }>('/api/marketplace/sources', { method: 'POST', body: input }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.marketplace.sources() });
+      await queryClient.invalidateQueries({ queryKey: ['marketplace', 'search'], refetchType: 'none' });
+    },
+  });
+}
+
+export function useMarketplaceCategoriesQuery(source: MarketplaceSource, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.marketplace.categories(source),
+    queryFn: () => apiRequest<{ success: boolean; data?: { categories: MarketplaceCategory[] }; error?: string }>(
+      '/api/marketplace/categories?' + new URLSearchParams({ source }),
+    ),
+    enabled: options.enabled ?? true,
     staleTime: 10 * 60_000,
   });
 }
@@ -30,40 +48,21 @@ export function useMarketplaceCategoriesQuery() {
 export function useMarketplaceSearchQuery(params: MarketplaceSearchParams, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.marketplace.search(params),
-    queryFn: () => apiRequest<MarketplaceSearchResponse>('/api/marketplace/search', {
+    queryFn: ({ signal }) => apiRequest<SearchResponse>('/api/marketplace/search', {
       method: 'POST',
       body: params,
+      signal,
     }),
     enabled: options.enabled ?? true,
-    placeholderData: (previous) => previous,
     staleTime: 30_000,
   });
 }
 
-export function useInstallMarketplaceSkillMutation(params: MarketplaceSearchParams) {
-  const queryClient = useQueryClient();
+export function useInstallMarketplaceSkillMutation() {
   return useMutation({
-    mutationFn: (skillName: string) => apiRequest<{ success: boolean; error?: string }>('/api/marketplace/install', {
+    mutationFn: (body: InstallRequest) => apiRequest<{ success: boolean; error?: string }>('/api/marketplace/install', {
       method: 'POST',
-      body: { skillName },
+      body,
     }),
-    onSuccess: (data, skillName) => {
-      if (!data.success) return;
-      queryClient.setQueryData<MarketplaceSearchResponse>(
-        queryKeys.marketplace.search(params),
-        (current) => {
-          if (!current?.data?.skills) return current;
-          return {
-            ...current,
-            data: {
-              ...current.data,
-              skills: current.data.skills.map((skill) => (
-                skill.name === skillName ? { ...skill, installed: true } : skill
-              )),
-            },
-          };
-        },
-      );
-    },
   });
 }

@@ -55,7 +55,28 @@ export interface MatrixSkill {
   };
 }
 
+export type MarketplaceSource = string;
+export type MarketplaceProtocol = 'matrix' | 'skillhub' | 'catalog';
+
+export interface MarketplaceSourceConfig {
+  id: MarketplaceSource;
+  label: string;
+  protocol: MarketplaceProtocol;
+  url: string;
+  builtin: boolean;
+}
+
+export interface MarketplaceCategory {
+  id: string;
+  enName: string;
+  cnName: string;
+  count?: number;
+}
+
 export interface MarketplaceSkill {
+  source: MarketplaceSource;
+  installName: string;
+  namespace?: string;
   id: string;
   name: string;
   enName?: string;
@@ -66,7 +87,6 @@ export interface MarketplaceSkill {
   categoryIds?: string[];
   author: string;
   version: string;
-  downloadUrl: string;
   stars: number;
   downloads: number;
   updatedAt: string;
@@ -86,6 +106,8 @@ export interface MatrixSearchRequest {
   pageNum: number;
   pageSize: number;
   keyword?: string;
+  categoryId?: string;
+  statusList?: string[];
 }
 
 export interface MatrixSearchResponse {
@@ -98,6 +120,7 @@ export interface MatrixSearchResponse {
 }
 
 export interface SearchRequest {
+  source?: MarketplaceSource;
   keyword?: string;
   category?: string;
   organization?: string;
@@ -110,6 +133,7 @@ export interface SearchResponse {
   data: {
     skills: MarketplaceSkill[];
     total: number;
+    totalPages: number;
     pageNum: number;
     pageSize: number;
   };
@@ -118,6 +142,9 @@ export interface SearchResponse {
 
 export interface InstallRequest {
   skillName: string;
+  namespace?: string;
+  source?: MarketplaceSource;
+  version?: string;
 }
 
 export interface InstallResponse {
