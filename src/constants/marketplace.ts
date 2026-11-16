@@ -1,9 +1,24 @@
-export const MATRIX_API_BASE = 'https://matrix.openharmony.cn/api/registry/skill';
+import type { MarketplaceSource, MarketplaceSourceConfig } from '@/types/marketplace';
 
-export const API_ENDPOINTS = {
-  SEARCH: `${MATRIX_API_BASE}/skills`,
-  INSTALL: (name: string) => `${MATRIX_API_BASE}/${name}/install?format=zip`,
-} as const;
+export const MATRIX_API_BASE = 'https://matrix.openharmony.cn/api/registry/skill';
+export const SKILLHUB_API_BASE = 'https://api.skillhub.cn';
+
+export const BUILTIN_MARKETPLACE_SOURCES: MarketplaceSourceConfig[] = [
+  { id: 'matrix', label: '鸿蒙 Matrix', protocol: 'matrix', url: MATRIX_API_BASE, builtin: true },
+  { id: 'skillhub', label: '腾讯 SkillHub', protocol: 'skillhub', url: SKILLHUB_API_BASE, builtin: true },
+];
+
+const EXTERNAL_MARKETPLACE_PREFIX = 'marketplace--';
+
+export function isExternalMarketplaceFolder(name: string): boolean {
+  return name.startsWith(EXTERNAL_MARKETPLACE_PREFIX);
+}
+
+export function getMarketplaceInstallFolder(source: MarketplaceSource, installName: string, namespace?: string): string {
+  if (source === 'matrix') return installName;
+  const localName = namespace ? namespace.length + '-' + namespace + '-' + installName : installName;
+  return EXTERNAL_MARKETPLACE_PREFIX + source + '--' + localName;
+}
 
 export const DEFAULT_PAGE_SIZE = 15;
 export const MAX_PAGE_SIZE = 100;

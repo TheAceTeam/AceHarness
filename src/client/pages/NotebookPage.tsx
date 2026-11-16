@@ -13,7 +13,6 @@ import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHe
 import type { NotebookSearch } from '@/routes/notebook';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
-import { PageToolbar } from '@/components/ui/page-toolbar';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
   DataCard,
@@ -23,6 +22,7 @@ import {
   DataCardTitle,
 } from '@/components/ui/data-card';
 import { EmptyState } from '@/components/ui/empty-state';
+import styles from './NotebookPage.module.css';
 
 interface UserInfo {
   id: string;
@@ -192,7 +192,7 @@ export function NotebookPageContent({
   }
 
   return (
-    <div className={`${embedded ? 'h-full' : 'h-dvh'} flex flex-col overflow-hidden bg-background text-foreground`}>
+    <div className={`${embedded ? 'h-full' : 'h-dvh'} flex min-w-0 flex-col overflow-hidden bg-background text-foreground ${styles.page}`}>
       {!embedded ? (
         <PageHeader
           className="shrink-0 bg-card"
@@ -215,36 +215,29 @@ export function NotebookPageContent({
           )}
         />
       ) : null}
-      <PageToolbar
-        className="shrink-0 bg-card"
-        search={(
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40 text-muted-foreground">
-              <FolderTree className="h-4 w-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">文件树 / 编辑器 / 元数据 inspector</div>
-              <div className="truncate text-xs text-muted-foreground">
-                文件操作在左侧文件树，保存、历史、分享与 AI 操作保留在编辑器工具栏。
-              </div>
+      <div className={styles.toolbar}>
+        <div className={styles.overview}>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40 text-muted-foreground">
+            <FolderTree className="h-4 w-4" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">文件树 / 编辑器 / 元数据 inspector</div>
+            <div className="truncate text-xs text-muted-foreground">
+              文件操作在左侧文件树，保存、历史、分享与 AI 操作保留在编辑器工具栏。
             </div>
           </div>
-        )}
-        filters={(
-          <div className="flex items-center gap-2">
-            <ScopeButton targetScope="personal" currentScope={scope} href={buildNotebookScopeHref(effectiveSearchParams, 'personal')} />
-            <ScopeButton targetScope="global" currentScope={scope} href={buildNotebookScopeHref(effectiveSearchParams, 'global')} />
-          </div>
-        )}
-        actions={(
-          <StatusPill tone={canWrite ? 'success' : 'warning'}>
-            {canWrite ? '可编辑' : '只读分享'}
-          </StatusPill>
-        )}
-      />
-      <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[minmax(0,1fr)_292px]">
-          <div className="min-h-0 overflow-hidden rounded-xl border border-border bg-card">
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Notebook 范围">
+          <ScopeButton targetScope="personal" currentScope={scope} href={buildNotebookScopeHref(effectiveSearchParams, 'personal')} />
+          <ScopeButton targetScope="global" currentScope={scope} href={buildNotebookScopeHref(effectiveSearchParams, 'global')} />
+        </div>
+        <StatusPill className="ml-auto shrink-0 whitespace-nowrap" tone={canWrite ? 'success' : 'warning'}>
+          {canWrite ? '可编辑' : '只读分享'}
+        </StatusPill>
+      </div>
+      <div className={styles.workspace}>
+        <div className={styles.layout}>
+          <div className="min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-card">
             <WorkspaceEditor
               open={open}
               onOpenChange={(next) => {
@@ -266,7 +259,7 @@ export function NotebookPageContent({
               onFileLocationChange={handleFileLocationChange}
             />
           </div>
-          <aside className="hidden min-h-0 flex-col gap-3 overflow-auto xl:flex">
+          <aside className={styles.inspector}>
             <DataCard>
               <DataCardHeader>
                 <div className="min-w-0">
@@ -453,17 +446,17 @@ function ScopeButton({
 
   if (active) {
     return (
-      <Button variant="secondary" size="sm" disabled className="gap-2">
-        <Icon className="h-4 w-4" />
+      <Button variant="secondary" size="sm" disabled className="h-8 gap-1.5 px-2.5 text-xs">
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
         {label}
       </Button>
     );
   }
 
   return (
-    <Button variant="outline" size="sm" asChild>
+    <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs" asChild>
       <Link href={href}>
-        <Icon className="mr-2 h-4 w-4" />
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
         {label}
       </Link>
     </Button>

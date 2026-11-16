@@ -736,6 +736,7 @@ export function EditorPanel({
 }: EditorPanelProps) {
   const { resolvedTheme } = useTheme()
   const { toast } = useToast()
+  const notebookReadOnly = mode === "notebook" && notebookPermission === "read"
   const editorRef = React.useRef<any>(null)
   const monacoRef = React.useRef<any>(null)
   const [wordWrap, setWordWrap] = React.useState<"on" | "off">("off")
@@ -1022,7 +1023,7 @@ export function EditorPanel({
   }, [aiSuggestions, onAcceptAiSuggestion, onRejectAiSuggestion])
 
   const handleSave = React.useCallback(async () => {
-    if (editorContent == null || saving) return
+    if (notebookReadOnly || editorContent == null || saving) return
     setSaving(true)
     try {
       await onSave(editorContent)
@@ -1031,7 +1032,7 @@ export function EditorPanel({
     } finally {
       setSaving(false)
     }
-  }, [editorContent, onSave, saving, toast])
+  }, [editorContent, notebookReadOnly, onSave, saving, toast])
 
   const handleRun = React.useCallback(async () => {
     if (!filePath || !isRunnableCangjieFile(filePath) || editorContent == null || running) return
@@ -1068,10 +1069,10 @@ export function EditorPanel({
   }, [handleSave])
 
   const handleUndo = () => {
-    editorRef.current?.trigger("keyboard", "undo", null)
+    if (!notebookReadOnly) editorRef.current?.trigger("keyboard", "undo", null)
   }
   const handleRedo = () => {
-    editorRef.current?.trigger("keyboard", "redo", null)
+    if (!notebookReadOnly) editorRef.current?.trigger("keyboard", "redo", null)
   }
 
   const pathSegments = (filePath?.replace(/\\/g, "/").split("/").filter(Boolean) || []).map(getDisplayedPathSegment)
@@ -1218,7 +1219,7 @@ export function EditorPanel({
           <MenubarMenu>
             <MenubarTrigger>文件</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem onClick={handleSave} disabled={!filePath || oversize || saving}>
+              <MenubarItem onClick={handleSave} disabled={notebookReadOnly || !filePath || oversize || saving}>
                 {saving ? "保存中..." : "保存"}
                 <MenubarShortcut>⌘S</MenubarShortcut>
               </MenubarItem>
@@ -1231,11 +1232,11 @@ export function EditorPanel({
           <MenubarMenu>
             <MenubarTrigger>编辑</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem onClick={handleUndo} disabled={!filePath}>
+              <MenubarItem onClick={handleUndo} disabled={notebookReadOnly || !filePath}>
                 撤销
                 <MenubarShortcut>⌘Z</MenubarShortcut>
               </MenubarItem>
-              <MenubarItem onClick={handleRedo} disabled={!filePath}>
+              <MenubarItem onClick={handleRedo} disabled={notebookReadOnly || !filePath}>
                 重做
                 <MenubarShortcut>⇧⌘Z</MenubarShortcut>
               </MenubarItem>

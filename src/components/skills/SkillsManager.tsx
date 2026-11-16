@@ -75,9 +75,15 @@ import { cn } from '@/lib/core/utils';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import type { ReturnTarget } from '@/lib/navigation/return-target';
 import { InstallProgress } from '@/components/marketplace';
-import type { MarketplaceSkill, InstallProgress as InstallProgressType } from '@/types/marketplace';
+import { MarketplaceSourcesDialog } from '@/components/marketplace/MarketplaceSourcesDialog';
+import type { MarketplaceSkill, MarketplaceSource, InstallProgress as InstallProgressType } from '@/types/marketplace';
 import type { ManagedMcpServer, McpTransportType } from '@/lib/mcp/types';
-import { DEFAULT_PAGE_SIZE } from '@/constants/marketplace';
+import {
+  BUILTIN_MARKETPLACE_SOURCES,
+  DEFAULT_PAGE_SIZE,
+  getMarketplaceInstallFolder,
+  isExternalMarketplaceFolder,
+} from '@/constants/marketplace';
 import { apiFetch } from '@/client/query/api-client';
 import { queryKeys } from '@/client/query/query-keys';
 import {
@@ -93,8 +99,10 @@ import {
   type SkillMutationResponse,
 } from '@/client/query/skills';
 import {
+  useInstallMarketplaceSkillMutation,
   useMarketplaceCategoriesQuery,
   useMarketplaceSearchQuery,
+  useMarketplaceSourcesQuery,
 } from '@/client/query/marketplace';
 import { useLocalSkillRows, useSyncLocalSkillsToDb } from '@/client/db/collections';
 
@@ -1557,17 +1565,14 @@ export default function SkillsManager({
   const [localPageSize, setLocalPageSize] = useState(DEFAULT_PAGE_SIZE);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [onlineSkills, setOnlineSkills] = useState<MarketplaceSkill[]>([]);
-  const [categories, setCategories] = useState<any[]>([]);
-  const [onlineLoading, setOnlineLoading] = useState(false);
-  const [onlineError, setOnlineError] = useState<string | null>(null);
+  const [marketplaceSource, setMarketplaceSource] = useState<MarketplaceSource>('matrix');
+  const [marketplaceSourcesOpen, setMarketplaceSourcesOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [onlineSearchDraft, setOnlineSearchDraft] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [onlineViewMode, setOnlineViewMode] = useState<ViewMode>('gallery');
   const [onlinePage, setOnlinePage] = useState(1);
-  const [onlinePageSize, setOnlinePageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [totalItems, setTotalItems] = useState(0);
+  const [onlinePageSize, setOnlinePageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [installing, setInstalling] = useState<string | null>(null);
   const [installProgress, setInstallProgress] = useState<InstallProgressType>({
     skillName: '',
@@ -1577,23 +1582,37 @@ export default function SkillsManager({
   });
   const [selectedOnlineSkill, setSelectedOnlineSkill] = useState<MarketplaceSkill | null>(null);
   const [deleteSkillNames, setDeleteSkillNames] = useState<string[]>([]);
-  const [installSkillName, setInstallSkillName] = useState<string | null>(null);
+  const [skillToInstall, setSkillToInstall] = useState<MarketplaceSkill | null>(null);
   const skillsQuery = useSkillsQuery({ enabled: activeTab === 'local' || activeTab === 'online' });
   const marketplaceSearchParams = useMemo(() => ({
+    source: marketplaceSource,
     keyword: searchKeyword,
     category: selectedCategory,
     pageNum: onlinePage,
     pageSize: onlinePageSize,
-  }), [onlinePage, onlinePageSize, searchKeyword, selectedCategory]);
+  }), [marketplaceSource, onlinePage, onlinePageSize, searchKeyword, selectedCategory]);
   const marketplaceSearchQuery = useMarketplaceSearchQuery(marketplaceSearchParams, { enabled: activeTab === 'online' });
-  const marketplaceCategoriesQuery = useMarketplaceCategoriesQuery();
+  const marketplaceCategoriesQuery = useMarketplaceCategoriesQuery(marketplaceSource, { enabled: activeTab === 'online' });
+  const marketplaceSourcesQuery = useMarketplaceSourcesQuery(activeTab === 'online');
+  const marketplaceSources = marketplaceSourcesQuery.data?.sources || BUILTIN_MARKETPLACE_SOURCES;
+  const marketplaceSourceLabel = (id: string) => marketplaceSources.find((source) => source.id === id)?.label || id;
+  const changeMarketplaceSource = (id: MarketplaceSource) => {
+    setMarketplaceSource(id);
+    setSelectedCategory('');
+    setOnlinePage(1);
+    setSelectedOnlineSkill(null);
+  };
+  const installMarketplaceSkill = useInstallMarketplaceSkillMutation();
+  const onlineData = marketplaceSearchQuery.data?.data;
+  const onlineLoading = marketplaceSearchQuery.isPending;
+  const onlineError = marketplaceSearchQuery.error?.message || marketplaceSearchQuery.data?.error;
   const uploadSkillZipMutation = useUploadSkillZipMutation();
   const deleteSkillsMutation = useDeleteSkillsMutation();
   const syncSkillsMutation = useSyncSkillsMutation();
   const exportSkillsMutation = useExportSkillsMutation();
-  const queriedSkills = skillsQuery.data?.skills || [];
+  const queriedSkills = skillsQuery.data?.skills;
   const installSkills = skillsQuery.data?.installSkills || [];
-  useSyncLocalSkillsToDb(queriedSkills);
+  useSyncLocalSkillsToDb(queriedSkills || []);
   const skills = useLocalSkillRows({
     keyword: '',
     source: 'all',
@@ -1633,7 +1652,7 @@ export default function SkillsManager({
       }
       const savedLocalPageSize = Number(localStorage.getItem(LOCAL_PAGE_SIZE_KEY) || DEFAULT_PAGE_SIZE);
       if (PAGE_SIZE_OPTIONS.includes(savedLocalPageSize)) setLocalPageSize(savedLocalPageSize);
-      const savedOnlinePageSize = Number(localStorage.getItem(ONLINE_PAGE_SIZE_KEY) || DEFAULT_PAGE_SIZE);
+      const savedOnlinePageSize = Number(localStorage.getItem(ONLINE_PAGE_SIZE_KEY) || PAGE_SIZE_OPTIONS[0]);
       if (PAGE_SIZE_OPTIONS.includes(savedOnlinePageSize)) setOnlinePageSize(savedOnlinePageSize);
     } catch {}
   }, [initialTab]);
@@ -1663,28 +1682,10 @@ export default function SkillsManager({
   }, [searchQuery, selectedSource, selectedTags, localSortKey, localSortDirection, localPageSize]);
 
   useEffect(() => {
-    setOnlinePage(1);
-  }, [searchKeyword, selectedCategory, onlinePageSize]);
-
-  useEffect(() => {
-    if (activeTab !== 'online') return;
-    setOnlineLoading(marketplaceSearchQuery.isFetching);
-    if (marketplaceSearchQuery.data?.success) {
-      setOnlineSkills(marketplaceSearchQuery.data.data?.skills || []);
-      setTotalItems(marketplaceSearchQuery.data.data?.total || 0);
-      setOnlineError(null);
-    } else if (marketplaceSearchQuery.data && !marketplaceSearchQuery.data.success) {
-      setOnlineError(marketplaceSearchQuery.data.error || '加载应用市场失败');
-    } else if (marketplaceSearchQuery.isError) {
-      setOnlineError(marketplaceSearchQuery.error instanceof Error ? marketplaceSearchQuery.error.message : '加载应用市场失败');
-    }
-  }, [activeTab, marketplaceSearchQuery.data, marketplaceSearchQuery.error, marketplaceSearchQuery.isError, marketplaceSearchQuery.isFetching]);
-
-  useEffect(() => {
-    if (marketplaceCategoriesQuery.data?.success) {
-      setCategories(marketplaceCategoriesQuery.data.data?.categories || []);
-    }
-  }, [marketplaceCategoriesQuery.data]);
+    if (!onlineData) return;
+    const lastPage = Math.max(1, onlineData.totalPages);
+    if (onlinePage > lastPage) setOnlinePage(lastPage);
+  }, [onlineData, onlinePage]);
 
   const getImportSummary = useCallback((data: SkillMutationResponse) => {
     const results = Array.isArray(data.results) ? data.results : [];
@@ -1913,14 +1914,11 @@ export default function SkillsManager({
     }
   };
 
-  const requestInstall = (skillName: string) => {
-    setInstallSkillName(skillName);
-  };
-
   const confirmInstall = async () => {
-    const skillName = installSkillName;
-    if (!skillName) return;
-    setInstallSkillName(null);
+    if (!skillToInstall) return;
+    const { source, installName, namespace, version, name, enName } = skillToInstall;
+    const skillName = enName || name;
+    setSkillToInstall(null);
     setSelectedOnlineSkill(null);
     setInstalling(skillName);
     setInstallProgress({
@@ -1937,47 +1935,27 @@ export default function SkillsManager({
         message: '正在下载...',
       }));
 
-      const response = await apiFetch('/api/marketplace/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skillName }),
+      const data = await installMarketplaceSkill.mutateAsync({
+        source,
+        skillName: installName,
+        namespace,
+        version: version || undefined,
       });
-      const data = await response.json().catch(() => ({}));
-
-      if (response.ok && data.success) {
-        setInstallProgress({
-          skillName,
-          status: 'success',
-          progress: 100,
-          message: '安装成功！',
-        });
-        setOnlineSkills((prev) =>
-          prev.map((skill) => {
-            const installName = skill.enName || skill.name;
-            return installName === skillName ? { ...skill, installed: true } : skill;
-          }),
-        );
-        setSelectedOnlineSkill((prev) => {
-          if (!prev) return prev;
-          const installName = prev.enName || prev.name;
-          return installName === skillName ? { ...prev, installed: true } : prev;
-        });
-        toast('success', `Skill "${skillName}" 已成功安装`);
-        await refreshSkills();
-      } else {
-        setInstallProgress({
-          skillName,
-          status: 'error',
-          progress: 100,
-          message: data.error || '安装失败',
-        });
-      }
-    } catch {
+      if (!data.success) throw new Error(data.error || '安装失败');
+      setInstallProgress({
+        skillName,
+        status: 'success',
+        progress: 100,
+        message: '安装成功！',
+      });
+      toast('success', '已安装 ' + skillName);
+      await refreshSkills();
+    } catch (error) {
       setInstallProgress({
         skillName,
         status: 'error',
         progress: 100,
-        message: '网络错误',
+        message: error instanceof Error ? error.message : '安装失败',
       });
     }
   };
@@ -2012,35 +1990,29 @@ export default function SkillsManager({
       label: `${getSourceLabel(source)} (${sourceCounts[source] || 0})`,
     })),
   ], [skills.length, sourceCounts, sourceKeys]);
-  const categoryOptions = useMemo(() => [
+  const categoryOptions = [
     { value: 'all', label: '全部分类' },
-    ...categories.map((category) => ({
+    ...(marketplaceCategoriesQuery.data?.data?.categories || []).map((category) => ({
       value: category.id,
-      label: `${category.cnName} (${category.count})`,
+      label: category.count === undefined ? category.cnName : category.cnName + ' (' + category.count + ')',
     })),
-  ], [categories]);
+  ];
 
   const installSkillPathSet = useMemo(() => new Set(installSkills.map((skill) => skill.path)), [installSkills]);
-  const installedSkillKeySet = useMemo(() => {
-    const keys = new Set<string>();
-    for (const skill of skills) {
-      keys.add(normalizeMarketplaceSkillKey(skill.name));
-      if (skill.path) {
-        const normalizedPath = skill.path.replace(/\\/g, '/');
-        const folderName = normalizedPath.split('/').filter(Boolean).pop();
-        if (folderName) keys.add(normalizeMarketplaceSkillKey(folderName));
+  const installedMarketplaceKeys = useMemo(() => {
+    const matrix = new Set<string>();
+    const external = new Set<string>();
+    for (const skill of [...(queriedSkills || []), ...installSkills]) {
+      const folder = skill.path?.split(/[\\/]+/).filter(Boolean).pop();
+      if (folder && isExternalMarketplaceFolder(folder)) {
+        external.add(folder);
+      } else {
+        matrix.add(normalizeMarketplaceSkillKey(skill.name));
+        if (folder) matrix.add(normalizeMarketplaceSkillKey(folder));
       }
     }
-    for (const skill of installSkills) {
-      keys.add(normalizeMarketplaceSkillKey(skill.name));
-      if (skill.path) {
-        const normalizedPath = skill.path.replace(/\\/g, '/');
-        const folderName = normalizedPath.split('/').filter(Boolean).pop();
-        if (folderName) keys.add(normalizeMarketplaceSkillKey(folderName));
-      }
-    }
-    return keys;
-  }, [installSkills, skills]);
+    return { matrix, external };
+  }, [installSkills, queriedSkills]);
 
   const syncStatusByName = useMemo(() => {
     return skills.reduce<Record<string, SyncStatus>>((acc, skill) => {
@@ -2083,12 +2055,12 @@ export default function SkillsManager({
     }
   }, [localPage, localPagination.page]);
 
-  const sortedOnlineSkills = useMemo(() => {
-    return onlineSkills.map((skill) => ({
-      ...skill,
-      installed: skill.installed || installedSkillKeySet.has(normalizeMarketplaceSkillKey(skill.enName || skill.name)),
-    }));
-  }, [installedSkillKeySet, onlineSkills]);
+  const sortedOnlineSkills = (onlineData?.skills || []).map((skill) => ({
+    ...skill,
+    installed: skill.source !== 'matrix'
+      ? installedMarketplaceKeys.external.has(getMarketplaceInstallFolder(skill.source, skill.installName, skill.namespace))
+      : installedMarketplaceKeys.matrix.has(normalizeMarketplaceSkillKey(skill.installName)),
+  }));
 
   const getDisplayDescription = (skill: LocalSkill) => skill.descriptionZh || skill.description;
 
@@ -2101,7 +2073,8 @@ export default function SkillsManager({
   };
 
   const handleApplyOnlineSearch = () => {
-    setSearchKeyword(onlineSearchDraft);
+    setSearchKeyword(onlineSearchDraft.trim());
+    setOnlinePage(1);
   };
 
   const toggleTag = (tag: string) => {
@@ -2197,6 +2170,7 @@ export default function SkillsManager({
         </div>
       ),
     },
+    { id: 'source', header: '来源', accessor: (skill) => marketplaceSourceLabel(skill.source), priority: 1 },
     { id: 'organization', header: '组织', accessor: (skill) => skill.organization || '-', priority: 2 },
     { id: 'author', header: '作者', accessor: (skill) => skill.author || '-', priority: 3 },
     { id: 'downloads', header: '下载量', accessor: (skill) => skill.downloads, priority: 3 },
@@ -2214,12 +2188,11 @@ export default function SkillsManager({
     },
   ];
   const getMarketplaceActions = (skill: MarketplaceSkill): ActionMenuGroup[] => {
-    const installName = skill.enName || skill.name;
     return [{
       actions: [
         { id: 'detail', label: '详情', primary: skill.installed, onSelect: () => setSelectedOnlineSkill(skill) },
-        ...(skill.installed ? [{ id: 'installed', label: '已安装', disabled: true, disabledReason: '本地已安装同名 Skill' }] : []),
-        { id: 'install', label: skill.installed ? '重新安装' : '安装', primary: !skill.installed, inline: !skill.installed, onSelect: () => requestInstall(installName) },
+        ...(skill.installed ? [{ id: 'installed', label: '已安装', disabled: true, disabledReason: '该 Skill 已安装到本地' }] : []),
+        { id: 'install', label: skill.installed ? '重新安装' : '安装', primary: !skill.installed, inline: !skill.installed, disabled: installMarketplaceSkill.isPending, onSelect: () => setSkillToInstall(skill) },
       ],
     }];
   };
@@ -2397,7 +2370,7 @@ export default function SkillsManager({
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="搜索 Skill 广场..."
+              placeholder="搜索技能名称或描述…"
               value={onlineSearchDraft}
               onChange={(event) => setOnlineSearchDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -2416,16 +2389,35 @@ export default function SkillsManager({
         </div>
       )}
       filters={(
-        <SingleCombobox
-          value={selectedCategory || 'all'}
-          onValueChange={(value) => setSelectedCategory(value === 'all' ? '' : value)}
-          options={categoryOptions}
-          triggerIcon={<span className="material-symbols-outlined text-sm">category</span>}
-          placeholder="分类"
-          triggerClassName="h-9 w-[180px] rounded-lg bg-background text-sm"
-          emptyText="无匹配分类"
-        />
+        <div className="flex flex-wrap gap-2">
+          <SingleCombobox
+            value={marketplaceSource}
+            onValueChange={changeMarketplaceSource}
+            options={marketplaceSources.map((source) => ({ value: source.id, label: source.label }))}
+            placeholder="来源"
+            triggerClassName="h-9 w-32 rounded-lg bg-background text-sm"
+          />
+          {categoryOptions.length > 1 ? (
+            <SingleCombobox
+              value={selectedCategory || 'all'}
+              onValueChange={(value) => {
+                setSelectedCategory(value === 'all' ? '' : value);
+                setOnlinePage(1);
+              }}
+              options={categoryOptions}
+              triggerIcon={<span className="material-symbols-outlined text-sm">category</span>}
+              placeholder="分类"
+              triggerClassName="h-9 w-[180px] rounded-lg bg-background text-sm"
+              emptyText="无匹配分类"
+            />
+          ) : null}
+        </div>
       )}
+      actions={marketplaceSourcesQuery.data?.canManage ? (
+        <Button size="sm" variant="outline" onClick={() => setMarketplaceSourcesOpen(true)}>
+          管理来源
+        </Button>
+      ) : null}
       viewToggle={(
         <div className="inline-flex rounded-lg border border-border bg-background p-1">
           <Button
@@ -2835,8 +2827,11 @@ export default function SkillsManager({
 
             <section className="rounded-xl border border-border bg-card p-4 shadow-none">
               {onlineError ? (
-                <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg text-destructive">
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-destructive">
                   {onlineError}
+                  <Button size="sm" variant="ghost" disabled={marketplaceSearchQuery.isFetching} onClick={() => void marketplaceSearchQuery.refetch()}>
+                    重试
+                  </Button>
                 </div>
               ) : onlineLoading ? (
                 <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
@@ -2847,7 +2842,7 @@ export default function SkillsManager({
                 <EmptyState
                   icon={<Store className="h-5 w-5" />}
                   title={searchKeyword ? '没有找到匹配的 Skill' : '暂无 Skill'}
-                  description="调整搜索关键词或分类后重试。"
+                  description="调整关键词或筛选条件后重试。"
                 />
               ) : onlineViewMode === 'table' ? (
                 <DataTable
@@ -2863,7 +2858,6 @@ export default function SkillsManager({
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {sortedOnlineSkills.map((skill) => {
                     const displayName = skill.enName || skill.name;
-                    const installName = skill.enName || skill.name;
                     return (
                       <DataCard key={skill.id} className="cursor-pointer" onClick={() => setSelectedOnlineSkill(skill)}>
                         <DataCardHeader>
@@ -2877,15 +2871,17 @@ export default function SkillsManager({
                         </DataCardHeader>
                         <DataCardDescription className="line-clamp-3">{skill.description}</DataCardDescription>
                         <DataCardMeta>
+                          <StatusPill tone="neutral" dot={false}>{marketplaceSourceLabel(skill.source)}</StatusPill>
                           {skill.organization ? <StatusPill tone="info">{skill.organization}</StatusPill> : null}
+                          {skill.author ? <span>{skill.author}</span> : null}
                           <span>下载 {skill.downloads}</span>
-                          <span>评分 {skill.overallScore || 'N/A'}</span>
+                          {skill.overallScore ? <span>评分 {skill.overallScore}</span> : null}
                         </DataCardMeta>
                         <DataCardActions onClick={(event) => event.stopPropagation()}>
                           <Button size="sm" variant="outline" onClick={() => setSelectedOnlineSkill(skill)}>
                             详情
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => requestInstall(installName)}>
+                          <Button size="sm" variant="outline" disabled={installMarketplaceSkill.isPending} onClick={() => setSkillToInstall(skill)}>
                             {skill.installed ? '重新安装' : '安装'}
                           </Button>
                         </DataCardActions>
@@ -2896,10 +2892,10 @@ export default function SkillsManager({
               )}
             </section>
 
-            {totalItems > 0 ? (
+            {onlineData && onlineData.total > 0 && onlinePage <= onlineData.totalPages ? (
               <PaginationBar
                 current={onlinePage}
-                total={totalItems}
+                total={onlineData.total}
                 pageSize={onlinePageSize}
                 onPageChange={setOnlinePage}
                 pageSizeOptions={PAGE_SIZE_OPTIONS}
@@ -2927,15 +2923,19 @@ export default function SkillsManager({
                       <DetailDrawerDescription>{selectedOnlineSkill.description}</DetailDrawerDescription>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {selectedOnlineSkill.installed ? <StatusPill tone="success">已安装</StatusPill> : <StatusPill tone="neutral">未安装</StatusPill>}
+                        <StatusPill tone="neutral" dot={false}>{marketplaceSourceLabel(selectedOnlineSkill.source)}</StatusPill>
+                        {marketplaceSources.find((source) => source.id === selectedOnlineSkill.source)?.protocol !== 'matrix' && selectedOnlineSkill.version ? <StatusPill tone="neutral" dot={false}>v{selectedOnlineSkill.version}</StatusPill> : null}
                         {selectedOnlineSkill.organization ? <StatusPill tone="info">{selectedOnlineSkill.organization}</StatusPill> : null}
                       </div>
                     </DetailDrawerHeader>
                     <DetailDrawerBody className="space-y-6">
                       <div className="grid grid-cols-2 gap-3">
-                        <DataCard>
-                          <DataCardTitle>综合评分</DataCardTitle>
-                          <DataCardDescription>{selectedOnlineSkill.overallScore || 'N/A'}</DataCardDescription>
-                        </DataCard>
+                        {selectedOnlineSkill.overallScore ? (
+                          <DataCard>
+                            <DataCardTitle>综合评分</DataCardTitle>
+                            <DataCardDescription>{selectedOnlineSkill.overallScore}</DataCardDescription>
+                          </DataCard>
+                        ) : null}
                         <DataCard>
                           <DataCardTitle>下载量</DataCardTitle>
                           <DataCardDescription>{selectedOnlineSkill.downloads}</DataCardDescription>
@@ -2964,7 +2964,8 @@ export default function SkillsManager({
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => requestInstall(selectedOnlineSkill.enName || selectedOnlineSkill.name)}
+                        disabled={installMarketplaceSkill.isPending}
+                        onClick={() => setSkillToInstall(selectedOnlineSkill)}
                       >
                         {selectedOnlineSkill.installed ? '重新安装' : '安装'}
                       </Button>
@@ -3134,16 +3135,35 @@ export default function SkillsManager({
           if (!open) setDeleteSkillNames([]);
         }}
       />
+      {marketplaceSourcesOpen ? (
+        <MarketplaceSourcesDialog
+          open={marketplaceSourcesOpen}
+          onOpenChange={setMarketplaceSourcesOpen}
+          sources={marketplaceSources}
+          onSourceAdded={(id) => {
+            changeMarketplaceSource(id);
+            setMarketplaceSourcesOpen(false);
+          }}
+          onSourceRemoved={(id) => {
+            if (marketplaceSource === id) changeMarketplaceSource('matrix');
+          }}
+        />
+      ) : null}
       <ConfirmModal
-        open={Boolean(installSkillName)}
+        open={Boolean(skillToInstall)}
         title="确认安装 Skill"
-        objectName={installSkillName}
-        consequence="将从 Marketplace 下载并安装该 Skill。如果本地已有同名 Skill，安装过程可能覆盖或更新相关文件。"
+        objectName={skillToInstall?.enName || skillToInstall?.name}
+        consequence={skillToInstall
+          ? '从 ' + marketplaceSourceLabel(skillToInstall.source)
+            + (skillToInstall.author ? ' 下载 ' + skillToInstall.author + ' 发布的版本' : ' 下载')
+            + '并安装到本地。'
+            + (skillToInstall.installed ? ' 重新安装会更新本地文件。' : '')
+          : undefined}
         confirmLabel="安装"
         onConfirm={confirmInstall}
-        onCancel={() => setInstallSkillName(null)}
+        onCancel={() => setSkillToInstall(null)}
         onOpenChange={(open) => {
-          if (!open) setInstallSkillName(null);
+          if (!open) setSkillToInstall(null);
         }}
       />
     </div>

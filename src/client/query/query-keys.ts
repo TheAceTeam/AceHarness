@@ -167,7 +167,8 @@ export const queryKeys = {
   engineAvailability: () => ['engines', 'availability'] as const,
   skills: () => ['skills'] as const,
   marketplace: {
-    categories: () => ['marketplace', 'categories'] as const,
+    sources: () => ['marketplace', 'sources'] as const,
+    categories: (source: string) => ['marketplace', 'categories', source] as const,
     search: (params: Record<string, unknown>) => ['marketplace', 'search', params] as const,
   },
   rag: {

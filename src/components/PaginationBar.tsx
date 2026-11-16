@@ -110,7 +110,7 @@ export function PaginationBar({
         </span>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex min-w-0 flex-wrap items-center justify-center gap-3">
         {showViewToggle ? (
           <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
             <Button
@@ -142,8 +142,8 @@ export function PaginationBar({
           </div>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Pagination className="mx-0 w-auto justify-start">
+        <div className="flex min-w-0 flex-wrap items-center justify-center gap-3">
+          <Pagination className="mx-0 w-auto max-w-full">
             <PaginationContent>
               <PaginationItem>
                 <PaginationPrevious
@@ -188,13 +188,13 @@ export function PaginationBar({
             </PaginationContent>
           </Pagination>
           <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
-            <SelectTrigger className="h-9 w-[112px] bg-background">
-              <span>{pageSize} / 页</span>
+            <SelectTrigger aria-label="每页条数" className="h-9 w-28 shrink-0 gap-2 bg-background">
+              <span>{pageSize} 条/页</span>
             </SelectTrigger>
             <SelectContent>
               {pageSizeOptions.map((opt) => (
                 <SelectItem key={opt} value={String(opt)}>
-                  {opt} / 页
+                  {opt} 条/页
                 </SelectItem>
               ))}
             </SelectContent>

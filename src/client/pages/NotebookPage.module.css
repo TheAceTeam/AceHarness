@@ -1,0 +1,70 @@
+.page {
+  container: notebook-page / inline-size;
+}
+
+.toolbar {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+}
+
+.overview {
+  display: none;
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.5rem;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  gap: 0.75rem;
+}
+
+.inspector {
+  display: none;
+}
+
+@container notebook-page (min-width: 42rem) {
+  .toolbar {
+    padding: 0.625rem 1rem;
+  }
+
+  .overview {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .workspace {
+    padding: 0.75rem;
+  }
+}
+
+@container notebook-page (min-width: 74rem) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) 292px;
+  }
+
+  .inspector {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow: auto;
+  }
+}
