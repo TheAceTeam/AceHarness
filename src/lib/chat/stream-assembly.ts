@@ -1,5 +1,19 @@
 import { parseActions } from '@/lib/chat/actions';
 
+export type ChatAdapterStatus = {
+  agentName: string;
+  phase: 'preparing' | 'ready';
+};
+
+export function readChatAdapterStatus(value: unknown): ChatAdapterStatus | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { agentName, phase } = value as Partial<ChatAdapterStatus>;
+  if (typeof agentName !== 'string' || !agentName.trim() || (phase !== 'preparing' && phase !== 'ready')) {
+    return undefined;
+  }
+  return { agentName: agentName.trim(), phase };
+}
+
 export function appendStreamChunk(previous: string, next: string): string {
   const base = String(previous || '');
   const chunk = String(next || '');

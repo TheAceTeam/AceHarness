@@ -11,6 +11,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { openSqliteDatabase } from '@/lib/sqlite/database';
 import { extractLastChatPreview } from '@/lib/chat/message-preview';
+import type { ChatAdapterStatus } from '@/lib/chat/stream-assembly';
 import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 import { normalizeSessionWorkbenchConversationMode, type HomeConversationMode } from '@/lib/chat/conversation-mode';
 
@@ -51,6 +52,7 @@ export interface PersistedMessage {
   role: 'user' | 'assistant' | 'error';
   content: string;
   rawContent?: string;
+  adapterStatus?: ChatAdapterStatus;
   source?: {
     type: 'wechat';
     label?: string;

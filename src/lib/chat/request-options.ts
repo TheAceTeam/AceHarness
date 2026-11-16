@@ -137,6 +137,7 @@ export async function buildChatRequestContext(options: {
   requestedSkills?: RequestedSkillsInput;
   requestedMcpServers?: RequestedMcpServersInput;
   creationAssistantEnabled?: boolean;
+  workflowCreationGuideEnabled?: boolean;
   personalDir?: string;
 }): Promise<{
   systemPrompt: string;
@@ -157,6 +158,7 @@ export async function buildChatRequestContext(options: {
     requestedSkills,
     requestedMcpServers,
     creationAssistantEnabled: requestedCreationAssistantEnabled,
+    workflowCreationGuideEnabled: requestedWorkflowCreationGuideEnabled,
     personalDir,
   } = options;
 
@@ -168,10 +170,13 @@ export async function buildChatRequestContext(options: {
   const creationAssistantEnabled = mode === 'dashboard'
     ? requestedCreationAssistantEnabled ?? persistedCreationAssistantEnabled ?? true
     : false;
+  const workflowCreationGuideEnabled = requestedWorkflowCreationGuideEnabled === undefined
+    ? creationAssistantEnabled
+    : mode === 'dashboard' && !isResume && requestedWorkflowCreationGuideEnabled;
   const configuredSkills = chatSettings
     ? expandCapabilitySkillNames(resolveEnabledSkills(chatSettings, requestedSkills), chatSettings.capabilitySkills)
     : [];
-  const enabledSkills = creationAssistantEnabled
+  const enabledSkills = workflowCreationGuideEnabled
     ? configuredSkills
     : configuredSkills.filter((skillName) => !REQUIRED_DASHBOARD_SKILLS.includes(skillName));
   const requestedWorkingDirectory = typeof workingDirectory === 'string' ? workingDirectory.trim() : '';
@@ -195,18 +200,22 @@ export async function buildChatRequestContext(options: {
   let runtimeSkillNames: string[] = [];
   if (mode === 'dashboard') {
     const dashboardSkills = [...enabledSkills];
-    if (creationAssistantEnabled) {
+    if (workflowCreationGuideEnabled) {
       for (const skillName of REQUIRED_DASHBOARD_SKILLS) {
         if (!dashboardSkills.includes(skillName)) dashboardSkills.push(skillName);
       }
     }
     if (isResume) {
       const modeReminder = creationAssistantEnabled
-        ? '当前会话已启用创建助手模式。创建 Agent 时，在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON；需要打开创建弹窗时设置 `shouldOpenModal:true`。设计普通 state-machine 工作流时，使用一等工作流设计 UI。'
+        ? '创建 Agent 时，在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON；需要打开创建弹窗时设置 `shouldOpenModal:true`。'
         : '当前会话是普通工程对话模式。不要触发 Agent 创建弹窗；普通 state-machine 工作流仍可按工程需求进行设计。';
+      const workflowReminder = workflowCreationGuideEnabled
+        ? '设计普通 state-machine 工作流时，使用一等工作流设计 UI。'
+        : '';
       systemPrompt = dashboardSkills.length > 0
         ? [
           modeReminder,
+          workflowReminder,
           `当前启用的 Skills: ${dashboardSkills.join(', ')}。需要时查阅 skills/{skill-name}/SKILL.md。`,
           dashboardSkills.includes('aceharness-chat-card')
             ? '当用户查看/列出/统计 workflow、Agent、模型、运行记录、状态或其他 API 查询结果时，优先在回复末尾输出 `<result>{"kind":"card","payload":{...}}</result>`；列表优先用 table，不要只用纯文本复述长列表。'
@@ -221,7 +230,11 @@ export async function buildChatRequestContext(options: {
       }
     } else {
       runtimeSkillNames = [...dashboardSkills];
-      const promptOptions = { personalDir, workingDirectory: resolvedWorkingDirectory };
+      const promptOptions = {
+        personalDir,
+        workingDirectory: resolvedWorkingDirectory,
+        ...(requestedWorkflowCreationGuideEnabled !== undefined ? { workflowCreationGuideEnabled } : {}),
+      };
       systemPrompt = creationAssistantEnabled
         ? await buildDashboardSystemPrompt(dashboardSkills, promptOptions)
         : await buildDashboardConversationSystemPrompt(dashboardSkills, promptOptions);

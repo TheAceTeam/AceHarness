@@ -8,6 +8,7 @@ import {
   resolveRequestedChatRuntimeEngineType,
   resolveRequestedChatRuntimeModel,
   type ChatRuntimeResultMetadata,
+  type ChatRuntimeStreamEvent,
   type ChatRuntimeTokenUsage,
 } from '@/lib/chat/chat-engine-runtime';
 import {
@@ -31,9 +32,9 @@ import {
   type RequestedMcpServersInput,
   type RequestedSkillsInput,
 } from '@/lib/chat/request-options';
-import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
+import { buildFinalRawContent, appendStreamChunk, type ChatAdapterStatus } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
-import { formatAceRuntimeToolEvent } from '@/lib/chat/ace-process-formatters';
+import { formatAceReasoning, formatAceRuntimeToolEvent } from '@/lib/chat/ace-process-formatters';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
 import { isCreationAssistantSidebarHint, type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
@@ -156,6 +157,7 @@ function buildInitialLiveSessionSnapshot(input: {
   assistantMessageId?: string;
   skipUserMessage?: boolean;
   creationAssistantEnabled?: boolean;
+  workflowCreationGuideStarted?: boolean;
 }): PersistedChatSession {
   const now = Date.now();
   const visibleUserMessage = String(input.displayMessage || input.message || '').trim();
@@ -192,12 +194,13 @@ function buildInitialLiveSessionSnapshot(input: {
     workflowBinding: existing?.workflowBinding,
     creationSession: existing?.creationSession,
     agentBinding: existing?.agentBinding,
-    sessionWorkbenchState: typeof input.creationAssistantEnabled === 'boolean'
-      ? {
-          ...(existing?.sessionWorkbenchState || {}),
-          creationAssistantEnabled: input.creationAssistantEnabled,
-        }
-      : existing?.sessionWorkbenchState,
+    sessionWorkbenchState: {
+      ...existing?.sessionWorkbenchState,
+      ...(typeof input.creationAssistantEnabled === 'boolean'
+        ? { creationAssistantEnabled: input.creationAssistantEnabled }
+        : {}),
+      ...(input.workflowCreationGuideStarted ? { workflowCreationGuideStarted: true } : {}),
+    },
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     messages: nextMessages,
@@ -229,6 +232,7 @@ const activeChats = new Map<string, {
   promise: Promise<any>;
   settled: boolean;
   chatId: string;
+  readonly adapterStatus?: ChatAdapterStatus;
   cancel?: () => void;
 }>();
 const engineStreamEvents = new EventEmitter();
@@ -258,6 +262,7 @@ export async function POST(request: Request) {
       skills,
       mcpServers,
       creationAssistantEnabled: requestedCreationAssistantEnabled,
+      workflowCreationGuideEnabled: requestedWorkflowCreationGuideEnabled,
     } = body;
     if (!message?.trim()) {
       return jsonError('消息不能为空', 400);
@@ -297,6 +302,9 @@ export async function POST(request: Request) {
       creationAssistantEnabled: typeof requestedCreationAssistantEnabled === 'boolean'
         ? requestedCreationAssistantEnabled
         : undefined,
+      workflowCreationGuideEnabled: typeof requestedWorkflowCreationGuideEnabled === 'boolean'
+        ? requestedWorkflowCreationGuideEnabled && !skipUserMessage
+        : undefined,
       personalDir: auth.personalDir,
     });
     let validRuntimeSessionId: string | undefined = undefined;
@@ -327,6 +335,7 @@ export async function POST(request: Request) {
           assistantMessageId: typeof assistantMessageId === 'string' ? assistantMessageId : undefined,
           skipUserMessage: Boolean(skipUserMessage),
           creationAssistantEnabled,
+          workflowCreationGuideStarted: typeof requestedWorkflowCreationGuideEnabled === 'boolean' && !skipUserMessage,
         })
       : null;
     const liveAssistantMessageId = typeof assistantMessageId === 'string' && assistantMessageId.trim()
@@ -400,8 +409,25 @@ export async function POST(request: Request) {
         processManager.registerActiveStream(streamRecoveryKey, chatId);
       }
 
-      const onEngineStream = (evt: any) => {
-        if (evt?.type === 'text' && evt.content) {
+      let adapterStatus: ChatAdapterStatus | undefined;
+      const onEngineStream = (evt: ChatRuntimeStreamEvent) => {
+        if (evt.type === 'adapter_status') {
+          adapterStatus = evt.status;
+          if (baseLiveSession && liveAssistantMessageId) {
+            const nextLiveSession = updateEngineStreamLiveSession(chatId, (session) => {
+              if (!session) return session;
+              return {
+                ...session,
+                messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
+                  ...message,
+                  adapterStatus: evt.status,
+                })),
+              };
+            });
+            saveLiveSessionSnapshot(nextLiveSession);
+          }
+          engineStreamEvents.emit(chatId, { type: 'adapter_status', status: evt.status });
+        } else if (evt.type === 'text' && evt.content) {
           appendEngineStreamContent(chatId, evt.content);
           const stateAfterAppend = getEngineStream(chatId);
           writeChatStreamDebugTrace({
@@ -504,6 +530,7 @@ export async function POST(request: Request) {
           }
           engineStreamEvents.emit(chatId, { type: 'session', runtimeSessionId: evt.content, sessionId: evt.content });
         } else if (evt?.type === 'thought' && evt.content) {
+          const reasoning = formatAceReasoning(evt.content);
           const stateAtThought = getEngineStream(chatId);
           writeChatStreamDebugTrace({
             stage: 'chat.stream.thought',
@@ -522,7 +549,7 @@ export async function POST(request: Request) {
               if (!session) return session;
               const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
               if (!currentAssistant) return session;
-              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), String(evt.content || ''));
+              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), reasoning);
               return {
                 ...session,
                 updatedAt: Date.now(),
@@ -536,7 +563,7 @@ export async function POST(request: Request) {
             });
             saveLiveSessionSnapshot(nextLiveSession);
           }
-          engineStreamEvents.emit(chatId, { type: 'thinking', content: evt.content });
+          engineStreamEvents.emit(chatId, { type: 'thinking', content: reasoning });
         } else if (evt?.type === 'error' && evt.content) {
           const stateAtError = getEngineStream(chatId);
           writeChatStreamDebugTrace({
@@ -754,6 +781,7 @@ export async function POST(request: Request) {
         promise: execPromise,
         settled: false,
         chatId,
+        get adapterStatus() { return adapterStatus; },
         cancel: () => {
           setEngineStreamStatus(chatId, 'killed');
           memoryEngine.cancel();
@@ -925,6 +953,8 @@ export async function GET(request: Request) {
           send('delta', { content: evt.content });
         } else if (evt.type === 'session') {
           send('session', { runtimeSessionId: evt.runtimeSessionId || evt.sessionId, sessionId: evt.runtimeSessionId || evt.sessionId });
+        } else if (evt.type === 'adapter_status') {
+          send('adapter_status', evt.status);
         } else if (evt.type === 'thinking') {
           send('thinking', { content: evt.content });
         } else if (evt.type === 'engine_error') {
@@ -934,6 +964,9 @@ export async function GET(request: Request) {
       };
 
       send('connected', { chatId });
+      if (entry.adapterStatus) {
+        send('adapter_status', entry.adapterStatus);
+      }
       const state = getEngineStream(chatId);
       if (state?.runtimeSessionId) {
         send('session', { runtimeSessionId: state.runtimeSessionId, sessionId: state.runtimeSessionId });

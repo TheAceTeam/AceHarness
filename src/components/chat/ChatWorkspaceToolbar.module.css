@@ -1,0 +1,85 @@
+.container {
+  flex-shrink: 0;
+  min-width: 0;
+  container: chat-workspace-toolbar / inline-size;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-height: 3rem;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+}
+
+.count,
+.status,
+.tabIcon,
+.workspaceLabel,
+.workspaceChevron {
+  display: none;
+}
+
+.count {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabIcon,
+.workspaceChevron {
+  flex-shrink: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.workspaceLabel {
+  min-width: 0;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspaceChevron {
+  color: hsl(var(--muted-foreground));
+}
+
+@container chat-workspace-toolbar (min-width: 26rem) {
+  .count {
+    display: inline;
+  }
+}
+
+@container chat-workspace-toolbar (min-width: 39rem) {
+  .row {
+    gap: 0.75rem;
+    padding-inline: 1.125rem;
+  }
+
+  .tabIcon,
+  .workspaceChevron {
+    display: block;
+  }
+
+  .workspaceLabel {
+    display: block;
+  }
+}
+
+@container chat-workspace-toolbar (min-width: 55rem) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  .status {
+    display: inline-flex;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+}

@@ -3,6 +3,7 @@ import React from 'react';
 import { describe, expect, test, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import ChatMessage from '@/components/chat/ChatMessage';
+import { formatAceReasoning } from '@/lib/chat/ace-process-formatters';
 
 const noop = () => {};
 
@@ -24,6 +25,43 @@ function renderAssistantCard(card: any) {
 }
 
 describe('ChatMessage card rendering', () => {
+  test('shows the adapter tag above the reply and keeps thought text in the reasoning panel', () => {
+    const props = {
+      onConfirmAction: noop,
+      onRejectAction: noop,
+      onUndoAction: noop,
+      onRetryAction: noop,
+    };
+    const message = { id: 'claude-reply', role: 'assistant' as const, content: '' };
+    const { rerender } = render(
+      <ChatMessage
+        {...props}
+        isStreaming
+        message={{ ...message, adapterStatus: { agentName: 'Claude', phase: 'preparing' } }}
+      />
+    );
+    expect(screen.getByText('首次对话，正在准备 Claude 适配器')).toBeInTheDocument();
+    expect(screen.queryByText('思考中')).not.toBeInTheDocument();
+
+    rerender(
+      <ChatMessage
+        {...props}
+        message={{
+          ...message,
+          content: '你好！',
+          rawContent: `你好！${formatAceReasoning('内部思考片段')}`,
+          adapterStatus: { agentName: 'Claude', phase: 'ready' },
+        }}
+      />
+    );
+    const tag = screen.getByText('Claude 适配器已准备完成');
+    const response = screen.getByText('你好！');
+    expect(tag.compareDocumentPosition(response) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText('首次对话，正在准备 Claude 适配器')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ace-reasoning')).toBeInTheDocument();
+    expect(screen.queryByText('你好！内部思考片段')).not.toBeInTheDocument();
+  });
+
   test('renders shorthand table cards returned by assistant results', () => {
     renderAssistantCard({
       header: {

@@ -1,5 +1,6 @@
 import { listChatSessions, saveChatSession } from '@/lib/chat/persistence';
 import { requireAuth } from '@/lib/auth/middleware';
+import { readChatAdapterStatus } from '@/lib/chat/stream-assembly';
 import { normalizeSessionWorkbenchConversationMode } from '@/lib/chat/conversation-mode';
 import { errorMessage, jsonError, jsonOk, readJsonBody } from '@/server/api-route-runtime/request-utils';
 
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
           role: message?.role === 'assistant' || message?.role === 'error' ? message.role : 'user',
           content: typeof message?.content === 'string' ? message.content : '',
           rawContent: typeof message?.rawContent === 'string' ? message.rawContent : undefined,
+          adapterStatus: readChatAdapterStatus(message?.adapterStatus),
           source: message?.source,
           actions: Array.isArray(message?.actions) ? message.actions : undefined,
           cards: Array.isArray(message?.cards) ? message.cards : undefined,

@@ -15,20 +15,16 @@ import { cn } from '@/lib/core/utils';
 export interface ChatSessionMenuProps {
   disabled?: boolean;
   compact?: boolean;
-  creationAssistantEnabled: boolean;
-  creationAssistantDisabled?: boolean;
+  workflowCreationGuide?: { enabled: boolean; onChange: (enabled: boolean) => void };
   forkDisabled?: boolean;
-  onCreationAssistantChange: (enabled: boolean) => void;
   onFork: () => void;
 }
 
 export function ChatSessionMenu({
   disabled = false,
   compact = false,
-  creationAssistantEnabled,
-  creationAssistantDisabled = false,
+  workflowCreationGuide,
   forkDisabled = false,
-  onCreationAssistantChange,
   onFork,
 }: ChatSessionMenuProps) {
   return (
@@ -36,25 +32,28 @@ export function ChatSessionMenu({
       <DropdownMenuTrigger asChild>
         <Button
           size="sm"
-          variant="outline"
+          variant={compact ? 'ghost' : 'outline'}
           disabled={disabled}
           title="会话菜单"
           aria-label="会话菜单"
-          className={cn(compact && 'h-8 rounded-md px-2.5 text-xs')}
+          className={cn(compact && 'h-8 w-8 shrink-0 rounded-md p-0 text-muted-foreground hover:text-foreground')}
         >
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
-        <DropdownMenuCheckboxItem
-          checked={creationAssistantEnabled}
-          disabled={creationAssistantDisabled}
-          onCheckedChange={(checked) => onCreationAssistantChange(checked === true)}
-          onSelect={(event) => event.preventDefault()}
-        >
-          新对话创建助手
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
+        {workflowCreationGuide && (
+          <>
+            <DropdownMenuCheckboxItem
+              checked={workflowCreationGuide.enabled}
+              onCheckedChange={workflowCreationGuide.onChange}
+              onSelect={(event) => event.preventDefault()}
+            >
+              工作流创建引导
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem onSelect={onFork} disabled={forkDisabled}>
           <GitFork className="mr-2 h-4 w-4" aria-hidden="true" />
           Fork 对话

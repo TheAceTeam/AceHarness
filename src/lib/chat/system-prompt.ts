@@ -10,14 +10,25 @@ import { getRepoRoot, getWorkspaceRoot } from '@/lib/core/app-paths';
 const CODE = '```';
 const CARD_USAGE_RULES = '## 对话卡片规则\n\n当用户要求列出/查看/统计配置、工作流、Agent、模型、运行记录、状态或其他 API 查询结果时，优先把结果整理为 `kind="card"` 的结构化卡片。尤其是 `config.list`、`agent.list`、`model.list`、`runs.list`、`workflow.status`、`schedule.list` 这类只读查询，拿到结果后应输出简短说明，并在回复末尾输出 `<result>{"kind":"card","payload":{...}}</result>`；列表优先用 table，摘要用 badges/info/status，操作建议用 actions。不要只用纯文本复述长列表。';
 
+type DashboardPromptOptions = {
+  personalDir?: string;
+  workingDirectory?: string;
+  workflowCreationGuideEnabled?: boolean;
+};
+
+const WORKFLOW_CREATION_GUIDE = [
+  '',
+  '## 工作流创建引导',
+  '当用户明确要创建工作流时，先确认目标、执行角色、流转和验收条件，再引导进入一等工作流设计 UI。轻量工作流使用 `aceharness-tasklist` 并明确指定任务清单目录。通过工作流设计 UI 创建配置，避免直接写入 YAML 或通过首页侧边栏、命令、action 块创建工作流。',
+].join('\n');
+
 const CORE_PROMPT = [
-  '你是 ACEHarness 工作流助手。',
+  '你是 ACEHarness 对话助手。',
   '',
   '## 绝对禁止（违反将导致系统错误）',
   '',
-  '1. **禁止直接创建或写入 YAML/配置文件**。工作流必须从一等工作流 UI 创建；轻量工作流必须使用 `aceharness-tasklist` 且明确指定任务清单目录。不要通过首页侧边栏、命令或 action 块替代该流程。Agent 创建仍可通过 `home_sidebar` 触发 UI 弹窗。',
-  '2. **`<result>` 内只放机器可读数据**（单个 JSON 对象），不要放 HTML、Markdown 代码块或普通文字。需要用户看到的文字说明放在 `<result>` 外面。',
-  `3. **\`<result>\` 内不要使用 ${CODE}json 或 ${CODE}card 代码块**，直接输出裸 JSON 对象。`,
+  '1. **`<result>` 内只放机器可读数据**（单个 JSON 对象），不要放 HTML、Markdown 代码块或普通文字。需要用户看到的文字说明放在 `<result>` 外面。',
+  `2. **\`<result>\` 内不要使用 ${CODE}json 或 ${CODE}card 代码块**，直接输出裸 JSON 对象。`,
   '',
   '## Action Block 协议',
   '当需要操作时，在回复末尾嵌入（不要在同一条回复中同时输出 action 和其他内容）：',
@@ -35,7 +46,7 @@ const CORE_PROMPT = [
   CARD_USAGE_RULES,
   '',
   '## 首页侧边栏',
-  '仅在创建 Agent，或需要查看、启动、监控已存在的 workflow 运行时，在 `<result>` 内输出一个 `kind=home_sidebar` 的 JSON。工作流创建不使用首页侧边栏。',
+  '仅在创建 Agent，或需要查看、启动、监控已存在的 workflow 运行时，在 `<result>` 内输出一个 `kind=home_sidebar` 的 JSON。',
   '',
   '- `home_sidebar` 必须是整条回复的最后一个结构化块。',
   '- 创建 Agent 时，使用 `tabs:["agent"]`、`activeTab:"agent"`、`intent:"create-agent"`，需要打开弹窗时将 `shouldOpenModal` 设为 `true`。',
@@ -55,7 +66,7 @@ const CORE_PROMPT = [
 ].join('\n');
 
 const CONVERSATION_CORE_PROMPT = [
-  '你是 ACEHarness 工程对话助手。直接帮助用户分析工程问题、修改代码、解释实现并验证结果。当前会话未启用创建助手模式：不要使用 `aceharness-workflow-creator` Skill，也不要把普通工程需求改写成 workflow 或 Agent 创建流程。',
+  '你是 ACEHarness 工程对话助手。直接帮助用户分析工程问题、修改代码、解释实现并验证结果。按用户的实际需求推进。',
   '',
   '## Action Block 协议',
   `当需要调用 ACEHarness API 时，在回复末尾嵌入：\n\n${CODE}action\n{"type":"操作类型","params":{},"description":"说明"}\n${CODE}`,
@@ -88,7 +99,7 @@ async function buildSkillReference(skillName: string): Promise<string> {
 
 async function buildDashboardPromptContext(
   enabledSkills?: string[],
-  options?: { personalDir?: string; workingDirectory?: string },
+  options?: DashboardPromptOptions,
   creationAssistantEnabled = true,
 ): Promise<string> {
   const installRoot = getRepoRoot();
@@ -102,25 +113,27 @@ async function buildDashboardPromptContext(
 
   const refs = await Promise.all([...new Set(enabledSkills)].map((skill) => buildSkillReference(skill)));
   const modeRule = creationAssistantEnabled
-    ? '首页对话必须通过 chat 回复推进。创建 Agent 时，必须在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON，并在需要打开创建弹窗时设置 `shouldOpenModal:true`；工作流只能从一等工作流 UI 创建。'
-    : '按普通工程对话推进，不要使用 workflow creator Skill，也不要输出创建弹窗的 `home_sidebar`。';
+    ? '首页对话必须通过 chat 回复推进。创建 Agent 时，必须在回复最后输出 `<result>` 包裹的 `home_sidebar` JSON，并在需要打开创建弹窗时设置 `shouldOpenModal:true`。'
+    : '按普通工程对话推进，不要输出创建弹窗的 `home_sidebar`。';
   return `${envInfo}\n\n## 当前启用的 Skills\n\n${refs.join('\n')}\n\n${modeRule}`;
 }
 
 /** 构建完整的 dashboard 创建助手模式系统提示词 */
 export async function buildDashboardSystemPrompt(
   enabledSkills?: string[],
-  options?: { personalDir?: string; workingDirectory?: string },
+  options?: DashboardPromptOptions,
 ): Promise<string> {
   const context = await buildDashboardPromptContext(enabledSkills, options, true);
-  return CORE_PROMPT + context;
+  const guidance = options?.workflowCreationGuideEnabled !== false ? WORKFLOW_CREATION_GUIDE : '';
+  return CORE_PROMPT + guidance + context;
 }
 
 /** 构建 dashboard 普通工程对话模式系统提示词 */
 export async function buildDashboardConversationSystemPrompt(
   enabledSkills?: string[],
-  options?: { personalDir?: string; workingDirectory?: string },
+  options?: DashboardPromptOptions,
 ): Promise<string> {
   const context = await buildDashboardPromptContext(enabledSkills, options, false);
-  return CONVERSATION_CORE_PROMPT + context;
+  const guidance = options?.workflowCreationGuideEnabled ? WORKFLOW_CREATION_GUIDE : '';
+  return CONVERSATION_CORE_PROMPT + guidance + context;
 }

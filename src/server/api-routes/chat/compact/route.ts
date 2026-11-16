@@ -155,6 +155,7 @@ export async function POST(request: Request) {
     const engineType = await resolveRequestedChatRuntimeEngineType(typeof body?.engine === 'string' ? body.engine : session.engine);
     const { systemPrompt, runtimeSkillNames, enabledMcpServers } = await buildChatRequestContext({
       mode: 'dashboard',
+      workflowCreationGuideEnabled: false,
       frontendSessionId,
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
       requestedSkills: body?.skills as RequestedSkillsInput,

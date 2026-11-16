@@ -161,6 +161,43 @@ describe('chat-request-options', () => {
     expect(result.systemPrompt).not.toContain('通过旧 creator 创建 workflow');
   });
 
+  test('workflow creation guidance is independent of Agent creation and only used for a fresh request', async () => {
+    const { buildChatRequestContext } = await import('@/lib/chat/request-options');
+    const { buildDashboardConversationSystemPrompt, buildDashboardSystemPrompt } = await import('@/lib/chat/system-prompt');
+    const firstRequest = await buildChatRequestContext({
+      mode: 'dashboard',
+      creationAssistantEnabled: false,
+      workflowCreationGuideEnabled: true,
+    });
+    expect(firstRequest.creationAssistantEnabled).toBe(false);
+    expect(firstRequest.runtimeSkillNames).toContain('aceharness-workflow-creator');
+    expect(buildDashboardConversationSystemPrompt).toHaveBeenCalledWith(
+      expect.arrayContaining(['aceharness-workflow-creator']),
+      expect.objectContaining({ workflowCreationGuideEnabled: true }),
+    );
+
+    const disabledRequest = await buildChatRequestContext({
+      mode: 'dashboard',
+      creationAssistantEnabled: true,
+      workflowCreationGuideEnabled: false,
+    });
+    expect(disabledRequest.creationAssistantEnabled).toBe(true);
+    expect(disabledRequest.runtimeSkillNames).not.toContain('aceharness-workflow-creator');
+    expect(buildDashboardSystemPrompt).toHaveBeenCalledWith(
+      expect.not.arrayContaining(['aceharness-workflow-creator']),
+      expect.objectContaining({ workflowCreationGuideEnabled: false }),
+    );
+
+    const resumedRequest = await buildChatRequestContext({
+      mode: 'dashboard',
+      sessionId: 'continued-session',
+      creationAssistantEnabled: true,
+      workflowCreationGuideEnabled: true,
+    });
+    expect(resumedRequest.runtimeSkillNames).not.toContain('aceharness-workflow-creator');
+    expect(resumedRequest.systemPrompt).not.toContain('一等工作流设计 UI');
+  });
+
   test('links only selected runtime skills and keeps aceharness skills eligible', async () => {
     await withTempDir('aceharness-chat-skills-', async (base) => {
       const runtimeSkills = path.join(base, 'runtime-skills');

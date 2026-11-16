@@ -4,7 +4,9 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions, normalizeAssistantDisplay } from '@/lib/chat/actions';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import { extractLastChatPreview } from '@/lib/chat/message-preview';
+import { clearConversationDraft } from '@/hooks/useConversationDraft';
 import {
+  canConfigureWorkflowCreationGuide,
   isCreationAssistantSidebarHint,
   readStoredCreationAssistantEnabled,
   resolveCreationAssistantEnabled,
@@ -12,7 +14,7 @@ import {
   type HomeSidebarHint,
   type SessionWorkbenchState,
 } from '@/lib/core/home-sidebar-state';
-import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
+import { appendStreamChunk, buildFinalRawContent, readChatAdapterStatus, type ChatAdapterStatus } from '@/lib/chat/stream-assembly';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
@@ -89,6 +91,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'error';
   content: string;
   rawContent?: string;
+  adapterStatus?: ChatAdapterStatus;
   source?: {
     type: 'wechat';
     label?: string;
@@ -1124,6 +1127,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             hasConnected = true;
           });
 
+          es.addEventListener('adapter_status', (e) => {
+            const adapterStatus = readChatAdapterStatus(parseSseJsonEventData(e.data));
+            if (!hasConnected || !adapterStatus) return;
+            setActiveSession(prev => prev?.id === activeSessionId ? {
+              ...prev,
+              messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, adapterStatus } : m),
+            } : prev);
+          });
+
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
             const content = String(parseSseJsonEventData(e.data).content || '');
@@ -1942,7 +1954,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     void apiTerminateSessionProcesses(id)
       .catch(console.error)
       .finally(() => {
-        apiDeleteSession(id).catch(async (error) => {
+        apiDeleteSession(id).then(() => clearConversationDraft(id)).catch(async (error) => {
           console.error(error);
           const [list, restoredSession] = await Promise.all([
             apiListSessions(),
@@ -2003,7 +2015,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     void apiTerminateSessionsProcesses(deletableIds)
       .catch(console.error)
       .finally(() => {
-        apiBatchDeleteSessions(deletableIds).catch(async (error) => {
+        apiBatchDeleteSessions(deletableIds).then(() => {
+          deletableIds.forEach(clearConversationDraft);
+        }).catch(async (error) => {
           console.error(error);
           await Promise.allSettled(deletableIds.map((id) => apiDeleteSession(id)));
           const [list, restoredSession] = await Promise.all([
@@ -2142,6 +2156,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             workingDirectory: targetWorkingDirectory || undefined,
             mcpServers: mcpSettingsRef.current,
             creationAssistantEnabled: resolveCreationAssistantEnabled(targetSessionSnapshot),
+            workflowCreationGuideEnabled: false,
           }),
         });
         const { chatId } = await startRes.json();
@@ -2516,6 +2531,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return;
     }
     const creationAssistantEnabled = resolveCreationAssistantEnabled(previousSession);
+    const isNewWorkflowGuideTurn = canConfigureWorkflowCreationGuide(previousSession);
+    const workflowCreationGuideEnabled = isNewWorkflowGuideTurn
+      && previousSession.sessionWorkbenchState?.workflowCreationGuideEnabled !== false;
     const applyToTargetSession = (updater: (session: ChatSession) => ChatSession) => updateSessionById(targetSessionId, updater);
     const getTargetSessionSnapshot = () => getCachedSessionSnapshot(targetSessionId);
     let targetWorkingDirectory = resolveSessionWorkingDirectory(previousSession, '');
@@ -2528,6 +2546,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       ...s,
       updatedAt: Date.now(),
       title: s.messages.length === 0 ? userMsg.content.slice(0, 30) : s.title,
+      sessionWorkbenchState: isNewWorkflowGuideTurn
+        ? { ...s.sessionWorkbenchState, workflowCreationGuideStarted: true }
+        : s.sessionWorkbenchState,
       messages: [...s.messages, userMsg],
     }));
 
@@ -2698,6 +2719,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           workingDirectory: targetWorkingDirectory || undefined,
           mcpServers: mcpSettingsRef.current,
           creationAssistantEnabled,
+          workflowCreationGuideEnabled,
         }),
       });
       const startData = await startRes.json().catch(() => ({}));
@@ -2745,7 +2767,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
           activeEventSourceRef.current = es;
           resetInactivityTimer();
-          let accumulatedRawContent = '';
           let accumulatedRawStream = '';
           let hasConnected = false;
 
@@ -2754,11 +2775,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             hasConnected = true;
           });
 
+          es.addEventListener('adapter_status', (e) => {
+            const adapterStatus = readChatAdapterStatus(parseSseJsonEventData(e.data));
+            if (!hasConnected || !adapterStatus) return;
+            resetInactivityTimer();
+            void applyToTargetSession(s => ({
+              ...s,
+              messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, adapterStatus } : m),
+            }));
+          });
+
           es.addEventListener('thinking', (e) => {
             if (!hasConnected) return;
             resetInactivityTimer();
             const content = String(parseSseJsonEventData(e.data).content || '');
-            accumulatedRawContent = appendStreamChunk(accumulatedRawContent, content);
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
             const row = storeChatStreamSseEventAsAgentMessage('thinking', { content }, {
               chatId,

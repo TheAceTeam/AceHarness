@@ -4,11 +4,11 @@ import { useState, useRef, useEffect, useCallback, useMemo, type ClipboardEvent,
 import { usePathname, useRouter, useSearchParams } from '@/lib/navigation/client';
 import { motion } from 'framer-motion';
 import dynamic from '@/lib/navigation/dynamic';
-import { FolderOpen, GitBranch, MessageSquareText, Settings2 } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ChatSessionMenu } from '@/components/chat/ChatSessionMenu';
+import { ChatWorkspaceToolbar } from '@/components/chat/ChatWorkspaceToolbar';
 import {
   PromptInputCommand,
   PromptInputCommandEmpty,
@@ -24,7 +24,7 @@ import {
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { agentApi, agoraApi, workspaceApi, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
@@ -34,6 +34,7 @@ import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
+import { moveNewConversationDraft, useConversationDraft } from '@/hooks/useConversationDraft';
 import ChatSidebar, { readStoredSessionDirectoryOrder, type SessionDirectoryView } from '@/components/chat/ChatSidebar';
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
 import ChatMessage from '@/components/chat/ChatMessage';
@@ -42,6 +43,7 @@ import { apiFetch } from '@/client/query/api-client';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
+import { ConversationOutline } from '@/components/chat/ConversationOutline';
 import HomeCommandSidebar from '@/components/chat/HomeCommandSidebar';
 import ConversationRightRail from '@/components/chat/ConversationRightRail';
 import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
@@ -53,7 +55,6 @@ import {
   isAiWorkflowCreatorAction,
   isCodespecWorkflowCreatorAction,
   isAiWorkflowCreatorStarterAction,
-  shouldOpenAiWorkflowCreatorFromConversation,
 } from '@/lib/chat/workflow-creator-entry';
 import CliRunDialog, { type CliRunDialogRequest } from '@/components/chat/CliRunDialog';
 import UserMenu from '@/components/UserMenu';
@@ -63,6 +64,7 @@ import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockW
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
+  canConfigureWorkflowCreationGuide,
   inferHomeSidebarTab,
   normalizeHomeSidebarHint,
   normalizeHomeSidebarTab,
@@ -79,7 +81,6 @@ import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/ui/page-header';
-import { PageToolbar } from '@/components/ui/page-toolbar';
 import { StatusPill } from '@/components/ui/status-pill';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
@@ -172,12 +173,6 @@ const sidebarPixelsToPercent = (width: number, containerWidth: number) => {
 };
 type WebkitFileSystemEntryLike = { name?: string; fullPath?: string; isDirectory?: boolean; isFile?: boolean };
 type DataTransferItemWithEntry = DataTransferItem & { webkitGetAsEntry?: () => WebkitFileSystemEntryLike | null };
-type ChatPendingAttachment = {
-  name: string;
-  path: string;
-  size: number;
-  workspace: string;
-};
 const DEFAULT_HOME_SIDEBAR_SIZE = 26;
 const MIN_HOME_SIDEBAR_SIZE = 20;
 const MAX_HOME_SIDEBAR_SIZE = 46;
@@ -640,8 +635,6 @@ export function ChatPageContent({
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model,
     setModel,
-    creationAssistantDefaultEnabled = true,
-    setCreationAssistantDefaultEnabled = () => {},
     engine,
     effectiveEngine,
     isModelSelectionReady,
@@ -674,10 +667,14 @@ export function ChatPageContent({
     };
   }, [activeSession, chatAgentMessageRows]);
   const { toast } = useToast();
-  const [input, setInput] = useState('');
+  const composerSessionId = activeSessionId || activeSession?.id || null;
+  const composerSessionRef = useRef(composerSessionId);
+  composerSessionRef.current = composerSessionId;
+  const focusComposerSessionRef = useRef<string | null>(null);
+  const { text: input, setText: setInput, attachment: pendingAttachment, setAttachment: setPendingAttachment } = useConversationDraft(composerSessionId);
   const [fileDropActive, setFileDropActive] = useState(false);
-  const [attachmentUploading, setAttachmentUploading] = useState(false);
-  const [pendingAttachment, setPendingAttachment] = useState<ChatPendingAttachment | null>(null);
+  const [uploadingAttachments, setUploadingAttachments] = useState<Record<string, number>>({});
+  const attachmentUploading = Boolean(composerSessionId && uploadingAttachments[composerSessionId]);
   const [attachmentPreviewPath, setAttachmentPreviewPath] = useState<string | null>(null);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
@@ -750,6 +747,7 @@ export function ChatPageContent({
   const autoScrollLockedRef = useRef(false);
   const isProgrammaticScrollRef = useRef(false);
   const pendingHistoryScrollAdjustRef = useRef<{ prevScrollHeight: number; prevScrollTop: number } | null>(null);
+  const pendingOutlineJumpRef = useRef<string | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const isMobile = useIsMobile();
@@ -795,10 +793,11 @@ export function ChatPageContent({
   const effectiveWorkingDirectory = activeChatWorkspacePath || fallbackWorkingDirectory;
 
   useEffect(() => {
-    if (activeSessionId || activeSession?.id) {
-      autoCreatedSessionIdRef.current = activeSessionId || activeSession?.id || null;
-    }
-  }, [activeSession?.id, activeSessionId]);
+    autoCreatedSessionIdRef.current = composerSessionId;
+    autoScrollLockedRef.current = false;
+    pendingOutlineJumpRef.current = null;
+    setShowScrollBtn(false);
+  }, [composerSessionId]);
   const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding || activeSession?.sessionWorkbenchState?.embeddedWorkflow?.configFile);
   const hasWorkflowRuntimeRightRailContext = Boolean(
     (activeSession?.workflowBinding?.configFile && activeSession?.workflowBinding?.runId)
@@ -1152,22 +1151,21 @@ export function ChatPageContent({
     const sidebarTab = searchParams.get('sidebarTab');
     const sessionTitle = searchParams.get('sessionTitle');
     const existingSessionId = searchParams.get('sessionId');
+    const draftSessionId = existingSessionId || createSession({ title: sessionTitle?.trim() || '新对话' });
     if (existingSessionId) {
-      const targetSession = sessions.find((session) => session.id === existingSessionId);
-      if (targetSession) {
+      if (sessions.some((session) => session.id === existingSessionId)) {
         setSessionDirectoryView('conversation');
       }
       setActiveSessionId(existingSessionId);
-    } else {
-      createSession({ title: sessionTitle?.trim() || '新对话' });
     }
 
     if (sidebarTab === 'agent' || sidebarTab === 'commander') {
       openHomeSidebar(sidebarTab);
     }
 
-    setInput(starterPrompt);
-    editorRef.current?.focus();
+    setInput(starterPrompt, draftSessionId);
+    if (draftSessionId === composerSessionId) editorRef.current?.focus();
+    else focusComposerSessionRef.current = draftSessionId;
 
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.delete('sessionId');
@@ -1176,7 +1174,7 @@ export function ChatPageContent({
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
+  }, [composerSessionId, createSession, pathname, router, searchParams, sessions, setActiveSessionId, setInput, shouldHandleChatSearchParams]);
 
   const getInputMarkdown = useCallback(() => {
     return editorRef.current?.getMarkdown().trim() || input.trim();
@@ -1425,8 +1423,6 @@ export function ChatPageContent({
     setWorkflowCreatorRequirements(requirements?.trim() || DEFAULT_AI_WORKFLOW_REQUIREMENTS);
     setWorkflowCreatorOpen(true);
     unlockAutoScroll();
-    setInput('');
-    editorRef.current?.clear();
     if (loading) stopStreaming();
   }, [activeSession?.id, activeSessionId, loading, stopStreaming, unlockAutoScroll]);
 
@@ -2155,17 +2151,6 @@ export function ChatPageContent({
     const displayMessage = pendingAttachment
       ? [normalized || '请查看附件', `\n[附件] ${pendingAttachment.name} (${formatAttachmentSize(pendingAttachment.size)})`].join('\n')
       : normalized;
-    const shouldOpenWorkflowCreator = shouldOpenAiWorkflowCreatorFromConversation(normalized, {
-      creationAssistantEnabled: creationAssistantDefaultEnabled,
-      sessionCreationAssistantEnabled: activeSession?.sessionWorkbenchState?.creationAssistantEnabled,
-      hasWorkflowBinding: Boolean(activeSession?.workflowBinding),
-      hasAgentBinding: Boolean(activeSession?.agentBinding),
-      hasCollaboration: hasCollaborationSidebarContext,
-    });
-    if (!pendingAttachment && shouldOpenWorkflowCreator) {
-      openWorkflowCreator(normalized);
-      return;
-    }
     if (!pendingAttachment && normalized === '/compact') {
       if (loading) {
         toast('warning', '当前正在生成，请先停止后再压缩上下文');
@@ -2222,7 +2207,7 @@ export function ChatPageContent({
     }
     await sendMessage(messageToSend, { displayText: displayMessage, targetSessionId });
     editorRef.current?.focus();
-  }, [activeSession?.agentBinding, activeSession?.id, activeSession?.sessionWorkbenchState?.creationAssistantEnabled, activeSession?.workflowBinding, activeSessionId, attachmentUploading, compactActiveSession, createAndActivateSession, creationAssistantDefaultEnabled, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, openWorkflowCreator, pendingAttachment, sendMessage, sendUnifiedAgentChatMessage, stopStreaming, toast, unlockAutoScroll]);
+  }, [activeSession?.id, activeSessionId, attachmentUploading, compactActiveSession, createAndActivateSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, isModelSelectionReady, loading, pendingAttachment, sendMessage, sendUnifiedAgentChatMessage, setInput, setPendingAttachment, stopStreaming, toast, unlockAutoScroll]);
 
   const applySlashCommand = useCallback(async (commandId: string) => {
     if (commandId === 'compact') {
@@ -2316,8 +2301,6 @@ export function ChatPageContent({
       return;
     }
     unlockAutoScroll();
-    setInput('');
-    editorRef.current?.clear();
     if (loading) stopStreaming();
     if (embedded && dockWorkspace) {
       dockWorkspace.openTab({
@@ -2339,8 +2322,6 @@ export function ChatPageContent({
       return;
     }
     unlockAutoScroll();
-    setInput('');
-    editorRef.current?.clear();
     if (loading) stopStreaming();
     if (embedded && dockWorkspace) {
       dockWorkspace.openTab({
@@ -2356,7 +2337,7 @@ export function ChatPageContent({
     router.push(`/workbench/${encodeURIComponent(configFile)}?mode=run&autoStart=1`);
   }, [dockWorkspace, embedded, loading, router, stopStreaming, toast, unlockAutoScroll]);
 
-  const handleQuickAction = useCallback((prompt: string) => {
+  const handleQuickAction = useCallback((prompt: string, targetSessionId = composerSessionId) => {
     if (prompt.startsWith('__HOME_ACTION__:workflow_open:')) {
       const workflowOpenConfig = decodeWorkflowActionFilename(prompt, '__HOME_ACTION__:workflow_open:');
       handleWorkflowOpenAction(workflowOpenConfig);
@@ -2382,9 +2363,9 @@ export function ChatPageContent({
     if (prompt === '__HOME_ACTION__:create_agent') {
       unlockAutoScroll();
       const agentPrompt = '我想创建一个负责【职责】的 Agent，服务于【场景】，请先帮我定义它的职责、风格、能力边界和输入输出。';
-      setInput(agentPrompt);
-      editorRef.current?.setContent(agentPrompt);
-      editorRef.current?.focus();
+      setInput(agentPrompt, targetSessionId);
+      if (targetSessionId === composerSessionId) editorRef.current?.focus();
+      else focusComposerSessionRef.current = targetSessionId;
       if (loading) stopStreaming();
       return;
     }
@@ -2404,8 +2385,6 @@ export function ChatPageContent({
       });
       if (handled) {
         unlockAutoScroll();
-        setInput('');
-        editorRef.current?.clear();
         return;
       }
     }
@@ -2418,8 +2397,6 @@ export function ChatPageContent({
 
     if (prompt && !prompt.includes('\n')) {
       unlockAutoScroll();
-      setInput('');
-      editorRef.current?.clear();
       if (loading) stopStreaming();
       if (!activeSessionId && !activeSession) {
         setSidebarOpen(true);
@@ -2431,6 +2408,7 @@ export function ChatPageContent({
     activeSession,
     activeSessionId,
     createSession,
+    composerSessionId,
     decodeWorkflowActionFilename,
     handleWorkflowOpenAction,
     handleWorkflowStartAction,
@@ -2441,6 +2419,7 @@ export function ChatPageContent({
     setActiveSessionId,
     setHomeSidebarMode,
     setHomeSidebarTab,
+    setInput,
     stopStreaming,
     toast,
     unlockAutoScroll,
@@ -2503,7 +2482,7 @@ export function ChatPageContent({
     }
 
     if (starterAction === 'create_agent') {
-      handleQuickAction('__HOME_ACTION__:create_agent');
+      handleQuickAction('__HOME_ACTION__:create_agent', targetSessionId);
     }
     if (isAiWorkflowCreatorStarterAction(starterAction)) {
       openWorkflowCreator(undefined, targetSessionId);
@@ -2529,6 +2508,31 @@ export function ChatPageContent({
   useEffect(() => {
     setHistoryExpanded(false);
   }, [activeSession?.id]);
+
+  const scrollToMessage = useCallback((messageId: string) => {
+    const target = scrollContainerRef.current?.querySelector<HTMLElement>(
+      `[data-chat-message-id="${CSS.escape(messageId)}"]`,
+    );
+    if (!target) return false;
+    autoScrollLockedRef.current = true;
+    target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return true;
+  }, []);
+
+  const jumpToConversationMessage = useCallback((messageId: string) => {
+    if (scrollToMessage(messageId)) return;
+    pendingOutlineJumpRef.current = messageId;
+    pendingHistoryScrollAdjustRef.current = null;
+    setHistoryExpanded(true);
+  }, [scrollToMessage]);
+
+  useEffect(() => {
+    if (!historyExpanded || !pendingOutlineJumpRef.current) return;
+    const messageId = pendingOutlineJumpRef.current;
+    pendingOutlineJumpRef.current = null;
+    const frame = requestAnimationFrame(() => scrollToMessage(messageId));
+    return () => cancelAnimationFrame(frame);
+  }, [historyExpanded, scrollToMessage]);
 
   const handleEditMessage = useCallback((messageId: string) => {
     const msg = messages.find(m => m.id === messageId);
@@ -2624,15 +2628,14 @@ export function ChatPageContent({
     if (existing) return existing;
     const nextSessionId = createAndActivateSession({ title: '新对话' });
     autoCreatedSessionIdRef.current = nextSessionId;
+    moveNewConversationDraft(nextSessionId);
     setSidebarOpen(true);
     setSessionDirectoryView('conversation');
     return nextSessionId;
   }, [activeSession?.id, activeSessionId, createAndActivateSession]);
 
-  const ensureAttachmentWorkspace = useCallback(async (): Promise<string> => {
-    const targetSessionId = ensureChatSessionForComposer();
-
-    const existingWorkspace = targetSessionId === activeSessionId
+  const ensureAttachmentWorkspace = useCallback(async (targetSessionId: string): Promise<string> => {
+    const existingWorkspace = targetSessionId === activeSession?.id
       ? String(activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim()
       : '';
     if (existingWorkspace) return existingWorkspace;
@@ -2646,7 +2649,7 @@ export function ChatPageContent({
       purpose: 'chat',
     });
     if (!result.workspacePath) throw new Error('准备对话工作区失败');
-    setSessionWorkbenchState((prev) => ({
+    await updateSessionWorkbenchState(targetSessionId, (prev) => ({
       ...(prev || {}),
       chatWorkspace: {
         ...(prev?.chatWorkspace || {}),
@@ -2657,19 +2660,17 @@ export function ChatPageContent({
         updatedAt: Date.now(),
       },
     }));
-    setWorkingDirectory(result.workspacePath);
+    if (composerSessionRef.current === targetSessionId) setWorkingDirectory(result.workspacePath);
     return result.workspacePath;
   }, [
     activeSession?.id,
     activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory,
     activeSession?.title,
-    activeSessionId,
-    ensureChatSessionForComposer,
     fallbackWorkingDirectory,
     mcpSettings,
-    setSessionWorkbenchState,
     setWorkingDirectory,
     skillSettings,
+    updateSessionWorkbenchState,
   ]);
 
   const uploadChatAttachment = useCallback(async (file: File) => {
@@ -2677,9 +2678,10 @@ export function ChatPageContent({
       toast('warning', `文件超过 ${formatAttachmentSize(CHAT_ATTACHMENT_MAX_BYTES)} 限制`);
       return;
     }
-    setAttachmentUploading(true);
+    const targetSessionId = ensureChatSessionForComposer();
+    setUploadingAttachments(previous => ({ ...previous, [targetSessionId]: (previous[targetSessionId] || 0) + 1 }));
     try {
-      const workspace = await ensureAttachmentWorkspace();
+      const workspace = await ensureAttachmentWorkspace(targetSessionId);
       const result = await workspaceApi.upload(workspace, CHAT_ATTACHMENT_UPLOAD_DIR, [file], {
         conflict: 'rename',
         relativePaths: [file.name],
@@ -2691,15 +2693,24 @@ export function ChatPageContent({
         path: saved.path,
         size: saved.size || file.size,
         workspace,
-      });
+      }, targetSessionId);
       toast('success', `已添加附件：${saved.name || file.name}`);
-      requestAnimationFrame(() => editorRef.current?.focus());
+      if (composerSessionRef.current === targetSessionId) {
+        requestAnimationFrame(() => {
+          if (composerSessionRef.current === targetSessionId) editorRef.current?.focus();
+        });
+      }
     } catch (error: any) {
       toast('error', error?.message || '附件上传失败');
     } finally {
-      setAttachmentUploading(false);
+      setUploadingAttachments(previous => {
+        const next = { ...previous };
+        if (next[targetSessionId] > 1) next[targetSessionId] -= 1;
+        else delete next[targetSessionId];
+        return next;
+      });
     }
-  }, [ensureAttachmentWorkspace, toast]);
+  }, [ensureAttachmentWorkspace, ensureChatSessionForComposer, setPendingAttachment, toast]);
 
   const handleComposerDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!hasDroppedFiles(event.dataTransfer)) return;
@@ -2752,8 +2763,9 @@ export function ChatPageContent({
   }, [toast, uploadChatAttachment]);
 
   const handleComposerFocus = useCallback(() => {
-    ensureChatSessionForComposer();
-  }, [ensureChatSessionForComposer]);
+    if (!composerSessionId) focusComposerSessionRef.current = ensureChatSessionForComposer();
+    else if (focusComposerSessionRef.current === composerSessionId) focusComposerSessionRef.current = null;
+  }, [composerSessionId, ensureChatSessionForComposer]);
 
   const composerDropProps = useMemo(() => ({
     onDragEnterCapture: handleComposerDragEnter,
@@ -2828,8 +2840,9 @@ export function ChatPageContent({
         }
       }
       return (
-        <div key={msg.id} className="pb-4">
+        <div key={msg.id} className="pb-3">
           <ChatMessage
+            compactTranscript
             message={displayMsg}
             isStreaming={isStreaming}
             onConfirmAction={messageCallbacks[msg.id]?.onConfirmAction}
@@ -3081,9 +3094,20 @@ export function ChatPageContent({
     toast('success', '已创建 Fork');
     return sessionId;
   }, [activeSession, createAndActivateSession, loading, toast]);
-  const handleCreationAssistantChange = useCallback((enabled: boolean) => {
-    setCreationAssistantDefaultEnabled(enabled);
-  }, [setCreationAssistantDefaultEnabled]);
+  const workflowCreationGuide = useMemo(() => {
+    if (!activeSession || isCurrentSessionLoading || activeAiBusy || !canConfigureWorkflowCreationGuide(activeSession)) {
+      return undefined;
+    }
+    return {
+      enabled: activeSession.sessionWorkbenchState?.workflowCreationGuideEnabled !== false,
+      onChange: (enabled: boolean) => {
+        void updateSessionWorkbenchState(activeSession.id, (prev) => ({
+          ...prev,
+          workflowCreationGuideEnabled: enabled,
+        }));
+      },
+    };
+  }, [activeSession, activeAiBusy, isCurrentSessionLoading, updateSessionWorkbenchState]);
   const chatHeaderStatus = activeAiBusy || isCurrentSessionLoading
     ? <StatusPill tone="neutral">生成中</StatusPill>
     : activeWeChatBinding
@@ -3150,10 +3174,8 @@ export function ChatPageContent({
           <span className="hidden xl:inline">保存为 Notebook</span>
         </Button>
         <ChatSessionMenu
-          creationAssistantEnabled={creationAssistantDefaultEnabled}
-          creationAssistantDisabled={loading}
+          workflowCreationGuide={workflowCreationGuide}
           forkDisabled={!activeSession || loading}
-          onCreationAssistantChange={handleCreationAssistantChange}
           onFork={handleForkFromSessionMenu}
         />
       </>
@@ -3167,8 +3189,7 @@ export function ChatPageContent({
     activeWeChatBinding?.externalConversationId,
     activeAiBusy,
     chatTitle,
-    creationAssistantDefaultEnabled,
-    handleCreationAssistantChange,
+    workflowCreationGuide,
     handleCreateNewConversation,
     handleForkFromSessionMenu,
     handleSaveConversationAsNotebook,
@@ -3281,7 +3302,7 @@ export function ChatPageContent({
                     <RobotLogo size={28} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs font-semibold">默认助手</div>
-                      <div className="truncate text-[11px] text-muted-foreground">单人议场默认 Agent，普通对话能力完整保留</div>
+                      <div className="truncate text-[11px] text-muted-foreground">aceharness对话助手</div>
                     </div>
                     <Badge variant="secondary" className="rounded-full text-[10px]">默认</Badge>
                   </div>
@@ -3567,6 +3588,7 @@ export function ChatPageContent({
                       </Attachments>
                     ) : null}
                     <RichTextEditor
+                      key={composerSessionId ?? 'new'}
                       ref={editorRef}
                       content={input}
                       onEnter={handleEditorEnter}
@@ -3577,7 +3599,7 @@ export function ChatPageContent({
                       maxHeight={220}
                       className="[&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-6 [&_.ProseMirror]:text-foreground [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
                       disabled={false}
-                      autoFocus={false}
+                      autoFocus={Boolean(composerSessionId && focusComposerSessionRef.current === composerSessionId)}
                       showFullscreenToggle={false}
                       showToolbar={false}
                       mentionItems={mainInputMentionItems}
@@ -3608,41 +3630,6 @@ export function ChatPageContent({
             </div>
           ) : (
           <div className="flex h-full min-h-0 flex-col bg-[#F7F7F4] dark:bg-[#0D0E14]">
-            {chatWorkspaceShellEnabled ? (
-            <PageHeader
-              className="h-auto shrink-0 bg-card px-5 py-3"
-              title={chatWorkspaceTitle}
-              status={chatHeaderStatus}
-              leading={<span className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-[#EEE7FF] text-[#8B5CF6] dark:bg-violet-500/10 dark:text-violet-300">#</span>}
-              secondaryActions={(
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 rounded-md px-2.5 text-xs"
-                  title="切换工作区"
-                  aria-label="切换工作区"
-                  onClick={() => {
-                    setChatWorkspaceDraft(pinnedChatWorkspacePath || defaultChatWorkspacePath);
-                    setChatWorkspaceDialogOpen(true);
-                  }}
-                >
-                  <Settings2 className="mr-1.5 h-4 w-4" />
-                  切换工作区
-                </Button>
-                <ChatSessionMenu
-                  compact
-                  creationAssistantEnabled={creationAssistantDefaultEnabled}
-                  creationAssistantDisabled={loading}
-                  forkDisabled={!activeSession || loading}
-                  onCreationAssistantChange={handleCreationAssistantChange}
-                  onFork={handleForkFromSessionMenu}
-                />
-              </div>
-              )}
-            />
-            ) : null}
-
             <Tabs
               value={chatWorkspaceShellEnabled ? chatWorkspaceActiveTab : 'chat'}
               onValueChange={(value) => {
@@ -3652,29 +3639,22 @@ export function ChatPageContent({
               className="flex min-h-0 flex-1 flex-col"
             >
               {chatWorkspaceShellEnabled ? (
-              <PageToolbar
-                className="shrink-0 bg-card px-5 py-0"
-                actions={(
-                  <div className="hidden max-w-[44%] truncate text-xs text-muted-foreground md:block">
-                    {resolvedChatWorkspacePath || '准备工作区...'}
-                  </div>
-                )}
-              >
-                <TabsList className="h-11 gap-5 rounded-none bg-transparent p-0">
-                  <TabsTrigger value="chat" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-[#8B5CF6] data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
-                    <MessageSquareText className="h-4 w-4" />
-                    聊天
-                  </TabsTrigger>
-                  <TabsTrigger value="workspace" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-[#8B5CF6] data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
-                    <FolderOpen className="h-4 w-4" />
-                    工作区
-                  </TabsTrigger>
-                  <TabsTrigger value="changes" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-[#8B5CF6] data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
-                    <GitBranch className="h-4 w-4" />
-                    变更
-                  </TabsTrigger>
-                </TabsList>
-              </PageToolbar>
+                <ChatWorkspaceToolbar
+                  title={chatWorkspaceTitle}
+                  messageCount={messages.length}
+                  status={isCurrentSessionLoading ? 'loading' : activeAiBusy ? 'generating' : activeWeChatBinding ? 'wechat' : undefined}
+                  workspacePath={resolvedChatWorkspacePath}
+                  automaticWorkspace={sessionChatWorkspace?.autoCreated}
+                  onSwitchWorkspace={() => {
+                    setChatWorkspaceDraft(pinnedChatWorkspacePath || defaultChatWorkspacePath);
+                    setChatWorkspaceDialogOpen(true);
+                  }}
+                  menuProps={{
+                    workflowCreationGuide,
+                    forkDisabled: !activeSession || loading,
+                    onFork: handleForkFromSessionMenu,
+                  }}
+                />
               ) : null}
 
               <TabsContent value="chat" className="relative mt-0 min-h-0 flex-1 overflow-visible">
@@ -3707,6 +3687,7 @@ export function ChatPageContent({
                     ref={scrollContainerRef}
                     className={cn(
                       'home-chat-scroll absolute inset-0 overflow-y-auto px-4 pb-6 pt-8 md:px-8 lg:px-16',
+                      messages.length > 1 && 'md:pl-12 lg:pl-16',
                     )}
                   >
                     {messages.length === 0 && isCurrentSessionLoading ? (
@@ -3753,6 +3734,13 @@ export function ChatPageContent({
                     />
                     <div ref={messagesEndRef} />
                   </div>
+                  <ConversationOutline
+                    key={composerSessionId ?? 'new'}
+                    messages={messages}
+                    scrollContainerRef={scrollContainerRef}
+                    historyExpanded={historyExpanded}
+                    onJump={jumpToConversationMessage}
+                  />
                   {showScrollBtn && (
                     <button
                       onClick={scrollToBottom}
@@ -3836,6 +3824,7 @@ export function ChatPageContent({
                           </div>
                         ) : null}
                         <RichTextEditor
+                          key={composerSessionId ?? 'new'}
                           ref={editorRef}
                           content={input}
                           onEnter={handleEditorEnter}
@@ -3846,7 +3835,7 @@ export function ChatPageContent({
                           maxHeight={220}
                           className="[&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-6 [&_.ProseMirror]:text-foreground [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
                           disabled={false}
-                          autoFocus={false}
+                          autoFocus={Boolean(composerSessionId && focusComposerSessionRef.current === composerSessionId)}
                           showFullscreenToggle={!isMobile}
                           showToolbar={false}
                           mentionItems={mainInputMentionItems}

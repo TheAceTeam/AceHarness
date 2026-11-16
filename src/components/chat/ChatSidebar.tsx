@@ -12,7 +12,6 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
-import { PageHeader } from '@/components/ui/page-header';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CheckedState } from '@radix-ui/react-checkbox';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
@@ -56,7 +55,6 @@ import type { HumanQuestion } from '@/lib/run/state-persistence';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { isRunningWorkflowConversation } from '@/lib/workflow/run-status';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
-import { RobotLogo } from '@/components/brand/RobotLogo';
 
 type SkillItem = {
   name: string;
@@ -1222,14 +1220,20 @@ function ChatSidebarComponent({
 
   return (
     <div className="w-full flex h-full flex-col bg-[#EDEDE9] dark:bg-[#121218]">
-      <PageHeader
-        className={compact ? 'bg-[#EDEDE9] p-2 dark:bg-[#121218]' : 'bg-[#EDEDE9] p-3 dark:bg-[#121218]'}
-        title="会话中心"
-        subtitle={compact ? undefined : '对话、群聊与工作流入口'}
-        leading={!compact ? <RobotLogo size={28} /> : undefined}
-        status={<StatusPill tone="neutral">{groupedSessions.conversation.length}</StatusPill>}
-      >
-        <div className="mt-3 grid grid-cols-2 gap-2">
+      <header className={`shrink-0 space-y-2 px-3 pb-1 ${compact ? 'pt-2' : 'pt-2.5'}`}>
+        <div className="flex items-center justify-between rounded-md border border-border bg-card px-2.5 py-1.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="material-symbols-outlined text-[18px] text-[#8B5CF6]" aria-hidden="true">forum</span>
+            <div className="min-w-0">
+              <h1 className="truncate text-xs font-medium text-foreground">对话</h1>
+              <div className="truncate text-[10px] text-muted-foreground">群聊和工作流都会显示在这里</div>
+            </div>
+          </div>
+          <StatusPill tone="neutral" className="shrink-0 text-[10px]">
+            {groupedSessions.conversation.length}
+          </StatusPill>
+        </div>
+        <div className="flex flex-wrap gap-2">
           <Button
             type="button"
             size="sm"
@@ -1264,25 +1268,10 @@ function ChatSidebarComponent({
             {manageMode ? '完成管理' : '批量管理'}
           </Button>
         </div>
-      </PageHeader>
+      </header>
 
       <div className="home-chat-scroll flex-1 overflow-y-auto">
-        <div className="border-b border-border/40 px-3 py-2">
-          <div className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="material-symbols-outlined text-[18px] text-[#8B5CF6]">forum</span>
-              <div className="min-w-0">
-                <div className="truncate text-xs font-medium text-foreground">对话</div>
-                <div className="truncate text-[10px] text-muted-foreground">群聊和工作流都会显示在这里</div>
-              </div>
-            </div>
-            <StatusPill tone="neutral" className="shrink-0 text-[10px]">
-              {groupedSessions.conversation.length}
-            </StatusPill>
-          </div>
-        </div>
-
-        <div className="border-b border-border/40 bg-[#EDEDE9] px-3 py-2 dark:bg-[#121218]">
+        <div className="bg-[#EDEDE9] px-3 py-1.5 dark:bg-[#121218]">
           <div className="flex items-center gap-2">
             <div className="relative min-w-0 flex-1">
               <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
@@ -1375,7 +1364,7 @@ function ChatSidebarComponent({
         )}
 
         {sessionsLoading && visibleSessions.length === 0 ? (
-          <div className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
+          <div className="mx-3 mb-2 mt-0.5 overflow-hidden rounded-lg border border-border bg-card">
             {Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="border-b border-border/35 px-3 py-3 last:border-b-0">
                 <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
@@ -1393,7 +1382,7 @@ function ChatSidebarComponent({
           />
         )}
         {visibleSessions.length > 0 ? (
-          <div className="mx-2 my-2 overflow-hidden rounded-lg border border-border bg-card">
+          <div className="mx-3 mb-2 mt-0.5 overflow-hidden rounded-lg border border-border bg-card">
             {pagedVisibleSessions.map(session => (
               <SessionItem
                 key={session.id}
@@ -2947,7 +2936,7 @@ function EmptySessionState({
     : '新建对话，让 AI 帮你继续推进。';
 
   return (
-    <div className="px-3 py-6">
+    <div className="px-3 pb-2 pt-0.5">
       <EmptyState
         className="min-h-[190px] rounded-lg bg-card px-4 py-6"
         icon={<span className="material-symbols-outlined text-base">forum</span>}

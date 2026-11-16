@@ -4,6 +4,7 @@ import { parse } from 'yaml';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { withIsolatedAceHome, withTempDir } from './helpers/module-helpers';
 import { makeRequest, responseJson } from './helpers/route-helpers';
+import type { AcpRuntimeOptions } from 'acpx/runtime';
 
 describe('models API route', () => {
   afterEach(() => {
@@ -11,6 +12,8 @@ describe('models API route', () => {
     vi.doUnmock('@/lib/auth/middleware');
     vi.doUnmock('@/lib/models/probes');
     vi.doUnmock('@/lib/models/diagnostics-runtime-bridge');
+    vi.doUnmock('acpx/agent-registry');
+    vi.doUnmock('acpx/runtime');
     vi.resetModules();
   });
 
@@ -60,6 +63,74 @@ describe('models API route', () => {
       });
       expect(body.routes).toHaveLength(1);
       expect(body.yamlSeed).toContain('modelRouteId: route-codex-gpt');
+    });
+  });
+
+  test('returns the live Claude model list before session cleanup and probes on every request', async () => {
+    let catalogModel = { id: 'claude-opus-5-5', name: 'Opus 5.5 (Custom)' };
+    const finishProbes: Array<() => void> = [];
+    const close = vi.fn(async () => undefined);
+    const shutdown = vi.fn(async () => undefined);
+    const createAcpRuntime = vi.fn((options: AcpRuntimeOptions) => ({
+      ensureSession: vi.fn(() => {
+        options.onAcpMessage?.('outbound', { method: 'session/new', id: 2 });
+        options.onAcpMessage?.('inbound', {
+          id: 1,
+          result: { models: { availableModelIds: ['wrong-request'] } },
+        });
+        options.onAcpMessage?.('inbound', {
+          id: 2,
+          result: {
+            configOptions: [{
+              id: 'model',
+              type: 'select',
+              options: [{ value: catalogModel.id, name: catalogModel.name }],
+            }],
+          },
+        });
+        return new Promise(resolve => finishProbes.push(() => resolve({ sessionKey: 'temporary-session' })));
+      }),
+      close,
+      shutdown,
+    }));
+    const createAgentRegistry = vi.fn(() => ({}));
+    vi.doMock('acpx/runtime', () => ({ createAcpRuntime, createAgentRegistry, createRuntimeStore: () => ({}) }));
+    vi.doMock('acpx/agent-registry', () => ({
+      AGENT_REGISTRY: { claude: 'built-in-claude-command' },
+      resolveInstalledBuiltInAgentLaunch: () => ({ command: process.execPath, args: ['adapter-entry.js'] }),
+    }));
+    vi.stubEnv('ACPX_CLAUDE_INCLUDE_USER_SETTINGS', undefined);
+
+    try {
+      const { GET } = await import('@/server/api-routes/engine/models/route');
+      const request = () => makeRequest('/api/engine/models?engine=claude');
+      const first = await GET(request());
+
+      expect(first.status).toBe(200);
+      expect(first.headers.get('Cache-Control')).toBe('no-store');
+      expect(await responseJson(first)).toMatchObject({
+        models: [{ modelId: 'claude-opus-5-5', name: 'Opus 5.5 (Custom)' }],
+      });
+      expect(close).not.toHaveBeenCalled();
+      expect(process.env.ACPX_CLAUDE_INCLUDE_USER_SETTINGS).toBe('1');
+      expect(createAgentRegistry).toHaveBeenCalledWith({
+        overrides: expect.objectContaining({ claude: [process.execPath, 'adapter-entry.js'] }),
+      });
+
+      catalogModel = { id: 'changed-model', name: 'Changed custom model' };
+      const second = await GET(request());
+      expect(await responseJson(second)).toMatchObject({
+        models: [{ modelId: 'changed-model', name: 'Changed custom model' }],
+      });
+      expect(createAcpRuntime).toHaveBeenCalledTimes(2);
+    } finally {
+      finishProbes.forEach(finish => finish());
+      vi.unstubAllEnvs();
+    }
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledTimes(2);
+      expect(shutdown).toHaveBeenCalledTimes(2);
     });
   });
 
