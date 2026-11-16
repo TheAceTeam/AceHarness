@@ -32,6 +32,7 @@ import {
   type AceToolResultPayload,
 } from '@/lib/chat/ai-process-blocks';
 import { getAceToolTitle } from '@/lib/chat/ace-tool-titles';
+import type { ChatAdapterStatus } from '@/lib/chat/stream-assembly';
 import { workspaceApi } from '@/lib/core/api';
 import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
 import type { BundledLanguage } from 'shiki';
@@ -1847,6 +1848,7 @@ interface ChatMessageProps {
     role: 'user' | 'assistant' | 'error';
     content: string;
     rawContent?: string;
+    adapterStatus?: ChatAdapterStatus;
     source?: {
       type: 'wechat';
       label?: string;
@@ -1868,6 +1870,7 @@ interface ChatMessageProps {
     timestamp?: number;
   };
   isStreaming?: boolean;
+  compactTranscript?: boolean;
   onConfirmAction: (actionId: string) => void;
   onRejectAction: (actionId: string) => void;
   onUndoAction: (actionId: string) => void;
@@ -1892,6 +1895,15 @@ export function ThinkingBot() {
       <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
       <Shimmer as="span" className={markdownStyles.thinkingText}>思考中</Shimmer>
       <span className={markdownStyles.thinkingDots}><span>.</span><span>.</span><span>.</span></span>
+    </div>
+  );
+}
+
+function TranscriptTag({ label, icon, className }: { label: string; icon: string; className: string }) {
+  return (
+    <div className={`home-chat-surface flex w-fit items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${className}`} aria-live="polite">
+      <span className="material-symbols-outlined text-sm" aria-hidden="true">{icon}</span>
+      <span className="whitespace-normal break-words">{label}</span>
     </div>
   );
 }
@@ -2045,7 +2057,7 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
   );
 }
 
-export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onReloadActionResult, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, currentUser }: ChatMessageProps) {
+export default memo(function ChatMessage({ message, isStreaming, compactTranscript, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onReloadActionResult, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, currentUser }: ChatMessageProps) {
   const { toast } = useToast();
   const rawMessageContent = message.rawContent || message.content || '';
   const processSource = stripResultBlocks(rawMessageContent);
@@ -2148,10 +2160,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
       return (
         <div className="group flex justify-center">
           <div className="flex flex-col items-center gap-1">
-            <div className={`home-chat-surface flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${visibleSessionTag.className}`}>
-              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{visibleSessionTag.icon}</span>
-              <span className="whitespace-normal break-all">{message.content}</span>
-            </div>
+            <TranscriptTag label={message.content} icon={visibleSessionTag.icon} className={visibleSessionTag.className} />
             {sentAt ? <div className="text-[11px] text-muted-foreground opacity-70">{sentAt}</div> : null}
             <div className={`${actionBarClass} justify-center`}>
               <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
@@ -2182,8 +2191,12 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
               </span>
             </div>
           ) : null}
-          <div className="rounded-xl rounded-tr-sm border border-border bg-card px-4 py-2.5 text-sm text-foreground transition-colors duration-150 hover:border-[#8B5CF6]/30">
-            <div className="[&_a]:text-[#8B5CF6] [&_a]:underline [&_a:hover]:text-[#6D45D8] [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain">
+          <div className={compactTranscript
+            ? `ml-auto w-fit max-w-full rounded-2xl bg-[#141414] px-3.5 py-2 text-[#fafafa] dark:bg-[#292929] ${markdownStyles.compactTranscript} ${markdownStyles.compactUserTranscript}`
+            : 'rounded-xl rounded-tr-sm border border-border bg-card px-4 py-2.5 text-sm text-foreground transition-colors duration-150 hover:border-[#8B5CF6]/30'}>
+            <div className={compactTranscript
+              ? '[&_img]:my-2 [&_img]:max-h-64 [&_img]:rounded-md [&_img]:object-contain'
+              : '[&_a]:text-[#8B5CF6] [&_a]:underline [&_a:hover]:text-[#6D45D8] [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain'}>
               <Markdown>{message.content}</Markdown>
             </div>
           </div>
@@ -2349,16 +2362,19 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   }
 
   // Assistant message
+  const adapterStatus = message.adapterStatus;
+  const adapterReady = adapterStatus?.phase === 'ready';
+  const showThinkingBot = isStreaming && !streamingResult && adapterStatus?.phase !== 'preparing';
   const hasAssistantBubbleContent = Boolean(
     processTimelineState.timelineItems.length
     || streamingResult
-    || isStreaming
+    || showThinkingBot
   );
 
   return (
     <div className="group flex items-start gap-2">
       <AssistantAvatar />
-      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
+      <div className={compactTranscript ? 'w-full min-w-0 max-w-[58rem] space-y-1' : `${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         {sourceLabel ? (
           <div>
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 backdrop-blur-sm dark:text-emerald-300">
@@ -2366,16 +2382,25 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             </span>
           </div>
         ) : null}
+        {adapterStatus && (adapterReady || isStreaming) && (
+          <TranscriptTag
+            label={adapterReady ? `${adapterStatus.agentName} 适配器已准备完成` : `首次对话，正在准备 ${adapterStatus.agentName} 适配器`}
+            icon={adapterReady ? 'check_circle' : 'hourglass_top'}
+            className="border-border bg-background text-muted-foreground"
+          />
+        )}
         {hasAssistantBubbleContent && (
-          <div className="rounded-xl rounded-tl-sm border border-border bg-card px-4 py-2.5 transition-colors duration-150 hover:border-[#8B5CF6]/30">
-            <div className="space-y-3">
+          <div className={compactTranscript
+            ? `py-1 text-foreground ${markdownStyles.compactTranscript}`
+            : 'rounded-xl rounded-tl-sm border border-border bg-card px-4 py-2.5 transition-colors duration-150 hover:border-[#8B5CF6]/30'}>
+            <div className={compactTranscript ? 'space-y-2' : 'space-y-3'}>
               {processTimelineState.timelineItems.length ? (
                 <WrapperProcessBlocks content={processSource} isStreaming={isStreaming} />
               ) : null}
               {streamingResult ? (
                 <StreamingResultPanel result={streamingResult} />
               ) : null}
-              {isStreaming && !streamingResult && (
+              {showThinkingBot && (
                 <div className="pt-1">
                   <ThinkingBot />
                 </div>

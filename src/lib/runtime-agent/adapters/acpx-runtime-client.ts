@@ -21,7 +21,7 @@ import type {
 } from '../contracts';
 import { writeAcpxDebugTrace } from '../acpx-debug-trace';
 import { redactDiagnosticPayload } from '../security/redaction';
-import { formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, shouldSkipOpencodeSafeCheck, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
+import { applyAcpxAgentProcessEnvDefaults, formatAcpxCommandForRuntime, getAcpxAgentRegistryOverrides, type AcpxCommandResolution, type AcpxRuntimeClient } from './acpx-adapter';
 
 export interface CreateAcpxRuntimeClientOptions {
   cwd?: string;
@@ -103,8 +103,8 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
       let handle: AcpRuntimeHandle | undefined;
 
       try {
+        applyAcpxAgentProcessEnvDefaults(agentId);
         runtime = await getRuntime(session.profileSnapshot);
-        applyProcessEnvForAgent(agentId);
         const env = await resolveEnv(session, options.loadConfiguredEnv);
         const createEnsureInput = (sessionKey: string, resumeId?: string) => ({
           sessionKey,
@@ -1455,10 +1455,4 @@ function isAcpResumeUnavailableError(error: unknown): boolean {
   if (isNotFound) return true;
   const mentionsResume = /\b(resume|resumed|session\/resume|session\/load|thread id)\b/u.test(diagnostic);
   return mentionsResume && isNotFound;
-}
-
-function applyProcessEnvForAgent(agentId: string | undefined): void {
-  if (shouldSkipOpencodeSafeCheck(agentId)) {
-    process.env.OPENCODE_SKIP_SAFE_CHECK = process.env.OPENCODE_SKIP_SAFE_CHECK || '1';
-  }
 }

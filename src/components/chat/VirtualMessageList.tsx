@@ -32,6 +32,8 @@ export function VirtualMessageList({
       {items.map((item) => (
         <div
           key={item.key}
+          data-chat-message-id={item.key}
+          className="scroll-mt-5"
           style={{
             contentVisibility: 'auto',
             containIntrinsicSize: `auto ${estimatedItemHeight}px`,

@@ -11,6 +11,8 @@ import {
   stringifyStructured,
 } from '@/lib/chat/ace-process-formatters';
 import { writeAcpxDebugTrace } from '@/lib/runtime-agent/acpx-debug-trace';
+import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
+import type { ChatAdapterStatus } from '@/lib/chat/stream-assembly';
 import type { RuntimeToolChange, RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 import type {
   CostUsage,
@@ -100,6 +102,10 @@ export type ChatRuntimeStreamEvent =
       type: 'tool';
       tool: RuntimeToolEvent;
       metadata?: any;
+    }
+  | {
+      type: 'adapter_status';
+      status: ChatAdapterStatus;
     };
 
 export type RuntimeToolState = {
@@ -407,6 +413,11 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
       this.emit('stream', event);
     };
     emitFormattedChunk({ type: 'session', content: session.runtimeSessionId });
+    const agent = getBuiltinAgentDefinition(this.agentId);
+    const adapterName = !runtimeSessionId && agent?.runtime === 'acpx' ? agent.displayName : undefined;
+    if (adapterName) {
+      emitFormattedChunk({ type: 'adapter_status', status: { agentName: adapterName, phase: 'preparing' } });
+    }
 
     let output = '';
     let success = true;
@@ -499,6 +510,8 @@ class RuntimeBackedChatEngine extends EventEmitter implements ChatRuntimeEngine 
               metadata: normalized.payload,
             });
           }
+        } else if (normalized.type === 'turn.started' && adapterName) {
+          emitFormattedChunk({ type: 'adapter_status', status: { agentName: adapterName, phase: 'ready' } });
         } else if (normalized.type === 'turn.failed') {
           success = false;
           error = extractErrorMessage(normalized.payload) || extractMessage(normalized.payload) || 'Runtime turn failed';

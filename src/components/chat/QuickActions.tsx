@@ -413,7 +413,7 @@ export function QuickActionsBar({ onAction, skillSettings, slashCommands }: Quic
   const collapsibleGroups = getCollapsibleActionGroups(buildCodespecQuickActions(slashCommands));
 
   return (
-    <div className="w-full py-1">
+    <div className="w-full">
       <AnimatePresence>
         {expanded && (
           <motion.div
@@ -457,29 +457,35 @@ export function QuickActionsBar({ onAction, skillSettings, slashCommands }: Quic
         )}
       </AnimatePresence>
 
-      <Suggestions className="mb-1 gap-2">
-        {pinnedActions.map((action) => (
-          <Suggestion
-            key={action.id}
-            suggestion={action.prompt}
-            onClick={() => onAction(action.prompt)}
-            className={`h-10 rounded-full bg-gradient-to-r ${action.color} border-white/10 px-5 text-sm font-semibold text-white shadow-sm hover:opacity-90`}
-            size="sm"
-          >
-            <span className="material-symbols-outlined text-xs">{action.icon}</span>
-            {action.label}
-          </Suggestion>
-        ))}
-      </Suggestions>
-      <div className="mb-0.5 flex items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-2">
         <button
           type="button"
-          onClick={() => setExpanded(e => !e)}
-          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
         >
-          <span className="material-symbols-outlined text-sm">{expanded ? 'expand_more' : 'expand_less'}</span>
-          {expanded ? '收起快捷操作' : '快捷操作'}
+          <span aria-hidden="true" className="material-symbols-outlined text-sm">
+            {expanded ? 'expand_more' : 'expand_less'}
+          </span>
+          快捷操作
         </button>
+
+        {pinnedActions.length > 0 && (
+          <Suggestions className="gap-1.5 p-0.5" style={{ minWidth: 0 }}>
+            {pinnedActions.map((action) => (
+              <Suggestion
+                key={action.id}
+                suggestion={action.prompt}
+                onClick={() => onAction(action.prompt)}
+                className={`h-7 gap-1 rounded-full bg-gradient-to-r ${action.color} border-white/10 px-2.5 text-xs font-medium text-white hover:opacity-90`}
+                size="sm"
+              >
+                <span aria-hidden="true" className="material-symbols-outlined text-xs">{action.icon}</span>
+                {action.label}
+              </Suggestion>
+            ))}
+          </Suggestions>
+        )}
       </div>
     </div>
   );

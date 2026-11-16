@@ -175,7 +175,7 @@ export function formatAcpxCommandForRuntime(command: AcpxCommandResolution, opti
 }
 
 export function resolveAcpxRuntimeAgent(command: AcpxCommandResolution, options: { cwd?: string; agentId?: string } = {}): string {
-  // ACPX 0.13 rejects raw command strings on Windows. Built-in agents must be
+  // ACPX rejects raw command strings on Windows. Built-in agents must be
   // addressed by registry ID so the corresponding argv override is applied.
   return options.agentId || command.command;
 }
@@ -192,13 +192,7 @@ export function clearAcpxAgentRegistryOverrideCache(): void {
 }
 
 export function getAcpxAgentRegistryOverrides(): Record<string, string[]> {
-  // Overrides must stay argv arrays. acpx 0.13 accepts `string | string[]`, but
-  // only the array form yields `agentArgv`; without it `resolveAgentCommandParts`
-  // throws on win32 ("Raw agent command strings are not supported on Windows").
-  // The 0.12 contract was the opposite — its `mergeAgentRegistry` called
-  // `command.trim()` and rejected arrays — so this shape is tied to the acpx
-  // major the lockfile pins, and a version guard test keeps a stale install from
-  // silently passing.
+  // Keep overrides as argv arrays so ACPX can launch them on Windows.
   //
   // Discovery has to stay as well: a bare name is resolved against the server
   // process PATH, which misses a CLI installed only on an ACEHarness-configured
@@ -241,8 +235,14 @@ const OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS = new Set([
   'codegenie',
 ]);
 
-export function shouldSkipOpencodeSafeCheck(agentId: string | undefined): boolean {
-  return OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS.has(String(agentId || '').trim().toLowerCase());
+export function applyAcpxAgentProcessEnvDefaults(agentId: string | undefined): void {
+  const id = String(agentId || '').trim().toLowerCase();
+  if (id === 'claude') {
+    process.env.ACPX_CLAUDE_INCLUDE_USER_SETTINGS ??= '1';
+  }
+  if (OPENCODE_SAFE_CHECK_SKIP_AGENT_IDS.has(id)) {
+    process.env.OPENCODE_SKIP_SAFE_CHECK ||= '1';
+  }
 }
 
 export function resolveAcpxAgentCommand(

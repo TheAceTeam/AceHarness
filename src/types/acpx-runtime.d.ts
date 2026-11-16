@@ -94,6 +94,11 @@ declare module 'acpx/runtime' {
     timeoutMs?: number;
     probeAgent?: string;
     verbose?: boolean;
+    onAcpMessage?: (direction: 'outbound' | 'inbound', message: {
+      id?: string | number | null;
+      method?: string;
+      result?: unknown;
+    }) => void;
     [key: string]: unknown;
   }
 
@@ -120,6 +125,7 @@ declare module 'acpx/runtime' {
     startTurn(input: AcpRuntimeTurnInput): AcpRuntimeTurn;
     runTurn?(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent>;
     cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
+    shutdown?(): Promise<void>;
     close(input: { handle: AcpRuntimeHandle; reason: string; discardPersistentState?: boolean }): Promise<void>;
     getStatus?(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
     setConfigOption?(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;

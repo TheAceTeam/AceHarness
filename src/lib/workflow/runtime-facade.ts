@@ -37,7 +37,7 @@ import type {
 } from '@/lib/runtime-agent/contracts';
 
 export type WorkflowRuntimeType = string;
-export type WorkflowRuntimeStreamEvent = ChatRuntimeStreamEvent;
+export type WorkflowRuntimeStreamEvent = Exclude<ChatRuntimeStreamEvent, { type: 'adapter_status' }>;
 export type WorkflowRuntimeTokenUsage = ChatRuntimeTokenUsage;
 export type WorkflowRuntimeResultMetadata = ChatRuntimeResultMetadata;
 export type WorkflowRuntimeResult = ChatRuntimeResult;

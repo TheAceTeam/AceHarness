@@ -5407,7 +5407,7 @@ export default function NewConfigModal({
 
   const startAiStream = useCallback(async (sourceSession?: any, instruction?: string) => {
     if (!creationAdversarialIntent) {
-      throw new Error('请先选择是否允许这个工作流使用红蓝对抗，再调用 AI。');
+      throw new Error('请先选择是否开启红蓝对抗，再调用 AI。');
     }
     if (agentsQuery.isLoading) {
       throw new Error('正在加载可用 Agent，请稍后再生成工作流。');
@@ -5699,7 +5699,7 @@ export default function NewConfigModal({
   // Handle "下一步": validate form then enter plan preview
   const handleNextStep = async () => {
     if (!creationAdversarialIntent) {
-      toast('error', '请先选择是否允许这个工作流使用红蓝对抗');
+      toast('error', '请先选择是否开启红蓝对抗');
       return;
     }
     if (agentsQuery.isLoading) {
@@ -6043,7 +6043,7 @@ export default function NewConfigModal({
     // AI-guided mode uses preview + AI flow, not direct submit
     if (workflowMode === 'ai-guided') return;
     if (!creationAdversarialIntent) {
-      toast('error', '请先选择是否允许这个工作流使用红蓝对抗');
+      toast('error', '请先选择是否开启红蓝对抗');
       return;
     }
     if (agentsQuery.isLoading) {
@@ -7799,16 +7799,11 @@ export default function NewConfigModal({
             </>
           )}
 
-          <section className="space-y-3 rounded-lg border bg-muted/20 p-4" aria-label="全局对抗意愿">
+          <section className="space-y-3 rounded-lg border bg-muted/20 p-4" aria-label="是否开启红蓝对抗">
             <div>
-              <Label className="text-sm font-semibold">
-                是否允许这个工作流使用红蓝对抗 <span className="text-destructive">*</span>
-              </Label>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                该选择只约束是否允许红蓝对抗，不决定生成轻量工作流还是状态机。
-              </p>
+              <Label className="text-sm font-semibold">是否开启红蓝对抗</Label>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="工作流全局对抗意愿">
+            <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="是否开启红蓝对抗" aria-required="true">
               <button
                 type="button"
                 role="radio"
@@ -7820,7 +7815,7 @@ export default function NewConfigModal({
                 )}
               >
                 <span className="block text-sm font-medium">不开启红蓝对抗</span>
-                <span className="mt-1 block text-xs leading-5 text-muted-foreground">AI 仍会选择轻量或状态机；若为状态机，所有非终态都使用标准模式。</span>
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">节省 token 和运行时长</span>
               </button>
               <button
                 type="button"
@@ -7833,36 +7828,14 @@ export default function NewConfigModal({
                 )}
               >
                 <span className="block text-sm font-medium">按需开启</span>
-                <span className="mt-1 block text-xs leading-5 text-muted-foreground">AI 先选择工作流类型；若为状态机，再按整体和状态风险提出对抗建议，用户可逐状态修改。</span>
-                <span className="mt-1 block text-xs leading-5 text-muted-foreground">会引入额外的评估与对抗步骤，耗时和 token 消耗通常更高。</span>
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">对于状态机工作流，AI 将按整体和状态风险提出对抗建议。</span>
+                <span className="block text-xs leading-5 text-muted-foreground">会引入额外的评估与对抗步骤，可减少AI产生的错误，但通常耗时和 token 消耗通常更高。</span>
               </button>
             </div>
             {!creationAdversarialIntent ? (
               <p className="text-xs text-destructive">请选择一项后再创建或调用 AI。</p>
             ) : null}
           </section>
-
-          {!isLightweight ? (
-            <section className="space-y-2 rounded-lg border bg-muted/20 p-4" aria-label="Agent 自动编排">
-              <div>
-                <h3 className="text-sm font-semibold">Agent 自动编排</h3>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  系统会根据状态职责、Agent 能力和参考工作流自动分配执行者；生成后仍可在设计页逐个调整。
-                </p>
-              </div>
-              {agentsQuery.isLoading ? (
-                <p className="text-xs text-muted-foreground">正在确认可用 Agent…</p>
-              ) : agentsQuery.isError ? (
-                <p className="text-xs text-destructive">Agent 列表加载失败，请刷新后重试。</p>
-              ) : availableWorkflowStepAgentNames.length === 0 ? (
-                <p className="text-xs text-destructive">当前没有可执行的普通 Agent，请先到 Agent 管理中创建或启用一个。</p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  已发现 {availableWorkflowStepAgentNames.length} 个可用普通 Agent；Supervisor 仅负责调度，不会被分配为执行步骤。
-                </p>
-              )}
-            </section>
-          ) : null}
 
           {/* AI 引导模式的需求输入 */}
           {isLightweight ? (
@@ -7958,16 +7931,16 @@ export default function NewConfigModal({
                   }}
                 />
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant={specPlanningEnabled ? 'secondary' : 'outline'}>
-                  {specPlanningEnabled ? '先修订 Spec' : '跳过 Spec'}
-                </Badge>
-                <Badge variant="outline">
-                  {workflowMode === 'ai-guided'
-                    ? (specPlanningEnabled ? '完整计划链路' : '直接编排 workflow')
-                    : (specPlanningEnabled ? '创建并附带 Spec 基线' : '仅创建 workflow 配置')}
-                </Badge>
-              </div>
+              {specPlanningEnabled || workflowMode === 'ai-guided' ? (
+                <div className="flex flex-wrap gap-2">
+                  {specPlanningEnabled && <Badge variant="secondary">先修订 Spec</Badge>}
+                  <Badge variant="outline">
+                    {workflowMode === 'ai-guided'
+                      ? (specPlanningEnabled ? '完整计划链路' : '直接编排 workflow')
+                      : '创建并附带 Spec 基线'}
+                  </Badge>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -8214,6 +8187,11 @@ export default function NewConfigModal({
                 </form>
 
                 <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
+                  {!isLightweight && agentsQuery.isError ? (
+                    <p className="mr-auto self-center text-xs text-destructive">Agent 列表加载失败，请刷新后重试。</p>
+                  ) : !isLightweight && !agentsQuery.isLoading && availableWorkflowStepAgentNames.length === 0 ? (
+                    <p className="mr-auto self-center text-xs text-destructive">当前没有可执行的普通 Agent，请先到 Agent 管理中创建或启用一个。</p>
+                  ) : null}
                   <Button type="button" variant="destructive" onClick={handleClose}>
                     取消
                   </Button>

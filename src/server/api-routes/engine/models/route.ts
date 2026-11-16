@@ -1,6 +1,7 @@
+import type { AcpRuntimeOptions } from 'acpx/runtime';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
-import { getAcpxAgentRegistryOverrides, resolveAcpxCommand, resolveAcpxRuntimeAgent, shouldSkipOpencodeSafeCheck } from '@/lib/runtime-agent/adapters/acpx-adapter';
+import { applyAcpxAgentProcessEnvDefaults, getAcpxAgentRegistryOverrides, resolveAcpxCommand, resolveAcpxRuntimeAgent } from '@/lib/runtime-agent/adapters/acpx-adapter';
 import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-runtime/request-utils';
 
 export const dynamic = 'force-dynamic';
@@ -68,9 +69,6 @@ function extractModelsFromStatus(status: unknown): DiscoveredModel[] {
     ? record.models as Record<string, unknown>
     : undefined;
 
-  for (const modelId of valuesFromUnknown(models?.availableModelIds)) {
-    addModel(target, seen, modelId);
-  }
   for (const item of valuesFromUnknown(models?.availableModels)) {
     if (typeof item === 'string') {
       addModel(target, seen, item);
@@ -79,6 +77,9 @@ function extractModelsFromStatus(status: unknown): DiscoveredModel[] {
     if (!item || typeof item !== 'object') continue;
     const model = item as Record<string, unknown>;
     addModel(target, seen, model.modelId ?? model.value ?? model.id, model.name ?? model.label ?? model.title);
+  }
+  for (const modelId of valuesFromUnknown(models?.availableModelIds)) {
+    addModel(target, seen, modelId);
   }
 
   const configOptions = [
@@ -107,63 +108,92 @@ function extractModelsFromStatus(status: unknown): DiscoveredModel[] {
   return target;
 }
 
+async function resolveInstalledClaudeLaunch() {
+  const { AGENT_REGISTRY, resolveInstalledBuiltInAgentLaunch } = await import('acpx/agent-registry');
+  return resolveInstalledBuiltInAgentLaunch(AGENT_REGISTRY.claude);
+}
+
 async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
   const definition = getBuiltinAgentDefinition(agentId);
   if (!definition || definition.runtime !== 'acpx') {
     throw new Error(`Unknown ACPX agent: ${agentId}`);
   }
+
   const cwd = process.cwd();
+  applyAcpxAgentProcessEnvDefaults(agentId);
+  const acpx = await import('acpx/runtime');
+
+  const installedClaude = agentId === 'claude' ? await resolveInstalledClaudeLaunch() : undefined;
+  const overrides = installedClaude
+    ? { claude: [installedClaude.command, ...installedClaude.args] }
+    : getAcpxAgentRegistryOverrides();
+
   const command = resolveAcpxCommand(agentId);
-  // Built-in ACPX agents resolve through the registry override argv array.
-  // Passing the ID avoids ACPX's unsupported Windows raw-command-string path.
   const runtimeAgent = resolveAcpxRuntimeAgent(command, { agentId, cwd });
-  return await discoverViaAcpxCommand(agentId, runtimeAgent, agentId, 1, 1, cwd);
-}
-
-async function discoverViaAcpxCommand(
-  agentId: string,
-  command: string,
-  source: string,
-  attempt: number,
-  attemptCount: number,
-  cwd: string,
-): Promise<DiscoveredModel[]> {
-  const startedAt = Date.now();
-
-  const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = await import('acpx/runtime');
-  const runtime = createAcpRuntime({
+  const { createAcpRuntime, createAgentRegistry, createRuntimeStore } = acpx;
+  const runtimeOptions: AcpRuntimeOptions = {
     cwd,
     sessionStore: createRuntimeStore({
       stateDir: getWorkspaceDataFile('acpx-runtime'),
     }),
-    agentRegistry: createAgentRegistry({
-      overrides: getAcpxAgentRegistryOverrides(),
-    }),
-    permissionMode: 'approve-all',
+    agentRegistry: createAgentRegistry({ overrides }),
+    permissionMode: installedClaude ? 'deny-all' : 'approve-all',
     nonInteractivePermissions: 'deny',
-  });
-  if (shouldSkipOpencodeSafeCheck(agentId)) {
-    process.env.OPENCODE_SKIP_SAFE_CHECK = process.env.OPENCODE_SKIP_SAFE_CHECK || '1';
+    ...(installedClaude ? { fs: false, terminal: false } : {}),
+  };
+
+  let advertisedModels: DiscoveredModel[] | undefined;
+  let resolveAdvertised: ((models: DiscoveredModel[]) => void) | undefined;
+  const advertised = installedClaude ? new Promise<DiscoveredModel[]>((resolve) => {
+    resolveAdvertised = resolve;
+  }) : undefined;
+
+  if (advertised) {
+    let sessionRequestId: string | number | undefined;
+    runtimeOptions.onAcpMessage = (direction, message) => {
+      if (direction === 'outbound' && message.method === 'session/new' && message.id != null) {
+        sessionRequestId = message.id;
+      }
+      if (direction === 'inbound' && sessionRequestId !== undefined && message.id === sessionRequestId) {
+        const models = uniqueModels(extractModelsFromStatus(message.result));
+        if (models.length > 0) {
+          advertisedModels = models;
+          resolveAdvertised?.(models);
+        }
+      }
+    };
   }
 
-  const handle = await runtime.ensureSession({
-    sessionKey: `model-discovery:${agentId}`,
-    agent: command,
-    mode: 'oneshot',
-    cwd,
-  });
+  const runtime = createAcpRuntime(runtimeOptions);
+  const completeProbe = async () => {
+    try {
+      const handle = await runtime.ensureSession({
+        sessionKey: `model-discovery:${agentId}`,
+        agent: runtimeAgent,
+        mode: 'oneshot',
+        cwd,
+      });
 
-  try {
-    const status = await runtime.getStatus?.({ handle });
-    const models = uniqueModels(extractModelsFromStatus(status));
-    return models;
-  } finally {
-    await runtime.close({
-      handle,
-      reason: 'model-discovery-complete',
-      discardPersistentState: true,
-    }).catch(() => undefined);
-  }
+      try {
+        if (advertisedModels) return advertisedModels;
+        const status = await runtime.getStatus?.({ handle });
+        return uniqueModels(extractModelsFromStatus(status));
+      } finally {
+        await runtime.close({
+          handle,
+          reason: 'model-discovery-complete',
+          discardPersistentState: true,
+        }).catch(() => undefined);
+      }
+    } finally {
+      await runtime.shutdown?.().catch(() => undefined);
+    }
+  };
+
+  // The live ACP reply already contains the complete catalog. ACPX keeps
+  // ownership of the temporary session and finishes closing it independently.
+  const completion = completeProbe();
+  return advertised ? Promise.race([advertised, completion]) : completion;
 }
 
 export async function GET(request: Request) {
@@ -177,7 +207,7 @@ export async function GET(request: Request) {
   try {
     const models = await discoverViaAcpx(agentId);
     if (models.length > 0) {
-      return jsonOk({ engine, agentId, source: 'acpx', models });
+      return jsonOk({ engine, agentId, source: 'acpx', models }, { headers: { 'Cache-Control': 'no-store' } });
     }
   } catch (error) {
     return jsonError(`Failed to discover models: ${errorMessage(error)}`, 500);
@@ -189,5 +219,5 @@ export async function GET(request: Request) {
     source: 'acpx',
     models: [],
     message: '当前运行时没有返回可用模型列表',
-  });
+  }, { headers: { 'Cache-Control': 'no-store' } });
 }

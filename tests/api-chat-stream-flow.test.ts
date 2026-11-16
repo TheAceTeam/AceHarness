@@ -2,6 +2,8 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { makeRequest, responseJson, assertErrorResponse } from './helpers/route-helpers';
 import { MockEngine } from './helpers/mock-engine';
 import { REAL_OPENCODE_CONNECTED_REPLAY } from './fixtures/real-engine-events';
+import { parseActions } from '@/lib/chat/actions';
+import { extractAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
 
 vi.mock('@/lib/chat/chat-engine-runtime', () => ({
   getOrCreateChatRuntimeEngine: vi.fn(),
@@ -295,6 +297,44 @@ describe('chat stream flow', () => {
     expect(body).toContain('event: session');
     expect(body).toContain('runtime-session-replay');
     expect(body).not.toContain(REAL_OPENCODE_CONNECTED_REPLAY.replayDelta);
+  });
+
+  test('replays adapter preparation and keeps late thinking separate from the answer', async () => {
+    const engine = new MockEngine();
+    let finish: (value: { success: true; output: string }) => void = () => {};
+    engine.executeImpl = () => {
+      engine.emit('stream', { type: 'adapter_status', status: { agentName: 'Claude', phase: 'preparing' } });
+      return new Promise(resolve => { finish = resolve; });
+    };
+    const { getOrCreateChatRuntimeEngine } = await import('@/lib/chat/chat-engine-runtime');
+    const { getEngineStream } = await import('@/lib/chat/stream-state');
+    vi.mocked(getOrCreateChatRuntimeEngine).mockResolvedValue(engine as any);
+    vi.mocked(getEngineStream).mockReturnValue(undefined);
+
+    const { POST, GET } = await import('@/server/api-routes/chat/stream/route');
+    const started = await POST(makeRequest('/api/chat/stream', {
+      json: { message: 'Hello', mode: 'dashboard' },
+    }));
+    const { chatId } = await responseJson(started);
+    const response = await GET(makeRequest(`/api/chat/stream?id=${chatId}`));
+
+    engine.emit('stream', { type: 'adapter_status', status: { agentName: 'Claude', phase: 'ready' } });
+    engine.emitStream('Hello!');
+    engine.emitThought('...');
+    finish({ success: true, output: 'Hello!' });
+
+    const events = (await response.text()).trim().split('\n\n').map((frame) => {
+      const [event, data] = frame.split('\n');
+      return { event: event.slice('event: '.length), data: JSON.parse(data.slice('data: '.length)) };
+    });
+    expect(events.filter(({ event }) => event === 'adapter_status').map(({ data }) => data)).toEqual([
+      { agentName: 'Claude', phase: 'preparing' },
+      { agentName: 'Claude', phase: 'ready' },
+    ]);
+    const thought = events.find(({ event }) => event === 'thinking')?.data.content;
+    expect(extractAceProcessBlocks(thought).blocks).toMatchObject([{ kind: 'reasoning', body: '...' }]);
+    expect(parseActions(`Hello!${thought}`).text).toBe('Hello!');
+    expect(events.find(({ event }) => event === 'done')?.data.result).toBe('Hello!');
   });
 
   test('DELETE cancels engine and returns killed=true', async () => {

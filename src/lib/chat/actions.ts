@@ -650,8 +650,14 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
   const actions: ActionBlock[] = [];
   const cards: any[] = [];
   const sidebarHints: HomeSidebarHint[] = [];
-  const removals: [number, number][] = [];
-  const aceProcessRanges = extractAceProcessBlocks(markdown).blocks.map((block) => [block.start, block.end] as [number, number]);
+  const { blocks: processBlocks } = extractAceProcessBlocks(markdown);
+  const aceProcessRanges = processBlocks.map((block) => [block.start, block.end] as [number, number]);
+  const removals: [number, number][] = processBlocks
+    .filter((block) => block.kind === 'reasoning')
+    .map(({ start, end }) => [
+      markdown[start - 1] === '\n' ? start - 1 : start,
+      markdown[end] === '\n' ? end + 1 : end,
+    ]);
 
   // First pass: parse action blocks globally.
   // In practice some models emit action payloads in ```json instead of ```action.

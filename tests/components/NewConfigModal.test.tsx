@@ -184,17 +184,15 @@ describe('NewConfigModal lightweight workflow creation', () => {
     renderModal({ initialMode: 'state-machine' });
 
     fireEvent.click(await screen.findByRole('radio', { name: 'AI 引导创建' }));
-    expect(await screen.findByRole('region', { name: 'Agent 自动编排' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Agent 自动编排' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('选择参与编排的执行 Agent')).not.toBeInTheDocument();
-    expect(screen.getByText(/已发现 1 个可用普通 Agent/)).toBeInTheDocument();
   });
 
-  test('lets direct state-machine creation assign Agents automatically', async () => {
+  test('lets direct state-machine creation assign Agents automatically', () => {
     renderModal({ initialMode: 'state-machine' });
 
-    expect(await screen.findByRole('region', { name: 'Agent 自动编排' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Agent 自动编排' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('选择参与编排的执行 Agent')).not.toBeInTheDocument();
-    expect(screen.getByText(/系统会根据状态职责、Agent 能力和参考工作流自动分配执行者/)).toBeInTheDocument();
   });
 
   test('blocks creation on the first screen when no normal execution Agent is available', async () => {

@@ -286,6 +286,8 @@ export function normalizeHomeSidebarHint(value: unknown): HomeSidebarHint | null
 export interface SessionWorkbenchState {
   conversationMode?: 'plain' | 'agent-chat' | 'workflow-running' | 'workflow-completed';
   creationAssistantEnabled?: boolean;
+  workflowCreationGuideEnabled?: boolean;
+  workflowCreationGuideStarted?: boolean;
   creationTag?: boolean;
   homeSidebar?: HomeSidebarHint | null;
   rightRail?: {
@@ -360,6 +362,18 @@ export function resolveCreationAssistantEnabled(
   }
 
   return session?.sessionWorkbenchState?.creationAssistantEnabled !== false;
+}
+
+export function canConfigureWorkflowCreationGuide(
+  session?: (CreationAssistantSessionLike & { messages: readonly unknown[]; runtimeSessionId?: string | null }) | null,
+): boolean {
+  return Boolean(session
+    && session.messages.length === 0
+    && !session.runtimeSessionId
+    && !session.workflowBinding
+    && !session.agentBinding
+    && !session.sessionWorkbenchState?.collaborationRoom
+    && !session.sessionWorkbenchState?.workflowCreationGuideStarted);
 }
 
 export function isCreationAssistantSidebarHint(hint?: HomeSidebarHint | null): boolean {

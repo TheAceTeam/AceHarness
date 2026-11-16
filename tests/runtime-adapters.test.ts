@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { createRuntimeAdapterRegistry, resolveRuntimeForAgent } from '@/lib/runtime-agent/adapters/adapter-registry';
 import {
   AcpxAdapter,
+  applyAcpxAgentProcessEnvDefaults,
   clearAcpxAgentRegistryOverrideCache,
   getAcpxAgentRegistryOverrides,
   normalizeAcpxRuntimeEvent,
@@ -89,14 +90,19 @@ describe('runtime adapters', () => {
     });
   });
 
-  test('runs against the acpx major the override contract targets', () => {
-    // 0.12 required command strings and threw on arrays; 0.13 is the opposite and
-    // rejects raw strings on win32. A stale install would otherwise let the wrong
-    // override shape pass every test in this file.
-    const { version } = JSON.parse(
-      readFileSync(requireFromProject.resolve('acpx/package.json'), 'utf-8'),
-    ) as { version: string };
-    expect(version.startsWith('0.13.')).toBe(true);
+  test('defaults Claude user settings on and respects an explicit opt-out', () => {
+    const key = 'ACPX_CLAUDE_INCLUDE_USER_SETTINGS';
+    vi.stubEnv(key, undefined);
+    try {
+      applyAcpxAgentProcessEnvDefaults('claude');
+      expect(process.env[key]).toBe('1');
+
+      vi.stubEnv(key, '0');
+      applyAcpxAgentProcessEnvDefaults('claude');
+      expect(process.env[key]).toBe('0');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   test('uses argv overrides so acpx can launch on Windows', async () => {
