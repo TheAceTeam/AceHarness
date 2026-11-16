@@ -7,7 +7,6 @@ import dynamic from '@/lib/navigation/dynamic';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ChatSessionMenu } from '@/components/chat/ChatSessionMenu';
 import { ChatWorkspaceToolbar } from '@/components/chat/ChatWorkspaceToolbar';
 import {
   PromptInputCommand,
@@ -3173,11 +3172,6 @@ export function ChatPageContent({
           <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
           <span className="hidden xl:inline">保存为 Notebook</span>
         </Button>
-        <ChatSessionMenu
-          workflowCreationGuide={workflowCreationGuide}
-          forkDisabled={!activeSession || loading}
-          onFork={handleForkFromSessionMenu}
-        />
       </>
     ),
   }, [
@@ -3189,12 +3183,9 @@ export function ChatPageContent({
     activeWeChatBinding?.externalConversationId,
     activeAiBusy,
     chatTitle,
-    workflowCreationGuide,
     handleCreateNewConversation,
-    handleForkFromSessionMenu,
     handleSaveConversationAsNotebook,
     isCurrentSessionLoading,
-    loading,
     messages.length,
     notebookExporting,
   ]);
