@@ -30,6 +30,9 @@ const REQUIRED_VISIBLE_AGENT_IDS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
+  'grok-build',
+  'junie',
 ] as const;
 
 describe('runtime agent registry', () => {

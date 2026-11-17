@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DataCard } from '@/components/ui/data-card';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
   DetailDrawer,
   DetailDrawerBody,
@@ -32,6 +33,8 @@ import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { modelEnginesSupportEngine, normalizeRuntimeEngineId } from '@/lib/models/engine-compatibility';
 import { mergeDetectedModelsForImport } from '@/lib/models/import-merge';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
+import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
 import { cn } from '@/lib/core/utils';
 import type { EnginesSearch } from '@/routes/engines';
 import {
@@ -111,6 +114,9 @@ const PRODUCT_ENGINE_ORDER = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
+  'grok-build',
+  'junie',
 ] as const;
 
 const RUNTIME_AGENT_ICON_PATHS: Record<string, string> = {
@@ -251,6 +257,24 @@ const STATIC_ENGINE_METADATA: Record<string, Omit<Engine, 'id' | 'status' | 'age
     features: ['中文协作', '代码理解', '任务执行'],
     endpoints: ['anthropic', 'openai'],
   },
+  'deepseek-harness': {
+    name: 'DeepSeek Harness',
+    description: '通过本机 dsh CLI 接入。请先在 DeepSeek Harness 中配置认证和默认模型。',
+    features: ['代码编辑', '任务执行'],
+    endpoints: [],
+  },
+  'grok-build': {
+    name: 'Grok Build',
+    description: '通过本机 Grok CLI 接入。请先完成 Grok Build 登录或配置 xAI API Key。',
+    features: ['代码编辑', '任务执行'],
+    endpoints: [],
+  },
+  junie: {
+    name: 'Junie',
+    description: '通过本机 JetBrains Junie CLI 接入。请先在 Junie 中完成认证。',
+    features: ['代码编辑', '任务执行'],
+    endpoints: [],
+  },
 };
 
 function normalizeEngineId(engine?: string | null) {
@@ -266,7 +290,7 @@ function buildRuntimeEngineCard(id: string): Engine {
     description: metadata?.description || `${canonicalId} 编程助手`,
     status: 'available',
     agentId: canonicalId,
-    iconPath: metadata?.iconPath || RUNTIME_AGENT_ICON_PATHS[canonicalId],
+    iconPath: metadata?.iconPath || RUNTIME_AGENT_ICON_PATHS[canonicalId] || getEngineMeta(canonicalId)?.iconPath,
     canDetectModels: metadata?.canDetectModels,
     features: metadata?.features || ['代码编辑', '任务执行'],
     endpoints: metadata?.endpoints || [],
@@ -330,6 +354,13 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
   const [refreshingEngines, setRefreshingEngines] = useState<Set<string>>(() => new Set());
   const checkingAvailability = availabilityQuery.isFetching || refreshingEngines.has(currentEngine);
   const engines = useMemo(() => PRODUCT_ENGINE_ORDER.map((id) => buildRuntimeEngineCard(id)), []);
+  const [engineSearch, setEngineSearch] = useState('');
+  const engineSearchTerms = engineSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const visibleEngines = engineSearchTerms.length === 0 ? engines : engines.filter((engine) => {
+    const command = getBuiltinAgentDefinition(engine.agentId)?.command;
+    const searchable = [engine.name, engine.id, command].join(' ').toLowerCase();
+    return engineSearchTerms.every((term) => searchable.includes(term));
+  });
 
   const broadcastEngineUpdated = () => {
     if (typeof window === 'undefined') return;
@@ -623,9 +654,24 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
           )}
         />
 
+        <div className="relative mb-4 max-w-sm">
+          <Search aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-3 my-auto h-4 w-4 text-muted-foreground" />
+          <Input
+            type="search"
+            aria-label="搜索引擎"
+            placeholder="搜索引擎…"
+            value={engineSearch}
+            onChange={(event) => setEngineSearch(event.target.value)}
+            className="pl-9"
+          />
+        </div>
+
         {/* Engines Grid */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {engines.map((engine, index) => {
+          {visibleEngines.length === 0 ? (
+            <EmptyState className="md:col-span-2" title="未找到匹配的引擎" />
+          ) : null}
+          {visibleEngines.map((engine, index) => {
             const compatibleModels = getModelsForEngine(engine.id);
             const hasModels = compatibleModels.length > 0;
             const isCurrentEngine = currentEngine === engine.id;

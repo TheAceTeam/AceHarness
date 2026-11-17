@@ -123,8 +123,25 @@ describe('runtime adapters', () => {
   });
 
   test('uses the built-in agent ID for both ACPX session and model discovery launch paths', () => {
-    for (const agentId of ['nga', 'codeagent', 'codegenie']) {
+    for (const agentId of ['nga', 'codeagent', 'codegenie', 'deepseek-harness', 'grok-build', 'junie']) {
       expect(resolveAcpxRuntimeAgent(resolveAcpxCommand(agentId), { agentId, cwd: process.cwd() })).toBe(agentId);
+    }
+  });
+
+  test('uses the upstream ACPX launch arguments for the added builtin agents', async () => {
+    const { createAgentRegistry } = await import('acpx/runtime');
+    const upstream = createAgentRegistry();
+    const overrides = getAcpxAgentRegistryOverrides();
+    const commands = {
+      'deepseek-harness': ['dsh', '--profile', 'acp'],
+      'grok-build': ['grok', 'agent', 'stdio'],
+      junie: ['junie', '--acp=true'],
+    };
+
+    for (const [id, [command, ...args]] of Object.entries(commands)) {
+      expect(upstream.resolve(id)).toEqual([command, ...args]);
+      expect(resolveAcpxCommand(id)).toMatchObject({ command, args });
+      expect(overrides[id].slice(1)).toEqual(args);
     }
   });
 

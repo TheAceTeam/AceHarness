@@ -119,6 +119,9 @@ const RUNTIME_AVAILABILITY_ENGINE_IDS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
+  'grok-build',
+  'junie',
 ] as const;
 
 export function useModelsQuery() {

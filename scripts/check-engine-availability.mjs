@@ -40,6 +40,9 @@ const DEFAULT_AGENTS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
+  'grok-build',
+  'junie',
 ];
 
 function parseArgs(argv) {

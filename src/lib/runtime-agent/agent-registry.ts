@@ -20,6 +20,9 @@ export type AgentId =
   | 'mux'
   | 'qoder'
   | 'qwen'
+  | 'deepseek-harness'
+  | 'grok-build'
+  | 'junie'
   | (string & {});
 
 export type AgentRuntime = 'acpx' | 'magic';
@@ -336,6 +339,30 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
   acpxAgent({ id: 'mux', displayName: 'Mux', tier: 'verified', command: 'mux', iconPath: AGENT_ICON_PATHS.mux }),
   acpxAgent({ id: 'qoder', displayName: 'Qoder', tier: 'verified', command: 'qoder', iconPath: AGENT_ICON_PATHS.qoder }),
   acpxAgent({ id: 'qwen', displayName: 'Qwen', tier: 'verified', command: 'qwen', iconPath: AGENT_ICON_PATHS.qwen }),
+  acpxAgent({
+    id: 'deepseek-harness',
+    displayName: 'DeepSeek Harness',
+    tier: 'verified',
+    command: 'dsh',
+    args: ['--profile', 'acp'],
+    iconPath: AGENT_ICON_PATHS.deepseekHarness,
+  }),
+  acpxAgent({
+    id: 'grok-build',
+    displayName: 'Grok Build',
+    tier: 'verified',
+    command: 'grok',
+    args: ['agent', 'stdio'],
+    iconPath: AGENT_ICON_PATHS.grokBuild,
+  }),
+  acpxAgent({
+    id: 'junie',
+    displayName: 'Junie',
+    tier: 'verified',
+    command: 'junie',
+    args: ['--acp=true'],
+    iconPath: AGENT_ICON_PATHS.junie,
+  }),
 ] as const;
 
 export const BUILTIN_AGENT_DEFINITIONS_BY_ID: ReadonlyMap<AgentId, AgentDefinition> = new Map(
