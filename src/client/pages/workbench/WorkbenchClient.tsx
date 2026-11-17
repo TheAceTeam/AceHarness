@@ -32,6 +32,7 @@ import { useGitBrowserSummaryQuery } from '@/client/query/workspace';
 import { useLightweightRuntimeToolEventsQuery, useLightweightTasklistEvidenceQuery } from '@/client/query/lightweight-tasklist';
 
 const { ClipLoader } = ReactSpinners;
+import StateMachineDiagram from '@/components/StateMachineDiagram';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import LightweightWorkflowExecutionView from '@/components/workflow/LightweightWorkflowExecutionView';
 import LightweightTaskBoard from '@/components/workflow/LightweightTaskBoard';
@@ -297,22 +298,6 @@ export function resolveWorkbenchRuntimeWorkflowConfig(input: {
     };
   }
   return input.baseConfig;
-}
-
-export function resolveWorkbenchStateMapPresentation(input: {
-  baseConfig: any;
-  activeRunId?: string | null;
-  runDetail?: any;
-  statusSnapshot?: any;
-}): {
-  config: any;
-  source: 'run' | 'configuration';
-} {
-  const config = resolveWorkbenchRuntimeWorkflowConfig(input);
-  return {
-    config,
-    source: config === input.baseConfig ? 'configuration' : 'run',
-  };
 }
 
 export function buildWorkbenchPreviewDetailNavItems(input: {
@@ -3265,14 +3250,12 @@ export default function WorkbenchPage({
     staleTime: 1_000,
     refetchInterval: isRuntimeWorkflowStatusActive(workflowStatus) ? 2_000 : false,
   });
-  const runtimeWorkflowPresentation = useMemo(() => resolveWorkbenchStateMapPresentation({
+  const runtimeWorkflowConfig = useMemo(() => resolveWorkbenchRuntimeWorkflowConfig({
     baseConfig: workflowConfig,
     activeRunId: activeRuntimeRunId,
     runDetail,
     statusSnapshot: statusCompactQuery.data,
   }), [activeRuntimeRunId, runDetail, statusCompactQuery.data, workflowConfig]);
-  const runtimeWorkflowConfig = runtimeWorkflowPresentation.config;
-  const stateMapUsesRuntimeSnapshot = runtimeWorkflowPresentation.source === 'run';
   const isRuntimeLightweightWorkflow = isLightweightWorkflowConfig(runtimeWorkflowConfig);
   const isPromotedLightweightRun = isLightweightWorkflow && !isRuntimeLightweightWorkflow;
   const lightweightTasklistQuery = useLightweightTasklistEvidenceQuery(
@@ -13613,68 +13596,27 @@ export default function WorkbenchPage({
 
   const renderWorkbenchPreview = () => {
     if (runDetailSection === 'state') {
-      const stateMapConfig = stateMapUsesRuntimeSnapshot ? runtimeWorkflowConfig : workflowConfig;
       return (
         <div className={styles.workbenchPreviewFullPanel}>
           <div className={styles.workbenchPreviewFullHeader}>
-            <div className={styles.workbenchPreviewKicker}>{stateMapUsesRuntimeSnapshot ? '本次运行快照' : '结构预览'}</div>
+            <div className={styles.workbenchPreviewKicker}>结构预览</div>
             <h2 className="mt-3 text-xl font-semibold tracking-tight">状态图</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              {stateMapUsesRuntimeSnapshot
-                ? '这里按本次 run 快照展示实际状态、步骤角色和流转历史；不会修改原工作流。'
-                : '这里展示原始工作流配置。启动运行后，将自动切换为本次 run 的真实状态图。'}
+              展示已保存的工作流配置。实际执行路径和步骤状态可在运行记录中查看。
             </p>
           </div>
           <div className={styles.workbenchPreviewCanvas}>
-            {stateMapConfig && isLightweightWorkflowConfig(stateMapConfig) ? (
+            {workflowConfig && isLightweightWorkflow ? (
               <LightweightTaskExecutionGraph
-                {...lightweightTaskBoardInput}
+                workflow={workflowConfig.workflow}
                 className="h-full"
               />
-            ) : stateMapConfig?.workflow?.mode === 'state-machine' ? (
-              <StateMachineExecutionView
-                key={`${stateMapUsesRuntimeSnapshot ? `run-${activeRuntimeRunId || 'current'}` : `preview-${configFile}-${savedWorkflowRevision}`}`}
-                states={stateMapConfig.workflow.states || []}
+            ) : workflowConfig?.workflow?.mode === 'state-machine' ? (
+              <StateMachineDiagram
+                key={`${configFile}-${savedWorkflowRevision}`}
+                states={workflowConfig.workflow.states || []}
                 agents={agentConfigs}
-                currentState={stateMapUsesRuntimeSnapshot ? currentPhase : null}
-                currentStep={stateMapUsesRuntimeSnapshot ? currentStep : null}
-                activeSteps={stateMapUsesRuntimeSnapshot ? activeSteps : []}
-                activeConcurrencyGroups={stateMapUsesRuntimeSnapshot ? activeConcurrencyGroups : []}
-                completedSteps={stateMapUsesRuntimeSnapshot ? completedSteps : []}
-                failedSteps={stateMapUsesRuntimeSnapshot ? failedSteps : []}
-                stateHistory={stateMapUsesRuntimeSnapshot ? smStateHistory : []}
-                issueTracker={stateMapUsesRuntimeSnapshot ? smIssueTracker : []}
-                transitionCount={stateMapUsesRuntimeSnapshot ? smTransitionCount : 0}
-                maxTransitions={stateMapConfig.workflow.maxTransitions || 50}
-                status={(stateMapUsesRuntimeSnapshot ? workflowStatus : 'idle') as any}
-                isRunning={stateMapUsesRuntimeSnapshot ? isRunning : false}
-                allowForceTransition={false}
-                focusedState={stateMapUsesRuntimeSnapshot ? focusedState : null}
-                startTime={stateMapUsesRuntimeSnapshot ? runStartTime : null}
-                endTime={stateMapUsesRuntimeSnapshot ? runEndTime : null}
-                accumulatedWaitMs={stateMapUsesRuntimeSnapshot ? runAccumulatedWaitMs : 0}
-                waitStartedAt={stateMapUsesRuntimeSnapshot ? runWaitStartedAt : null}
-                supervisorFlow={stateMapUsesRuntimeSnapshot ? supervisorFlow : []}
-                agentFlow={stateMapUsesRuntimeSnapshot ? agentFlow : []}
-                tokenAnalytics={stateMapUsesRuntimeSnapshot ? workflowTokenAnalytics : undefined}
-                executionTrace={stateMapUsesRuntimeSnapshot ? executionTrace : null}
-                runtimeEvents={stateMapUsesRuntimeSnapshot ? dbRuntimeEvents : []}
-                subworkflowRuns={stateMapUsesRuntimeSnapshot ? subworkflowRuns : []}
-                subworkflowSummary={stateMapUsesRuntimeSnapshot ? subworkflowSummary : null}
-                activeSubworkflowRunId={stateMapUsesRuntimeSnapshot ? activeSubworkflowRunId : null}
-                onOpenSubworkflowRun={() => {}}
-                overviewFooter={null}
-                activeTabOverride="trace"
-                defaultActiveTab="trace"
-                onActiveTabChange={() => {}}
-                hasPendingHumanQuestion={stateMapUsesRuntimeSnapshot && !!pendingHumanQuestion}
-                pendingHumanQuestion={stateMapUsesRuntimeSnapshot ? pendingHumanQuestion as any : null as any}
-                formationAgents={supervisorFormationAgents}
-                supervisorAgent={runtimeSupervisorAgent}
-                diagramSemanticsScope={stateMapUsesRuntimeSnapshot ? 'run' : 'configuration'}
-                onStateClick={() => {}}
-                onStepClick={() => {}}
-                onForceTransition={() => {}}
+                semanticsScope="configuration"
               />
             ) : (
               <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">

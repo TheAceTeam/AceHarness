@@ -17,7 +17,6 @@ import {
   resolveSoleConfiguredWorkflowStepName,
   resolveStartPreflightStrategy,
   resolveWorkbenchRuntimeWorkflowConfig,
-  resolveWorkbenchStateMapPresentation,
   shouldShowWorkbenchHumanAttention,
   resolveInitialAdversarialIntent,
   buildWorkbenchRunDetailNavItems,
@@ -73,24 +72,18 @@ describe('Workbench historical run live sync', () => {
     })).toBe(baseConfig);
   });
 
-  test('labels the state map as a run snapshot only when a matching runtime workflow exists', () => {
-    const baseConfig = { workflow: { mode: 'state-machine', states: [{ name: '配置对抗' }] } };
-    const runtime = resolveWorkbenchStateMapPresentation({
-      baseConfig,
-      activeRunId: 'run-disabled',
-      statusSnapshot: {
-        runId: 'run-disabled',
-        workflow: { mode: 'state-machine', states: [{ name: '本次标准' }] },
-      },
-    });
+  test('keeps the state preview bound to saved configuration even when run data is loaded', async () => {
+    const source = await readFile(new URL('../src/client/pages/workbench/WorkbenchClient.tsx', import.meta.url), 'utf8');
+    const previewStart = source.indexOf('const renderWorkbenchPreview');
+    const preview = source.slice(previewStart, source.indexOf("if (runDetailSection === 'workspace')", previewStart));
+    expect(preview).toContain('states={workflowConfig.workflow.states || []}');
+    expect(preview).toContain('semanticsScope="configuration"');
+    expect(preview).toContain('workflow={workflowConfig.workflow}');
+    expect(preview).not.toMatch(/runtimeWorkflowConfig|stateHistory|completedSteps|lightweightTaskBoardInput/);
 
-    expect(runtime.source).toBe('run');
-    expect(runtime.config.workflow.states).toEqual([{ name: '本次标准' }]);
-    expect(resolveWorkbenchStateMapPresentation({
-      baseConfig,
-      activeRunId: 'run-other',
-      statusSnapshot: { runId: 'run-disabled', workflow: runtime.config.workflow },
-    })).toEqual({ config: baseConfig, source: 'configuration' });
+    const run = source.slice(source.indexOf('const renderRunStateMapPanel'), source.indexOf('const renderAgentFormationPanel'));
+    expect(run).toContain('runtimeWorkflowConfig.workflow.states');
+    expect(run).toContain('stateHistory={smStateHistory}');
   });
 
   test('keeps structured tasks and runtime output navigation for a promoted lightweight run', () => {
