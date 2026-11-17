@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, test } from 'vitest';
 
 import StateMachineDiagram from '@/components/StateMachineDiagram';
@@ -25,6 +25,37 @@ function step(input: Partial<WorkflowStep> & Pick<WorkflowStep, 'name'>): Workfl
 }
 
 describe('StateMachineDiagram run semantics', () => {
+  test('dims the approval node exactly when it has no visible transition', async () => {
+    const state: StateMachineState = {
+      name: '覆盖校验',
+      description: '需要人工审查',
+      isInitial: true,
+      isFinal: false,
+      requireHumanApproval: true,
+      steps: [],
+      transitions: [],
+    };
+    const diagram = (requiresApproval: boolean) => (
+      <div style={{ width: 1200, height: 800 }}>
+        <StateMachineDiagram states={[{ ...state, requireHumanApproval: requiresApproval }]} />
+      </div>
+    );
+    const { container, rerender } = render(diagram(false));
+    const approval = container.querySelector('[data-id="__human_approval__"]')!;
+    await waitFor(() => expect(approval).toHaveStyle({ opacity: '0.5' }));
+
+    rerender(diagram(true));
+    await waitFor(() => expect(approval).not.toHaveStyle({ opacity: '0.5' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /隐藏未执行路径/ }));
+    await waitFor(() => expect(approval).toHaveStyle({ opacity: '0.5' }));
+
+    fireEvent.mouseEnter(approval);
+    await waitFor(() => expect(approval).not.toHaveStyle({ opacity: '0.5' }));
+    fireEvent.mouseLeave(approval);
+    await waitFor(() => expect(approval).toHaveStyle({ opacity: '0.5' }));
+  });
+
   test('renders the real run mode, adversarial roles, and isolated sessions instead of inferring from names', async () => {
     const states: StateMachineState[] = [
       {

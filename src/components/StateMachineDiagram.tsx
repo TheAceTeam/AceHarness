@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useEffect, useState, useRef } from 'react';
+import { useCallback, useMemo, useEffect, useId, useState, useRef } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -20,6 +20,7 @@ import ReactFlow, {
   useNodesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import { startTransitionFlow } from './state-transition-flow';
 import type { StateMachineState, StateTransition, StateTransitionRecord, WorkflowStep } from '@/lib/core/schemas';
 import { Badge } from './ui/badge';
 import { RotateCcw } from 'lucide-react';
@@ -31,10 +32,24 @@ const EMPTY_COMPLETED_STEPS: string[] = [];
 const EMPTY_FAILED_STEPS: string[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
 const EXECUTED_EDGE_COLOR = '#2563eb';
+const EXECUTION_COLORS = {
+  deep: { green: [46, 134, 111], blue: [57, 105, 188], purple: [137, 76, 144] },
+  light: { green: [130, 213, 181], blue: [118, 173, 238], purple: [222, 143, 186] },
+};
 const CONFIG_EDGE_COLOR = '#64748b';
 const MUTED_EDGE_COLOR = CONFIG_EDGE_COLOR;
 const MUTED_EDGE_MARKER_COLOR = '#94a3b8';
 const HUMAN_APPROVAL_EDGE_COLOR = '#f97316';
+
+function getExecutionColor(progress: number, shade: keyof typeof EXECUTION_COLORS = 'deep') {
+  const { green, blue, purple } = EXECUTION_COLORS[shade];
+  const [start, end] = progress < 0.5 ? [green, blue] : [blue, purple];
+  const blend = progress < 0.5 ? progress * 2 : progress * 2 - 1;
+  const channels = start.map((channel, index) => {
+    return Math.round(channel + (end[index] - channel) * blend).toString(16).padStart(2, '0');
+  });
+  return `#${channels.join('')}`;
+}
 
 export type StateDiagramReviewModePresentation = {
   mode: 'standard' | 'adversarial' | null;
@@ -176,19 +191,170 @@ function TransitionEdgeLabel({ label, defaultColor }: { label: unknown; defaultC
   );
 }
 
+type ParallelTransition = {
+  lane: number;
+  laneCount: number;
+  direction: 1 | -1;
+  avoidanceX: number;
+  avoidanceY: number;
+};
+
+export function spaceParallelTransitions(edges: Edge[]): Edge[] {
+  const groups = new Map<string, Edge[]>();
+  for (const edge of edges) {
+    if (edge.type !== 'stateTransition' || edge.source === edge.target) continue;
+
+    const key = JSON.stringify([edge.source, edge.target].sort());
+    const group = groups.get(key) ?? [];
+    group.push(edge);
+    groups.set(key, group);
+  }
+
+  const parallelTransitions = new Map<string, ParallelTransition>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+
+    const avoidance = group.find(({ data }) => data?.curveOffsetX || data?.curveOffsetY)?.data;
+    group.forEach((edge, index) => {
+      parallelTransitions.set(edge.id, {
+        lane: index - (group.length - 1) / 2,
+        laneCount: group.length,
+        direction: edge.source < edge.target ? 1 : -1,
+        avoidanceX: avoidance?.curveOffsetX ?? 0,
+        avoidanceY: avoidance?.curveOffsetY ?? 0,
+      });
+    });
+  }
+
+  return edges.map((edge) => {
+    const parallelTransition = parallelTransitions.get(edge.id);
+    return parallelTransition ? { ...edge, data: { ...edge.data, parallelTransition } } : edge;
+  });
+}
+
+const HANDLE_DIRECTIONS = {
+  [Position.Left]: [-1, 0],
+  [Position.Right]: [1, 0],
+  [Position.Top]: [0, -1],
+  [Position.Bottom]: [0, 1],
+};
+
+type TransitionCoordinates = Pick<
+  EdgeProps, 'sourceX' | 'sourceY' | 'targetX' | 'targetY' | 'sourcePosition' | 'targetPosition'
+>;
+
+type TransitionHandleOffsets = Partial<Record<'source' | 'target', number>>;
+
+function isVerticalNodeSide(position: Position) {
+  return position === Position.Left || position === Position.Right;
+}
+
+function offsetTransitionEndpoints(coordinates: TransitionCoordinates, offsets?: TransitionHandleOffsets) {
+  const sourceAlongY = isVerticalNodeSide(coordinates.sourcePosition);
+  const targetAlongY = isVerticalNodeSide(coordinates.targetPosition);
+  const sourceOffset = offsets?.source ?? 0;
+  const targetOffset = offsets?.target ?? 0;
+  return {
+    ...coordinates,
+    sourceX: coordinates.sourceX + (sourceAlongY ? 0 : sourceOffset),
+    sourceY: coordinates.sourceY + (sourceAlongY ? sourceOffset : 0),
+    targetX: coordinates.targetX + (targetAlongY ? 0 : targetOffset),
+    targetY: coordinates.targetY + (targetAlongY ? targetOffset : 0),
+  };
+}
+
+function getParallelTransitionBend(
+  { sourceX, sourceY, targetX, targetY, sourcePosition }: TransitionCoordinates,
+  { lane, laneCount, direction, avoidanceX, avoidanceY }: ParallelTransition,
+) {
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const length = Math.max(1, Math.hypot(dx, dy));
+  const axisX = dx / length;
+  const axisY = dy / length;
+  // Keep history lanes in reading order on the side where they meet the node.
+  const normalX = -axisY * direction;
+  const normalY = axisX * direction;
+  const order = (isVerticalNodeSide(sourcePosition) ? normalY : normalX) < 0 ? -1 : 1;
+  const detourSide = Math.sign((avoidanceX * normalX + avoidanceY * normalY) * order);
+  const laneOffset = (lane + detourSide * (laneCount - 1) / 2) * 64 * order;
+  return {
+    x: (sourceX + targetX) / 2 + avoidanceX + normalX * laneOffset,
+    y: (sourceY + targetY) / 2 + avoidanceY + normalY * laneOffset,
+    axisX, axisY, length, laneSpacingY: normalY * 64 * order,
+  };
+}
+
+export function getParallelTransitionGeometry(
+  coordinates: TransitionCoordinates,
+  transition: ParallelTransition,
+  offsets?: TransitionHandleOffsets,
+) {
+  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition } = offsetTransitionEndpoints(coordinates, offsets);
+  const { x: midX, y: midY, axisX, axisY, length, laneSpacingY } = getParallelTransitionBend(coordinates, transition);
+  const tangent = Math.min(80, length / 5);
+  const [sourceOutX, sourceOutY] = HANDLE_DIRECTIONS[sourcePosition];
+  const [targetOutX, targetOutY] = HANDLE_DIRECTIONS[targetPosition];
+  const edgePath = [
+    `M ${sourceX},${sourceY}`,
+    `C ${sourceX + sourceOutX * tangent},${sourceY + sourceOutY * tangent}`,
+    `${midX - axisX * tangent},${midY - axisY * tangent} ${midX},${midY}`,
+    `C ${midX + axisX * tangent},${midY + axisY * tangent}`,
+    `${targetX + targetOutX * tangent},${targetY + targetOutY * tangent} ${targetX},${targetY}`,
+  ].join(' ');
+
+  // Near-vertical routes also need spacing along the flow direction to clear wide labels.
+  const extraSpacingY = Math.max(0, 32 - Math.abs(laneSpacingY));
+  const labelShift = extraSpacingY && axisY
+    ? transition.lane * extraSpacingY * (laneSpacingY < 0 ? -1 : 1) / axisY
+    : 0;
+  return {
+    edgePath,
+    labelX: midX + axisX * labelShift,
+    labelY: midY + axisY * labelShift,
+  };
+}
+
+function TransitionFlow({ path, index }: { path: string; index: number }) {
+  return (
+    <path
+      className="state-transition-flow stroke-blue-700 dark:stroke-sky-100 motion-reduce:hidden"
+      data-transition-index={index}
+      d={path}
+      fill="none"
+      strokeWidth={2}
+      visibility="hidden"
+      pointerEvents="none"
+      aria-hidden="true"
+    />
+  );
+}
+
 function StateTransitionEdge({
   id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  sourcePosition,
-  targetPosition,
   style = {},
   markerEnd,
   label,
   data,
+  ...coordinates
 }: EdgeProps) {
+  const handleOffsets: TransitionHandleOffsets | undefined = data?.handleOffsets;
+  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition } = offsetTransitionEndpoints(coordinates, handleOffsets);
+  const gradientId = `transition-gradient-${useId()}`;
+  const gradientColors: { start: string; end: string } | undefined = data?.gradientColors;
+  const hasGradient = gradientColors && (sourceX !== targetX || sourceY !== targetY);
+  const flowIndex: number | undefined = data?.transitionIndex;
+  const gradient = hasGradient ? (
+    <defs>
+      <linearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={sourceX} y1={sourceY} x2={targetX} y2={targetY}>
+        <stop offset="0%" stopColor={gradientColors.start} />
+        <stop offset="16%" stopColor={gradientColors.start} />
+        <stop offset="84%" stopColor={gradientColors.end} />
+        <stop offset="100%" stopColor={gradientColors.end} />
+      </linearGradient>
+    </defs>
+  ) : null;
+  const edgeStyle = hasGradient ? { ...style, stroke: `url(#${gradientId})` } : style;
   if (data?.isSelfLoop) {
     const loopSize = data?.loopSize ?? 120;
     const edgePath = [
@@ -202,7 +368,9 @@ function StateTransitionEdge({
 
     return (
       <>
-        <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+        {gradient}
+        <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={edgeStyle} />
+        {flowIndex !== undefined && <TransitionFlow path={edgePath} index={flowIndex} />}
         {label ? (
           <EdgeLabelRenderer>
             <div
@@ -241,8 +409,13 @@ function StateTransitionEdge({
   let edgePath: string;
   let labelX: number;
   let labelY: number;
-
-  if (hasAvoidanceOffset) {
+  if (data?.parallelTransition) {
+    ({ edgePath, labelX, labelY } = getParallelTransitionGeometry(
+      coordinates,
+      data.parallelTransition,
+      handleOffsets,
+    ));
+  } else if (hasAvoidanceOffset) {
     edgePath = [
       `M ${sourceX},${sourceY}`,
       `C ${sourceX + curveOffsetX},${sourceY + curveOffsetY}`,
@@ -269,7 +442,9 @@ function StateTransitionEdge({
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      {gradient}
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={edgeStyle} />
+      {flowIndex !== undefined && <TransitionFlow path={edgePath} index={flowIndex} />}
       {label ? (
         <EdgeLabelRenderer>
           <div
@@ -516,6 +691,14 @@ function calculateNodeLayout(states: StateMachineState[], useAutoLayout: boolean
   }
 
   return positions;
+}
+
+function getStateVisitOrder(transitions: ReturnType<typeof buildExecutedStateTransitions>) {
+  return new Map([...new Set(transitions.flatMap(({ from, to }) => [from, to]))].map((name, index) => [name, index]));
+}
+
+function isRollbackTransition(from: string, to: string, visitOrder: Map<string, number>) {
+  return (visitOrder.get(from) ?? -1) > (visitOrder.get(to) ?? -1);
 }
 
 // 自定义状态节点组件
@@ -959,6 +1142,85 @@ function getHandlePoint(bounds: NodeBounds, handle: string | null | undefined): 
   }
 }
 
+export function spaceTransitionEndpoints(edges: Edge[], getBounds: (id: string) => NodeBounds | null): Edge[] {
+  const sides = new Map<string, {
+    span: number;
+    endpoints: { edgeId: string; end: 'source' | 'target'; angle: number; sequence: number }[];
+  }>();
+
+  for (const edge of edges) {
+    if (edge.type !== 'stateTransition') continue;
+
+    const sequence: number = edge.data?.transitionIndex ?? Number.POSITIVE_INFINITY;
+
+    const source = getBounds(edge.source);
+    const target = getBounds(edge.target);
+    const sourcePosition = edge.sourceHandle as Position | undefined;
+    const targetPosition = edge.targetHandle as Position | undefined;
+    if (!source || !target || !sourcePosition || !targetPosition) continue;
+
+    const start = getHandlePoint(source, sourcePosition);
+    const end = getHandlePoint(target, targetPosition);
+    const bend = edge.data?.parallelTransition
+      ? getParallelTransitionBend({
+          sourceX: start.x, sourceY: start.y, targetX: end.x, targetY: end.y, sourcePosition, targetPosition,
+        }, edge.data.parallelTransition)
+      : {
+          x: (start.x + end.x) / 2 + (edge.data?.curveOffsetX ?? 0),
+          y: (start.y + end.y) / 2 + (edge.data?.curveOffsetY ?? 0),
+        };
+
+    for (const endpoint of ['source', 'target'] as const) {
+      const bounds = endpoint === 'source' ? source : target;
+      const position = endpoint === 'source' ? sourcePosition : targetPosition;
+      const handle = endpoint === 'source' ? start : end;
+      const alongY = isVerticalNodeSide(position);
+      const key = JSON.stringify([edge[endpoint], position]);
+      const side = sides.get(key) ?? {
+        span: alongY ? bounds.bottom - bounds.top : bounds.right - bounds.left,
+        endpoints: [],
+      };
+      const dx = bend.x - handle.x;
+      const dy = bend.y - handle.y;
+      const angle = alongY ? Math.atan2(dy, Math.abs(dx)) : Math.atan2(dx, Math.abs(dy));
+      side.endpoints.push({ edgeId: edge.id, end: endpoint, angle, sequence });
+      sides.set(key, side);
+    }
+  }
+
+  const offsets = new Map<string, TransitionHandleOffsets>();
+  const markerSizes = new Map<string, number>();
+  for (const { span, endpoints } of sides.values()) {
+    if (endpoints.length < 2) continue;
+
+    // Reserve space at the corners and keep incoming arrows clear of outgoing paths.
+    const gap = Math.min(24, Math.max(0, span - 28) / (endpoints.length - 1));
+    endpoints.sort((a, b) => (a.sequence === b.sequence ? a.angle - b.angle : a.sequence - b.sequence));
+    endpoints.forEach(({ edgeId, end }, index) => {
+      const edgeOffsets = offsets.get(edgeId) ?? {};
+      edgeOffsets[end] = (index - (endpoints.length - 1) / 2) * gap;
+      offsets.set(edgeId, edgeOffsets);
+      if (end === 'target') markerSizes.set(edgeId, Math.min(40, gap * 1.65));
+    });
+  }
+
+  return edges.map((edge) => {
+    const handleOffsets = offsets.get(edge.id);
+    if (!handleOffsets) return edge;
+
+    const size = markerSizes.get(edge.id);
+    const markerEnd = size && typeof edge.markerEnd === 'object'
+      ? {
+          ...edge.markerEnd,
+          width: Math.min(edge.markerEnd.width ?? size, size),
+          height: Math.min(edge.markerEnd.height ?? size, size),
+          markerUnits: 'userSpaceOnUse',
+        }
+      : edge.markerEnd;
+    return { ...edge, markerEnd, data: { ...edge.data, handleOffsets } };
+  });
+}
+
 function segmentIntersectsBounds(
   start: { x: number; y: number },
   end: { x: number; y: number },
@@ -1111,11 +1373,12 @@ function StateMachineDiagramInner({
     onForceTransitionRef.current?.(targetState);
   }, []);
 
+  const executedTransitions = useMemo(() => buildExecutedStateTransitions(stateHistory), [stateHistory]);
+  const visitOrder = useMemo(() => getStateVisitOrder(executedTransitions), [executedTransitions]);
+  const layoutPositions = useMemo(() => calculateNodeLayout(states, true), [states]);
+
   // 转换为 ReactFlow 节点
   const initialNodes: Node[] = useMemo(() => {
-    // 计算布局 - 强制使用自动布局
-    const layoutPositions = calculateNodeLayout(states, true);
-
     const nodes = states.map((state, index) => {
       const position = layoutPositions.get(state.name) || {
         x: (index % 3) * 400 + 150,
@@ -1147,8 +1410,6 @@ function StateMachineDiagramInner({
       };
     });
 
-    // 始终添加内置的人工审查节点
-    // 将人工审查节点放在视图最下方，居中显示
     const avgX = nodes.length > 0 ? nodes.reduce((sum, n) => sum + n.position.x, 0) / nodes.length : 500;
     const maxY = nodes.length > 0 ? Math.max(...nodes.map(n => n.position.y)) : 200;
 
@@ -1185,7 +1446,7 @@ function StateMachineDiagramInner({
     });
 
     return nodes;
-  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, failedSteps, handleStepClick, handleRerunFromStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope]);
+  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, failedSteps, handleStepClick, handleRerunFromStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope, layoutPositions]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 
@@ -1211,7 +1472,7 @@ function StateMachineDiagramInner({
     const edgeSet = new Set<string>(); // 用于去重
 
     const nodesById = new Map(nodes.map((node) => [node.id, node]));
-    const fallbackPositions = calculateNodeLayout(states, true);
+    const fallbackPositions = new Map(layoutPositions);
     const humanApprovalNode = nodesById.get('__human_approval__');
     if (!humanApprovalNode) {
       const avgX = states.length > 0
@@ -1223,7 +1484,6 @@ function StateMachineDiagramInner({
       fallbackPositions.set('__human_approval__', { x: avgX, y: maxY + 300 });
     }
 
-    const executedTransitions = buildExecutedStateTransitions(stateHistory);
     const executedKeys = new Set(executedTransitions.map((transition) => `${transition.from}->${transition.to}`));
 
     const getHandles = (source: string, target: string) => {
@@ -1238,13 +1498,19 @@ function StateMachineDiagramInner({
       );
     };
 
-    // 历史实际发生的转移优先绘制为蓝线。不要依赖配置 transition，
-    // 否则同源同目标的多条配置边会被 from-to 去重吞掉实际线路。
+    // 相邻的历史转移共享一个色值，重复或回退也沿用同一次执行的颜色顺序。
+    const executionColors = Array.from({ length: executedTransitions.length + 1 }, (_, index) => {
+      // 色相随执行顺序变化，接点的深浅交替，让每段的变化在缩小后仍可见。
+      const shade = index % 2 === 0 ? 'deep' : 'light';
+      return getExecutionColor(index / Math.max(1, executedTransitions.length), shade);
+    });
     for (let i = 0; i < executedTransitions.length; i++) {
       const record = executedTransitions[i];
       const edgeId = `history-${i}-${record.from}-${record.to}`;
       const { sourceHandle, targetHandle } = getHandles(record.from, record.to);
       const isSelfLoop = record.from === record.to;
+      const isRollback = isRollbackTransition(record.from, record.to, visitOrder);
+      const color = executionColors[i + 1];
       const avoidanceOffset = calculateEdgeAvoidanceOffset({
         source: record.from,
         target: record.to,
@@ -1262,15 +1528,20 @@ function StateMachineDiagramInner({
         targetHandle,
         label: `${i + 1}. ${compactEdgeLabel(record.reason)}`,
         type: 'stateTransition',
-        animated: true,
+        animated: false,
         hidden: false,
         style: {
-          stroke: EXECUTED_EDGE_COLOR,
+          stroke: color,
           strokeWidth: 3,
+          strokeLinecap: 'round',
+          strokeDasharray: isRollback ? '5 4' : undefined,
         },
         zIndex: 1,
         data: {
-          labelColor: EXECUTED_EDGE_COLOR,
+          transitionIndex: i,
+          gradientColors: { start: executionColors[i], end: color },
+          isRollback,
+          labelColor: color,
           labelOffset: 26,
           labelZIndex: 80,
           curveOffset: 0,
@@ -1281,9 +1552,10 @@ function StateMachineDiagramInner({
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          width: 20,
-          height: 20,
-          color: EXECUTED_EDGE_COLOR,
+          width: 28,
+          height: 28,
+          markerUnits: 'userSpaceOnUse',
+          color,
         },
       });
     }
@@ -1436,8 +1708,10 @@ function StateMachineDiagramInner({
       }
     }
 
-    return edges;
-  }, [states, stateHistory, currentState, showAllEdges, nodes]);
+    return spaceTransitionEndpoints(spaceParallelTransitions(edges), (id) =>
+      getNodeBounds(nodesById.get(id), fallbackPositions.get(id)),
+    );
+  }, [states, currentState, showAllEdges, nodes, layoutPositions, executedTransitions, visitOrder]);
 
   useEffect(() => {
     if (!initialFitDone.current) {
@@ -1471,6 +1745,13 @@ function StateMachineDiagramInner({
       return edge;
     });
   }, [hoveredNode, initialEdges, showAllEdges, stateHistory]);
+
+  const approvalHasVisibleEdge = displayEdges.some((edge) =>
+    !edge.hidden && (edge.source === '__human_approval__' || edge.target === '__human_approval__'),
+  );
+  const displayNodes = useMemo(() => approvalHasVisibleEdge ? nodes : nodes.map((node) =>
+    node.id === '__human_approval__' ? { ...node, style: { ...node.style, opacity: 0.5 } } : node,
+  ), [nodes, approvalHasVisibleEdge]);
 
   // 当 focusedState 改变时，自动聚焦到对应节点（用于视图跳转，不影响执行状态）
   const prevFocusedState = useRef<string | null>(null);
@@ -1521,10 +1802,19 @@ function StateMachineDiagramInner({
     [onTransitionClick]
   );
 
+  const diagramRef = useRef<HTMLDivElement>(null);
+  const hasExecutedTransitions = executedTransitions.length > 0;
+  useEffect(() => {
+    if (hasExecutedTransitions && diagramRef.current) return startTransitionFlow(diagramRef.current);
+  }, [hasExecutedTransitions]);
+
   return (
-    <div className="w-full h-full bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
+    <div
+      ref={diagramRef}
+      className="w-full h-full bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800"
+    >
       <ReactFlow
-        nodes={nodes}
+        nodes={displayNodes}
         edges={displayEdges}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
@@ -1539,9 +1829,15 @@ function StateMachineDiagramInner({
         nodesDraggable
         nodesConnectable={false}
         elementsSelectable
-        attributionPosition="bottom-left"
+        proOptions={{ hideAttribution: true }}
       >
-        <Controls />
+        <Controls
+          className="overflow-hidden rounded-md dark:ring-1 dark:ring-gray-700
+            dark:[&_button]:border-gray-700
+            dark:[&_button]:bg-gray-800
+            dark:[&_button_svg]:fill-gray-100
+            dark:[&_button:hover]:bg-gray-700"
+        />
         <Background />
 
         {/* 切换按钮 */}
@@ -1569,7 +1865,13 @@ function StateMachineDiagramInner({
               <div className="flex items-center gap-2"><span className="rounded border border-rose-300 bg-rose-100 px-1 text-[9px] font-semibold text-rose-800">{semanticsScope === 'run' ? '本次对抗' : '配置对抗'}</span><span>隔离角色编排</span></div>
               <div className="flex items-center gap-2"><span className="rounded border border-slate-300 bg-slate-100 px-1 text-[9px] font-semibold text-slate-700">{semanticsScope === 'run' ? '本次标准' : '配置标准'}</span><span>普通步骤编排</span></div>
               <div className="flex items-center gap-2"><span className="rounded border border-violet-300 bg-violet-100 px-1 text-[9px] font-semibold text-violet-800">独立</span><span>独立运行会话</span></div>
-              <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[3px] border-blue-600" /><span>已执行路径</span></div>
+              <div className="flex items-center gap-2">
+                <div className="h-[3px] w-8 rounded" style={{ background: `linear-gradient(90deg, ${getExecutionColor(0)}, ${getExecutionColor(0.5, 'light')}, ${getExecutionColor(1, 'light')})` }} />
+                <span>已执行路径</span>
+              </div>
+              {displayEdges.some((edge) => edge.data?.isRollback) && (
+                <div className="flex items-center gap-2"><div className="w-8 border-t-2 border-dashed" style={{ borderColor: getExecutionColor(0.5) }} /><span>回退</span></div>
+              )}
               <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-gray-500" /><span>当前可用</span></div>
               <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[2px] border-dashed border-gray-400 opacity-40" /><span>未使用路径</span></div>
             </div>
