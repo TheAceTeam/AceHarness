@@ -28,6 +28,9 @@ export type EngineMetadataId =
   | 'mux'
   | 'qoder'
   | 'qwen'
+  | 'deepseek-harness'
+  | 'grok-build'
+  | 'junie'
 
 export interface EngineMeta {
   id: EngineMetadataId
@@ -170,6 +173,21 @@ export const ENGINE_META: Record<EngineMetadataId, EngineMeta> = {
     id: 'qwen',
     name: 'Qwen',
     iconPath: AGENT_ICON_PATHS.qwen,
+  },
+  'deepseek-harness': {
+    id: 'deepseek-harness',
+    name: 'DeepSeek Harness',
+    iconPath: AGENT_ICON_PATHS.deepseekHarness,
+  },
+  'grok-build': {
+    id: 'grok-build',
+    name: 'Grok Build',
+    iconPath: AGENT_ICON_PATHS.grokBuild,
+  },
+  junie: {
+    id: 'junie',
+    name: 'Junie',
+    iconPath: AGENT_ICON_PATHS.junie,
   },
 }
 

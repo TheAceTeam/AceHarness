@@ -24,6 +24,9 @@ const DEFAULT_AGENTS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
+  'grok-build',
+  'junie',
 ];
 
 const options = parseArgs(process.argv.slice(2));

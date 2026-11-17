@@ -45,6 +45,9 @@ const SUPPORTED_AGENTS = [
   'mux',
   'qoder',
   'qwen',
+  'deepseek-harness',
+  'grok-build',
+  'junie',
 ];
 
 function applyProcessEnvForAgent(agent) {
