@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ClipboardCheck, UsersRound, Vote } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
 import { AgoraShell } from '@/components/collaboration/AgoraShell';
@@ -12,7 +12,7 @@ import type {
   HumanQuestionAnswer,
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
-import type { CollaborationChatroomParticipant } from '@/lib/core/home-sidebar-state';
+import type { CollaborationChatroomParticipant, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 import { createInitialChatroomState, ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
 
 interface WorkflowSupervisorAgoraPanelProps {
@@ -94,6 +94,8 @@ function buildWorkflowPanelRoster(
   return incomingRoster;
 }
 
+const EMPTY_GUESTS: NonNullable<WorkflowSupervisorAgoraPanelProps['initialGuests']> = [];
+
 export default function WorkflowSupervisorAgoraPanel({
   sessionId,
   title,
@@ -102,7 +104,7 @@ export default function WorkflowSupervisorAgoraPanel({
   supervisorAgent,
   supervisorSessionId,
   workingDirectory,
-  initialGuests = [],
+  initialGuests = EMPTY_GUESTS,
   agentSessionIds,
   pendingHumanQuestion,
   submittingHumanQuestion,
@@ -113,23 +115,29 @@ export default function WorkflowSupervisorAgoraPanel({
   summaryPanel,
 }: WorkflowSupervisorAgoraPanelProps) {
   const {
-    activeSessionId,
-    activeSession,
     sessions,
     sessionsLoading,
-    setActiveSessionId,
-    setSessionWorkbenchState,
+    updateSessionWorkbenchState,
     appendSessionMessage,
   } = useChat();
-  useEffect(() => {
+  const [snapshot, setSnapshot] = useState<{ id: string; state: SessionWorkbenchState | null } | null>(null);
+  const boundSessionSummary = sessions.find((session) => session.id === sessionId);
+  const boundSessionSnapshot = snapshot?.id === sessionId ? snapshot : null;
+  const pendingUpdate = useRef<Promise<unknown>>(Promise.resolve());
+  const updateBoundSession = useCallback((id: string, state: Parameters<typeof updateSessionWorkbenchState>[1]) => {
+    const update = pendingUpdate.current.then(() => updateSessionWorkbenchState(id, state));
+    pendingUpdate.current = update.catch(() => null);
+    return update;
+  }, [updateSessionWorkbenchState]);
+  const setAgoraWorkbenchState = useCallback((state: Parameters<typeof updateSessionWorkbenchState>[1]) => {
     if (!sessionId) return;
-    if (activeSessionId !== sessionId) {
-      setActiveSessionId(sessionId);
-    }
-  }, [activeSessionId, sessionId, setActiveSessionId]);
-
-  const targetSessionId = sessionId || null;
-  const loaded = Boolean(targetSessionId && activeSession?.id === targetSessionId);
+    void updateBoundSession(sessionId, state).then((session) => {
+      if (!session) return;
+      setSnapshot((current) => current?.id === sessionId
+        ? { id: sessionId, state: session.sessionWorkbenchState || {} }
+        : current);
+    }).catch((error) => console.error('Failed to update the workflow Agora session:', error));
+  }, [sessionId, updateBoundSession]);
   const roster = useMemo(() => buildWorkflowRoster(initialGuests), [initialGuests]);
   const sessionMap = useMemo(() => normalizeSessionMap({
     ...agentSessionIds,
@@ -140,8 +148,13 @@ export default function WorkflowSupervisorAgoraPanel({
   const topic = title?.trim() || '工作流协作议题';
 
   useEffect(() => {
-    if (!loaded) return;
-    setSessionWorkbenchState((prev) => {
+    if (!sessionId || sessionsLoading) return;
+    let cancelled = false;
+    const finish = (state: SessionWorkbenchState | null) => {
+      if (!cancelled) setSnapshot({ id: sessionId, state });
+    };
+    // Session summaries omit Agora messages. Read and initialize the full bound session by ID.
+    void updateBoundSession(sessionId, (prev) => {
       const base = ensureChatroomRoomState(prev?.collaborationRoom);
       const currentChatroom = base.chatroom || createInitialChatroomState();
       const existingRoster = currentChatroom.participantRoster || [];
@@ -201,8 +214,12 @@ export default function WorkflowSupervisorAgoraPanel({
           chatroom: nextChatroom,
         },
       };
+    }).then((session) => finish(session ? session.sessionWorkbenchState || {} : null), (error) => {
+      if (!cancelled) console.error('Failed to load the workflow Agora session:', error);
+      finish(null);
     });
-  }, [loaded, roster, rosterKey, sessionMap, sessionMapKey, setSessionWorkbenchState, topic, workingDirectory]);
+    return () => { cancelled = true; };
+  }, [boundSessionSummary, roster, rosterKey, sessionId, sessionMap, sessionMapKey, sessionsLoading, topic, updateBoundSession, workingDirectory]);
 
   const hasPendingHumanQuestion = Boolean(
     pendingHumanQuestion
@@ -301,8 +318,8 @@ export default function WorkflowSupervisorAgoraPanel({
     );
   }
 
-  if (!loaded) {
-    const sessionMissing = !sessionsLoading && !sessions.some((session) => session.id === targetSessionId);
+  if (!boundSessionSnapshot?.state) {
+    const sessionMissing = boundSessionSnapshot?.state === null;
     return (
       <div className="flex h-full items-center justify-center rounded-2xl border bg-background/70 p-6 text-sm text-muted-foreground">
         {sessionMissing ? '当前运行绑定的协作议题不可用。' : '正在载入工作流协作议题...'}
@@ -315,8 +332,8 @@ export default function WorkflowSupervisorAgoraPanel({
       <AgoraShell
         activeSessionId={sessionId}
         sessionTitle={topic}
-        sessionWorkbenchState={activeSession?.sessionWorkbenchState}
-        setSessionWorkbenchState={setSessionWorkbenchState}
+        sessionWorkbenchState={boundSessionSnapshot.state}
+        setSessionWorkbenchState={setAgoraWorkbenchState}
         appendSessionMessage={appendSessionMessage}
         workingDirectory={workingDirectory || ''}
         hideComposer={false}
