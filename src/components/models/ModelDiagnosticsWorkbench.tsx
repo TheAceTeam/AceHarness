@@ -5,7 +5,7 @@ import Ansi from 'ansi-to-react';
 import { cjk } from '@streamdown/cjk';
 import { code } from '@streamdown/code';
 import { math as streamdownMath } from '@streamdown/math';
-import { mermaid as streamdownMermaid } from '@streamdown/mermaid';
+import { peleMermaid as streamdownMermaid } from '@/lib/markdown/pele';
 import {
   Activity,
   ArrowDown,

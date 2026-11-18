@@ -19,6 +19,7 @@ import {
   requireRemoteWorkspaceAuth,
 } from '@/lib/core/remote-credential-vault';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
+import { readLocalWorkflowBoardLayout, readLocalWorkflowBoards, readRemoteWorkflowBoards } from '@/server/api-route-runtime/workflow-boards';
 import { jsonOk, workspaceRouteError, workspaceRouteJsonError } from '@/server/api-route-runtime/workspace-route';
 
 interface TreeNode {
@@ -348,6 +349,7 @@ export async function GET(request: Request) {
       return workspaceRouteJsonError('缺少 path 参数', 400);
     }
 
+    const wantsBoards = searchParams.get('view') === 'boards';
     const maxDepth = Math.min(Math.max(parseInt(searchParams.get('depth') || '0', 10), 0), 10);
     const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10), 0);
     const requestedLimit = parseInt(searchParams.get('limit') || searchParams.get('pageSize') || String(DEFAULT_PAGE_SIZE), 10);
@@ -358,11 +360,24 @@ export async function GET(request: Request) {
     if (isRemoteWorkspace(workspacePath)) {
       const auth = await requireRemoteWorkspaceAuth(request);
       if (auth instanceof Response) return auth;
+      if (wantsBoards) {
+        const credentials = getRemoteCredentials({ userId: auth.id, workspace: workspacePath });
+        const { provider } = getRemoteWorkspace(workspacePath, credentials);
+        try {
+          return jsonOk(await readRemoteWorkflowBoards(provider));
+        } finally {
+          await provider.close?.();
+        }
+      }
       const page = await buildRemoteTreePage(workspacePath, auth.id, subPath, offset, limit);
       return jsonOk(page);
     }
 
     const rootPath = await resolveWorkspaceRoot(workspacePath);
+    if (wantsBoards) {
+      const [boards, layout] = await Promise.all([readLocalWorkflowBoards(rootPath), readLocalWorkflowBoardLayout(rootPath)]);
+      return jsonOk({ boards, layout });
+    }
     const targetPath = await resolveTreeTargetPath(rootPath, subPath);
     const stat = await fs.stat(targetPath);
     if (!stat.isDirectory()) {

@@ -1325,3 +1325,15 @@ button[data-resize-btn][data-resize-btn]:hover {
     pointer-events: none;
   }
 }
+
+/* Pele diagrams inherit the application palette in Markdown and workflow boards. */
+.pele {
+  --pele-bg: hsl(var(--background));
+  --pele-fg: hsl(var(--foreground));
+  --pele-line: hsl(var(--muted-foreground));
+  --pele-muted: hsl(var(--muted-foreground));
+  --pele-surface: hsl(var(--muted));
+  --pele-surface-alt: hsl(var(--accent));
+  --pele-border: hsl(var(--border));
+  --pele-accent: hsl(var(--primary));
+}
