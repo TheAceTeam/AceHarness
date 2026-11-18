@@ -1,6 +1,7 @@
 'use client';
 
 import { Children, isValidElement, useMemo, useState, useCallback, useEffect, useId } from 'react';
+import { renderMermaidDiagram } from '@/lib/markdown/pele';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -130,7 +131,6 @@ const verdictConfig: Record<string, { icon: string; label: string; color: string
   fail: { icon: 'cancel', label: '未通过', color: 'text-red-500', bg: 'bg-red-500/10', border: 'border-red-500/30' },
 };
 
-let mermaidInitialized = false;
 
 function VerdictCard({ data }: { data: { verdict: string; remaining_issues?: number; summary?: string } }) {
   const cfg = verdictConfig[data.verdict] || verdictConfig.fail;
@@ -220,7 +220,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   return renderHighlightedCode(code, language);
 }
 
-function MermaidBlock({ code }: { code: string }) {
+export function MermaidBlock({ code }: { code: string }) {
   const diagramId = useId().replace(/:/g, '-');
   const [svg, setSvg] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -230,17 +230,7 @@ function MermaidBlock({ code }: { code: string }) {
 
     (async () => {
       try {
-        const mod = await import('mermaid');
-        const mermaid = mod.default || mod;
-        if (!mermaidInitialized) {
-          mermaid.initialize({
-            startOnLoad: false,
-            securityLevel: 'loose',
-            theme: 'neutral',
-          });
-          mermaidInitialized = true;
-        }
-        const result = await mermaid.render(`mermaid-${diagramId}`, code);
+        const result = await renderMermaidDiagram(code, diagramId);
         if (cancelled) return;
         setSvg(result.svg);
         setError(null);

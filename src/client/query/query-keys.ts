@@ -129,6 +129,7 @@ export const queryKeys = {
     subtree: (workspacePath: string, subPath: string, params: Record<string, unknown>) =>
       ['workspace', 'subtree', workspacePath, subPath, params] as const,
     file: contentKeys.workspaceFile,
+    boards: (workspacePath: string) => ['workspace', 'boards', workspacePath] as const,
     fileBlob: (workspacePath: string, filePath: string) =>
       ['workspace', 'fileBlob', workspacePath, filePath] as const,
     workflowGitDiff: (runId: string, params: Record<string, unknown>) =>

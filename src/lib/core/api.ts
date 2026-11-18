@@ -3236,6 +3236,15 @@ export interface NotebookSnapshotDetail extends NotebookSnapshotSummary {
 }
 
 export const workspaceApi = {
+  async getWorkflowBoards(workspacePath: string): Promise<{
+    boards: import('@/lib/workspace/workflow-boards').WorkflowBoard[];
+    layout: import('@/lib/workspace/workflow-board-layout').WorkflowBoardLayout | null;
+  }> {
+    const params = new URLSearchParams({ path: workspacePath, view: 'boards' });
+    const response = await authFetch(`${API_BASE}/workspace/tree?${params.toString()}`);
+    if (!response.ok) await throwWorkspaceApiError(response, '读取工作区看板失败');
+    return response.json();
+  },
   async getNotebookTree(depth = 2, options?: { scope?: NotebookScope; shareToken?: string }): Promise<{ tree: TreeNode[]; rootPath: string }> {
     const params = new URLSearchParams();
     params.set('depth', String(depth));

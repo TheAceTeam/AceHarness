@@ -8505,6 +8505,8 @@ try {
       ].join('\n'));
     }
 
+    parts.push('\n# 工作流看板\n如果当前任务需要模块图、架构图或其他嵌入工作台的图表，使用 aceharness-workflow-board 技能。把一个一级标题和一个 mermaid 代码块写入当前工作目录的 .board/<名称>.md。');
+
     // Resolve workflow, Agent, and step skills for this exact execution step.
     const promptRoleConfig = this.agentConfigs.find((r) => r.name === step.agent)
       || config.roles?.find((r) => r.name === step.agent);

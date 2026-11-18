@@ -46,6 +46,8 @@ import NewConfigModal from '@/components/NewConfigModal';
 import WorkflowPreflightManagerDialog from '@/components/WorkflowPreflightManagerDialog';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
+import { WorkflowBoardPanel } from './WorkflowBoardPanel';
+import { WORKFLOW_BOARD_LAYOUT_FILE, type WorkflowBoardLayout } from '@/lib/workspace/workflow-board-layout';
 import {
   dispatchWorkflowRunHide,
   WORKFLOW_RUN_VISIBILITY_EVENT,
@@ -252,8 +254,8 @@ const MonacoEditor = dynamic(
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
-export type RunWorkbenchTab = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
-export type RunDetailSection = 'overview' | 'state' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
+export type RunWorkbenchTab = 'overview' | 'state' | 'board' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
+export type RunDetailSection = 'overview' | 'state' | 'board' | 'workspace' | 'changes' | 'documents' | 'agents' | 'agora' | 'live' | 'spec';
 export type DocumentSourceFilter = RunDocumentSource | 'all';
 export type RunDetailNavItem = {
   id: string;
@@ -303,10 +305,12 @@ export function resolveWorkbenchRuntimeWorkflowConfig(input: {
 export function buildWorkbenchPreviewDetailNavItems(input: {
   isLightweightWorkflow: boolean;
   runtimeSpecAvailable?: boolean;
+  hasBoards?: boolean;
 }): Array<{ key: RunDetailSection; label: string; icon: string }> {
   return [
     { key: 'overview', label: '总览', icon: 'dashboard' },
     { key: 'state', label: '状态图', icon: 'hub' },
+    ...(input.hasBoards ? [{ key: 'board' as const, label: '看板', icon: 'space_dashboard' }] : []),
     ...(!input.isLightweightWorkflow ? [{ key: 'agents' as const, label: 'Agents', icon: 'groups' }] : []),
     { key: 'workspace', label: '工作区', icon: 'folder_open' },
     ...(input.runtimeSpecAvailable ? [{ key: 'spec' as const, label: 'Spec', icon: 'fact_check' }] : []),
@@ -317,10 +321,12 @@ export function buildWorkbenchRunDetailNavItems(input: {
   isLightweightWorkflow: boolean;
   runtimeSpecAvailable?: boolean;
   includeStructuredTasklist?: boolean;
+  hasBoards?: boolean;
 }): RunDetailNavItem[] {
   return [
     { id: 'overview', key: 'overview', label: '总览', icon: 'dashboard' },
     { id: 'state', key: 'state', label: '状态图', icon: 'hub' },
+    ...(input.hasBoards ? [{ id: 'board', key: 'board' as const, label: '看板', icon: 'space_dashboard' }] : []),
     ...(!input.isLightweightWorkflow ? [{ id: 'agents', key: 'agents' as const, label: 'Agents', icon: 'groups' }] : []),
     { id: 'workspace', key: 'workspace', label: '工作区', icon: 'folder_open' },
     { id: 'changes', key: 'changes', label: '变更', icon: 'difference' },
@@ -342,7 +348,9 @@ export function buildWorkbenchRunDetailNavItems(input: {
 export function resolveWorkbenchPreviewRouteSection(routeSection: string): RunDetailSection {
   return routeSection === 'preview-state'
     ? 'state'
-    : routeSection === 'preview-agents'
+    : routeSection === 'preview-board'
+      ? 'board'
+      : routeSection === 'preview-agents'
       ? 'agents'
       : routeSection === 'preview-workspace'
         ? 'workspace'
@@ -946,6 +954,7 @@ function getDocumentSourceFilterFromSearchParams(searchParams: { get: (key: stri
 
 function runWorkbenchTabToDetailSection(tab: RunWorkbenchTab, runtimeSpecAvailable = true): RunDetailSection {
   if (tab === 'state') return 'state';
+  if (tab === 'board') return 'board';
   if (tab === 'workspace') return 'workspace';
   if (tab === 'changes') return 'changes';
   if (tab === 'documents') return 'documents';
@@ -991,6 +1000,7 @@ function getWorkflowRunPanelTabsStorageKey(configFile: string) {
 function isRunWorkbenchTab(value: unknown): value is RunWorkbenchTab {
   return value === 'overview'
     || value === 'state'
+    || value === 'board'
     || value === 'workspace'
     || value === 'changes'
     || value === 'documents'
@@ -2491,15 +2501,9 @@ export default function WorkbenchPage({
   const [savedWorkflowRevision, setSavedWorkflowRevision] = useState(0);
   const [runRecordDrilled, setRunRecordDrilled] = useState(false);
   const [runDetailSection, setRunDetailSection] = useState<RunDetailSection>(() => (
-    initialWorkbenchSection === 'preview-state'
-      ? 'state'
-      : initialWorkbenchSection === 'preview-agents'
-        ? 'agents'
-      : initialWorkbenchSection === 'preview-workspace'
-        ? 'workspace'
-        : initialWorkbenchSection === 'preview-spec'
-          ? 'spec'
-          : runWorkbenchTabToDetailSection(getRunWorkbenchTabFromSearchParams(effectiveSearchParams), true)
+    initialWorkbenchSection?.startsWith('preview-')
+      ? resolveWorkbenchPreviewRouteSection(initialWorkbenchSection)
+      : runWorkbenchTabToDetailSection(getRunWorkbenchTabFromSearchParams(effectiveSearchParams), true)
   ));
   const [runDetailNavigationPending, setRunDetailNavigationPending] = useState<RunDetailSection | null>(null);
   const runDetailNavigationTokenRef = useRef(0);
@@ -6006,6 +6010,38 @@ export default function WorkbenchPage({
     || resolvedProjectRoot
     || ''
   ).trim(), [currentRunWorkspacePath, resolvedProjectRoot, runDetail?.workingDirectory, selectedRun?.workingDirectory, statusCompactQuery.data]);
+  const boardWorkspacePath = workbenchNavSection === 'preview' ? previewWorkspacePath : workflowAgoraWorkingDirectory;
+  const canReadWorkspaceBoards = Boolean(boardWorkspacePath) && (workbenchNavSection === 'preview'
+    || (workbenchNavSection === 'runs' && (runRecordDrilled || Boolean(activeRuntimeRunId))));
+  const workspaceBoardsQuery = useQuery({
+    queryKey: queryKeys.workspace.boards(boardWorkspacePath),
+    queryFn: () => workspaceApi.getWorkflowBoards(boardWorkspacePath),
+    enabled: canReadWorkspaceBoards,
+    staleTime: 5_000,
+    refetchInterval: ['preparing', 'running', 'waiting-approval'].includes(workflowStatus) ? 5_000 : false,
+  });
+  const { refetch: refetchWorkspaceBoards } = workspaceBoardsQuery;
+  const refreshWorkspaceBoards = useCallback(() => {
+    if (canReadWorkspaceBoards) void refetchWorkspaceBoards({ cancelRefetch: false });
+  }, [canReadWorkspaceBoards, refetchWorkspaceBoards]);
+
+  useEffect(() => {
+    refreshWorkspaceBoards();
+  }, [activeRuntimeRunId, boardWorkspacePath, refreshWorkspaceBoards, runDetailSection, workbenchNavSection]);
+
+  const workflowBoards = workspaceBoardsQuery.data?.boards || [];
+  const workflowBoardLayout = workspaceBoardsQuery.data?.layout ?? null;
+  const saveWorkflowBoardLayout = async (layout: WorkflowBoardLayout) => {
+    const content = JSON.stringify(layout, null, 2) + '\n';
+    const queryKey = queryKeys.workspace.boards(boardWorkspacePath);
+    await queryClient.cancelQueries({ queryKey, exact: true });
+    await workspaceApi.saveFile(boardWorkspacePath, WORKFLOW_BOARD_LAYOUT_FILE, content);
+    queryClient.setQueryData<Awaited<ReturnType<typeof workspaceApi.getWorkflowBoards>>>(queryKey, (current) => ({
+      boards: current?.boards ?? workflowBoards,
+      layout,
+    }));
+    void queryClient.invalidateQueries({ queryKey, exact: true });
+  };
   const workflowFormationStates = useMemo(() => {
     const workflow = workflowConfig?.workflow;
     return (workflow?.states || []) as StateMachineState[];
@@ -12940,11 +12976,13 @@ export default function WorkbenchPage({
   const previewDetailNavItems = buildWorkbenchPreviewDetailNavItems({
     isLightweightWorkflow,
     runtimeSpecAvailable,
+    hasBoards: workflowBoards.length > 0 || Boolean(workflowBoardLayout),
   });
   const runDetailNavItems = buildWorkbenchRunDetailNavItems({
     isLightweightWorkflow: isRuntimeLightweightWorkflow,
     runtimeSpecAvailable,
     includeStructuredTasklist: isPromotedLightweightRun && runtimeSpecAvailable,
+    hasBoards: workflowBoards.length > 0 || Boolean(workflowBoardLayout),
   });
 
   const openPreviewSection = () => {
@@ -12978,8 +13016,10 @@ export default function WorkbenchPage({
     dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
     const previewSection = nextSection === 'state'
       ? 'preview-state'
-      : nextSection === 'agents'
-        ? 'preview-agents'
+      : nextSection === 'board'
+        ? 'preview-board'
+        : nextSection === 'agents'
+          ? 'preview-agents'
       : nextSection === 'workspace'
         ? 'preview-workspace'
         : nextSection === 'spec'
@@ -13594,7 +13634,22 @@ export default function WorkbenchPage({
     </div>
   );
 
+  const renderWorkflowBoards = () => (
+    <WorkflowBoardPanel
+      key={boardWorkspacePath}
+      workspacePath={boardWorkspacePath}
+      boards={workflowBoards}
+      layout={workflowBoardLayout}
+      onSave={saveWorkflowBoardLayout}
+      loading={workspaceBoardsQuery.isLoading}
+      error={workspaceBoardsQuery.isError}
+      refreshing={workspaceBoardsQuery.isFetching}
+      onRefresh={refreshWorkspaceBoards}
+    />
+  );
+
   const renderWorkbenchPreview = () => {
+    if (runDetailSection === 'board') return renderWorkflowBoards();
     if (runDetailSection === 'state') {
       return (
         <div className={styles.workbenchPreviewFullPanel}>
@@ -14086,6 +14141,8 @@ export default function WorkbenchPage({
                     renderRunOverviewPanel()
                   ) : runDetailSection === 'state' ? (
                     renderRunStateMapPanel()
+                  ) : runDetailSection === 'board' ? (
+                    renderWorkflowBoards()
                   ) : runDetailSection === 'agents' ? (
                     renderAgentFormationPanel('run')
                   ) : runDetailSection === 'agora' ? (

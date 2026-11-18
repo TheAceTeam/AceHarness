@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { parseWorkflowBoardLayout, WORKFLOW_BOARD_LAYOUT_FILE } from '@/lib/workspace/workflow-board-layout';
+import { WORKFLOW_BOARD_MAX_BYTES } from '@/lib/workspace/workflow-boards';
 import fs from 'fs/promises';
 import path from 'path';
 import { appendPersistedSpecRevision, classifyPersistedSpecFile } from '@/lib/spec/persistence';
@@ -154,6 +157,11 @@ export async function PUT(request: Request) {
       return workspaceRouteJsonError('缺少 workspace、file 或 content 参数', 400);
     }
 
+    const isBoardLayout = file === WORKFLOW_BOARD_LAYOUT_FILE;
+    if (isBoardLayout && (typeof content !== 'string' || new TextEncoder().encode(content).length > WORKFLOW_BOARD_MAX_BYTES
+      || !parseWorkflowBoardLayout(content))) {
+      return workspaceRouteJsonError('看板布局内容无效或过大', 400);
+    }
     if (new TextEncoder().encode(content).length > MAX_FILE_SIZE) {
       return workspaceRouteJsonError('内容超过 1MB 限制', 413);
     }
@@ -175,6 +183,16 @@ export async function PUT(request: Request) {
       await resolveExistingInsideWorkspace(resolvedWorkspace, file);
     }
 
+    if (isBoardLayout) {
+      const pending = fullPath + '.' + randomUUID() + '.tmp';
+      try {
+        await fs.writeFile(pending, content, { encoding: 'utf-8', flag: 'wx' });
+        await fs.rename(pending, fullPath);
+      } finally {
+        await fs.unlink(pending).catch(() => {});
+      }
+      return jsonOk({ success: true });
+    }
     await fs.writeFile(fullPath, content, 'utf-8');
 
     if (previousContent !== null && previousContent !== content) {
