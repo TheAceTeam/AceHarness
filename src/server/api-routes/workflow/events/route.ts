@@ -125,7 +125,7 @@ export async function GET(request: Request) {
         'feedback-injected', 'feedback-recalled', 'context-updated',
         'route-decision',
         // State machine events forwarded with normalized type names
-        'state-change', 'step-start', 'step-complete', 'transition',
+        'state-change', 'step-start', 'step-complete', 'step-failed', 'step-output', 'transition',
         'force-transition', 'transition-forced', 'human-approval-required',
         'human-question-required', 'human-question-answered', 'human-question-updated',
         'agent-flow', 'supervisor-review', 'runtime-transcript', 'state-executing',
@@ -137,7 +137,7 @@ export async function GET(request: Request) {
       const smTypeMap: Record<string, string> = {
         transition: 'sm-transition',
       };
-      const stateMachineEventTypes = new Set(['state-change', 'step-start', 'step-complete']);
+      const stateMachineEventTypes = new Set(['state-change', 'step-start', 'step-complete', 'step-failed', 'step-output']);
       const workflowStatusesFallback: Record<string, any> = {};
 
       const buildStateMachineEventData = (input: any, configFile?: string, statusSnapshot?: any) => {

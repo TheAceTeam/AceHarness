@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   compactWorkflowStatusDeltaForLive,
   compactWorkflowStatusForLive,
+  compactWorkflowEventPayloadForLive,
 } from '@/lib/workflow/live-status';
 
 describe('workflow live status normalization', () => {
@@ -103,4 +104,11 @@ describe('workflow live status normalization', () => {
 
     expect(snapshot.statusReason).toContain('步骤执行超时：已超过配置上限 30 分钟。');
   });
+});
+
+
+test('preserves script exit codes and bounded terminal streams in snapshots and live events', () => {
+  const log = {id:'script-1',stepName:'Build-Compile',stepType:'script',status:'completed',scriptInterpreter:'python',scriptExitCode:0,scriptFailureAction:'continue',scriptStdout:'success',scriptStderr:'warning',durationMs:1201};
+  expect((compactWorkflowStatusForLive({status:'completed',stepLogs:[log]}) as any).stepLogs[0]).toMatchObject(log);
+  expect(compactWorkflowEventPayloadForLive({stepLog:log}).stepLog).toMatchObject(log);
 });

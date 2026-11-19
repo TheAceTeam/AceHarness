@@ -329,7 +329,7 @@ function createWorkflowStatusStream(request: Request, configFile?: string | null
     'log',
     'iteration', 'iteration-complete', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled', 'context-updated',
-    'route-decision', 'state-change', 'step-start', 'step-complete',
+    'route-decision', 'state-change', 'step-start', 'step-complete', 'step-failed', 'step-output',
     'transition', 'force-transition', 'transition-forced',
     'human-approval-required', 'human-question-required',
     'human-question-answered', 'human-question-updated',

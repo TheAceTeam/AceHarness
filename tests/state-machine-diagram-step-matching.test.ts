@@ -102,3 +102,8 @@ describe('state diagram run semantics', () => {
     })).toMatchObject({ kind: 'standard-closer', label: '标准收口', isolated: false });
   });
 });
+
+
+test('script semantics take priority over legacy agent roles', () => {
+  expect(getStateDiagramStepSemantics({type:'script',role:'attacker',script:{interpreter:'python',source:'print(1)',timeoutMs:1000,onFailure:{action:'stop'}}})).toMatchObject({kind:'script',label:'Python',isolated:false});
+});

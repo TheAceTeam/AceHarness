@@ -1,5 +1,6 @@
 'use client';
 
+import { WorkflowGraphLegend } from '@/components/workflow/WorkflowGraphLegend';
 import { useMemo } from 'react';
 import ReactFlow, {
   Background,
@@ -416,8 +417,7 @@ function LightweightTaskExecutionGraphInner({ tasks = [], provisional = false, c
           <Controls />
           <Background />
           <Panel position="bottom-right">
-            <div className="rounded-lg border bg-white/95 p-3 text-xs shadow-lg dark:bg-slate-900/95">
-              <div className="mb-2 font-semibold">图例</div>
+            <WorkflowGraphLegend className="bg-white/95 dark:bg-slate-900/95">
               <div className="space-y-1">
                 <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[3px] border-blue-600" /><span>执行中依赖</span></div>
                 <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[2px] border-emerald-600" /><span>已满足依赖</span></div>
@@ -429,7 +429,7 @@ function LightweightTaskExecutionGraphInner({ tasks = [], provisional = false, c
                   暂无显式依赖边，仅展示任务节点与分组。
                 </div>
               ) : null}
-            </div>
+            </WorkflowGraphLegend>
           </Panel>
         </ReactFlow>
       </div>

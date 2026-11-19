@@ -5255,3 +5255,80 @@ describe('skill 内联兜底边界', () => {
     expect(inlined).toContain('demo-skill 正文');
   });
 });
+
+describe('workflow script steps', () => {
+  async function mockScriptResults(...codes: number[]) {
+    const commands = await import('@/lib/workflow/script-step');
+    const run = vi.spyOn(commands, 'runWorkflowScript');
+    for (const code of codes) run.mockResolvedValueOnce({
+      interpreter: 'shell', exitCode: code, stdout: `result-${code}`, stderr: '', started: true, cancelled: false,
+    });
+    return run;
+  }
+
+  function failingScript(name: string, code: number, onFailure: { action: 'continue' | 'stop' } | { action: 'transition'; target: string }) {
+    const windows = process.platform === 'win32';
+    return {
+      name, type: 'script', script: {
+        interpreter: windows ? 'cmd' : 'shell',
+        source: windows ? `echo result-${code}\nexit /b ${code}` : `printf 'result-${code}\\n'\nexit ${code}`,
+        timeoutMs: 10000, onFailure,
+      },
+    };
+  }
+
+  test('passes two continued failures to the next Agent in order', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const runtime = manager as any;
+    runtime.getSegmentHandoffDelayMs = () => 0;
+    runtime.executeStep = vi.fn().mockResolvedValue('{"verdict":"pass","summary":"已处理"}');
+    const config = makeConfig();
+    config.context.projectRoot = process.cwd();
+    const state = config.workflow.states[0];
+    state.steps = [
+      failingScript('编译', 4, { action: 'continue' }),
+      failingScript('测试', 7, { action: 'continue' }),
+      state.steps[0],
+    ];
+
+    const scripts = await mockScriptResults(4, 7);
+    const result = await runtime.executeState(state, config).finally(() => scripts.mockRestore());
+    expect(result.executionFailed, result.stepOutputs.join('\n')).toBe(false);
+    expect(runtime.failedSteps).toEqual([]);
+    expect(runtime.stepLogs.filter((log: any) => log.stepType === 'script')).toMatchObject([
+      { status: 'failed', scriptExitCode: 4, scriptFailureAction: 'continue', scriptStdout: 'result-4', scriptStderr: '', scriptOutputTruncated: false },
+      { status: 'failed', scriptExitCode: 7, scriptFailureAction: 'continue', scriptStdout: 'result-7', scriptStderr: '', scriptOutputTruncated: false },
+    ]);
+    const context = runtime.executeStep.mock.calls[0][4];
+    expect(context).toContain('result-4');
+    expect(context).toContain('result-7');
+    expect(context.indexOf('result-4')).toBeLessThan(context.indexOf('result-7'));
+    expect(runtime.pendingScriptResults).toEqual([]);
+  });
+
+  test.each(['transition', 'stop'] as const)('honors %s and skips the remaining state steps', async (action) => {
+    const manager = await createManagerForTest(new MockEngine());
+    const runtime = manager as any;
+    runtime.getSegmentHandoffDelayMs = () => 0;
+    runtime.executeStep = vi.fn().mockResolvedValue('{"verdict":"pass"}');
+    const config = makeConfig();
+    config.context.projectRoot = process.cwd();
+    const [source, target] = config.workflow.states;
+    source.steps = [
+      failingScript('验收', 9, action === 'transition' ? { action, target: target.name } : { action }),
+      source.steps[0],
+    ];
+    const scripts = await mockScriptResults(9);
+    const result = await runtime.executeState(source, config).finally(() => scripts.mockRestore());
+    expect(runtime.executeStep).not.toHaveBeenCalled();
+    if (action === 'transition') {
+      expect(result.executionFailed, result.stepOutputs.join('\n')).toBe(false);
+      await expect(runtime.evaluateTransitions(source.transitions, result, config)).resolves.toBe(target.name);
+      expect(runtime.pendingScriptResults).toMatchObject([{ step: '验收', exitCode: 9 }]);
+    } else {
+      expect(result.executionFailed).toBe(true);
+      expect(() => runtime.assertStateCanTransition(result)).toThrow();
+      expect(runtime.pendingScriptResults).toEqual([]);
+    }
+  });
+});

@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { GitBranch, Activity, MessageSquare, CheckCircle2, Maximize2, X } from 'lucide-react';
 import StateMachineRuntimePanel, { formatStateName } from './StateMachineRuntimePanel';
 import StateMachineDiagram, { type StateDiagramSemanticsScope } from './StateMachineDiagram';
+import { WorkflowScriptRunList } from '@/components/workflow/WorkflowScriptExecution';
+import type { ScriptExecutionRecord } from '@/lib/workflow/script-presentation';
 import AgentFormationDiagram from './AgentFormationDiagram';
 import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/core/schemas';
 import type { AgentAvatarConfig, AgentRoleType, AgentTeam } from '@/lib/agent/personas';
@@ -121,6 +123,7 @@ interface StateMachineExecutionViewProps {
   activeSteps?: string[];
   activeConcurrencyGroups?: ActiveConcurrencyGroupView[];
   completedSteps?: string[];
+  scriptExecutions?: ScriptExecutionRecord[];
   failedSteps?: string[];
   stateHistory: StateTransitionRecord[];
   issueTracker: Issue[];
@@ -242,6 +245,7 @@ export default function StateMachineExecutionView({
   activeConcurrencyGroups = [],
   completedSteps = [],
   failedSteps = [],
+  scriptExecutions = [],
   stateHistory,
   issueTracker,
   transitionCount,
@@ -719,6 +723,7 @@ export default function StateMachineExecutionView({
         {/* 总览视图 */}
         <TabsContent value="overview" className="min-h-0 flex-1 overflow-auto">
           <div className="space-y-6">
+            <WorkflowScriptRunList states={states} records={scriptExecutions} />
             {concurrencyGroupsToDisplay.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 space-y-4">
                 <div className="flex items-center justify-between gap-3">
@@ -882,6 +887,7 @@ export default function StateMachineExecutionView({
               activeSteps={activeSteps}
               completedSteps={completedSteps}
               failedSteps={failedSteps}
+              scriptExecutions={scriptExecutions}
               stateHistory={stateHistory}
               isRunning={isRunning}
               allowForceTransition={allowForceTransition}

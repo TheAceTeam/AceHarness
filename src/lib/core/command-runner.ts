@@ -40,13 +40,22 @@ function appendOutput(current: string, chunk: Buffer, outputLimit: number): stri
   return next.slice(next.length - outputLimit);
 }
 
-function closeProcessTree(child: ChildProcess): void {
+function closeProcessTree(child: ChildProcess, processGroup: boolean): void {
   if (child.killed || child.exitCode !== null) return;
   if (isWindows() && child.pid) {
-    spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+    const kill = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
       stdio: 'ignore',
       windowsHide: true,
     });
+    kill.on('error', () => child.kill('SIGTERM'));
+    return;
+  }
+  if (processGroup && child.pid) {
+    const group = -child.pid;
+    try { process.kill(group, 'SIGTERM'); } catch { return; }
+    setTimeout(() => {
+      try { process.kill(group, 'SIGKILL'); } catch { /* process group ended */ }
+    }, 3000).unref();
     return;
   }
   child.kill('SIGTERM');
@@ -69,12 +78,13 @@ function commandAttempt(command: string, args: string[]): CommandAttempt {
   };
 }
 
-function spawnCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): ChildProcess {
+function spawnCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, processGroup: boolean): ChildProcess {
   return launchCommand(commandAttempt(command, args), {
     cwd,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    detached: processGroup && !isWindows(),
   });
 }
 
@@ -86,6 +96,9 @@ export async function runCommand(options: {
   timeoutMs?: number;
   timeoutLabel?: string;
   outputLimit?: number;
+  signal?: AbortSignal;
+  processGroup?: boolean;
+  onOutput?: (stream: 'stdout' | 'stderr', text: string) => void;
 }): Promise<CommandRunResult> {
   const args = options.args || [];
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -93,37 +106,57 @@ export async function runCommand(options: {
   const timeoutLabel = options.timeoutLabel || [basename(options.command), ...args].join(' ');
 
   return new Promise((resolve, reject) => {
-    const child = spawnCommand(options.command, args, options.cwd, options.env || process.env);
+    if (options.signal?.aborted) {
+      reject(new Error('命令已取消'));
+      return;
+    }
+    const processGroup = options.processGroup ?? false;
+    const child = spawnCommand(options.command, args, options.cwd, options.env || process.env, processGroup);
     let stdout = '';
     let stderr = '';
     let settled = false;
 
     const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      closeProcessTree(child);
-      reject(new Error(`${timeoutLabel} 执行超时`));
+      cancel(new Error(`${timeoutLabel} 执行超时`));
     }, timeoutMs);
+    function onAbort() {
+      cancel(new Error('命令已取消'));
+    }
+    function finish() {
+      settled = true;
+      clearTimeout(timeout);
+      options.signal?.removeEventListener('abort', onAbort);
+    }
+    function cancel(error: Error) {
+      if (settled) return;
+      finish();
+      closeProcessTree(child, processGroup);
+      reject(error);
+    }
+    options.signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       stdout = appendOutput(stdout, chunk, outputLimit);
+      options.onOutput?.('stdout', chunk.toString('utf8'));
     });
     child.stderr?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       stderr = appendOutput(stderr, chunk, outputLimit);
+      options.onOutput?.('stderr', chunk.toString('utf8'));
     });
     child.on('error', (error) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
+      finish();
       reject(error);
     });
     child.on('close', (exitCode) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
+      finish();
       resolve({ stdout, stderr, exitCode });
     });
 
+    child.stdin?.on('error', () => {});
     child.stdin?.end();
   });
 }

@@ -83,7 +83,7 @@ class WorkflowRegistry extends EventEmitter {
   }
 
   private static EVENTS = [
-    'state-change', 'step-start', 'step-complete', 'transition',
+    'state-change', 'step-start', 'step-complete', 'step-failed', 'step-output', 'transition',
     'force-transition', 'transition-forced', 'human-approval-required',
     'human-question-required', 'human-question-answered', 'human-question-updated',
     'status', 'agents', 'escalation', 'token-usage',
@@ -166,7 +166,7 @@ class WorkflowRegistry extends EventEmitter {
           this.managerKeysByRunId.set(runId, managerKey);
         }
         this.emit(eventName, tagged);
-        if (runId && eventName !== 'runtime-transcript') {
+        if (runId && eventName !== 'runtime-transcript' && eventName !== 'step-output') {
           getWorkflowEventStore().append(runId, `workflow.${eventName}`, {
             configFile,
             managerKey,
