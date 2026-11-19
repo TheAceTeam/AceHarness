@@ -1,5 +1,6 @@
 'use client';
 
+import { WorkflowGraphLegend } from '@/components/workflow/WorkflowGraphLegend';
 import { useCallback, useMemo, useEffect, useId, useState, useRef } from 'react';
 import ReactFlow, {
   Node,
@@ -23,6 +24,8 @@ import 'reactflow/dist/style.css';
 import { startTransitionFlow } from './state-transition-flow';
 import type { StateMachineState, StateTransition, StateTransitionRecord, WorkflowStep } from '@/lib/core/schemas';
 import { Badge } from './ui/badge';
+import { ScriptExecutionMetrics, WorkflowScriptExecutionDialog } from '@/components/workflow/WorkflowScriptExecution';
+import { SCRIPT_INTERPRETER_LABELS, findScriptExecution, scriptExecutionLabel, type ScriptExecutionRecord } from '@/lib/workflow/script-presentation';
 import { RotateCcw } from 'lucide-react';
 
 // 稳定的空数组引用：避免默认参数 = [] 在每次渲染产生新数组，
@@ -30,6 +33,7 @@ import { RotateCcw } from 'lucide-react';
 const EMPTY_ACTIVE_STEPS: string[] = [];
 const EMPTY_COMPLETED_STEPS: string[] = [];
 const EMPTY_FAILED_STEPS: string[] = [];
+const EMPTY_SCRIPT_EXECUTIONS: ScriptExecutionRecord[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
 const EXECUTED_EDGE_COLOR = '#2563eb';
 const EXECUTION_COLORS = {
@@ -60,7 +64,7 @@ export type StateDiagramReviewModePresentation = {
 export type StateDiagramSemanticsScope = 'run' | 'configuration';
 
 export type StateDiagramStepSemantics = {
-  kind: 'ordinary' | 'standard-closer' | 'defender' | 'attacker' | 'judge';
+  kind: 'script' | 'ordinary' | 'standard-closer' | 'defender' | 'attacker' | 'judge';
   label: string;
   description: string;
   isolated: boolean;
@@ -102,8 +106,9 @@ export function getStateDiagramReviewMode(
  * adversarial step and a legacy step whose name merely sounds adversarial.
  */
 export function getStateDiagramStepSemantics(
-  step: Pick<WorkflowStep, 'role' | 'agentInstanceId' | 'provenance'>,
+  step: Pick<WorkflowStep, 'type' | 'script' | 'role' | 'agentInstanceId' | 'provenance'>,
 ): StateDiagramStepSemantics {
+  if (step.type === 'script') return { kind: 'script', label: SCRIPT_INTERPRETER_LABELS[step.script?.interpreter || 'shell'], description: '脚本步骤 · 在工作区执行命令', isolated: false, instanceId: '' };
   const instanceId = String(step.agentInstanceId || '').trim();
   if (step.role === 'defender') {
     return { kind: 'defender', label: '执行方', description: '对抗编排中的执行与举证角色', isolated: Boolean(instanceId), instanceId };
@@ -557,6 +562,7 @@ interface StateMachineDiagramProps {
   currentStep?: string | null;
   activeSteps?: string[];
   completedSteps?: string[];
+  scriptExecutions?: ScriptExecutionRecord[];
   failedSteps?: string[];
   stateHistory?: StateTransitionRecord[];
   isRunning?: boolean;
@@ -740,6 +746,7 @@ function getStateDiagramTeamIcon(team: string | null | undefined) {
 }
 
 function getStateDiagramStepIcon(step: any, team: string | null | undefined) {
+  if (step?.type === 'script') return 'terminal';
   if (step?.type === 'subworkflow') return 'account_tree';
   if (step?.role === 'attacker') return 'swords';
   if (step?.role === 'judge') return 'gavel';
@@ -748,6 +755,7 @@ function getStateDiagramStepIcon(step: any, team: string | null | undefined) {
 }
 
 function getStepSemanticBadgeClass(kind: StateDiagramStepSemantics['kind']): string {
+  if (kind === 'script') return 'border-violet-300 bg-violet-100 text-violet-800 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200';
   if (kind === 'attacker') return 'border-rose-300 bg-rose-100 text-rose-800 dark:border-rose-800 dark:bg-rose-950 dark:text-rose-200';
   if (kind === 'judge') return 'border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200';
   if (kind === 'defender') return 'border-blue-300 bg-blue-100 text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200';
@@ -756,6 +764,7 @@ function getStepSemanticBadgeClass(kind: StateDiagramStepSemantics['kind']): str
 }
 
 function getStepIdleClass(kind: StateDiagramStepSemantics['kind']): string {
+  if (kind === 'script') return 'border border-violet-200 bg-violet-50 text-violet-900 dark:border-violet-900 dark:bg-violet-950/50 dark:text-violet-200';
   if (kind === 'attacker') return 'border border-rose-200 bg-rose-50 text-rose-900 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-100 dark:hover:bg-rose-950';
   if (kind === 'judge') return 'border border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-100 dark:hover:bg-amber-950';
   if (kind === 'defender') return 'border border-blue-200 bg-blue-50 text-blue-900 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/50 dark:text-blue-100 dark:hover:bg-blue-950';
@@ -788,7 +797,7 @@ export function getStateDiagramRerunStepKey(stateName: string, stepName: string)
 }
 
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, failedSteps = EMPTY_FAILED_STEPS, agents, onStepClick, onRerunFromStep, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope = 'run' } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, failedSteps = EMPTY_FAILED_STEPS, scriptExecutions = EMPTY_SCRIPT_EXECUTIONS, agents, onStepClick, onScriptClick, onRerunFromStep, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope = 'run' } = data;
   const reviewMode = getStateDiagramReviewMode(state, semanticsScope);
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
@@ -805,26 +814,30 @@ function StateNode({ data }: any) {
     const isRunningStep = runningKeys.some((key) => stateDiagramStepKeyMatches(key, state.name, step.name));
     const isWaitingHumanHelp = Boolean(isHumanHelpPending && pendingHumanHelpStep && pendingHumanHelpStep === step.name);
     const isWaitingParallelApproval = Boolean(isParallelManualJoinPending && pendingParallelGroupId && getStateDiagramParallelGroup(step) === pendingParallelGroupId);
-    return { isDone, isFailed, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval };
+    const scriptRecord = step.type === 'script' ? findScriptExecution(scriptExecutions, state.name, step.name) : undefined;
+    return { isDone: scriptRecord ? scriptRecord.status === 'completed' : isDone,
+      isFailed: scriptRecord ? scriptRecord.status === 'failed' : isFailed,
+      isRunningStep: scriptRecord ? scriptRecord.status === 'running' : isRunningStep,
+      isWaitingHumanHelp, isWaitingParallelApproval, scriptRecord };
   };
   const renderStepPill = (step: any, idx: number, compact = false) => {
-    const { isDone, isFailed, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval } = getStepStatus(step);
+    const { isDone, isFailed, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval, scriptRecord } = getStepStatus(step);
     const agentTeam = getStateDiagramAgentTeam(agents, step?.agent);
     const semantics = getStateDiagramStepSemantics(step);
     const isWaitingApproval = isWaitingHumanHelp || isWaitingParallelApproval;
     return (
       <div
         key={`${step.name}-${idx}`}
-        onClick={(e) => { e.stopPropagation(); onStepClick?.(step); }}
-        title={`${semantics.description}${semantics.isolated ? ` · 独立会话 ${semantics.instanceId}` : ''}`}
+        onClick={(e) => { e.stopPropagation(); if (step.type === 'script') onScriptClick?.(state.name, step); else onStepClick?.(step); }}
+        title={step.type === 'script' ? `${semantics.description} · ${scriptExecutionLabel(scriptRecord, isRunningStep)}` : `${semantics.description}${semantics.isolated ? ` · 独立会话 ${semantics.instanceId}` : ''}`}
         className={`
           flex items-center gap-1 rounded cursor-pointer transition-colors
           ${compact ? 'px-1 py-0.5 text-[9px]' : 'px-1.5 py-0.5 text-[10px]'}
-          ${isWaitingApproval ? 'bg-amber-500 text-black ring-1 ring-amber-300' : isRunningStep ? 'bg-blue-500 text-white' : isFailed ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : getStepIdleClass(semantics.kind)}
+          ${isWaitingApproval ? 'bg-amber-500 text-black ring-1 ring-amber-300' : isRunningStep ? 'bg-blue-500 text-white' : isFailed ? (scriptRecord?.scriptFailureAction && scriptRecord.scriptFailureAction !== 'stop' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200' : 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300') : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : getStepIdleClass(semantics.kind)}
         `}
       >
         <span className="material-symbols-outlined" style={{ fontSize: compact ? 10 : 11 }}>
-          {isWaitingApproval ? 'support_agent' : isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramStepIcon(step, agentTeam)}
+          {isWaitingApproval ? 'support_agent' : isRunningStep ? 'play_arrow' : isFailed ? 'error' : isDone ? 'check_circle' : getStateDiagramStepIcon(step, agentTeam)}
         </span>
         <span className="truncate flex-1">{step.name}</span>
         <span
@@ -833,6 +846,8 @@ function StateNode({ data }: any) {
         >
           {semantics.label}
         </span>
+        {step.type === 'script' && <ScriptExecutionMetrics record={scriptRecord} running={isRunningStep} />}
+        {step.type === 'script' && isFailed && <span className="shrink-0 rounded border border-current/30 px-1 text-[8px]" aria-label={`${step.name}：${scriptExecutionLabel(scriptRecord)}`}>{scriptExecutionLabel(scriptRecord).replace('失败 · ', '')}</span>}
         {semantics.isolated ? (
           <span
             className="shrink-0 rounded border border-violet-300 bg-violet-100 px-1 text-[8px] font-semibold leading-3 text-violet-800 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200"
@@ -1328,6 +1343,7 @@ function StateMachineDiagramInner({
   activeSteps = EMPTY_ACTIVE_STEPS,
   completedSteps = EMPTY_COMPLETED_STEPS,
   failedSteps = EMPTY_FAILED_STEPS,
+  scriptExecutions = EMPTY_SCRIPT_EXECUTIONS,
   stateHistory = EMPTY_STATE_HISTORY,
   isRunning = false,
   allowForceTransition = isRunning,
@@ -1336,6 +1352,8 @@ function StateMachineDiagramInner({
   pendingHumanQuestion,
   semanticsScope = 'run',
 }: StateMachineDiagramProps) {
+  const [selectedScript, setSelectedScript] = useState<{ stateName: string; step: WorkflowStep } | null>(null);
+  const handleScriptClick = useCallback((stateName: string, step: WorkflowStep) => setSelectedScript({ stateName, step }), []);
   const [showAllEdges, setShowAllEdges] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const { setCenter, fitView: rfFitView } = useReactFlow();
@@ -1398,6 +1416,8 @@ function StateMachineDiagramInner({
           activeSteps,
           completedSteps,
           failedSteps,
+          scriptExecutions,
+          onScriptClick: handleScriptClick,
           agents,
           onStepClick: handleStepClick,
           onRerunFromStep: handleRerunFromStepClick,
@@ -1434,6 +1454,8 @@ function StateMachineDiagramInner({
         activeSteps,
         completedSteps,
         failedSteps,
+        scriptExecutions,
+        onScriptClick: handleScriptClick,
         agents,
         onStepClick: handleStepClick,
         onRerunFromStep: handleRerunFromStepClick,
@@ -1446,7 +1468,7 @@ function StateMachineDiagramInner({
     });
 
     return nodes;
-  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, failedSteps, handleStepClick, handleRerunFromStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope, layoutPositions]);
+  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, failedSteps, scriptExecutions, handleScriptClick, handleStepClick, handleRerunFromStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion, semanticsScope, layoutPositions]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 
@@ -1855,8 +1877,7 @@ function StateMachineDiagramInner({
 
         {/* 图例 */}
         <Panel position="bottom-right">
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 shadow-lg text-xs">
-            <div className="font-semibold mb-2">图例</div>
+          <WorkflowGraphLegend className="border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
             <div className="space-y-1">
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500" /><span>当前状态</span></div>
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-green-400" /><span>初始状态</span></div>
@@ -1880,9 +1901,10 @@ function StateMachineDiagramInner({
                 ? '提示：步骤角色和独立会话来自本次运行快照，不按步骤名称推断'
                 : '提示：当前仅展示原始配置；启动后将切换为本次运行快照'}
             </div>
-          </div>
+          </WorkflowGraphLegend>
         </Panel>
       </ReactFlow>
+      <WorkflowScriptExecutionDialog selection={selectedScript} records={scriptExecutions} onClose={() => setSelectedScript(null)} />
     </div>
   );
 }

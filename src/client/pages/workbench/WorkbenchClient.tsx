@@ -32,6 +32,8 @@ import { useGitBrowserSummaryQuery } from '@/client/query/workspace';
 import { useLightweightRuntimeToolEventsQuery, useLightweightTasklistEvidenceQuery } from '@/client/query/lightweight-tasklist';
 
 const { ClipLoader } = ReactSpinners;
+import { WorkflowScriptExecutionDetails } from '@/components/workflow/WorkflowScriptExecution';
+import type { ScriptExecutionRecord } from '@/lib/workflow/script-presentation';
 import StateMachineDiagram from '@/components/StateMachineDiagram';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import LightweightWorkflowExecutionView from '@/components/workflow/LightweightWorkflowExecutionView';
@@ -44,6 +46,7 @@ import AgentPanel from '@/components/AgentPanel';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import NewConfigModal from '@/components/NewConfigModal';
 import WorkflowPreflightManagerDialog from '@/components/WorkflowPreflightManagerDialog';
+import { WorkflowCanvasViewport } from '@/components/workflow/WorkflowCanvasViewport';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
 import { WorkflowBoardPanel } from './WorkflowBoardPanel';
@@ -234,6 +237,10 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
 const StateMachineDesignPanel = dynamic(() => import('@/components/StateMachineDesignPanel'), {
   ssr: false,
   loading: () => designTabLoadingPanel('正在加载状态机编排...'),
+});
+const StateMachineGraphPanel = dynamic(() => import('@/components/StateMachineGraphPanel'), {
+  ssr: false,
+  loading: () => designTabLoadingPanel('正在加载编排画布...'),
 });
 const WorkflowSupervisorAgoraPanel = dynamic(() => import('@/components/workflow/WorkflowSupervisorAgoraPanel'), {
   ssr: false,
@@ -2818,6 +2825,14 @@ export default function WorkbenchPage({
     costUsd: number;
     durationMs: number;
     timestamp: string;
+    stepType?: 'agent' | 'subworkflow' | 'script';
+    scriptInterpreter?: ScriptExecutionRecord['scriptInterpreter'];
+    scriptExitCode?: number | null;
+    scriptFailureAction?: ScriptExecutionRecord['scriptFailureAction'];
+    scriptStdout?: string;
+    scriptStderr?: string;
+    scriptOutputTruncated?: boolean;
+    scriptCancelled?: boolean;
     tokenUsage?: {
       inputTokens: number;
       outputTokens: number;
@@ -2825,6 +2840,7 @@ export default function WorkbenchPage({
       cacheReadInputTokens?: number;
     };
   }>>([]);
+  const scriptExecutions = useMemo(() => persistedStepLogs.filter(log => log.stepType === 'script' || log.agent === 'script'), [persistedStepLogs]);
   const [runStatusReason, setRunStatusReason] = useState<string | null>(null);
   const [creationSessionSummary, setCreationSessionSummary] = useState<{
     id: string;
@@ -3116,6 +3132,8 @@ export default function WorkbenchPage({
       ? value
       : 'orchestration'
   );
+  const [orchestrationView, setOrchestrationView] = useState<'form' | 'canvas'>('form');
+  const [canvasFullscreen, setCanvasFullscreen] = useState(true);
   const [designTab, setDesignTab] = useState<DesignTab>(() => normalizeDesignTab(effectiveSearchParams.get('designTab')));
   const [preflightManagerOpen, setPreflightManagerOpen] = useState(false);
   const [designOptimizationDialogOpen, setDesignOptimizationDialogOpen] = useState(false);
@@ -3217,6 +3235,9 @@ export default function WorkbenchPage({
       || specRevisionVoteHistory.length > 0,
   );
   const isLightweightWorkflow = isLightweightWorkflowConfig(workflowConfig);
+  const showOrchestrationCanvas = !isLightweightWorkflow && orchestrationView === 'canvas';
+  const OrchestrationPanel = showOrchestrationCanvas ? StateMachineGraphPanel : StateMachineDesignPanel;
+  const showFullscreenCanvas = showOrchestrationCanvas && canvasFullscreen;
   const specDesignEnabled = !specCodingDisabled && Boolean(
     workflowConfig?.context?.specCodingEnabled === true
       || editingConfig?.context?.specCodingEnabled === true
@@ -6333,6 +6354,7 @@ export default function WorkbenchPage({
     stateHistoryGroups.forEach((items) => syncWorkflowStateHistoryToDb(resolvedRunId, items, 0));
 
     const stepLogGroups = [
+      payload.stepLog ? [payload.stepLog] : undefined,
       payload.stepLogs,
       statusSnapshot?.stepLogs,
     ].filter(Array.isArray) as Array<Array<Record<string, unknown>>>;
@@ -6410,6 +6432,20 @@ export default function WorkbenchPage({
       timestamp: event.timestamp,
       data: payload,
     }, event.runId);
+
+    if (payload.stepLog?.stepType === 'script') {
+      const log = payload.stepLog;
+      setPersistedStepLogs(current => [...current.filter(item => item.id !== log.id), log]);
+      const stepKey = String(log.stepName || payload.stepKey || payload.step || '');
+      if (log.status === 'running') {
+        dispatch({ type: 'SET_CURRENT_STEP', payload: stepKey });
+        setActiveSteps(current => Array.from(new Set([...current, stepKey])));
+      } else {
+        setActiveSteps(current => current.filter(key => key !== stepKey && key !== payload.step));
+        dispatch({ type: log.status === 'failed' ? 'ADD_FAILED_STEP' : 'ADD_COMPLETED_STEP', payload: stepKey });
+      }
+      return;
+    }
 
     if (event.type === 'workflow.log') {
       const message = String(payload.message || payload.error || '').trim();
@@ -8026,6 +8062,21 @@ export default function WorkbenchPage({
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflowStatusCompact(configFile, statusQueryRunId) });
     }
 
+    if (event.data?.stepLog?.stepType === 'script') {
+      const log = event.data.stepLog;
+      applyWorkflowStatusSnapshot(event.data.statusSnapshot);
+      restoreStepLogs([log], 'merge');
+      const stepKey = String(log.stepName || event.data.stepKey || event.data.step || '');
+      if (log.status === 'running') {
+        setActiveSteps(current => Array.from(new Set([...current, stepKey])));
+        dispatch({ type: 'SET_CURRENT_STEP', payload: stepKey });
+      } else {
+        setActiveSteps(current => current.filter(key => key !== stepKey && key !== event.data.step));
+        dispatch({ type: log.status === 'failed' ? 'ADD_FAILED_STEP' : 'ADD_COMPLETED_STEP', payload: stepKey });
+      }
+      if (event.type !== 'step-output') addLog('script', log.status === 'failed' ? 'error' : log.status === 'completed' ? 'success' : 'info', `${event.data.step || stepKey} · ${log.status === 'running' ? '开始执行' : `退出码 ${log.scriptExitCode ?? '—'}`}`);
+      return;
+    }
     switch (event.type) {
       case 'snapshot': {
         const statuses = event.data?.workflowStatuses || {};
@@ -9312,6 +9363,7 @@ export default function WorkbenchPage({
               agentFlow={Array.isArray(childStatus.agentFlow) ? childStatus.agentFlow : []}
               tokenAnalytics={childStatus.tokenAnalytics}
               executionTrace={childStatus.executionTrace || null}
+              scriptExecutions={(childStatus as any).stepLogs || []}
               subworkflowRuns={childSubworkflowRuns}
               subworkflowSummary={childStatus.subworkflowSummary || null}
               activeSubworkflowRunId={childStatus.activeSubworkflowRunId || null}
@@ -13273,6 +13325,7 @@ export default function WorkbenchPage({
                       agentFlow={agentFlow}
                       tokenAnalytics={workflowTokenAnalytics}
                       executionTrace={executionTrace}
+                      scriptExecutions={scriptExecutions}
                       runtimeEvents={dbRuntimeEvents}
                       subworkflowRuns={subworkflowRuns}
                       subworkflowSummary={subworkflowSummary}
@@ -14257,6 +14310,10 @@ export default function WorkbenchPage({
                           </Button>
                         </div>
                       ) : null}
+                      {overviewStepRecord.payload?.stepType === 'script' || overviewStepRecord.agent === 'script' ? (
+                        <WorkflowScriptExecutionDetails record={overviewStepRecord.payload || overviewStepRecord} hideOutput
+                          step={(runtimeWorkflowConfig?.workflow as any)?.states?.find((state: any) => state.name === overviewStepRecord.stateName)?.steps?.find((step: any) => step.name === overviewStepRecord.stepName)} />
+                      ) : <>
                       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         <div className="rounded-lg border bg-background p-3">
                           <div className="text-xs text-muted-foreground">状态</div>
@@ -14295,6 +14352,7 @@ export default function WorkbenchPage({
                           <div className="mt-1 truncate font-mono text-xs">{overviewStepRecord.sessionId || '-'}</div>
                         </div>
                       </div>
+                      </>}
                       {overviewStepRecord.error ? (
                         <div>
                           <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">执行错误</div>
@@ -14495,57 +14553,143 @@ export default function WorkbenchPage({
 
               {/* Orchestration Tab */}
               {designTab === 'orchestration' && editingConfig?.workflow && (
-                <div className="flex h-full flex-col overflow-hidden">
-                  <div className="border-b bg-background/80 px-4 py-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold">状态、步骤、转移与 Agent 编排</div>
-                        <div className="mt-1 text-xs text-muted-foreground">维护当前工作流结构；执行参数统一放在“执行配置”。</div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button type="button" size="sm" className="h-8 gap-1.5 px-3 text-xs" onClick={handleOpenWorkflowOptimization}>
-                          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>auto_fix_high</span>
-                          生成优化建议
-                        </Button>
-                        {editingPreflightSummary.configuredSteps > 0 ? (
-                          <Badge variant="outline" className="text-[10px]">
-                            已配置 {editingPreflightSummary.configuredSteps} 个步骤 / {editingPreflightSummary.totalCommands} 条命令
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-[10px]">暂未配置 preflight</Badge>
-                        )}
-                        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 px-3 text-xs" onClick={() => setPreflightManagerOpen(true)}>
-                          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>fact_check</span>
-                          Preflight 校验管理
-                        </Button>
+                <WorkflowCanvasViewport fullscreen={showFullscreenCanvas} onExit={() => setCanvasFullscreen(false)}>
+                  <div className="flex h-full flex-col overflow-hidden">
+                    <div className="border-b bg-background/80 px-4 py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="text-sm font-semibold">状态、步骤、转移与 Agent 编排</div>
+                            {!isLightweightWorkflow && (
+                              <ButtonGroup aria-label="编排视图">
+                                {([
+                                  ['form', 'view_list', '表单'],
+                                  ['canvas', 'account_tree', '画布'],
+                                ] as const).map(([view, icon, label]) => (
+                                  <Button
+                                    key={view}
+                                    type="button"
+                                    size="sm"
+                                    variant={orchestrationView === view ? 'secondary' : 'outline'}
+                                    aria-pressed={orchestrationView === view}
+                                    className="relative h-7 gap-1.5 px-2.5 text-xs focus-visible:z-10"
+                                    onClick={() => {
+                                      setOrchestrationView(view);
+                                      if (view === 'canvas') setCanvasFullscreen(true);
+                                    }}
+                                  >
+                                    <span className="material-symbols-outlined" aria-hidden style={{ fontSize: 15 }}>{icon}</span>
+                                    {label}
+                                  </Button>
+                                ))}
+                              </ButtonGroup>
+                            )}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">维护当前工作流结构；执行参数统一放在“执行配置”。</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {showOrchestrationCanvas && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="size-8"
+                              title={showFullscreenCanvas ? '退出全屏' : '全屏画布'}
+                              aria-label={showFullscreenCanvas ? '退出全屏' : '全屏画布'}
+                              onClick={() => setCanvasFullscreen(!showFullscreenCanvas)}
+                            >
+                              <span className="material-symbols-outlined text-[18px]" aria-hidden>
+                                {showFullscreenCanvas ? 'fullscreen_exit' : 'fullscreen'}
+                              </span>
+                            </Button>
+                          )}
+                          <Button type="button" size="sm" variant={showOrchestrationCanvas ? 'outline' : 'default'} className="h-8 gap-1.5 px-3 text-xs" onClick={handleOpenWorkflowOptimization}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>auto_fix_high</span>
+                            生成优化建议
+                          </Button>
+                          {editingPreflightSummary.configuredSteps > 0 ? (
+                            <Badge variant="outline" className="text-[10px]">
+                              已配置 {editingPreflightSummary.configuredSteps} 个步骤 / {editingPreflightSummary.totalCommands} 条命令
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px]">暂未配置 preflight</Badge>
+                          )}
+                          <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 px-3 text-xs" onClick={() => setPreflightManagerOpen(true)}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>fact_check</span>
+                            Preflight 校验管理
+                          </Button>
+                          {showFullscreenCanvas && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-8 gap-1.5 px-3 text-xs"
+                              onClick={handleSaveConfig}
+                              disabled={saving || !hasUnsavedDesignConfigChanges}
+                            >
+                              <span className="material-symbols-outlined" aria-hidden style={{ fontSize: 16 }}>save</span>
+                              {saving ? '保存中…' : '保存配置'}
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="min-h-0 flex-1">
-                    <StateMachineDesignPanel
-                      states={editingConfig.workflow.states || []}
-                      onStatesChange={(states: any) => {
-                        const newConfig = JSON.parse(JSON.stringify(editingConfig));
-                        newConfig.workflow.states = states;
-                        dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-                      }}
-                      availableAgents={agentConfigs}
-                      availableSkills={availableSkills}
-                      specTasks={designOptimizationSpecTaskOptions}
-                      onOptimizeState={handleOptimizeStateMachineState}
-                      onOptimizeStep={handleOptimizeStateMachineStep}
-                      onAgentSkillsChange={handleAgentSkillsChange}
-                      protocolAdopted={isStateLevelReviewAdopted(editingConfig)}
-                      onAdoptReviewProtocol={(states: any) => {
-                        const newConfig = JSON.parse(JSON.stringify(editingConfig));
-                        newConfig.workflow.reviewProtocol = 'state-level';
-                        newConfig.workflow.states = states;
-                        dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-                      }}
-                    />
+                    <div className="min-h-0 flex-1">
+                      <OrchestrationPanel
+                        {...(showOrchestrationCanvas ? {
+                          configFile,
+                          onSave: handleSaveConfig,
+                          validateDraft: async (states: StateMachineState[]) => {
+                            const draft = {
+                              ...editingConfig,
+                              workflow: { ...editingConfig.workflow, states },
+                            };
+                            const prepared = buildWorkflowDesignConfigForSave(draft, currentWorkflowDesignDraftState);
+                            const config = specCodingDisabled ? stripSpecBindingsFromWorkflowConfig(prepared) : prepared;
+                            const { validation } = await configApi.validateConfig({ config });
+                            return (validation?.issues || []).map((issue: {
+                              path: string[];
+                              message: string;
+                              severity: 'error' | 'warning';
+                            }) => {
+                              const section = issue.path?.[2];
+                              const stateIndex = section === undefined ? undefined
+                                : /^\d+$/.test(section) ? Number(section) : states.findIndex((state) => state.name === section);
+                              const item = issue.path?.[4];
+                              const itemIndex = item !== undefined && /^\d+$/.test(item) ? Number(item) : undefined;
+                              return {
+                                message: issue.message,
+                                severity: issue.severity,
+                                stateIndex: stateIndex !== undefined && stateIndex >= 0 ? stateIndex : undefined,
+                                stepIndex: issue.path?.[3] === 'steps' ? itemIndex : undefined,
+                                transitionIndex: issue.path?.[3] === 'transitions' ? itemIndex : undefined,
+                              };
+                            });
+                          },
+                        } : {})}
+                        states={editingConfig.workflow.states || []}
+                        onStatesChange={(states: any) => {
+                          const newConfig = JSON.parse(JSON.stringify(editingConfig));
+                          newConfig.workflow.states = states;
+                          dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
+                        }}
+                        availableAgents={agentConfigs}
+                        availableSkills={availableSkills}
+                        specTasks={designOptimizationSpecTaskOptions}
+                        onOptimizeState={handleOptimizeStateMachineState}
+                        onOptimizeStep={handleOptimizeStateMachineStep}
+                        onAgentSkillsChange={handleAgentSkillsChange}
+                        protocolAdopted={isStateLevelReviewAdopted(editingConfig)}
+                        onAdoptReviewProtocol={(states: any) => {
+                          const newConfig = JSON.parse(JSON.stringify(editingConfig));
+                          newConfig.workflow.reviewProtocol = 'state-level';
+                          newConfig.workflow.states = states;
+                          dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
+                        }}
+                      />
+                    </div>
                   </div>
-                </div>
+                </WorkflowCanvasViewport>
               )}
 
               {designTab === 'spec' && specDesignEnabled && (

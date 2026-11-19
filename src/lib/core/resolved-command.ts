@@ -45,6 +45,7 @@ export type LaunchOptions = {
   env?: NodeJS.ProcessEnv;
   stdio?: StdioOptions;
   windowsHide?: boolean;
+  detached?: boolean;
   timeoutMs?: number;
 };
 
@@ -239,6 +240,7 @@ export function launchCommand(attempt: CommandAttempt, options: LaunchOptions = 
     env,
     stdio: options.stdio,
     windowsHide: options.windowsHide ?? true,
+    detached: options.detached,
     shell: false,
   });
 }

@@ -30,8 +30,9 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw, Terminal } from 'lucide-react';
 import EditNodeModal from './EditNodeModal';
+import { SCRIPT_INTERPRETER_LABELS, scriptFailureLabel } from '@/lib/workflow/script-presentation';
 import LightweightWorkflowDesignPanel, {
   hasLightweightWorkflowTopology,
   type LightweightWorkflowDesignMetadata,
@@ -39,7 +40,11 @@ import LightweightWorkflowDesignPanel, {
 import type { ReviewPolicy, StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
 import { useWorkflowConfigQuery } from '@/client/query/configs';
 import { useSaveConfigMutation } from '@/client/query/workflow-mutations';
-import { renameStateAndReferences } from '@/lib/workflow/state-machine-design';
+import {
+  buildStepGroups, buildWorkflowStepFromEditData, createDesignState, getStepParallelGroup,
+  insertDesignStep, isReviewStructureStep, makeParallelGroupId, renameStateAndReferences,
+  withParallelGroup, withoutParallelGroup,
+} from '@/lib/workflow/state-machine-design';
 import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 import {
   defaultMaxSelfTransitions,
@@ -49,7 +54,9 @@ import {
   type ReviewPolicyOperation,
 } from '@/lib/workflow/state-review-policy';
 
-interface StateMachineDesignPanelProps {
+export { buildWorkflowStepFromEditData } from '@/lib/workflow/state-machine-design';
+
+export interface StateMachineDesignPanelProps {
   states: StateMachineState[];
   onStatesChange: (states: StateMachineState[]) => void;
   availableAgents: any[];
@@ -79,12 +86,6 @@ type SubworkflowDrilldownState = {
   saving: boolean;
   error?: string;
   config?: any;
-};
-
-type StepGroup = {
-  id?: string;
-  startIndex: number;
-  steps: Array<{ step: WorkflowStep; index: number }>;
 };
 
 type ReviewPolicyCandidate = {
@@ -142,14 +143,6 @@ export function buildReviewProtocolAdoptionPreview(
     return result.nextState;
   });
   return { targetCount: targets.length, nextStates, operations, warnings, blocked };
-}
-
-function isReviewStructureStep(step: WorkflowStep | undefined): boolean {
-  return Boolean(step && (
-    step.role
-    || step.provenance?.origin === 'review-policy'
-    || step.provenance?.managedRole === 'standard-closer'
-  ));
 }
 
 /**
@@ -237,6 +230,7 @@ function findAgentConfig(agents: any[] | undefined, agentName: string) {
 }
 
 function StepAgentBadge({ step, availableAgents }: { step: WorkflowStep; availableAgents?: any[] }) {
+  if (step.type === 'script') return <span className="inline-flex items-center gap-1.5 font-mono"><Terminal className="size-3.5" />{SCRIPT_INTERPRETER_LABELS[step.script?.interpreter || 'shell']}</span>;
   if (step.type === 'subworkflow') {
     return (
       <span className="inline-flex min-w-0 max-w-[220px] items-center gap-1.5">
@@ -343,126 +337,9 @@ const SEVERITY_OPTIONS = [
   { value: 'minor', label: '次要' },
 ] as const;
 
-const getStepParallelGroup = (step?: WorkflowStep) => step?.parallelGroup || step?.concurrency?.groupId || '';
-
 const getStepJoinPolicyMode = (step?: WorkflowStep) => step?.concurrency?.joinPolicy?.mode || 'all';
 
 const getStepJoinPolicyQuorum = (step?: WorkflowStep) => step?.concurrency?.joinPolicy?.quorum;
-
-const slugifyId = (value: string, fallback: string) => {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-  return slug || fallback;
-};
-
-const makeParallelGroupId = (stateName: string, startIndex: number) =>
-  slugifyId(`parallel-${stateName}-${startIndex + 1}`, `parallel-${startIndex + 1}`);
-
-const makeBranchId = (step: WorkflowStep, index: number) =>
-  slugifyId(step.name || step.agent || `branch-${index + 1}`, `branch-${index + 1}`);
-
-const withParallelGroup = (step: WorkflowStep, groupId: string, index: number): WorkflowStep => ({
-  ...step,
-  parallelGroup: groupId,
-  concurrency: {
-    ...(step.concurrency || {}),
-    groupId,
-    branchId: step.concurrency?.branchId || makeBranchId(step, index),
-    joinPolicy: step.concurrency?.joinPolicy || { mode: 'all' },
-  },
-});
-
-const withoutParallelGroup = (step: WorkflowStep): WorkflowStep => {
-  const nextConcurrency = { ...(step.concurrency || {}) } as any;
-  delete nextConcurrency.groupId;
-  delete nextConcurrency.branchId;
-  delete nextConcurrency.joinPolicy;
-  return {
-    ...step,
-    parallelGroup: undefined,
-    concurrency: Object.keys(nextConcurrency).length ? nextConcurrency : undefined,
-    agentInstanceId: undefined,
-    channelIds: undefined,
-  };
-};
-
-export function buildWorkflowStepFromEditData(data: any, existingStep?: WorkflowStep | null): WorkflowStep {
-  const normalizedConstraints = Array.isArray(data.constraints)
-    ? data.constraints.filter((c: string) => typeof c === 'string' && c.trim())
-    : typeof data.constraints === 'string'
-      ? data.constraints.split('\n').filter((c: string) => c.trim())
-      : undefined;
-  const normalizedSkills: string[] | undefined = Array.isArray(data.skills)
-    ? Array.from(new Set<string>(
-        data.skills
-          .filter((skill: unknown): skill is string => typeof skill === 'string')
-          .map((skill: string) => skill.trim())
-          .filter(Boolean),
-      ))
-    : undefined;
-  const newStep: WorkflowStep = data.type === 'subworkflow'
-    ? {
-        ...(existingStep || {}),
-        name: data.name,
-        type: 'subworkflow',
-        workflow: data.workflow,
-        subworkflow: data.subworkflow,
-        inputs: data.inputs,
-        role: data.role ?? existingStep?.role,
-        parallelGroup: data.parallelGroup,
-        concurrency: data.concurrency,
-        agentInstanceId: data.agentInstanceId ?? existingStep?.agentInstanceId,
-        channelIds: data.channelIds,
-        specTaskBinding: data.specTaskBinding,
-      } as WorkflowStep
-    : ({
-        ...(existingStep || {}),
-        name: data.name,
-        agent: data.agent,
-        task: data.task,
-        role: data.role ?? existingStep?.role,
-        constraints: normalizedConstraints,
-        enableReviewPanel: data.enableReviewPanel,
-        parallelGroup: data.parallelGroup,
-        concurrency: data.concurrency,
-        agentInstanceId: data.agentInstanceId ?? existingStep?.agentInstanceId,
-        channelIds: data.channelIds,
-        specTaskBinding: data.specTaskBinding,
-        ...(normalizedSkills !== undefined ? { skills: normalizedSkills } : {}),
-      } as WorkflowStep);
-  if (data.type === 'subworkflow') {
-    delete (newStep as any).agent;
-    delete (newStep as any).task;
-    delete (newStep as any).constraints;
-    delete (newStep as any).enableReviewPanel;
-    delete (newStep as any).preCommands;
-    delete (newStep as any).skills;
-  }
-  if (data.type !== 'subworkflow' && Array.isArray(data.preCommands) && data.preCommands.length > 0) {
-    newStep.preCommands = data.preCommands;
-  } else if (data.type !== 'subworkflow' && Array.isArray(existingStep?.preCommands) && existingStep.preCommands.length > 0) {
-    newStep.preCommands = existingStep.preCommands;
-  }
-  return newStep;
-}
-
-const buildStepGroups = (steps: WorkflowStep[]): StepGroup[] => {
-  const groups: StepGroup[] = [];
-  steps.forEach((step, index) => {
-    const groupId = getStepParallelGroup(step);
-    const last = groups[groups.length - 1];
-    if (groupId && last?.id === groupId) {
-      last.steps.push({ step, index });
-      return;
-    }
-    groups.push({ id: groupId || undefined, startIndex: index, steps: [{ step, index }] });
-  });
-  return groups;
-};
 
 const getGroupRange = (steps: WorkflowStep[], index: number) => {
   const groupId = getStepParallelGroup(steps[index]);
@@ -522,7 +399,7 @@ function getAdvancedVerdictTransitions(verdict: VerdictTransition, transitions: 
   });
 }
 
-function getStateNodeErrors(state: StateMachineState, states: StateMachineState[]): string[] {
+export function getStateNodeErrors(state: StateMachineState, states: StateMachineState[]): string[] {
   if (state.isFinal) return [];
 
   const transitions = Array.isArray(state.transitions) ? state.transitions : [];
@@ -591,10 +468,11 @@ function SortableStepRow({
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
 
   const agentTeam = findAgentConfig(availableAgents, step.agent || '')?.team;
+  const isScript = step.type === 'script';
   const isSubworkflow = step.type === 'subworkflow';
   const childConfigFile = step.workflow || step.subworkflow?.configFile || '';
-  const roleIcon = isSubworkflow ? 'account_tree' : agentTeam === 'blue' ? 'swords' : agentTeam === 'judge' ? 'gavel' : agentTeam === 'red' ? 'shield' : 'radio_button_unchecked';
-  const roleColor = isSubworkflow
+  const roleIcon = isScript ? 'terminal' : isSubworkflow ? 'account_tree' : agentTeam === 'blue' ? 'swords' : agentTeam === 'judge' ? 'gavel' : agentTeam === 'red' ? 'shield' : 'radio_button_unchecked';
+  const roleColor = isScript ? 'bg-violet-500/5 text-violet-700 border-violet-200 dark:border-violet-900 dark:text-violet-200' : isSubworkflow
     ? 'bg-cyan-500/10 text-cyan-700 border-cyan-200 dark:border-cyan-800 dark:text-cyan-200'
     : agentTeam === 'blue'
     ? 'bg-blue-500/10 text-blue-600 border-blue-200 dark:border-blue-800'
@@ -659,6 +537,8 @@ function SortableStepRow({
                   <span className="min-w-0 flex-1 truncate" title={childConfigFile}>
                     {childConfigFile || '未设置子工作流配置'} · {step.inputs?.workspace === 'inherit' ? '继承父工作区' : step.inputs?.workspace || 'inherit'} · {step.runtime?.humanQuestions === 'child-only' ? '人工确认仅子流程' : '人工确认冒泡'}
                   </span>
+                ) : isScript ? (
+                  <span className="min-w-0 flex-1 truncate" title={step.script?.source}>{step.script?.source.split('\n')[0] || '未填写脚本'} · 失败时{scriptFailureLabel(step)}</span>
                 ) : step.task ? (
                   <span className="min-w-0 flex-1 truncate" title={step.task}>
                     {step.task}
@@ -1216,7 +1096,7 @@ export default function StateMachineDesignPanel({
     [availableAgents],
   );
   const [selectedStateName, setSelectedStateName] = useState<string | null>(
-    states.length > 0 ? states[0].name : null
+    states[0]?.name ?? null
   );
   const [editingStateInfo, setEditingStateInfo] = useState(false);
   const [editingStep, setEditingStep] = useState<{ index: number; isNew: boolean; focusSpec?: boolean } | null>(null);
@@ -1500,33 +1380,9 @@ export default function StateMachineDesignPanel({
   };
 
   const handleAddState = () => {
-    const name = `状态${states.length + 1}`;
-    const newState: StateMachineState = {
-      id: crypto.randomUUID(),
-      name,
-      description: '',
-      steps: [],
-      transitions: [],
-      isInitial: states.length === 0,
-      isFinal: false,
-      maxSelfTransitions: 3,
-      // Only a workflow that already runs state-level review gives its new states
-      // a policy. Attaching one here on a pre-protocol workflow would opt the
-      // whole thing in, and every other state would then fail validation for not
-      // declaring one.
-      ...(protocolAdopted ? {
-        reviewPolicy: {
-          mode: 'standard' as const,
-          source: 'default' as const,
-          locked: false,
-          confidence: 'medium' as const,
-          riskSignals: [],
-          rationale: '手工新增状态默认采用标准模式，可在状态详情中调整。',
-        },
-      } : {}),
-    };
+    const newState = createDesignState(states, protocolAdopted);
     onStatesChange([...states, newState]);
-    setSelectedStateName(name);
+    setSelectedStateName(newState.name);
   };
 
   const handleDeleteState = (name: string) => {
@@ -1538,50 +1394,26 @@ export default function StateMachineDesignPanel({
 
   const handleSaveStep = (data: any) => {
     if (!selectedState || editingStep === null) return;
-    const existingStep = !editingStep.isNew ? selectedState.steps[editingStep.index] : null;
+    const existingStep = editingStep.isNew ? null : selectedState.steps[editingStep.index];
     if (selectedState.reviewPolicy?.locked
       && (existingStep?.provenance?.origin === 'review-policy'
         || existingStep?.provenance?.managedRole === 'standard-closer')) return;
     const newStep = buildWorkflowStepFromEditData(data, existingStep);
     if (editingStep.isNew) {
-      newStep.id = crypto.randomUUID();
-      newStep.provenance = { origin: 'user' };
-    }
-    if (selectedState.reviewPolicy?.locked && existingStep && isReviewStructureStep(existingStep)) {
-      newStep.id = existingStep.id;
-      newStep.provenance = existingStep.provenance;
-      newStep.role = existingStep.role;
-      newStep.agentInstanceId = existingStep.agentInstanceId;
-      newStep.parallelGroup = existingStep.parallelGroup;
-      newStep.concurrency = existingStep.concurrency;
-    }
-    if (selectedState.reviewPolicy?.locked
-      && selectedState.reviewPolicy.mode === 'adversarial'
-      && editingStep.isNew) {
-      newStep.role = 'defender';
-      newStep.agentInstanceId = crypto.randomUUID();
-      const groupId = getStepParallelGroup(newStep);
-      if (groupId) {
-        newStep.concurrency = {
-          ...(newStep.concurrency || {}),
-          groupId,
-          joinPolicy: { mode: 'all' },
-        };
-      }
-    }
-    const steps = [...selectedState.steps];
-    if (editingStep.isNew) {
-      const protectedTailIndex = selectedState.reviewPolicy?.locked
-        ? selectedState.reviewPolicy.mode === 'standard'
-          ? steps.findIndex((step) => step.provenance?.managedRole === 'standard-closer')
-          : steps.findIndex((step) => step.role === 'attacker')
-        : -1;
-      if (protectedTailIndex >= 0) steps.splice(protectedTailIndex, 0, newStep);
-      else steps.push(newStep);
+      updateState(insertDesignStep(selectedState, newStep));
     } else {
+      if (newStep.type !== 'script' && existingStep && selectedState.reviewPolicy?.locked && isReviewStructureStep(existingStep)) {
+        newStep.id = existingStep.id;
+        newStep.provenance = existingStep.provenance;
+        newStep.role = existingStep.role;
+        newStep.agentInstanceId = existingStep.agentInstanceId;
+        newStep.parallelGroup = existingStep.parallelGroup;
+        newStep.concurrency = existingStep.concurrency;
+      }
+      const steps = [...selectedState.steps];
       steps[editingStep.index] = newStep;
+      updateState({ ...selectedState, steps });
     }
-    updateState({ ...selectedState, steps });
     setEditingStep(null);
   };
 
@@ -1594,6 +1426,7 @@ export default function StateMachineDesignPanel({
 
   const handleGroupSteps = (start: number, end: number, groupId?: string) => {
     if (!selectedState) return;
+    if (selectedState.steps.slice(start, end + 1).some((step) => step.type === 'script')) return;
     if (selectedState.reviewPolicy?.locked
       && selectedState.steps.slice(start, end + 1).some((step) => isReviewStructureStep(step))) return;
     const nextGroupId = groupId || makeParallelGroupId(selectedState.name, start);
@@ -1735,6 +1568,7 @@ export default function StateMachineDesignPanel({
         const s = selectedState.steps[editingStep.index];
         return {
           type: s.type,
+          script: s.script,
           name: s.name,
           agent: s.agent,
           task: s.task,
@@ -2350,12 +2184,12 @@ export default function StateMachineDesignPanel({
                                 editLocked={Boolean(selectedState.reviewPolicy?.locked
                                   && (step.provenance?.origin === 'review-policy'
                                     || step.provenance?.managedRole === 'standard-closer'))}
-                                canGroupPrevious={index > 0 && getStepParallelGroup((selectedState.steps || [])[index - 1]) !== getStepParallelGroup(step)}
-                                canGroupNext={index < (selectedState.steps?.length ?? 0) - 1 && getStepParallelGroup((selectedState.steps || [])[index + 1]) !== getStepParallelGroup(step)}
+                                canGroupPrevious={step.type !== 'script' && selectedState.steps[index - 1]?.type !== 'script' && index > 0 && getStepParallelGroup((selectedState.steps || [])[index - 1]) !== getStepParallelGroup(step)}
+                                canGroupNext={step.type !== 'script' && selectedState.steps[index + 1]?.type !== 'script' && index < (selectedState.steps?.length ?? 0) - 1 && getStepParallelGroup((selectedState.steps || [])[index + 1]) !== getStepParallelGroup(step)}
                                 onGroupWithPrevious={() => handleGroupWithPrevious(index)}
                                 onGroupWithNext={() => handleGroupWithNext(index)}
                                 onUngroup={() => handleUngroup(index)}
-                                onEdit={() => setEditingStep({ index, isNew: false })}
+                                onEdit={() => setEditingStep({index,isNew:false})}
                                 onOptimize={onOptimizeStep && selectedStateIndex >= 0 ? () => onOptimizeStep(selectedStateIndex, index) : undefined}
                                 onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
                                 onPreviewSubworkflow={() => openSubworkflowDrilldown(step, { stateName: selectedState.name, stepIndex: index })}
@@ -2380,11 +2214,11 @@ export default function StateMachineDesignPanel({
                         editLocked={Boolean(selectedState.reviewPolicy?.locked
                           && (step.provenance?.origin === 'review-policy'
                             || step.provenance?.managedRole === 'standard-closer'))}
-                        canGroupPrevious={index > 0}
-                        canGroupNext={index < (selectedState.steps?.length ?? 0) - 1}
+                        canGroupPrevious={step.type !== 'script' && index > 0 && selectedState.steps[index - 1]?.type !== 'script'}
+                        canGroupNext={step.type !== 'script' && index < (selectedState.steps?.length ?? 0) - 1 && selectedState.steps[index + 1]?.type !== 'script'}
                         onGroupWithPrevious={() => handleGroupWithPrevious(index)}
                         onGroupWithNext={() => handleGroupWithNext(index)}
-                        onEdit={() => setEditingStep({ index, isNew: false })}
+                        onEdit={() => setEditingStep({index,isNew:false})}
                         onOptimize={onOptimizeStep && selectedStateIndex >= 0 ? () => onOptimizeStep(selectedStateIndex, index) : undefined}
                         onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
                         onPreviewSubworkflow={() => openSubworkflowDrilldown(step, { stateName: selectedState.name, stepIndex: index })}
@@ -2475,6 +2309,8 @@ export default function StateMachineDesignPanel({
             channelIds: [],
             specTaskBinding: undefined,
           } : editingStepData}
+          availableStates={states.map(state => state.name)}
+          scriptAllowed={selectedState?.reviewPolicy?.mode !== 'adversarial'}
           roles={workflowStepAgents}
           availableSkills={availableSkills}
           specTasks={specTasks}

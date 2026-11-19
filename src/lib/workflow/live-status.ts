@@ -147,6 +147,13 @@ function compactStepLog(log: any) {
     sessionId: log.sessionId || null,
     engineName: log.engineName,
     stepType: log.stepType,
+    scriptInterpreter: log.scriptInterpreter,
+    scriptExitCode: log.scriptExitCode,
+    scriptFailureAction: log.scriptFailureAction,
+    scriptStdout: truncateLiveText(log.scriptStdout, 8192),
+    scriptStderr: truncateLiveText(log.scriptStderr, 8192),
+    scriptOutputTruncated: log.scriptOutputTruncated,
+    scriptCancelled: log.scriptCancelled,
     childRunId: log.childRunId,
     childConfigFile: log.childConfigFile,
     childStatus: log.childStatus,
@@ -337,6 +344,7 @@ export function compactWorkflowEventPayloadForLive(payload: any) {
     compact.fullOutput = truncateLiveText(payload.fullOutput, EVENT_OUTPUT_LIMIT);
     compact.fullOutputTruncated = payload.fullOutput.length > EVENT_OUTPUT_LIMIT;
   }
+  if (payload.stepLog?.stepType === 'script') compact.stepLog = compactStepLog(payload.stepLog);
   if (Array.isArray(payload.agents)) {
     compact.agents = payload.agents.map(compactAgent);
   }

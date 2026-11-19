@@ -137,3 +137,26 @@ describe('state machine design updates', () => {
     expect(states[1].reviewPolicy).toBeUndefined();
   });
 });
+
+
+describe('script step type conversions', () => {
+  const script = { interpreter: 'python' as const, source: 'print(1)', timeoutMs: 120000, onFailure: {action:'continue' as const} };
+  test('creates scripts through the common step builder without agent execution fields', () => {
+    const step = buildWorkflowStepFromEditData({type:'script',name:'构建',script});
+    expect(step).toMatchObject({name:'构建',type:'script',agent:'',task:'',script});
+  });
+  test('converting an agent to a script preserves identity and removes agent and parallel execution settings', () => {
+    const step = buildWorkflowStepFromEditData({type:'script',name:'检查',script}, {
+      id:'stable-step',name:'检查',type:'agent',agent:'builder',task:'旧任务',role:'defender',parallelGroup:'parallel',
+      concurrency:{groupId:'parallel',joinPolicy:{mode:'all'}},agentInstanceId:'session',skills:['old-skill'],preCommands:['old-command'],
+    });
+    expect(step.id).toBe('stable-step');
+    expect(step.script).toEqual(script);
+    for(const key of ['role','parallelGroup','concurrency','agentInstanceId','skills','preCommands']) expect(step).not.toHaveProperty(key);
+  });
+  test('switching back to an agent clears its previous script', () => {
+    const step = buildWorkflowStepFromEditData({type:'agent',name:'实现',agent:'builder',task:'编码'}, {name:'构建',type:'script',agent:'',task:'',script});
+    expect(step).toMatchObject({type:'agent',agent:'builder',task:'编码'});
+    expect(step.script).toBeUndefined();
+  });
+});

@@ -194,6 +194,12 @@ describe('workflow events SSE route', () => {
     expect(stepComplete.data.phase).toBeUndefined();
     expect(stepComplete.data.step).not.toBe('Build-Compile');
 
+    for (const type of ['step-output', 'step-failed']) {
+      workflowMocks.emit(type, { __configFile:'workflow.yaml', state:'Build', step:'Compile', stepType:'script',
+        stepLog:{id:'script-1',stepName:'Build-Compile',stepType:'script',status:type === 'step-failed' ? 'failed' : 'running',scriptInterpreter:'python',scriptExitCode:type === 'step-failed' ? 7 : null,scriptFailureAction:'continue',scriptStdout:'live output',scriptStderr:'error output'} });
+      expect(await readSseEvent(reader!)).toMatchObject({type,data:{state:'Build',step:'Compile',statusSnapshot:{status:'running'},stepLog:{stepType:'script',scriptInterpreter:'python',scriptFailureAction:'continue',scriptStdout:'live output',scriptStderr:'error output'}}});
+    }
+
     controller.abort();
     await reader!.cancel();
   });

@@ -42,7 +42,8 @@ import {
   type WorkflowChildSpecDeltaSummary,
   type WorkflowFinalReview,
 } from '@/lib/workflow/experience-store';
-import { stateMachineWorkflowSchema } from '@/lib/core/schemas';
+import { stateMachineWorkflowSchema, workflowScriptSchema } from '@/lib/core/schemas';
+import { runWorkflowScript, scriptHandoffContext, type ScriptHandoff } from '@/lib/workflow/script-step';
 import type {
   StateMachineWorkflowConfig, StateMachineState, StateTransition,
   Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
@@ -348,6 +349,7 @@ export interface StateExecutionResult {
   stepOutputs: string[];
   summary: string;
   executionFailed?: boolean;
+  scriptTransitionTarget?: string;
 }
 
 export interface RuntimeEvidenceItem {
@@ -992,6 +994,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private activeConcurrencyGroups: ActiveConcurrencyGroup[] = [];
   private completedSteps: string[] = [];
   private failedSteps: string[] = [];
+  private pendingScriptResults: ScriptHandoff[] = [];
+  private activeScript: AbortController | null = null;
   private resumeStateName: string | null = null;
   private resumeStepKey: string | null = null;
   private currentProcesses: PersistedProcessInfo[] = [];
@@ -1683,7 +1687,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
     for (const state of config.workflow.states || []) {
       for (const step of state.steps || []) {
-        if (isSubworkflowStep(step)) continue;
+        if (isSubworkflowStep(step) || step.type === 'script') continue;
         const roleConfig = this.agentConfigs.find((role) => role.name === step.agent)
           || config.roles?.find((role) => role.name === step.agent);
         for (const skillName of getEffectiveWorkflowStepSkills({ config, step, roleConfig })) {
@@ -2239,6 +2243,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.selfTransitionCounts = new Map();
       this.completedSteps = [];
       this.failedSteps = [];
+      this.pendingScriptResults = [];
       this.resumeStateName = null;
       this.resumeStepKey = null;
       this.activeStepKeys.clear();
@@ -2612,6 +2617,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.transitionCount = existingState.transitionCount || 0;
         this.completedSteps = existingState.completedSteps || [];
         this.failedSteps = existingState.failedSteps || this.deriveFailedStepKeys(existingState.stepLogs || []);
+        this.pendingScriptResults = existingState.pendingScriptResults || [];
         const validStates = new Set((workflowConfig.workflow.states || []).map((s) => s.name));
         const restoredState = existingState.currentState;
         this.currentState = restoredState && validStates.has(restoredState) ? restoredState : null;
@@ -3655,7 +3661,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private deriveFailedStepKeys(stepLogs: PersistedStepLog[] = []): string[] {
     return Array.from(new Set(
       stepLogs
-        .filter((log) => !log.superseded && log.status === 'failed' && typeof log.stepName === 'string' && log.stepName.trim())
+        .filter((log) => !log.superseded && log.status === 'failed'
+          && !(log.stepType === 'script' && ['continue', 'transition'].includes(log.scriptFailureAction || ''))
+          && typeof log.stepName === 'string' && log.stepName.trim())
         .map((log) => log.stepName)
     ));
   }
@@ -3749,6 +3757,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private cancelCurrentProcesses(): boolean {
+    const script = this.activeScript;
+    script?.abort();
     const processIds = new Set(this.currentProcesses.map((proc) => proc.id).filter(Boolean));
     const stepIds = new Set(this.currentProcesses.map((proc) => proc.stepId).filter(Boolean) as string[]);
     const running = processManager.getAllProcesses().filter((p: any) =>
@@ -3777,7 +3787,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       cancelledViaEngine = true;
     }
 
-    return running.length > 0 || cancelledViaEngine;
+    return Boolean(script) || running.length > 0 || cancelledViaEngine;
   }
 
   private async persistState(finalStatus?: 'completed' | 'failed' | 'stopped'): Promise<void> {
@@ -3831,6 +3841,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         pendingLiveFeedback: toLiveFeedbackSnapshot(this.liveFeedback),
         completedSteps: this.completedSteps,
         failedSteps: this.failedSteps,
+        pendingScriptResults: this.pendingScriptResults,
         stepLogs: [...this.stepLogs],
         agents: this.agents.map(a => ({
           name: a.name,
@@ -5444,7 +5455,8 @@ try {
           }
           this.assertStateCanTransition(finalResult);
           const forcedTarget = this.pendingForceTransition;
-          if (forcedTarget) {
+          const scriptTarget = finalResult.scriptTransitionTarget;
+          if (forcedTarget || scriptTarget) {
             const fromState = this.currentState;
             const instruction = this.pendingForceInstruction || '';
             const nextState = await this.evaluateTransitions([], finalResult, config);
@@ -5452,9 +5464,9 @@ try {
             this.stateHistory.push({
               from: fromState,
               to: nextState,
-              reason: instruction
-                ? `强制跳转到 ${nextState}，附加指令: ${instruction}`
-                : `强制跳转到 ${nextState}`,
+              reason: forcedTarget
+                ? (instruction ? `强制跳转到 ${nextState}，附加指令: ${instruction}` : `强制跳转到 ${nextState}`)
+                : `脚本失败转移到 ${nextState}`,
               issues: finalResult.issues,
               timestamp: new Date().toISOString(),
             });
@@ -5464,7 +5476,7 @@ try {
               to: nextState,
               transitionCount: this.transitionCount,
               issues: finalResult.issues,
-              forced: true,
+              forced: Boolean(forcedTarget),
             });
             if (this.currentRunSpecCoding) {
               const statusUpdate = this.deriveRunSpecCodingStateUpdate(stateConfig, finalResult, nextState);
@@ -6215,6 +6227,7 @@ try {
     const runtimeEvidence: RuntimeEvidenceItem[] = [];
     let verdict: 'pass' | 'conditional_pass' | 'fail' = 'pass';
     let executionFailed = false;
+    let scriptTransitionTarget: string | undefined;
 
     const segments = groupStateStepsIntoSegments(state.steps);
     const resumeStepKey = this.resumeStateName === state.name ? this.resumeStepKey : null;
@@ -6300,6 +6313,17 @@ try {
       const step = segment.step;
       try {
         const stepGeneration = this.runtimeGeneration;
+        if (step.type === 'script') {
+          const outcome = await this.executeScriptStep(step, state, config);
+          if (outcome.cancelled || stepGeneration !== this.runtimeGeneration || stateGeneration !== this.runtimeGeneration) continue;
+          executedSegmentInThisPass = true;
+          stepOutputs.push(outcome.summary);
+          if (!outcome.action || outcome.action === 'continue') continue;
+          verdict = 'fail';
+          executionFailed = outcome.action === 'stop';
+          scriptTransitionTarget = outcome.target;
+          break;
+        }
         const evidenceContext = this.buildAdversarialEvidenceContext(step, runtimeEvidence);
         const output = await this.executeWorkflowStepDispatch(step, state, config, requirements, evidenceContext, useSegmentVerdict);
         if (stepGeneration !== this.runtimeGeneration || stateGeneration !== this.runtimeGeneration) {
@@ -6373,6 +6397,7 @@ try {
       stepOutputs,
       summary,
       executionFailed,
+      scriptTransitionTarget,
     };
   }
 
@@ -6508,7 +6533,119 @@ try {
     if (isSubworkflowStep(step)) {
       return this.executeSubworkflowStep(step, state, config, requirements, extraContext, useVerdict);
     }
-    return this.executeStep(step, state, config, requirements, extraContext);
+    const pending = this.pendingScriptResults;
+    if (!pending.length) return this.executeStep(step, state, config, requirements, extraContext);
+    const scriptRunId = this.currentRunId;
+    this.pendingScriptResults = [];
+    try {
+      return await this.executeStep(step, state, config, requirements, [extraContext, scriptHandoffContext(pending)].filter(Boolean).join('\n\n'));
+    } catch (error) {
+      if (this.currentRunId === scriptRunId) {
+        this.pendingScriptResults = [...pending, ...this.pendingScriptResults];
+        await this.persistState();
+      }
+      throw error;
+    }
+  }
+
+  private async executeScriptStep(step: WorkflowStep, state: StateMachineState, config: StateMachineWorkflowConfig) {
+    const script = workflowScriptSchema.parse(step.script);
+    const failure = script.onFailure;
+    if (failure.action === 'transition' && !config.workflow.states.some((item) => item.name === failure.target)) {
+      throw new Error(`脚本「${step.name}」的失败目标状态不存在`);
+    }
+    const cwd = this.getWorkingDirectory() || config.context?.projectRoot;
+    if (!cwd) throw new Error(`脚本「${step.name}」缺少运行工作区`);
+    const runId = this.currentRunId;
+    const generation = this.runtimeGeneration;
+    const controller = new AbortController();
+    this.activeScript = controller;
+    const startedAt = Date.now();
+    const id = this.createUniqueStepLogId();
+    const key = this.getWorkflowStepKey(state.name, step);
+    const log: PersistedStepLog = {
+      id, stepName: key, agent: 'script', stepType: 'script', scriptInterpreter: script.interpreter, scriptFailureAction: failure.action, status: 'running', output: '', error: '',
+      costUsd: 0, durationMs: 0, timestamp: new Date(startedAt).toISOString(),
+      tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
+    };
+    try {
+      this.clearFailedStep(key);
+      this.completedSteps = this.completedSteps.filter((stepKey) => stepKey !== key);
+      this.markStepActive(key);
+      this.upsertPersistedStepLog(log);
+      this.emit('step-start', { id, state: state.name, step: step.name, agent: 'script', stepType: 'script', stepKey: key, stepLog: log });
+      this.emitRuntimeStatus();
+      await this.persistState();
+      let streamed = 0;
+      let liveStdout = '';
+      let liveStderr = '';
+      let lastOutputUpdate = 0;
+      const result = await runWorkflowScript(script, {
+        cwd,
+        userId: this._createdBy || undefined,
+        signal: controller.signal,
+        onOutput: (stream, text) => {
+          if (!runId || generation !== this.runtimeGeneration || streamed >= 256 * 1024) return;
+          const chunk = (stream === 'stderr' ? '[stderr] ' + text : text).slice(0, 256 * 1024 - streamed);
+          streamed += chunk.length;
+          if (stream === 'stdout') liveStdout = (liveStdout + text).slice(-8192);
+          else liveStderr = (liveStderr + text).slice(-8192);
+          if (Date.now() - lastOutputUpdate >= 500) {
+            lastOutputUpdate = Date.now();
+            const progress: PersistedStepLog = { ...log, durationMs: Date.now() - startedAt, scriptStdout: liveStdout, scriptStderr: liveStderr, scriptOutputTruncated: streamed > 8192 };
+            this.upsertPersistedStepLog(progress);
+            this.emit('step-output', { id, state: state.name, step: step.name, stepType: 'script', stepKey: key, stepLog: progress });
+          }
+          void appendStreamContent(runId, key, chunk).catch(() => {});
+        },
+      });
+      if (generation !== this.runtimeGeneration || runId !== this.currentRunId) return { cancelled: true, summary: '' };
+      const passed = result.exitCode === 0;
+      const summary = `脚本 ${step.name} (${result.interpreter})：${passed ? '通过' : (result.error || `退出码 ${result.exitCode}`)}`;
+      const action = passed || result.cancelled ? undefined : (result.started ? script.onFailure.action : 'stop');
+      const output = [
+        summary,
+        action ? {
+          continue: '失败后继续执行下一步',
+          transition: failure.action === 'transition' ? `失败后转移到：${failure.target}` : '',
+          stop: '失败后停止工作流',
+        }[action] : '',
+        result.stdout ? '## stdout\n' + result.stdout : '',
+        result.stderr ? '## stderr\n' + result.stderr : '',
+      ].filter(Boolean).join('\n\n');
+      const preview = compactRuntimeOutputPreview(output);
+      this.markStepInactive(key);
+      if (passed) this.completedSteps.push(key);
+      if (action === 'stop') this.addFailedStep(key);
+      if (!result.cancelled && action !== 'stop') {
+        this.pendingScriptResults = [...this.pendingScriptResults, {
+          stepId: id, state: state.name, step: step.name, interpreter: result.interpreter, exitCode: result.exitCode,
+          stdout: result.stdout.slice(-850), stderr: result.stderr.slice(-850), error: result.error,
+        }];
+      }
+      const finishedLog: PersistedStepLog = {
+        ...log, status: passed ? 'completed' : 'failed', output: preview.output, outputBytes: preview.outputBytes,
+        error: passed ? '' : summary, durationMs: Date.now() - startedAt, timestamp: new Date().toISOString(),
+        scriptExitCode: result.exitCode, scriptFailureAction: result.cancelled ? 'continue' : action,
+        scriptStdout: result.stdout.slice(-8192), scriptStderr: result.stderr.slice(-8192),
+        scriptOutputTruncated: result.stdout.length > 8192 || result.stderr.length > 8192, scriptCancelled: result.cancelled,
+      };
+      this.upsertPersistedStepLog(finishedLog);
+      if (runId) await saveProcessOutput(runId, key, output).catch(() => {});
+      await this.persistState();
+      this.emit(passed ? 'step-complete' : 'step-failed', {
+        id, state: state.name, step: step.name, agent: 'script', stepType: 'script',
+        exitCode: result.exitCode, scriptFailureAction: action, output: preview.output, stepKey: key, stepLog: finishedLog,
+        ...(passed ? {} : { error: summary }),
+      });
+      this.emitRuntimeStatus();
+      return {
+        cancelled: result.cancelled, summary, action,
+        target: action === 'transition' && script.onFailure.action === 'transition' ? script.onFailure.target : undefined,
+      };
+    } finally {
+      if (this.activeScript === controller) this.activeScript = null;
+    }
   }
 
   private truncateSubworkflowSummary(summary: string): string {
@@ -9349,6 +9486,8 @@ try {
       return target;
     }
 
+    if (result.scriptTransitionTarget) return result.scriptTransitionTarget;
+
     // AI-suggested next_state is only accepted when it is one of the configured
     // fallback targets for the emitted verdict.
     const aiSuggestedState = this.parseNextStateFromOutputs(result.stepOutputs, config);
@@ -9955,6 +10094,7 @@ try {
     this.activeStepKeys.clear();
     this.activeConcurrencyGroups = [];
     this.stepLogs = runState.stepLogs || [];
+    this.pendingScriptResults = runState.pendingScriptResults || [];
     this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime || null;
     this.runEndTime = null;

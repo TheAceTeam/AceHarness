@@ -160,13 +160,29 @@ export const workflowStepProvenanceSchema = z.object({
 export type ReviewPolicy = z.infer<typeof reviewPolicySchema>;
 export type WorkflowStepProvenance = z.infer<typeof workflowStepProvenanceSchema>;
 
+export const workflowScriptInterpreterSchema = z.enum(['bash', 'shell', 'powershell', 'cmd', 'python']);
+export const workflowScriptSchema = z.object({
+  interpreter: workflowScriptInterpreterSchema,
+  source: z.string().max(128 * 1024, '脚本内容过长').refine((value) => Boolean(value.trim()), '脚本内容不能为空'),
+  timeoutMs: z.number().int().min(100).max(30 * 60 * 1000).default(120000),
+  onFailure: z.discriminatedUnion('action', [
+    z.object({ action: z.literal('continue') }),
+    z.object({ action: z.literal('transition'), target: z.string().trim().min(1, '请选择失败目标状态') }),
+    z.object({ action: z.literal('stop') }),
+  ]).default({ action: 'stop' }),
+});
+
+export type WorkflowScript = z.infer<typeof workflowScriptSchema>;
+export type WorkflowScriptInterpreter = z.infer<typeof workflowScriptInterpreterSchema>;
+
 export interface WorkflowStep {
   id?: string;
   name: string;
   agent: string;
   task: string;
   preCommands?: string[];
-  type?: 'agent' | 'subworkflow';
+  type?: 'agent' | 'subworkflow' | 'script';
+  script?: WorkflowScript;
   workflow?: string;
   subworkflow?: Partial<SubworkflowReference>;
   inputs?: SubworkflowInputs;
@@ -194,7 +210,8 @@ export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
   // 注意：这些命令在后端 Node 环境中串行执行，stdout/stderr 会被收集并注入上下文，
   // 不会中断整个步骤（即使命令本身返回非 0 退出码）。
   preCommands: z.array(z.string()).optional(),
-  type: z.enum(['agent', 'subworkflow']).optional(),
+  type: z.enum(['agent', 'subworkflow', 'script']).optional(),
+  script: workflowScriptSchema.optional(),
   workflow: z.string().optional(),
   subworkflow: subworkflowReferenceSchema.partial({ configFile: true }).optional(),
   inputs: subworkflowInputsSchema,
@@ -211,6 +228,13 @@ export const workflowStepSchema: z.ZodType<WorkflowStep> = z.object({
   skills: z.array(z.string().min(1)).optional(),
   provenance: workflowStepProvenanceSchema.optional(),
 }).superRefine((step, ctx) => {
+  if (step.type === 'script') {
+    if (!step.script) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: '请配置脚本内容与解释器' });
+    if (step.role || step.parallelGroup || step.concurrency?.groupId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['script'], message: '脚本步骤按顺序执行，不能分配对抗角色或并发组' });
+    }
+    return;
+  }
   if (step.type === 'subworkflow') {
     const configFile = step.workflow?.trim() || step.subworkflow?.configFile?.trim();
     if (!configFile) {
@@ -758,6 +782,13 @@ export const stateMachineStateSchema = z.object({
   steps: z.array(workflowStepSchema),
   transitions: z.array(stateTransitionSchema), // 终止状态允许空数组
   position: z.object({ x: z.number(), y: z.number() }).optional(), // 可视化位置
+  parallelGroupPositions: z.record(z.string(), z.object({ x: z.number(), y: z.number() })).optional(),
+  parallelGroups: z.array(z.object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    joinPolicy: joinPolicySchema.optional(),
+    insertBefore: z.number().int().nonnegative().optional(),
+  })).optional(),
   isInitial: z.boolean().default(false), // 是否为初始状态
   isFinal: z.boolean().default(false), // 是否为终止状态
   maxSelfTransitions: z.number().min(1).max(100).optional(), // 最大自我转换次数，超出后自动熔断
@@ -806,6 +837,17 @@ export const stateMachineWorkflowSchema = z.object({
   context: contextConfigSchema,
 }).superRefine((config, ctx) => {
   const workflow = config.workflow;
+  const names = new Set(workflow.states.map((state) => state.name));
+  workflow.states.forEach((state, stateIndex) => state.steps.forEach((step, stepIndex) => {
+    const onFailure = step.type === 'script' ? step.script?.onFailure : undefined;
+    if (onFailure?.action === 'transition' && !names.has(onFailure.target)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['workflow', 'states', stateIndex, 'steps', stepIndex, 'script', 'onFailure', 'target'],
+        message: `脚本失败目标状态不存在：${onFailure.target}`,
+      });
+    }
+  }));
   const isLightweight = workflow.profile === LIGHTWEIGHT_WORKFLOW_PROFILE;
 
   if (!isLightweight) {
@@ -868,11 +910,11 @@ export const stateMachineWorkflowSchema = z.object({
   }
 
   const step = state.steps[0];
-  if (step.type === 'subworkflow') {
+  if (step.type === 'subworkflow' || step.type === 'script') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['workflow', 'states', 0, 'steps', 0, 'type'],
-      message: 'lightweight workflows cannot contain subworkflow steps',
+      message: step.type === 'script' ? 'lightweight workflows cannot contain script steps' : 'lightweight workflows cannot contain subworkflow steps',
     });
   }
   if (!Array.isArray(step.skills) || !step.skills.includes(LIGHTWEIGHT_TASKLIST_SKILL)) {

@@ -376,7 +376,7 @@
   grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr);
 }
 
-.designDrawerLayout {
+.designWorkbenchLayout.designDrawerLayout {
   grid-template-columns: minmax(0, var(--workbench-nav-width)) minmax(0, 1fr);
 }
 
@@ -1338,6 +1338,9 @@
 }
 
 @media (max-width: 820px) {
+  .designWorkbenchLayout.designDrawerLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .runWorkbenchLayout,
   .designWorkbenchLayout {
     grid-template-columns: 1fr;

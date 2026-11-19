@@ -9,6 +9,10 @@ import {
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog';
+import WorkflowScriptEditor from '@/components/workflow/WorkflowScriptEditor';
+import { InspectorSelect } from '@/components/workflow/WorkflowCanvasInspector';
+import { SCRIPT_INTERPRETER_LABELS } from '@/lib/workflow/script-presentation';
+import type { WorkflowScriptInterpreter } from '@/lib/core/schemas';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -24,8 +28,13 @@ import { useSkillsQuery } from '@/client/query/skills';
 import { isWorkflowStepSelectableAgent } from '@/lib/agent/catalog';
 
 const stepSchema = z.object({
-  type: z.enum(['agent', 'subworkflow']).optional(),
-  name: z.string().min(1, '步骤名称不能为空'),
+  type: z.enum(['agent', 'subworkflow', 'script']).optional(),
+  scriptInterpreter: z.enum(['bash', 'shell', 'powershell', 'cmd', 'python']).optional(),
+  scriptSource: z.string().optional(),
+  scriptTimeoutSeconds: z.union([z.string(), z.number()]).optional(),
+  scriptFailureAction: z.enum(['continue', 'transition', 'stop']).optional(),
+  scriptTarget: z.string().optional(),
+  name: z.string().trim().min(1, '步骤名称不能为空'),
   agent: z.string().optional(),
   task: z.string().optional(),
   workflow: z.string().optional(),
@@ -46,6 +55,15 @@ const stepSchema = z.object({
   requirementIds: z.string().optional(),
   artifactKeys: z.string().optional(),
 }).superRefine((step, ctx) => {
+  if (step.type === 'script') {
+    if (!step.scriptSource?.trim()) ctx.addIssue({code: z.ZodIssueCode.custom, path: ['scriptSource'], message: '脚本内容不能为空'});
+    if ((step.scriptSource?.length || 0) > 128 * 1024) ctx.addIssue({code: z.ZodIssueCode.custom, path: ['scriptSource'], message: '脚本内容不能超过 128 KB'});
+    const timeout = Number(step.scriptTimeoutSeconds);
+    if (!Number.isFinite(timeout) || timeout < 1 || timeout > 1800) ctx.addIssue({code: z.ZodIssueCode.custom, path: ['scriptTimeoutSeconds'], message: '超时须在 1 至 1800 秒之间'});
+    if (step.scriptFailureAction === 'transition' && !step.scriptTarget?.trim()) ctx.addIssue({code: z.ZodIssueCode.custom, path: ['scriptTarget'], message: '请选择失败转移的目标状态'});
+    return;
+  }
+
   if (step.type === 'subworkflow') {
     if (!step.workflow?.trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['workflow'], message: '子工作流配置不能为空' });
@@ -61,6 +79,17 @@ const stepSchema = z.object({
 });
 
 type StepForm = z.infer<typeof stepSchema>;
+
+function scriptFormDefaults(source: any) {
+  return {
+    scriptInterpreter: (source?.script?.interpreter || 'shell') as WorkflowScriptInterpreter,
+    scriptSource: source?.script?.source || '',
+    scriptTimeoutSeconds: (source?.script?.timeoutMs ?? 120000) / 1000,
+    scriptFailureAction: (source?.script?.onFailure?.action || 'stop') as 'continue' | 'transition' | 'stop',
+    scriptTarget: source?.script?.onFailure?.action === 'transition' ? source.script.onFailure.target : '',
+  };
+}
+
 
 const listToInput = (value: unknown) => Array.isArray(value) ? value.join(', ') : '';
 const inputToList = (value: unknown) => typeof value === 'string'
@@ -228,6 +257,8 @@ function AgentSelectedContent({ role, fallbackName }: { role?: RoleOption; fallb
 }
 
 interface EditNodeModalProps {
+  availableStates?: string[];
+  scriptAllowed?: boolean;
   [key: string]: unknown;
   isOpen: boolean;
   data: any;
@@ -256,6 +287,8 @@ export default function EditNodeModal({
   availableKnowledgeBases = [],
   isNew = false,
   existingSteps = [],
+  availableStates = [],
+  scriptAllowed = true,
   specTasks = [],
   initialSection,
   onClose,
@@ -281,11 +314,13 @@ export default function EditNodeModal({
     formState: { errors, isSubmitting },
     watch,
     setValue,
+    setError,
     reset,
   } = useForm<StepForm>({
     resolver: zodResolver(stepSchema),
     defaultValues: {
-      type: data?.type === 'subworkflow' ? 'subworkflow' : 'agent',
+      type: data?.type === 'script' ? 'script' : data?.type === 'subworkflow' ? 'subworkflow' : 'agent',
+      ...scriptFormDefaults(data),
       name: data?.name || '',
       agent: data?.agent || '',
       task: data?.task || '',
@@ -318,7 +353,7 @@ export default function EditNodeModal({
     },
   });
 
-  const stepType = (watch('type') || 'agent') as 'agent' | 'subworkflow';
+  const stepType = (watch('type') || 'agent') as 'agent' | 'subworkflow' | 'script';
   const selectedAgentName = (watch('agent') || data?.agent || '') as string;
   const workflowOptions = useMemo(
     () => ((workflowOptionsQuery.data?.configs || []) as WorkflowOption[]),
@@ -386,7 +421,8 @@ export default function EditNodeModal({
     if (!source) return;
     const sourceRole = effectiveRoles.find((role) => role.name === source.agent);
     reset({
-      type: source.type === 'subworkflow' ? 'subworkflow' : 'agent',
+      type: source.type === 'script' ? 'script' : source.type === 'subworkflow' ? 'subworkflow' : 'agent',
+      ...scriptFormDefaults(source),
       name: source.name + ' (副本)',
       agent: source.agent || '',
       task: source.task || '',
@@ -417,7 +453,22 @@ export default function EditNodeModal({
   };
 
   const onSubmit = async (formData: StepForm) => {
-    const stepData: any = { name: formData.name };
+    if (formData.type === 'script') {
+      if (!scriptAllowed) { setError('type', {message: '请将脚本步骤放在标准状态中'}); return; }
+      if (existingSteps.some((step: any) => step.name === formData.name.trim() && (isNew || step.name !== data?.name))) {
+        setError('name', {message: '当前状态已存在同名步骤'}); return;
+      }
+      onSave({name: formData.name.trim(), type: 'script', script: {
+        interpreter: formData.scriptInterpreter || 'shell', source: formData.scriptSource,
+        timeoutMs: Math.round(Number(formData.scriptTimeoutSeconds) * 1000),
+        onFailure: formData.scriptFailureAction === 'transition'
+          ? {action: 'transition', target: formData.scriptTarget?.trim()}
+          : {action: formData.scriptFailureAction || 'stop'},
+      }, specTaskBinding: data?.specTaskBinding});
+      return;
+    }
+
+    const stepData: any = { name: formData.name, type: formData.type || 'agent' };
     if (formData.type === 'subworkflow') {
       stepData.type = 'subworkflow';
       stepData.workflow = formData.workflow;
@@ -491,7 +542,7 @@ export default function EditNodeModal({
           <div>
             <DialogTitle className="text-xl">{isNew ? '新建步骤' : '编辑步骤'}</DialogTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              调整 Agent、任务描述、约束与 Spec 绑定。保存配置时会统一校验 task 覆盖情况。
+              选择步骤类型，配置对应的执行内容与输入。
             </p>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose}>
@@ -515,19 +566,20 @@ export default function EditNodeModal({
               />
             </div>
           )}
-              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.95fr)]">
-                <div className="space-y-5">
-                  <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
                     <div className="space-y-2">
                       <Label>步骤类型</Label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         {[
                           { value: 'agent', label: 'Agent 步骤', icon: 'person' },
                           { value: 'subworkflow', label: '子工作流', icon: 'account_tree' },
+                          { value: 'script', label: '脚本步骤', icon: 'terminal' },
                         ].map((option) => (
                           <button
                             key={option.value}
                             type="button"
+                            aria-pressed={stepType === option.value}
+                            disabled={option.value === 'script' && !scriptAllowed}
+                            title={option.value === 'script' && !scriptAllowed ? '脚本步骤需放在标准状态中执行' : undefined}
                             onClick={() => setValue('type', option.value as any, { shouldDirty: true })}
                             className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${
                               stepType === option.value
@@ -535,12 +587,51 @@ export default function EditNodeModal({
                                 : 'border-border bg-background hover:bg-muted/50'
                             }`}
                           >
-                            <span className="material-symbols-outlined text-base">{option.icon}</span>
+                            <span aria-hidden="true" className="material-symbols-outlined text-base">{option.icon}</span>
                             {option.label}
                           </button>
                         ))}
                       </div>
                     </div>
+
+          {errors.type && <p role="alert" className="text-sm text-destructive">{errors.type.message}</p>}
+          {stepType === 'script' ? (
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="min-w-0 space-y-4 rounded-2xl border bg-background/70 p-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">步骤名称 <span className="text-destructive">*</span></Label>
+                  <Input id="name" {...register('name')} />
+                  {errors.name && <p role="alert" className="text-sm text-destructive">{errors.name.message}</p>}
+                </div>
+                <div className="space-y-2">
+                  <Label>脚本内容 <span className="text-destructive">*</span></Label>
+                  <WorkflowScriptEditor value={watch('scriptSource') || ''} interpreter={watch('scriptInterpreter') || 'shell'}
+                    onChange={(value) => setValue('scriptSource', value, {shouldDirty: true})} />
+                  {errors.scriptSource && <p role="alert" className="text-sm text-destructive">{errors.scriptSource.message}</p>}
+                </div>
+              </div>
+              <div className="space-y-4 rounded-2xl border bg-muted/10 p-4">
+                <InspectorSelect label="解释器" value={watch('scriptInterpreter') || 'shell'} options={Object.entries(SCRIPT_INTERPRETER_LABELS).map(([value,label]) => ({value,label}))}
+                  onChange={(value) => setValue('scriptInterpreter', value as WorkflowScriptInterpreter, {shouldDirty: true})} />
+                <div className="space-y-2">
+                  <Label htmlFor="script-timeout">超时（秒）</Label>
+                  <Input id="script-timeout" type="number" min={1} max={1800} {...register('scriptTimeoutSeconds')} />
+                  {errors.scriptTimeoutSeconds && <p role="alert" className="text-xs text-destructive">{errors.scriptTimeoutSeconds.message}</p>}
+                </div>
+                <InspectorSelect label="执行失败时" value={watch('scriptFailureAction') || 'stop'} options={[
+                  {value:'continue',label:'继续执行下一步'},{value:'transition',label:'转移到指定状态'},{value:'stop',label:'停止工作流'},
+                ]} onChange={(value) => setValue('scriptFailureAction', value as 'continue'|'transition'|'stop', {shouldDirty: true})} />
+                {watch('scriptFailureAction') === 'transition' && <>
+                  {availableStates.length ? <InspectorSelect label="目标状态" value={watch('scriptTarget') || ''} options={availableStates.map(value => ({value,label:value}))}
+                    onChange={(value) => setValue('scriptTarget',value,{shouldDirty:true})} /> : <div className="space-y-2"><Label htmlFor="script-target">目标状态</Label><Input id="script-target" {...register('scriptTarget')} /></div>}
+                  {errors.scriptTarget && <p role="alert" className="text-xs text-destructive">{errors.scriptTarget.message}</p>}
+                </>}
+              </div>
+            </div>
+          ) : (
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.95fr)]">
+                <div className="space-y-5">
+                  <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
                         <Label htmlFor="name">
@@ -900,6 +991,7 @@ export default function EditNodeModal({
                 </div>
               </div>
 
+          )}
         </form>
         <div className="flex gap-2 justify-end p-6 border-t bg-background/95 flex-shrink-0">
           {onDelete && (

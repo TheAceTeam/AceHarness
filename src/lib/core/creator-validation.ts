@@ -265,6 +265,13 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
       pushIssue(issues, 'error', ['workflow', 'states'], `状态名称重复: ${state.name}`);
     }
     stateNames.add(state.name);
+    for (const group of state.parallelGroups || []) {
+      const members = (state.steps || []).filter((step: any) => (step.parallelGroup || step.concurrency?.groupId) === group.id);
+      if (members.length < 2) {
+        pushIssue(issues, 'error', ['workflow', 'states', String(stateIndex), 'parallelGroups'],
+          `状态 "${state.name}" 的并发组 "${group.name}" 至少需要两个步骤`);
+      }
+    }
     if (!state.isFinal && (!Array.isArray(state.steps) || state.steps.length === 0)) {
       pushIssue(
         issues,
@@ -274,6 +281,7 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
       );
     }
     for (const [stepIndex, step] of (state.steps || []).entries()) {
+      if (step.type === 'script') continue;
       if (isSubworkflowStep(step)) {
         const childConfigFile = getSubworkflowConfigFile(step);
         try {

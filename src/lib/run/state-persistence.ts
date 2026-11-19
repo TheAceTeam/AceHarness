@@ -8,6 +8,7 @@ import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/su
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 import type { WorkflowTaskInput } from '@/lib/workflow/task-input';
+import type { ScriptHandoff } from '@/lib/workflow/script-step';
 import type { RunReviewPlan } from '@/lib/workflow/run-review-types';
 import { mergeRuntimeToolEvents, type RuntimeToolEvent } from '@/lib/runtime-agent/tool-events';
 
@@ -238,7 +239,14 @@ export interface PersistedStepLog {
   tokenUsage?: PersistedTokenUsage;
   sessionId?: string | null;
   engineName?: string;
-  stepType?: 'agent' | 'subworkflow';
+  stepType?: 'agent' | 'subworkflow' | 'script';
+  scriptInterpreter?: import('@/lib/core/schemas').WorkflowScriptInterpreter;
+  scriptStdout?: string;
+  scriptStderr?: string;
+  scriptOutputTruncated?: boolean;
+  scriptCancelled?: boolean;
+  scriptExitCode?: number | null;
+  scriptFailureAction?: 'continue' | 'transition' | 'stop';
   childRunId?: string;
   childConfigFile?: string;
   childStatus?: string;
@@ -495,6 +503,7 @@ export interface PersistedRunState {
   activeConcurrencyGroups?: PersistedActiveConcurrencyGroup[];
   completedSteps: string[];
   failedSteps: string[];
+  pendingScriptResults?: ScriptHandoff[];
   stepLogs: PersistedStepLog[];
   agents: PersistedAgentState[];
   iterationStates: Record<string, PersistedIterationState>;
@@ -939,6 +948,13 @@ async function writeRunStateNow(state: PersistedRunState): Promise<void> {
           sessionId: log?.sessionId || null,
           engineName: log?.engineName,
           stepType: log?.stepType,
+          scriptInterpreter: log?.scriptInterpreter,
+          scriptExitCode: log?.scriptExitCode,
+          scriptFailureAction: log?.scriptFailureAction,
+          scriptStdout: log?.scriptStdout,
+          scriptStderr: log?.scriptStderr,
+          scriptOutputTruncated: log?.scriptOutputTruncated,
+          scriptCancelled: log?.scriptCancelled,
           childRunId: log?.childRunId,
           childConfigFile: log?.childConfigFile,
           childStatus: log?.childStatus,
