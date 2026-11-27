@@ -95,6 +95,17 @@ function ContextProbe() {
   );
 }
 
+function RuntimeSelectionProbe() {
+  const { sessions, activeSessionId, activeSession, setEngine, setModel } = useChat();
+  return <>
+    <div data-testid="runtime-session">{activeSessionId}</div>
+    <div data-testid="runtime-count">{sessions.length}</div>
+    <div data-testid="runtime-model">{activeSession?.model}</div>
+    <button onClick={() => { setEngine('codex'); setModel('gpt-6.1-sol'); }}>change-model</button>
+    <button onClick={() => setModel('gpt-6.1-sol[effort=high]')}>change-effort</button>
+  </>;
+}
+
 function StreamingProbe() {
   const { sessions, activeSessionId, activeSession, setActiveSessionId, sendMessage } = useChat();
   const sess1 = sessions.find((session) => session.id === 'sess-1');
@@ -255,6 +266,19 @@ describe('ChatProvider', () => {
       expect(screen.getByTestId('active-session').textContent).toBe('sess-2');
     });
     expect(sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY)).toBe('sess-2');
+  });
+
+  test('model and effort changes retain the restored conversation without creating sessions', async () => {
+    render(<ChatProvider><RuntimeSelectionProbe /></ChatProvider>);
+    await waitFor(() => expect(screen.getByTestId('runtime-model')).toHaveTextContent('claude-sonnet'));
+    for (let i = 0; i < 3; i++) {
+      fireEvent.click(screen.getByText('change-model'));
+      fireEvent.click(screen.getByText('change-effort'));
+    }
+    await waitFor(() => expect(screen.getByTestId('runtime-model')).toHaveTextContent('gpt-6.1-sol[effort=high]'));
+    expect(screen.getByTestId('runtime-session')).toHaveTextContent('sess-2');
+    expect(screen.getByTestId('runtime-count')).toHaveTextContent('2');
+    expect(vi.mocked(fetch).mock.calls.filter(([url, options]) => String(url) === '/api/chat/sessions' && options?.method === 'POST')).toHaveLength(0);
   });
 
   test('reloads session summaries after login completes in an already mounted provider', async () => {
