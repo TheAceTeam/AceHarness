@@ -67,6 +67,8 @@ import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useModelCatalogRows, useSyncModelCatalogToDb } from '@/client/db/collections';
 import type { ModelsSearch } from '@/routes/models';
+import { MultiCombobox } from '@/components/ui/combobox';
+import { useTranslations } from '@/hooks/useTranslations';
 
 interface Model {
   efforts?: string[];
@@ -224,6 +226,7 @@ function SortableModelCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslations();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: model.id,
   });
@@ -269,7 +272,7 @@ function SortableModelCard({
           <div className="min-w-0">
             <h3 className="line-clamp-2 text-[15px] font-semibold leading-6">{model.name}</h3>
             <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{model.modelId || model.id}</div>
-            <div className="mt-1 text-xs text-muted-foreground">Effort：{model.efforts?.length ? model.efforts.join(' / ') : '未检测'}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{t('modelEfforts.label')}：{model.efforts?.length ? model.efforts.join(' / ') : t('modelEfforts.empty')}</div>
             <div className="mt-1">
               <ModelStatusPill status={model.status} />
             </div>
@@ -366,6 +369,7 @@ function SortableModelTableRowEnhancer({
 }
 
 export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsPageProps = {}) {
+  const { t } = useTranslations();
   useDocumentTitle('模型管理');
   const searchParams = useSearchParams();
   const returnTarget = getOfficeAwareReturnTarget(searchParams.get('from'));
@@ -712,8 +716,8 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
     },
     {
       id: 'efforts',
-      header: '支持的 Effort',
-      render: (model) => <span className="text-xs text-muted-foreground">{model.efforts?.length ? model.efforts.join(' / ') : '未检测'}</span>,
+      header: t('modelEfforts.label'),
+      render: (model) => <span className="text-xs text-muted-foreground">{model.efforts?.length ? model.efforts.join(' / ') : t('modelEfforts.empty')}</span>,
     },
     {
       id: 'status',
@@ -766,7 +770,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
       priority: 4,
       render: (model) => <span className="text-xs text-muted-foreground">{model.updatedAt ? new Date(model.updatedAt).toLocaleDateString() : '-'}</span>,
     },
-  ], []);
+  ], [t]);
 
   const getModelRowActions = useCallback((model: Model): ActionMenuGroup[] => [
     {
@@ -1186,9 +1190,9 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
                   control={<Input value={editingModel.modelId || editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, modelId: e.target.value })} />}
                 />
                 <FormField
-                  label="支持的 Efforts"
-                  description="用逗号分隔，例如 low, medium, high；留空表示未配置。"
-                  control={<Input value={(editingModel.efforts || []).join(', ')} onChange={(e) => setEditingModel({ ...editingModel, efforts: e.target.value.split(',').map(value => value.trimStart()) })} onBlur={() => setEditingModel({ ...editingModel, efforts: [...new Set((editingModel.efforts || []).map(value => value.trim()).filter(Boolean))] })} placeholder="low, medium, high" />}
+                  label={t('modelEfforts.label')}
+                  description={t('modelEfforts.description')}
+                  control={<MultiCombobox value={editingModel.efforts || []} onValueChange={efforts => setEditingModel({ ...editingModel, efforts })} options={[...new Set(models.flatMap(model => model.efforts || []))].map(value => ({ value, label: value }))} allowCustom placeholder={t('modelEfforts.placeholder')} searchPlaceholder={t('modelEfforts.search')} emptyText={t('modelEfforts.empty')} />}
                 />
               </div>
             ),

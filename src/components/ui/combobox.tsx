@@ -360,6 +360,8 @@ function SingleCombobox({
 }
 
 interface MultiComboboxProps {
+  allowCustom?: boolean;
+  searchPlaceholder?: string;
   value: string[];
   onValueChange: (value: string[]) => void;
   options?: ComboboxOptionType[];
@@ -372,6 +374,8 @@ interface MultiComboboxProps {
 }
 
 function MultiCombobox({
+  allowCustom = false,
+  searchPlaceholder = '搜索...',
   value,
   onValueChange,
   options = [],
@@ -380,18 +384,31 @@ function MultiCombobox({
   triggerClassName,
   emptyText = '无匹配项',
 }: MultiComboboxProps) {
+  const [inputValue, setInputValue] = React.useState('');
+  const [customValues, setCustomValues] = React.useState<string[]>([]);
+  const allOptions = React.useMemo(() => {
+    const values = [...new Set([...customValues, ...value, ...(allowCustom && inputValue.trim() ? [inputValue.trim()] : [])])];
+    return [...options, ...values.filter(item => !options.some(option => option.value === item)).map(item => ({ value: item, label: item }))];
+  }, [options, customValues, value, allowCustom, inputValue]);
   const selectedItems = React.useMemo(
-    () => options.filter(o => value?.includes(o.value)),
-    [options, value],
+    () => allOptions.filter(o => value?.includes(o.value)),
+    [allOptions, value],
   );
 
   return (
     <Combobox<ComboboxOptionType>
       multiple
       value={selectedItems}
-      onValueChange={(vals, _details) => onValueChange((vals as ComboboxOptionType[]).map(v => v.value))}
+      onValueChange={(vals, _details) => {
+        const next = (vals as ComboboxOptionType[]).map(v => v.value);
+        setCustomValues(previous => [...new Set([...previous, ...next])]);
+        onValueChange(next);
+        setInputValue('');
+      }}
       disabled={disabled}
-      items={options}
+      items={allOptions}
+      inputValue={inputValue}
+      onInputValueChange={setInputValue}
       itemToStringValue={(opt) => opt.label}
     >
       <ComboboxChips className={triggerClassName}>
@@ -404,7 +421,7 @@ function MultiCombobox({
                   {item.label}
                 </ComboboxChip>
               ))}
-              <ComboboxChipsInput placeholder={chips.length === 0 ? placeholder : '搜索...'} />
+              <ComboboxChipsInput placeholder={chips.length === 0 ? placeholder : searchPlaceholder} />
             </>
           )}
         </ComboboxValue>

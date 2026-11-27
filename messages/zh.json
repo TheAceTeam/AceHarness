@@ -1,4 +1,12 @@
 {
+  "modelEfforts": {
+    "label": "思考强度",
+    "default": "默认",
+    "empty": "未检测",
+    "placeholder": "选择或输入思考强度",
+    "search": "搜索或输入…",
+    "description": "可多选，也可以输入自定义值后选择添加。"
+  },
   "dashboard": {
     "title": "ACEHarness",
     "subtitle": "你的 AI 团队，一起把事情做完。",

@@ -1,13 +1,20 @@
 'use client';
+import { SingleCombobox } from '@/components/ui/combobox';
+import { useTranslations } from '@/hooks/useTranslations';
 
 export function ModelEffortSelect({ value, efforts, onChange }: {
   value: string;
   efforts?: string[];
   onChange: (value: string) => void;
 }) {
+  const { t } = useTranslations();
   const choices = [...new Set([...(efforts || []), ...(value ? [value] : [])])];
-  return <select aria-label="Effort" title={choices.length ? '选择模型的推理强度' : '尚无支持的 effort，请检测并导入模型'} disabled={!choices.length} className="h-8 max-w-36 shrink-0 rounded-md border bg-background px-2 text-xs disabled:opacity-60" value={value} onChange={event => onChange(event.target.value)}>
-    <option value="">{choices.length ? 'Effort：默认' : 'Effort：未检测'}</option>
-    {choices.map(effort => <option key={effort} value={effort}>{effort}</option>)}
-  </select>;
+  return <div className="w-28 shrink-0" aria-label={t('modelEfforts.label')}>
+    <SingleCombobox value={value} onValueChange={onChange}
+      options={[{ value: '', label: t('modelEfforts.default') }, ...choices.map(effort => ({ value: effort, label: effort }))]}
+      disabled={!choices.length} placeholder={t('modelEfforts.label')}
+      triggerLabel={value || t('modelEfforts.label')}
+      triggerClassName="h-8 rounded-full border-0 bg-transparent text-xs shadow-none focus-within:ring-1"
+      emptyText={t('modelEfforts.empty')} />
+  </div>;
 }

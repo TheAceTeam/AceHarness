@@ -1,4 +1,12 @@
 {
+  "modelEfforts": {
+    "label": "Efforts",
+    "default": "Default",
+    "empty": "Not detected",
+    "placeholder": "Select or enter efforts",
+    "search": "Search or enter…",
+    "description": "Select multiple values or enter a custom value to add it."
+  },
   "dashboard": {
     "title": "ACEHarness",
     "subtitle": "Full-Lifecycle Multi-Agent Orchestration System",
