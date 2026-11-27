@@ -44,7 +44,7 @@ describe('EnvVarsDialog', () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('tab', { name: 'Claude' }));
-    expect(screen.getAllByText('ANTHROPIC_AUTH_TOKEN')).toHaveLength(2);
+    expect(screen.getAllByText('ANTHROPIC_AUTH_TOKEN')).toHaveLength(1);
     expect(screen.getByDisplayValue('ANTHROPIC_AUTH_TOKEN')).toBeDisabled();
 
     await user.click(screen.getByRole('tab', { name: 'Codex' }));

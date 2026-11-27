@@ -164,10 +164,17 @@ export function EnvironmentVariables({
             const visible = !secret || revealedIds.includes(item.id) || revealAll;
             const copied = copiedIds.includes(item.id);
             return (
-              <li key={item.id} className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 py-3 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_auto]">
-                <div className="col-start-1 row-start-1 min-w-0">
-                  <code className="block break-all font-mono text-xs font-medium">{item.key || '变量名'}</code>
-                  {item.description ? <p className="mt-1 text-xs text-muted-foreground">{item.description}</p> : null}
+              <li key={item.id} className="group/row grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto]">
+                <div className="col-start-1 row-start-1 flex min-w-0 flex-col">
+                  <Input
+                    value={item.key}
+                    onChange={(event) => onChange?.(index, { key: event.target.value })}
+                    placeholder="例如：MY_API_TOKEN"
+                    aria-label="变量名"
+                    className="h-9 font-mono text-xs"
+                    disabled={disabled || item.disableKeyEdit}
+                  />
+                  {item.description ? <p className="mt-1 truncate text-xs text-muted-foreground">{item.description}</p> : null}
                   {item.keyError ? <p className="mt-1 text-xs text-destructive">{item.keyError}</p> : null}
                 </div>
 
@@ -230,17 +237,6 @@ export function EnvironmentVariables({
                   </TooltipProvider>
                 </div>
 
-                <div className="col-start-1 row-start-3 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 sm:col-start-1 sm:row-start-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                  <Input
-                    value={item.key}
-                    onChange={(event) => onChange?.(index, { key: event.target.value })}
-                    placeholder="例如：MY_API_TOKEN"
-                    aria-label="变量名"
-                    className="h-8 font-mono text-xs"
-                    disabled={disabled || item.disableKeyEdit}
-                  />
-                  <span className="flex h-8 items-center text-[11px] text-muted-foreground">名称</span>
-                </div>
               </li>
             );
           })}
