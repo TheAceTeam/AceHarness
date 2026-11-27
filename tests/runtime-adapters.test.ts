@@ -1022,6 +1022,28 @@ describe('runtime adapters', () => {
       key: 'reasoning_effort',
       value: effort,
     }));
+    expect(runtime.setConfigOption).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'mode',
+      value: 'agent-full-access',
+    }));
+  });
+
+  test('Codex ACP keeps the default sandbox for approval-based permission policies', async () => {
+    const runtime = {
+      ensureSession: vi.fn(async () => ({ sessionKey: 'runtime-session-codex-ask', backend: 'acpx', runtimeSessionName: 'runtime-session-codex-ask' })),
+      setConfigOption: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } satisfies AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput('runtime-session-codex-ask', 'codex', 'acpx', 'ask');
+
+    await client.ensureSession?.({ session, command: resolveAcpxCommand('codex') });
+
+    expect(runtime.setConfigOption).not.toHaveBeenCalledWith(expect.objectContaining({
+      key: 'mode',
+      value: 'agent-full-access',
+    }));
   });
 
   test.each(getBuiltinAgentDefinitions().filter(agent => agent.runtime === 'acpx').map(agent => agent.id))('forwards generic bracket configuration to %s ACP controls', async (agentId) => {

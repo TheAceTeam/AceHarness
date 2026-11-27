@@ -288,6 +288,22 @@ export function upsertStartedRunInHistory(historyRuns: any[], startedRun: any) {
   return [startedRun, ...historyRuns.filter((run) => run?.id !== startedRun.id)];
 }
 
+export function clearDeletedStartedRunId(startedRunId: string | null | undefined, deletedRunId: string) {
+  return startedRunId === deletedRunId ? null : startedRunId || null;
+}
+
+export function mergeHistoryWithLocalStartedRun(historyRuns: any[], locallyStartedRun: any, requestedRunId?: string | null) {
+  if (!locallyStartedRun || locallyStartedRun.id === requestedRunId || historyRuns.some((run) => run?.id === locallyStartedRun.id)) {
+    return historyRuns;
+  }
+  return upsertStartedRunInHistory(historyRuns, locallyStartedRun);
+}
+
+export function isDeletedRunPayload(deletedRunIds: Set<string>, payload: any, requestedRunId?: string | null) {
+  const runId = String(payload?.runId || payload?.statusSnapshot?.runId || payload?.question?.runId || requestedRunId || '').trim();
+  return Boolean(runId && deletedRunIds.has(runId));
+}
+
 export function resolveWorkbenchRuntimeWorkflowConfig(input: {
   baseConfig: any;
   activeRunId?: string | null;
@@ -1743,7 +1759,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   };
 
   const updateRunReviewOverrides = async (nextOverrides: RunReviewOverride[]) => {
-    if (!reviewPlan || !props.runReviewPlanning || adversarialIntent !== 'on-demand') return;
+    if (!reviewPlan || !props.runReviewPlanning || adversarialIntent === 'disabled') return;
     const previousOverrides = reviewOverrides;
     setReviewOverrides(nextOverrides);
     setReviewPlanningBusy(true);
@@ -1842,7 +1858,9 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                   <p className="mt-1 text-xs text-muted-foreground">只影响这一次 run；原工作流 YAML 不变，也不会创建副本。</p>
                 </div>
                 <Badge variant={adversarialIntent === 'disabled' ? 'outline' : 'secondary'}>
-                  {adversarialIntent === 'disabled' ? '全局：不开启对抗' : '全局：按需开启'}
+                  {adversarialIntent === 'disabled'
+                    ? '全局：不开启对抗'
+                    : adversarialIntent === 'enabled' ? '全局：开启对抗' : '全局：智能按需对抗'}
                 </Badge>
               </div>
             </div>
@@ -1861,7 +1879,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               const hasOverride = Boolean(workflowOverride);
               const selectedRequiresAdversarial = workflowOverride?.kind === 'lightweight'
                 ? workflowOverride.requiresAdversarial
-                : null;
+                    : adversarialIntent === 'enabled' ? true : null;
               return (
                 <div key={`workflow-review-${workflow.configFile}`} className={cn('rounded-lg border p-3', workflow.blocked && 'border-destructive/50 bg-destructive/5')}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1898,36 +1916,36 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                     </details>
                   ) : null}
                   {workflow.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}
-                  {adversarialIntent === 'on-demand' ? (
+                  {adversarialIntent !== 'disabled' ? (
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
                         type="button"
                         size="sm"
-                        aria-pressed={hasOverride && selectedRequiresAdversarial === false}
-                        variant={hasOverride && selectedRequiresAdversarial === false ? 'primary' : 'outline'}
-                        className={hasOverride && selectedRequiresAdversarial === false ? 'ring-2 ring-primary/20' : undefined}
+                        aria-pressed={selectedRequiresAdversarial === false}
+                        variant={selectedRequiresAdversarial === false ? 'primary' : 'outline'}
+                        className={selectedRequiresAdversarial === false ? 'ring-2 ring-primary/20' : undefined}
                         onClick={() => updateLightweightOverride(workflow, false)}
                         disabled={reviewPlanningBusy}
                       >
-                        {hasOverride && selectedRequiresAdversarial === false ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        {selectedRequiresAdversarial === false ? <Check className="mr-1.5 h-4 w-4" /> : null}
                         本次保持轻量
                       </Button>
                       <Button
                         type="button"
                         size="sm"
-                        aria-pressed={hasOverride && selectedRequiresAdversarial === true}
-                        variant={hasOverride && selectedRequiresAdversarial === true ? 'primary' : 'outline'}
-                        className={hasOverride && selectedRequiresAdversarial === true ? 'ring-2 ring-primary/20' : undefined}
+                        aria-pressed={selectedRequiresAdversarial === true}
+                        variant={selectedRequiresAdversarial === true ? 'primary' : 'outline'}
+                        className={selectedRequiresAdversarial === true ? 'ring-2 ring-primary/20' : undefined}
                         onClick={() => updateLightweightOverride(workflow, true)}
                         disabled={reviewPlanningBusy}
                       >
-                        {hasOverride && selectedRequiresAdversarial === true ? <Check className="mr-1.5 h-4 w-4" /> : null}
-                        本次派生对抗状态机
+                        {selectedRequiresAdversarial === true ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        {adversarialIntent === 'enabled' ? '本次开启对抗' : '本次派生对抗状态机'}
                       </Button>
-                      {hasOverride && workflow.suggestion ? (
+                      {hasOverride && (workflow.suggestion || adversarialIntent === 'enabled') ? (
                         <Button type="button" size="sm" variant="outline" onClick={() => updateLightweightOverride(workflow, null)} disabled={reviewPlanningBusy}>
                           <RotateCcw className="mr-1.5 h-4 w-4" />
-                          恢复 AI 建议
+                          {adversarialIntent === 'enabled' ? '恢复开启对抗' : '恢复 AI 建议'}
                         </Button>
                       ) : null}
                     </div>
@@ -1939,7 +1957,9 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
             {reviewPlan.states.map((state) => {
               const stateOverride = reviewOverrides.find((item) => item.kind !== 'lightweight' && item.configFile === state.configFile && item.stateId === state.stateId);
               const hasOverride = Boolean(stateOverride);
-              const selectedMode = stateOverride?.kind !== 'lightweight' ? stateOverride?.mode : null;
+              const selectedMode = stateOverride?.kind !== 'lightweight' && stateOverride?.mode
+                ? stateOverride.mode
+                : adversarialIntent === 'enabled' ? 'adversarial' : null;
               return (
                 <div key={`${state.configFile}:${state.stateId}`} className={cn('rounded-lg border p-3', state.blocked && 'border-destructive/50 bg-destructive/5')}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1976,36 +1996,36 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                     </details>
                   ) : null}
                   {state.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}
-                  {adversarialIntent === 'on-demand' ? (
+                  {adversarialIntent !== 'disabled' ? (
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
                         type="button"
                         size="sm"
-                        aria-pressed={hasOverride && selectedMode === 'standard'}
-                        variant={hasOverride && selectedMode === 'standard' ? 'primary' : 'outline'}
-                        className={hasOverride && selectedMode === 'standard' ? 'ring-2 ring-primary/20' : undefined}
+                        aria-pressed={selectedMode === 'standard'}
+                        variant={selectedMode === 'standard' ? 'primary' : 'outline'}
+                        className={selectedMode === 'standard' ? 'ring-2 ring-primary/20' : undefined}
                         onClick={() => updateStateOverride(state, 'standard')}
                         disabled={reviewPlanningBusy}
                       >
-                        {hasOverride && selectedMode === 'standard' ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        {selectedMode === 'standard' ? <Check className="mr-1.5 h-4 w-4" /> : null}
                         本次用标准
                       </Button>
                       <Button
                         type="button"
                         size="sm"
-                        aria-pressed={hasOverride && selectedMode === 'adversarial'}
-                        variant={hasOverride && selectedMode === 'adversarial' ? 'primary' : 'outline'}
-                        className={hasOverride && selectedMode === 'adversarial' ? 'ring-2 ring-primary/20' : undefined}
+                        aria-pressed={selectedMode === 'adversarial'}
+                        variant={selectedMode === 'adversarial' ? 'primary' : 'outline'}
+                        className={selectedMode === 'adversarial' ? 'ring-2 ring-primary/20' : undefined}
                         onClick={() => updateStateOverride(state, 'adversarial')}
                         disabled={reviewPlanningBusy}
                       >
-                        {hasOverride && selectedMode === 'adversarial' ? <Check className="mr-1.5 h-4 w-4" /> : null}
+                        {selectedMode === 'adversarial' ? <Check className="mr-1.5 h-4 w-4" /> : null}
                         本次用对抗
                       </Button>
-                      {hasOverride && (state.configLocked || state.suggestion) ? (
+                      {hasOverride && (state.configLocked || state.suggestion || adversarialIntent === 'enabled') ? (
                         <Button type="button" size="sm" variant="outline" onClick={() => updateStateOverride(state, null)} disabled={reviewPlanningBusy}>
                           <RotateCcw className="mr-1.5 h-4 w-4" />
-                          {state.configLocked ? '恢复配置锁定' : '恢复 AI 建议'}
+                          {adversarialIntent === 'enabled' ? '恢复开启对抗' : state.configLocked ? '恢复配置锁定' : '恢复 AI 建议'}
                         </Button>
                       ) : null}
                     </div>
@@ -2077,24 +2097,20 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
             button, which used to look broken when the choice was off screen. */}
         {props.runReviewPlanning ? (
           <section className="grid gap-3 border-b border-border py-5 sm:grid-cols-[190px_minmax(0,1fr)]">
-            <div>
-              <Label className="text-sm font-medium">本次运行是否使用对抗流程？</Label>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {props.runReviewPlanning.baselineIntent
-                  ? '已按工作流创建时的选择预选，可直接继续。'
-                  : '已预选「不开启对抗」，按需要改。'}
-                只影响本次运行，不写回原配置。
-              </p>
+            <div className="flex flex-col justify-center">
+              <Label className="text-sm font-medium">启用对抗流程</Label>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">仅影响本次运行</p>
             </div>
             <div className="min-w-0">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <button type="button" aria-pressed={adversarialIntent === 'disabled'} onClick={() => setAdversarialIntent('disabled')} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === 'disabled' ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
-                  <div className="font-medium">不开启对抗</div>
-                  <div className="mt-1 text-xs text-muted-foreground">零次 AI 评估；轻量保持原样，普通状态机全部使用标准模式。</div>
+              <div role="radiogroup" aria-label="启用对抗流程" className="grid gap-2 sm:grid-cols-3">
+                <button type="button" role="radio" aria-checked={adversarialIntent === 'disabled'} onClick={() => setAdversarialIntent('disabled')} className={cn('min-h-10 rounded-md border px-3 py-2 text-sm font-medium transition-colors', adversarialIntent === 'disabled' ? 'border-primary bg-primary/5 text-foreground' : 'text-muted-foreground hover:border-primary/40 hover:bg-muted/40')}>
+                  不开启对抗
                 </button>
-                <button type="button" aria-pressed={adversarialIntent === 'on-demand'} onClick={() => setAdversarialIntent('on-demand')} className={cn('rounded-lg border p-3 text-left transition-colors', adversarialIntent === 'on-demand' ? 'border-primary bg-primary/5' : 'hover:border-primary/40 hover:bg-muted/40')}>
-                  <div className="font-medium">按需开启</div>
-                  <div className="mt-1 text-xs text-muted-foreground">一次整体规划；轻量任务必要时只为本次运行派生状态机。</div>
+                <button type="button" role="radio" aria-checked={adversarialIntent === 'enabled'} onClick={() => setAdversarialIntent('enabled')} className={cn('min-h-10 rounded-md border px-3 py-2 text-sm font-medium transition-colors', adversarialIntent === 'enabled' ? 'border-primary bg-primary/5 text-foreground' : 'text-muted-foreground hover:border-primary/40 hover:bg-muted/40')}>
+                  开启对抗
+                </button>
+                <button type="button" role="radio" aria-checked={adversarialIntent === 'on-demand'} onClick={() => setAdversarialIntent('on-demand')} className={cn('min-h-10 rounded-md border px-3 py-2 text-sm font-medium transition-colors', adversarialIntent === 'on-demand' ? 'border-primary bg-primary/5 text-foreground' : 'text-muted-foreground hover:border-primary/40 hover:bg-muted/40')}>
+                  智能按需对抗
                 </button>
               </div>
               {reviewPlanningError ? <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">{reviewPlanningError}</div> : null}
@@ -2409,6 +2425,7 @@ export default function WorkbenchPage({
   const [historyRuns, setHistoryRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<any>(null);
   const returnedRunIdRef = useRef<string | null>(null);
+  const deletedRunIdsRef = useRef(new Set<string>());
   const [historyRunAction, setHistoryRunAction] = useState<{ runId: string; action: 'view' | 'resume' | 'analyze' | 'delete' } | null>(null);
   const [focusedState, setFocusedState] = useState<string | null>(null); // 用于流程图视图跳转
   const [executionViewTabOverride, setExecutionViewTabOverride] = useState<string | null>(null);
@@ -3508,6 +3525,7 @@ export default function WorkbenchPage({
 
   const shouldApplyRuntimePayload = useCallback((payload: any) => {
     if (!payload) return true;
+    if (isDeletedRunPayload(deletedRunIdsRef.current, payload)) return false;
     const eventConfigFile = payload.currentConfigFile || payload.configFile || payload.statusSnapshot?.currentConfigFile || payload.statusSnapshot?.configFile;
     if (eventConfigFile && eventConfigFile !== configFile) return false;
 
@@ -6390,6 +6408,7 @@ export default function WorkbenchPage({
 
   const cacheWorkflowStatusPayload = useCallback((status: any, requestedRunId?: string) => {
     if (!status) return;
+    if (isDeletedRunPayload(deletedRunIdsRef.current, status, requestedRunId)) return;
     const resolvedRunId = resolveRuntimeRunId(status, requestedRunId) || requestedRunId;
     const mergeStatusPayload = (current: any) => ({
       ...(current && typeof current === 'object' ? current : {}),
@@ -6910,9 +6929,7 @@ export default function WorkbenchPage({
         const locallyStartedRun = locallyStartedRunId
           ? current.find((run: any) => run.id === locallyStartedRunId)
           : null;
-        return locallyStartedRun && !runs.some((run: any) => run.id === locallyStartedRunId)
-          ? upsertStartedRunInHistory(runs, locallyStartedRun)
-          : runs;
+      return mergeHistoryWithLocalStartedRun(runs, locallyStartedRun, requestedRunId);
       });
       setSelectedRun((current: any) => {
         if (!current?.id) return current;
@@ -7499,6 +7516,13 @@ export default function WorkbenchPage({
   ]);
 
   const clearDeletedRunFromWorkbench = useCallback((deletedRunId: string) => {
+    deletedRunIdsRef.current.add(deletedRunId);
+    latestRunIdRef.current = clearDeletedStartedRunId(latestRunIdRef.current, deletedRunId);
+    if (startupExpectedRunIdRef.current === deletedRunId) startupExpectedRunIdRef.current = null;
+    if (startupCreatedRunIdRef.current === deletedRunId) startupCreatedRunIdRef.current = null;
+    void queryClient.cancelQueries({ queryKey: queryKeys.workflowStatusCompact(configFile, deletedRunId) });
+    queryClient.removeQueries({ queryKey: queryKeys.workflowStatusCompact(configFile, deletedRunId) });
+    queryClient.removeQueries({ queryKey: queryKeys.runDetail(deletedRunId) });
     setHistoryRuns((prev) => prev.filter((item: any) => item.id !== deletedRunId));
     setSelectedRun((current: any) => current?.id === deletedRunId ? null : current);
     setSelectedRunIds((prev) => prev.filter((id) => id !== deletedRunId));
@@ -7553,7 +7577,9 @@ export default function WorkbenchPage({
     clearPendingHumanQuestion,
     dispatch,
     effectiveSearchParams,
+    configFile,
     pendingHumanQuestion?.runId,
+    queryClient,
     runDetail?.id,
     runId,
     selectedRun?.id,

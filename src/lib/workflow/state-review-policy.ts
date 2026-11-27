@@ -864,18 +864,22 @@ export function reconcileReviewPolicy(
  * null when the config carries no state-level policy at all (lightweight, or
  * pre-protocol configs), where the baseline is genuinely unknown.
  */
-export function inferBaselineAdversarialIntent(config: unknown): 'disabled' | 'on-demand' | null {
+export function inferBaselineAdversarialIntent(config: unknown): 'disabled' | 'enabled' | 'on-demand' | null {
   const states = (config as any)?.workflow?.states;
   if (!Array.isArray(states)) return null;
   const targets = (states as StateMachineState[]).filter((state) => state && !state.isFinal);
   if (targets.length === 0 || targets.every((state) => !state.reviewPolicy)) return null;
-  return targets.every((state) => (
+  if (targets.every((state) => (
     state.reviewPolicy?.mode === 'standard'
     && state.reviewPolicy?.source === 'user'
     && state.reviewPolicy?.locked === true
-  ))
-    ? 'disabled'
-    : 'on-demand';
+  ))) return 'disabled';
+  if (targets.every((state) => (
+    state.reviewPolicy?.mode === 'adversarial'
+    && state.reviewPolicy?.source === 'user'
+    && state.reviewPolicy?.locked === true
+  ))) return 'enabled';
+  return 'on-demand';
 }
 
 export function getReviewPolicyProtectedSlice(state: StateMachineState) {

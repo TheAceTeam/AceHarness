@@ -98,6 +98,7 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
         agentId,
         session.modelRoute.providerModel,
         session.modelRoute.configOptions,
+        session.profileSnapshot.permissionPolicyId,
       );
       const resumeSessionId = resolveResumeSessionId(input.existingHandle);
       let runtime: AcpRuntime | undefined;
@@ -145,6 +146,7 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
 
         for (const config of modelSelection.postInitializationConfig) {
           if (!runtime.setConfigOption) {
+            if (config.key === 'mode' && agentId === 'codex') continue;
             throw new Error(`当前 ACPX runtime 不支持会话配置项 ${config.key}`);
           }
           await runtime.setConfigOption({ handle, ...config });
@@ -1012,6 +1014,7 @@ function resolveAcpModelSelection(
   agentId: string | undefined,
   providerModel: string,
   configOptions?: Record<string, unknown>,
+  permissionPolicyId?: RuntimePermissionPolicyId,
 ): AcpxModelSelection {
   const parsed = parseProviderModel(String(providerModel || '').trim());
   let model = parsed.providerModel;
@@ -1032,10 +1035,15 @@ function resolveAcpModelSelection(
   }
   return {
     model,
-    postInitializationConfig: Object.entries(options).map(([key, value]) => {
+    postInitializationConfig: [
+      ...Object.entries(options).map(([key, value]) => {
       if (!['string', 'number', 'boolean'].includes(typeof value)) throw new Error('ACP config option must be a scalar: ' + key);
       return { key, value: String(value) };
-    }),
+      }),
+      ...(String(agentId || '').trim().toLowerCase() === 'codex' && permissionPolicyId === 'unrestricted'
+        ? [{ key: 'mode', value: 'agent-full-access' }]
+        : []),
+    ],
   };
 }
 

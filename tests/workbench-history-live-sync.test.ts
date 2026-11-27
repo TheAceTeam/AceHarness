@@ -11,7 +11,9 @@ import {
   selectCurrentStepAttemptLogs,
   shouldConnectWorkbenchRunStatusStream,
   shouldEnableWorkbenchStatusSync,
+  clearDeletedStartedRunId,
   upsertStartedRunInHistory,
+  mergeHistoryWithLocalStartedRun,
   formatLiveOutputTimestamp,
   getWorkflowStatusDotClass,
   resolveSoleConfiguredWorkflowStepName,
@@ -41,6 +43,7 @@ describe('Workbench historical run live sync', () => {
     expect(resolveInitialAdversarialIntent(undefined)).toBe('disabled');
     expect(resolveInitialAdversarialIntent('on-demand')).toBe('on-demand');
     expect(resolveInitialAdversarialIntent('disabled')).toBe('disabled');
+    expect(resolveInitialAdversarialIntent('enabled')).toBe('enabled');
   });
 
   test('uses consistent semantic colors for run status dots', () => {
@@ -125,6 +128,16 @@ describe('Workbench historical run live sync', () => {
       startedRun,
       { id: 'run-old', status: 'completed' },
     ]);
+  });
+
+  test('does not restore a deleted locally-started run into history', () => {
+    const historyRuns = [{ id: 'run-old', status: 'completed' }];
+    const startedRunId = clearDeletedStartedRunId('run-new', 'run-new');
+
+    expect(startedRunId).toBeNull();
+    expect(mergeHistoryWithLocalStartedRun(historyRuns, null, 'run-new')).toEqual(historyRuns);
+    expect(mergeHistoryWithLocalStartedRun(historyRuns, { id: 'run-other', status: 'preparing' }, 'run-new'))
+      .toEqual([{ id: 'run-other', status: 'preparing' }, ...historyRuns]);
   });
 
   test('builds an immutable workflow-name save draft from the active edit value', () => {

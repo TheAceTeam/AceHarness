@@ -71,8 +71,8 @@ export async function POST(request: Request) {
     const configFile = String(body?.configFile || '').trim();
     const intent = String(body?.intent || '') as WorkflowAdversarialIntent;
     if (!configFile) return jsonOk({ error: '缺少配置文件参数' }, { status: 400 });
-    if (!['disabled', 'on-demand'].includes(intent)) {
-      return jsonOk({ error: '必须选择不开启对抗或按需开启' }, { status: 400 });
+    if (!['disabled', 'enabled', 'on-demand'].includes(intent)) {
+      return jsonOk({ error: '必须选择不开启对抗、开启对抗或智能按需对抗' }, { status: 400 });
     }
     const initialContexts = normalizeInitialContexts(body?.initialContexts);
     const artifact = await createRunReviewPlanArtifact({
