@@ -1,3 +1,4 @@
+import { parseProviderModel } from '@/lib/models/model-config';
 import { parse, stringify } from 'yaml';
 import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
 import type { RuntimeSqliteDatabase } from '../sqlite/database';
@@ -103,27 +104,6 @@ function endpointsOrDefault(input: unknown): string[] {
 
 function slug(input: string): string {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
-}
-
-function parseProviderModel(value: string): { providerModel: string; configOptions: Record<string, unknown> } {
-  const match = value.match(/^(.+?)\[(.*)]$/);
-  if (!match) return { providerModel: value, configOptions: {} };
-
-  const [, providerModel, rawOptions] = match;
-  if (!rawOptions.includes('=')) return { providerModel: value, configOptions: {} };
-  const configOptions: Record<string, unknown> = {};
-  for (const part of rawOptions.split(',').map((item) => item.trim()).filter(Boolean)) {
-    const [rawKey, ...rawValueParts] = part.split('=');
-    const key = rawKey?.trim();
-    const value = rawValueParts.join('=').trim();
-    if (!key) continue;
-    if (value === 'true') configOptions[key] = true;
-    else if (value === 'false') configOptions[key] = false;
-    else if (/^-?\d+(\.\d+)?$/.test(value)) configOptions[key] = Number(value);
-    else configOptions[key] = value;
-  }
-
-  return { providerModel, configOptions };
 }
 
 function normalizeProviderId(endpoint: unknown): string | undefined {

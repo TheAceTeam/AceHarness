@@ -31,7 +31,7 @@ describe('EnvVarsDialog', () => {
     vi.clearAllMocks();
   });
 
-  test('renders one global dialog with CLI tabs and only exposes supported variables', async () => {
+  test('renders CLI tabs and exposes existing custom variables in their own tab', async () => {
     const { container } = render(<EnvVarsDialog scope="user" onClose={vi.fn()} />);
 
     const dialog = await screen.findByRole('dialog');
@@ -50,6 +50,24 @@ describe('EnvVarsDialog', () => {
     expect(screen.queryByDisplayValue('ANTHROPIC_AUTH_TOKEN')).toBeNull();
     expect(screen.getByRole('tab', { name: 'OpenCode' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: '其他 CLI' })).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: '自定义' }));
+    expect(screen.getByDisplayValue('LEGACY_INTERNAL_FLAG')).toBeEnabled();
+  });
+
+  test.each(['system', 'user'] as const)('adds and saves a case-sensitive custom variable for %s scope', async (scope) => {
+    const user = userEvent.setup();
+    render(<EnvVarsEditor scope={scope} inline />);
+    await screen.findByRole('tab', { name: 'Claude' });
+    await user.click(screen.getByRole('button', { name: '新增变量' }));
+    const keyInput = screen.getAllByPlaceholderText('例如：my_key').at(-1)!;
+    await user.type(keyInput, 'gitcode_token');
+    expect(keyInput).toHaveFocus();
+    await user.type(screen.getAllByPlaceholderText('输入变量值').at(-1)!, 'test-value');
+    await user.click(screen.getByRole('button', { name: '保存配置' }));
+    await waitFor(() => expect(envApiMock.save).toHaveBeenCalledWith(scope, expect.arrayContaining([
+      { key: 'gitcode_token', value: 'test-value', enabled: true },
+      { key: 'LEGACY_INTERNAL_FLAG', value: 'hidden', enabled: true },
+    ])));
   });
 
   test('saves edited values through the selected scope and closes after success', async () => {

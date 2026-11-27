@@ -21,10 +21,19 @@ describe('model import merge', () => {
         value: 'gpt-5.5',
         label: 'GPT 5.5',
         costMultiplier: 1,
-        endpoints: [],
+        endpoints: ['openai'],
         engines: ['codex'],
       },
     ]);
+  });
+
+  test('preserves advertised bracket options and uses an OpenAI route', () => {
+    const models = mergeDetectedModelsForImport({ models: [], engine: 'codex', detectedModels: [
+      { modelId: 'gpt-6.2-sol[future-effort]', label: '6.2 Sol [future-effort]' },
+    ] });
+    expect(models[0]).toMatchObject({
+      value: 'gpt-6.2-sol[future-effort]', label: '6.2 Sol [future-effort]', endpoints: ['openai'],
+    });
   });
 
   test('merges same model id without creating duplicate rows', () => {

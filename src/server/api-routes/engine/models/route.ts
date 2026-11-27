@@ -105,6 +105,20 @@ function extractModelsFromStatus(status: unknown): DiscoveredModel[] {
       addModel(target, seen, item.value ?? item.modelId ?? item.id ?? item.key, item.name ?? item.label ?? item.title ?? item.description);
     }
   }
+  const effortOption = configOptions.find((option) => option && typeof option === 'object'
+    && (option as Record<string, unknown>).id === 'reasoning_effort') as Record<string, unknown> | undefined;
+  const reasoningEfforts = valuesFromUnknown(effortOption?.options)
+    .map((choice) => typeof choice === 'string' ? choice : stringValue((choice as Record<string, unknown>)?.value))
+    .filter(Boolean);
+  const modelOption = configOptions.find((option) => option && typeof option === 'object'
+    && (option as Record<string, unknown>).id === 'model') as Record<string, unknown> | undefined;
+  const currentModelId = stringValue(modelOption?.currentValue ?? models?.currentModelId);
+  const currentModel = target.find(model => model.modelId === currentModelId);
+  // ACP options describe the selected model. Do not apply its effort choices
+  // to every advertised model: older models can support a smaller set.
+  if (currentModel) for (const effort of reasoningEfforts) {
+    addModel(target, seen, `${currentModel.modelId}[effort=${effort}]`, `${currentModel.name} [effort=${effort}]`);
+  }
   return target;
 }
 
@@ -177,7 +191,15 @@ async function discoverViaAcpx(agentId: string): Promise<DiscoveredModel[]> {
       try {
         if (advertisedModels) return advertisedModels;
         const status = await runtime.getStatus?.({ handle });
-        return uniqueModels(extractModelsFromStatus(status));
+        const models = extractModelsFromStatus(status);
+        if (agentId === 'codex' && runtime.setModel) {
+          const baseModels = models.filter(model => !model.modelId.includes('['));
+          for (const model of baseModels) {
+            await runtime.setModel({ handle, model: model.modelId });
+            models.push(...extractModelsFromStatus(await runtime.getStatus?.({ handle })));
+          }
+        }
+        return uniqueModels(models);
       } finally {
         await runtime.close({
           handle,

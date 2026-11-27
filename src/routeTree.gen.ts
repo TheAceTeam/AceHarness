@@ -51,8 +51,6 @@ import { Route as ApiConfigsRouteImport } from './routes/api.configs'
 import { Route as ApiChatRouteImport } from './routes/api.chat'
 import { Route as ApiAgentsRouteImport } from './routes/api.agents'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
-import { Route as AccountSystemSettingsRouteImport } from './routes/account.system-settings'
-import { Route as AccountChannelsRouteImport } from './routes/account.channels'
 import { Route as ApiWorkspaceUploadRouteImport } from './routes/api.workspace.upload'
 import { Route as ApiWorkspaceTreeRouteImport } from './routes/api.workspace.tree'
 import { Route as ApiWorkspaceRemoteCredentialsRouteImport } from './routes/api.workspace.remote-credentials'
@@ -442,16 +440,6 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
-} as any)
-const AccountSystemSettingsRoute = AccountSystemSettingsRouteImport.update({
-  id: '/system-settings',
-  path: '/system-settings',
-  getParentRoute: () => AccountRoute,
-} as any)
-const AccountChannelsRoute = AccountChannelsRouteImport.update({
-  id: '/channels',
-  path: '/channels',
-  getParentRoute: () => AccountRoute,
 } as any)
 const ApiWorkspaceUploadRoute = ApiWorkspaceUploadRouteImport.update({
   id: '/api/workspace/upload',
@@ -1394,7 +1382,7 @@ const ApiCollaborationRoomsRoomIdParticipantsAgentNameMemoryRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/account': typeof AccountRouteWithChildren
+  '/account': typeof AccountRoute
   '/agents': typeof AgentsRoute
   '/api-docs': typeof ApiDocsRoute
   '/dashboard': typeof DashboardRoute
@@ -1412,8 +1400,6 @@ export interface FileRoutesByFullPath {
   '/skills': typeof SkillsRoute
   '/users': typeof UsersRoute
   '/workflows': typeof WorkflowsRoute
-  '/account/channels': typeof AccountChannelsRoute
-  '/account/system-settings': typeof AccountSystemSettingsRoute
   '/api/$': typeof ApiSplatRoute
   '/api/agents': typeof ApiAgentsRouteWithChildren
   '/api/chat': typeof ApiChatRouteWithChildren
@@ -1618,7 +1604,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/account': typeof AccountRouteWithChildren
+  '/account': typeof AccountRoute
   '/agents': typeof AgentsRoute
   '/api-docs': typeof ApiDocsRoute
   '/dashboard': typeof DashboardRoute
@@ -1636,8 +1622,6 @@ export interface FileRoutesByTo {
   '/skills': typeof SkillsRoute
   '/users': typeof UsersRoute
   '/workflows': typeof WorkflowsRoute
-  '/account/channels': typeof AccountChannelsRoute
-  '/account/system-settings': typeof AccountSystemSettingsRoute
   '/api/$': typeof ApiSplatRoute
   '/api/agents': typeof ApiAgentsRouteWithChildren
   '/api/chat': typeof ApiChatRouteWithChildren
@@ -1843,7 +1827,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/account': typeof AccountRouteWithChildren
+  '/account': typeof AccountRoute
   '/agents': typeof AgentsRoute
   '/api-docs': typeof ApiDocsRoute
   '/dashboard': typeof DashboardRoute
@@ -1861,8 +1845,6 @@ export interface FileRoutesById {
   '/skills': typeof SkillsRoute
   '/users': typeof UsersRoute
   '/workflows': typeof WorkflowsRoute
-  '/account/channels': typeof AccountChannelsRoute
-  '/account/system-settings': typeof AccountSystemSettingsRoute
   '/api/$': typeof ApiSplatRoute
   '/api/agents': typeof ApiAgentsRouteWithChildren
   '/api/chat': typeof ApiChatRouteWithChildren
@@ -2087,8 +2069,6 @@ export interface FileRouteTypes {
     | '/skills'
     | '/users'
     | '/workflows'
-    | '/account/channels'
-    | '/account/system-settings'
     | '/api/$'
     | '/api/agents'
     | '/api/chat'
@@ -2311,8 +2291,6 @@ export interface FileRouteTypes {
     | '/skills'
     | '/users'
     | '/workflows'
-    | '/account/channels'
-    | '/account/system-settings'
     | '/api/$'
     | '/api/agents'
     | '/api/chat'
@@ -2535,8 +2513,6 @@ export interface FileRouteTypes {
     | '/skills'
     | '/users'
     | '/workflows'
-    | '/account/channels'
-    | '/account/system-settings'
     | '/api/$'
     | '/api/agents'
     | '/api/chat'
@@ -2742,7 +2718,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AccountRoute: typeof AccountRouteWithChildren
+  AccountRoute: typeof AccountRoute
   AgentsRoute: typeof AgentsRoute
   ApiDocsRoute: typeof ApiDocsRoute
   DashboardRoute: typeof DashboardRoute
@@ -3172,20 +3148,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/$'
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/account/system-settings': {
-      id: '/account/system-settings'
-      path: '/system-settings'
-      fullPath: '/account/system-settings'
-      preLoaderRoute: typeof AccountSystemSettingsRouteImport
-      parentRoute: typeof AccountRoute
-    }
-    '/account/channels': {
-      id: '/account/channels'
-      path: '/channels'
-      fullPath: '/account/channels'
-      preLoaderRoute: typeof AccountChannelsRouteImport
-      parentRoute: typeof AccountRoute
     }
     '/api/workspace/upload': {
       id: '/api/workspace/upload'
@@ -4436,18 +4398,6 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface AccountRouteChildren {
-  AccountChannelsRoute: typeof AccountChannelsRoute
-  AccountSystemSettingsRoute: typeof AccountSystemSettingsRoute
-}
-
-const AccountRouteChildren: AccountRouteChildren = {
-  AccountChannelsRoute: AccountChannelsRoute,
-  AccountSystemSettingsRoute: AccountSystemSettingsRoute,
-}
-
-const AccountRouteWithChildren =
-  AccountRoute._addFileChildren(AccountRouteChildren)
 
 interface KnowledgeRouteChildren {
   KnowledgeLibraryRoute: typeof KnowledgeLibraryRoute
@@ -5075,7 +5025,7 @@ const ApiMemoryV2WorkflowsRunIdHandoffsRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AccountRoute: AccountRouteWithChildren,
+  AccountRoute: AccountRoute,
   AgentsRoute: AgentsRoute,
   ApiDocsRoute: ApiDocsRoute,
   DashboardRoute: DashboardRoute,

@@ -1772,13 +1772,42 @@ describe('state machine live feedback', () => {
     expect(context).toContain('Implement the complete user goal and verify it.');
     expect(context).toContain('请使用 aceharness-tasklist。');
     expect(context).toMatch(/aceharness-tasklist[\\\\/]SKILL\.md/);
-    expect(context).toContain('约十条边界清晰、依赖明确、可独立验证的任务');
+    expect(context).toContain('按实际工作量拆分边界清晰、依赖明确、可独立验证的任务');
+    expect(context).toContain('相同条件下重复操作没有新信息时');
+    expect(context).toContain('阻塞时如实列出未完成项与恢复条件，不标为成功');
     expect(context).toContain('当前 Agent 完成任务清单中的全部实施、验证与记录');
     expect(context).toContain('持续推进全部任务');
     expect(context).toContain('/tmp/runs/run-prompt/tasklist');
     expect(context).not.toContain('# 最终裁决格式');
     expect(context).toContain('# 步骤结束协议');
     expect(context).toContain('<step-conclusion>');
+  });
+
+  test('applies bounded acceptance to custom state agents and verdict repair', async () => {
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeLightweightConfig();
+    delete config.workflow.profile;
+    delete config.workflow.lightweight;
+    const state = config.workflow.states[0];
+    state.isFinal = false;
+    state.transitions = [
+      { to: 'Done', condition: { verdict: 'pass' } },
+      { to: 'Execute', condition: { verdict: 'conditional_pass' } },
+      { to: 'Blocked', condition: { verdict: 'fail' } },
+    ];
+    const step = state.steps[0];
+    step.agent = 'custom-reviewer';
+    const context = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager, step, state, config, 'Fix the issue', undefined, undefined, null,
+    );
+    expect(context).toContain('全局目标用于理解背景');
+    expect(context).toContain('remaining_issues 仅统计有具体依据的当前阶段阻断项');
+    expect(context).toContain('不得为了到达某个状态而改变事实裁决');
+    const repair = (manager as any).buildMissingFinalVerdictPrompt('', 'Tests passed', state, step);
+    expect(repair).toContain('不要重新执行任务');
+    expect(repair).toContain('fail: 进入 "Blocked"');
+    expect(repair).toContain('不要为了结束循环而把未完成工作判为 pass');
   });
 
   test('lightweight step confirms completion and repairs its conclusion in the original session', async () => {
@@ -1921,7 +1950,7 @@ describe('state machine live feedback', () => {
     expect(context).toContain('不能把当前步骤的核心交付留给后续步骤');
     expect(context).not.toContain('当前状态 verdict 转移规则');
     expect(context).toContain('它们是路由标签，真实流向完全由当前状态 transitions 决定');
-    expect(context).toContain('conditional_pass 可能自迭代，也可能前进');
+    expect(context).toContain('根据当前阶段的实际验收结果选择 verdict');
     expect(context).toContain('状态: 设计');
     expect(context).toContain('状态: 实施');
     expect(context).toContain('步骤: impl-step [待执行]');

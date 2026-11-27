@@ -700,7 +700,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
           </div>
           <div className="min-w-0">
             <div className="truncate font-medium">{model.name}</div>
-            <div className="truncate text-xs text-muted-foreground">{model.id}</div>
+            <div className="truncate text-xs text-muted-foreground">{model.modelId || model.id}</div>
           </div>
         </div>
       ),

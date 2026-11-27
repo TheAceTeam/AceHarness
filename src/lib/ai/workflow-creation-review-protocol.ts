@@ -208,6 +208,9 @@ const STATE_MACHINE_RULES = [
 ];
 
 const STEP_RULES = [
+  '每个步骤明确当前目标、必要交付物和有限的验收条件；requirements 只描述业务目标，不混入输入控件、运行时机制或对抗编排要求。',
+  '验收满足即通过，可选建议不阻断；重试必须有具体修正动作和预期新证据。外部阻塞或重复无进展应使用人工介入或异常终止路径，不把所有 fail 都无条件指回自身。',
+  '测试范围按具体影响确定，不以“所有证据齐全”“覆盖全部情况”等无边界要求作为通过标准；保留必要验证与真实结果要求。',
   'standard：生成 1-N 个执行/验证步骤，不生成 attacker 或独立 judge；最后一个串行步骤必须在同一次输出中给出 pass|conditional_pass|fail verdict。',
   'adversarial：严格按一个或多个 defender → 一个串行 attacker → 一个串行 judge 排列，judge 必须是最后执行段。',
   'attacker 的 task/constraints 必须主动寻找反例、边界、遗漏和错误假设，不得仅复述 defender。',

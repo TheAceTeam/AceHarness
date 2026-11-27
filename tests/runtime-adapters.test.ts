@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, test, vi } from 'vitest';
 import { createRuntimeAdapterRegistry, resolveRuntimeForAgent } from '@/lib/runtime-agent/adapters/adapter-registry';
+import { getBuiltinAgentDefinitions } from '@/lib/runtime-agent/agent-registry';
 import {
   AcpxAdapter,
   applyAcpxAgentProcessEnvDefaults,
@@ -974,7 +975,7 @@ describe('runtime adapters', () => {
     }));
   });
 
-  test('acpx runtime client maps legacy Codex bracket models to the ACP model and effort option', async () => {
+  test.each(['low', 'max', 'ultra', 'future-effort'])('acpx runtime client forwards advertised Codex effort %s without an enum', async (effort) => {
     const ensureSession = vi.fn(async () => ({
       sessionKey: 'runtime-session-codex',
       backend: 'acpx',
@@ -1000,7 +1001,7 @@ describe('runtime adapters', () => {
       ...session.modelRoute,
       modelRouteId: 'codex__gpt-5-5-low__openai',
       providerModel: 'gpt-5.5',
-      configOptions: { low: '' },
+      configOptions: { [effort]: '' },
     };
     session.profileSnapshot = {
       ...session.profileSnapshot,
@@ -1019,8 +1020,25 @@ describe('runtime adapters', () => {
     }));
     expect(runtime.setConfigOption).toHaveBeenCalledWith(expect.objectContaining({
       key: 'reasoning_effort',
-      value: 'low',
+      value: effort,
     }));
+  });
+
+  test.each(getBuiltinAgentDefinitions().filter(agent => agent.runtime === 'acpx').map(agent => agent.id))('forwards generic bracket configuration to %s ACP controls', async (agentId) => {
+    const ensureSession = vi.fn(async () => ({ sessionKey: 'generic-config', backend: 'acpx', runtimeSessionName: 'generic-config' }));
+    const runtime = {
+      ensureSession,
+      setConfigOption: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    } as unknown as AcpRuntime;
+    const client = createAcpxRuntimeClient({ runtime, loadConfiguredEnv: async () => ({}) });
+    const session = createSessionInput('generic-config', agentId, 'acpx');
+    session.modelRoute = { ...session.modelRoute, providerModel: 'test-model[effort=future-effort,fast-mode=on]', configOptions: {} };
+    await client.ensureSession?.({ session, command: resolveAcpxCommand(agentId) });
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({ sessionOptions: { model: 'test-model' } }));
+    expect(runtime.setConfigOption).toHaveBeenCalledWith(expect.objectContaining({ key: agentId === 'codex' ? 'reasoning_effort' : 'effort', value: 'future-effort' }));
+    expect(runtime.setConfigOption).toHaveBeenCalledWith(expect.objectContaining({ key: 'fast-mode', value: 'on' }));
   });
 
   test('acpx runtime client exposes ACP session initialization diagnostics', async () => {

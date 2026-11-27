@@ -150,6 +150,7 @@ describe('models API route', () => {
               {
                 id: 'model',
                 type: 'select',
+                currentValue: 'gpt-5.6-sol',
                 options: [
                   { value: 'gpt-5.6-sol', label: 'GPT 5.6 Sol' },
                   { value: 'gpt-5.6-terra', label: 'GPT 5.6 Terra' },
@@ -159,7 +160,7 @@ describe('models API route', () => {
                 id: 'reasoning_effort',
                 type: 'select',
                 label: 'Reasoning effort for model',
-                options: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+                options: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'future-effort'],
               },
             ],
           })),
@@ -179,7 +180,9 @@ describe('models API route', () => {
         'gpt-5.4[medium]',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
+        ...['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'future-effort'].map(effort => `gpt-5.6-sol[effort=${effort}]`),
       ]);
+      expect(body.models.some(model => model.modelId.startsWith('gpt-5.6-terra['))).toBe(false);
     });
   });
 

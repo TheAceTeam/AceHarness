@@ -200,7 +200,7 @@ export function AccountContent({
       dockWorkspace.openTab({ id: 'channels', title: '微信接入', kind: 'channels' });
       return;
     }
-    router.push('/account/channels');
+    router.push('/dashboard?route=%2Faccount%2Fchannels');
   }, [dockWorkspace, router]);
 
   const openSystemSettings = useCallback(() => {
@@ -208,7 +208,7 @@ export function AccountContent({
       dockWorkspace.openTab({ id: 'settings', title: '系统设置', kind: 'settings' });
       return;
     }
-    router.push('/account/system-settings');
+    router.push('/dashboard?panel=settings');
   }, [dockWorkspace, router]);
 
   const profileDirty = Boolean(user) && (
