@@ -12,6 +12,9 @@ import {
 } from './model-routes';
 
 type PreRuntimeYamlModel = {
+  baseName?: unknown;
+  effort?: unknown;
+  configOptions?: Record<string, unknown>;
   value?: unknown;
   label?: unknown;
   costMultiplier?: unknown;
@@ -201,7 +204,10 @@ function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: str
     const modelId = asString(model.value);
     if (!modelId) continue;
 
-    const { providerModel, configOptions } = parseProviderModel(modelId);
+    const parsedModel = parseProviderModel(modelId);
+    const providerModel = parsedModel.providerModel;
+    const configOptions = { ...parsedModel.configOptions, ...model.configOptions };
+    if (asString(model.effort)) configOptions.effort = asString(model.effort);
     catalog.push({
       id: modelId,
       displayName: asString(model.label) ?? modelId,
@@ -209,6 +215,9 @@ function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: str
       metadata: {
         seedSource: 'preRuntime-models-yaml',
         costMultiplier: asNumber(model.costMultiplier),
+        baseModel: providerModel,
+        baseName: asString(model.baseName) ?? asString(model.label) ?? providerModel,
+        effort: asString(configOptions.effort ?? configOptions.reasoning_effort),
       },
       now,
     });

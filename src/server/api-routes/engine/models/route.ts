@@ -117,7 +117,7 @@ function extractModelsFromStatus(status: unknown): DiscoveredModel[] {
   // ACP options describe the selected model. Do not apply its effort choices
   // to every advertised model: older models can support a smaller set.
   if (currentModel) for (const effort of reasoningEfforts) {
-    addModel(target, seen, `${currentModel.modelId}[effort=${effort}]`, `${currentModel.name} [effort=${effort}]`);
+    addModel(target, seen, `${currentModel.modelId}[effort=${effort}]`, currentModel.name);
   }
   return target;
 }

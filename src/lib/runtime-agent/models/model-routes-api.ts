@@ -88,6 +88,10 @@ function toRouteDtos(db: RuntimeSqliteDatabase): RuntimeModelRouteDto[] {
     return {
       value: route.modelId,
       label: model?.displayName ?? route.modelId,
+      baseModel: String(model?.metadata?.baseModel ?? route.providerModel),
+      baseName: String(model?.metadata?.baseName ?? model?.displayName ?? route.modelId),
+      effort: typeof model?.metadata?.effort === 'string' ? model.metadata.effort : undefined,
+      configOptions: route.configOptions,
       costMultiplier: costMultiplierFromMetadata(model?.metadata),
       endpoints: route.providerId ? [route.providerId] : [],
       engines: [route.agentId],
@@ -125,6 +129,10 @@ function toModelDtos(db: RuntimeSqliteDatabase): RuntimeModelRouteDto[] {
       return {
         value: model.id,
         label: model.displayName,
+        baseModel: String(model.metadata?.baseModel ?? defaultRoute?.providerModel ?? model.id),
+        baseName: String(model.metadata?.baseName ?? model.displayName),
+        effort: typeof model.metadata?.effort === 'string' ? model.metadata.effort : undefined,
+        configOptions: defaultRoute?.configOptions ?? {},
         costMultiplier: costMultiplierFromMetadata(model.metadata),
         endpoints: Array.from(new Set(modelRoutes.map((route) => route.providerId).filter((endpoint): endpoint is string => Boolean(endpoint)))),
         engines: Array.from(new Set(modelRoutes.map((route) => route.agentId).filter(Boolean))),

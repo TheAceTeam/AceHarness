@@ -266,6 +266,7 @@ function SortableModelCard({
           </div>
           <div className="min-w-0">
             <h3 className="line-clamp-2 text-[15px] font-semibold leading-6">{model.name}</h3>
+            <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{model.modelId || model.id}</div>
             <div className="mt-1">
               <ModelStatusPill status={model.status} />
             </div>
@@ -1173,7 +1174,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
                 <FormField
                   label="模型 ID"
                   required
-                  control={<Input value={editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, id: e.target.value })} />}
+                  control={<Input value={editingModel.modelId || editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, modelId: e.target.value })} />}
                 />
               </div>
             ),

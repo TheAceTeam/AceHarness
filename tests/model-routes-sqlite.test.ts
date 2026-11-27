@@ -177,6 +177,7 @@ models:
     expect(parsed.catalog[0]).toMatchObject({
       id: 'gpt-5.3-codex[reasoning=medium,fast=false]',
       displayName: 'GPT 5.3 Codex',
+      metadata: { baseModel: 'gpt-5.3-codex', baseName: 'GPT 5.3 Codex' },
     });
     expect(parsed.routes.map((route) => route.agentId).sort()).toEqual(['claude', 'codex']);
     expect(parsed.routes[0]).toMatchObject({

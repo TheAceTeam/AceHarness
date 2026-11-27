@@ -183,6 +183,7 @@ describe('models API route', () => {
         ...['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'future-effort'].map(effort => `gpt-5.6-sol[effort=${effort}]`),
       ]);
       expect(body.models.some(model => model.modelId.startsWith('gpt-5.6-terra['))).toBe(false);
+      expect(body.models.find(model => model.modelId === 'gpt-5.6-sol[effort=future-effort]').name).toBe('GPT 5.6 Sol');
     });
   });
 
