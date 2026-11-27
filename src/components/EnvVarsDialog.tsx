@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { EnvironmentVariables } from '@/components/ai-elements/environment-variables';
+import { EnvironmentVariables } from '@/components/ui/environment-variables';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { envApi } from '@/lib/core/api';
 import {
@@ -24,6 +24,7 @@ interface EnvVar {
   key: string;
   value: string;
   enabled: boolean;
+  secret?: boolean;
 }
 
 interface EnvVarError {
@@ -100,6 +101,11 @@ export function EnvVarsEditor({
         const nextVars = data.vars || [];
         setVars(nextVars);
         setErrors(nextVars.map(() => ({})));
+        const configuredVars = nextVars.filter((item) => item.key.trim());
+        const configuredGroup = configuredVars.some((item) => !getCliEnvironmentGroupId(item.key))
+          ? 'custom'
+          : configuredVars[0] && getCliEnvironmentGroupId(configuredVars[0].key);
+        if (configuredGroup) setActiveGroup(configuredGroup);
       } catch (error: any) {
         if (!cancelled) setSubmitError(error?.message || '加载环境变量失败');
       } finally {
@@ -231,17 +237,19 @@ export function EnvVarsEditor({
                 </div>
 
                 <EnvironmentVariables
+                  title="配置列表"
+                  source={activeGroupDefinition.label}
                   onAdd={addCustom}
                   disabled={saving}
-                  items={activeRows.map(({ item, index }) => {
+                  variables={activeRows.map(({ item, index }) => {
                     const definition = getCliEnvironmentVariable(item.key);
                     return {
                       id: String(index),
                       key: item.key,
                       value: item.value,
                       enabled: item.enabled,
+                      secret: item.secret ?? Boolean(definition && 'secret' in definition && definition.secret),
                       description: definition?.description,
-                      maskValue: Boolean(definition && 'secret' in definition && definition.secret),
                       disableKeyEdit: Boolean(definition),
                       keyError: errors[index]?.key,
                     };
@@ -251,11 +259,16 @@ export function EnvVarsEditor({
                     if (actualIndex === undefined) return;
                     updateVar(actualIndex, patch);
                   }}
+                  onSecretModeChange={(rowIndex, secret) => {
+                    const actualIndex = activeRows[rowIndex]?.index;
+                    if (actualIndex === undefined) return;
+                    updateVar(actualIndex, { secret });
+                  }}
                   onRemove={(rowIndex) => {
                     const actualIndex = activeRows[rowIndex]?.index;
                     if (actualIndex !== undefined) removeVar(actualIndex);
                   }}
-                  emptyMessage={activeGroup === 'custom' ? '点击新增变量，填写变量名和值。' : '选择上方变量名，或新增自定义变量。'}
+                  emptyMessage={activeGroup === 'custom' ? '暂无自定义变量，点击新增开始配置。' : '选择上方变量名，或新增自定义变量。'}
                 />
               </TabsContent>
             </Tabs>

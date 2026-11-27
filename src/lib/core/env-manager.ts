@@ -17,6 +17,7 @@ export interface EnvVar {
   key: string;
   value: string;
   enabled: boolean;
+  secret?: boolean;
 }
 
 function normalizeKey(key: unknown): string {
