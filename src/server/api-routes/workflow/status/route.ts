@@ -203,6 +203,33 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
   };
 }
 
+/**
+ * Guard against dangling in-memory manager status. A manager can retain a runId
+ * whose persisted record was deleted out from under it (e.g. the run directory
+ * was removed while the process kept the last status in memory). Surfacing such
+ * a runId makes the workbench rewrite the URL between `?run=<ghost>` and `?run=`
+ * in a tight loop — visible as constant flickering. Validate the runId against
+ * persistence and fall back to idle when it no longer exists.
+ */
+async function getValidatedManagerStatus(manager: { getStatus(): any }, configFile: string) {
+  const status = manager.getStatus();
+  const runId = typeof status?.runId === 'string' && status.runId ? status.runId : '';
+  if (!runId) return status;
+  try {
+    const persisted = await loadRunState(runId, { hydrateLargeOutputs: false });
+    if (persisted && persisted.configFile === configFile) return status;
+  } catch {
+    return status; // never degrade on transient IO failure
+  }
+  return {
+    ...status,
+    status: 'idle',
+    statusReason: '运行记录已被移除',
+    runId: '',
+    currentConfigFile: configFile,
+  };
+}
+
 async function resolveWorkflowStatusPayload(configFile?: string | null, requestedRunId?: string | null) {
   if (configFile) {
     const runningManager = workflowRegistry.getRunningManager(configFile);
@@ -243,16 +270,20 @@ async function resolveWorkflowStatusPayload(configFile?: string | null, requeste
       // A scoped History request must never fall back to another run's in-memory
       // manager merely because its persisted record is unavailable. That would
       // let an explicit runId view render unrelated live status and events.
+      // Ghost-runId guard: echoing the deleted runId back makes the workbench
+      // write ?run=<ghost> into the URL and then strip it in a loop (flicker).
+      // Keep the scoped "not found" semantics but return no runId so the
+      // frontend stops tracking the deleted run.
       return withCreationSession({
         status: 'idle',
         statusReason: '未找到指定运行记录',
-        runId: requestedRunId,
+        runId: '',
         currentConfigFile: configFile,
       }, configFile);
     }
 
     const manager = await workflowRegistry.getManager(configFile);
-    return withCreationSession(manager.getStatus(), configFile);
+    return withCreationSession(await getValidatedManagerStatus(manager, configFile), configFile);
   }
 
   const running = workflowRegistry.getRunningManagers();
@@ -293,16 +324,18 @@ async function resolveWorkflowLiveStatusPayload(configFile?: string | null, requ
       // A scoped History request must never fall back to another run's in-memory
       // manager merely because its persisted record is unavailable. That would
       // let an explicit runId view render unrelated live status and events.
+      // Ghost-runId guard (same as above): never echo back a runId whose run
+      // no longer exists — the workbench would loop rewriting the URL.
       return compactWorkflowStatusForLive({
         status: 'idle',
         statusReason: '未找到指定运行记录',
-        runId: requestedRunId,
+        runId: '',
         currentConfigFile: configFile,
       }, configFile);
     }
 
     const manager = await workflowRegistry.getManager(configFile);
-    return compactWorkflowStatusForLive(manager.getStatus(), configFile);
+    return compactWorkflowStatusForLive(await getValidatedManagerStatus(manager, configFile), configFile);
   }
 
   const running = workflowRegistry.getRunningManagers();
