@@ -5,6 +5,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ModelEffortSelect } from '@/components/ModelEffortSelect';
 afterEach(cleanup);
+test('keeps the effort entry visible when model metadata is missing', () => {
+  render(<ModelEffortSelect value="" onChange={vi.fn()} />);
+  expect(screen.getByRole('combobox', { name: 'Effort' })).toBeDisabled();
+  expect(screen.getByRole('option')).toHaveTextContent('Effort：未检测');
+});
 test('offers advertised efforts and retains an older selection without inventing choices', async () => {
   const onChange = vi.fn();
   render(<ModelEffortSelect value="legacy" efforts={['low', 'future']} onChange={onChange} />);

@@ -269,6 +269,7 @@ function SortableModelCard({
           <div className="min-w-0">
             <h3 className="line-clamp-2 text-[15px] font-semibold leading-6">{model.name}</h3>
             <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{model.modelId || model.id}</div>
+            <div className="mt-1 text-xs text-muted-foreground">Effort：{model.efforts?.length ? model.efforts.join(' / ') : '未检测'}</div>
             <div className="mt-1">
               <ModelStatusPill status={model.status} />
             </div>
@@ -708,6 +709,11 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
           </div>
         </div>
       ),
+    },
+    {
+      id: 'efforts',
+      header: '支持的 Effort',
+      render: (model) => <span className="text-xs text-muted-foreground">{model.efforts?.length ? model.efforts.join(' / ') : '未检测'}</span>,
     },
     {
       id: 'status',
@@ -1178,6 +1184,11 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
                   label="模型 ID"
                   required
                   control={<Input value={editingModel.modelId || editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, modelId: e.target.value })} />}
+                />
+                <FormField
+                  label="支持的 Efforts"
+                  description="用逗号分隔，例如 low, medium, high；留空表示未配置。"
+                  control={<Input value={(editingModel.efforts || []).join(', ')} onChange={(e) => setEditingModel({ ...editingModel, efforts: e.target.value.split(',').map(value => value.trimStart()) })} onBlur={() => setEditingModel({ ...editingModel, efforts: [...new Set((editingModel.efforts || []).map(value => value.trim()).filter(Boolean))] })} placeholder="low, medium, high" />}
                 />
               </div>
             ),

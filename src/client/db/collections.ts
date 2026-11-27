@@ -219,6 +219,7 @@ export type LocalSkillRow = LocalSkill & {
 };
 
 export type ModelCatalogInput = {
+  efforts?: string[];
   id?: string;
   value?: string;
   name?: string;
@@ -233,6 +234,7 @@ export type ModelCatalogInput = {
 };
 
 export type ModelCatalogRow = {
+  efforts?: string[];
   id: string;
   name: string;
   endpoints: Array<string>;
@@ -1099,6 +1101,7 @@ export function syncModelCatalogToDb(models: Array<ModelCatalogInput>) {
     upsertModelCatalogRow({
       id,
       name: String(model.name || model.label || id),
+      efforts: Array.isArray(model.efforts) ? [...model.efforts] : [],
       endpoints: Array.isArray(model.endpoints) && model.endpoints.length > 0 ? model.endpoints : [...DEFAULT_MODEL_ENDPOINTS],
       engines: Array.isArray(model.engines) ? model.engines : [],
       status: model.status === 'inactive' ? 'inactive' : 'active',
