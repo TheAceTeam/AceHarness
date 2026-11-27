@@ -1,4 +1,5 @@
 import type { RuntimeAdapterKind, RuntimeCapabilities } from '../contracts';
+import { parseProviderModel } from '@/lib/models/model-config';
 import type { RuntimeSqliteDatabase } from '../sqlite/database';
 import { withImmediateTransaction } from '../sqlite/database';
 import { ensureModelRouteSchema, type ModelCatalogEntry, type ModelProviderEntry, type ModelRouteEntry } from './model-route-schema';
@@ -301,7 +302,20 @@ export function resolveModelRoute(db: RuntimeSqliteDatabase, input: ResolveModel
     LIMIT 1
   `).get(input.agentId, input.modelId);
 
-  if (!row) throw new Error(`No active model route for agentId=${input.agentId} modelId=${input.modelId}`);
+  if (!row) {
+    const parsed = parseProviderModel(input.modelId);
+    if (parsed.providerModel !== input.modelId) {
+      const base = resolveModelRoute(db, { agentId: input.agentId, modelId: parsed.providerModel });
+      const id = `${base.modelRouteId}[${Object.entries(parsed.configOptions).map(([key, value]) => `${key}=${value}`).join(',')}]`;
+      upsertModelRoute(db, {
+        id, modelId: base.modelId, agentId: base.agentId, runtime: base.runtime,
+        providerId: base.providerId || undefined, providerModel: base.providerModel,
+        configOptions: { ...base.configOptions, ...parsed.configOptions }, isDefault: false,
+      });
+      return resolveModelRoute(db, { modelRouteId: id });
+    }
+    throw new Error(`No active model route for agentId=${input.agentId} modelId=${input.modelId}`);
+  }
   return resolvedRouteFromRow(row);
 }
 

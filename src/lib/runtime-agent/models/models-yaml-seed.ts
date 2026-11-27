@@ -14,6 +14,7 @@ import {
 type PreRuntimeYamlModel = {
   baseName?: unknown;
   effort?: unknown;
+  efforts?: unknown;
   configOptions?: Record<string, unknown>;
   value?: unknown;
   label?: unknown;
@@ -218,6 +219,7 @@ function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: str
         baseModel: providerModel,
         baseName: asString(model.baseName) ?? asString(model.label) ?? providerModel,
         effort: asString(configOptions.effort ?? configOptions.reasoning_effort),
+        efforts: asArray(model.efforts).map(asString).filter(Boolean),
       },
       now,
     });

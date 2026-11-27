@@ -8,6 +8,8 @@ import { useToast } from '@/components/ui/toast';
 import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
 import { useEngineConfigQuery, useModelsQuery } from '@/client/query/engines';
 import { queryKeys } from '@/client/query/query-keys';
+import { groupModelEfforts, splitModelEffort, withModelEffort } from '@/lib/models/model-selection';
+import { ModelEffortSelect } from './ModelEffortSelect';
 
 interface ModelSelectProps {
   value: string;
@@ -35,7 +37,10 @@ export function ModelSelect({
   const queryClient = useQueryClient();
   const modelsQuery = useModelsQuery();
   const engineConfigQuery = useEngineConfigQuery({ enabled: allowGlobal });
-  const allModels = modelsQuery.data?.models || [];
+  const allModels = groupModelEfforts(modelsQuery.data?.models || []);
+  const selection = splitModelEffort(value);
+  const baseValue = withModelEffort(value, '');
+  const selectedBaseModel = allModels.find(model => model.value === baseValue);
   const loading = modelsQuery.isLoading || (allowGlobal && engineConfigQuery.isLoading);
   const globalDefaultModel = typeof engineConfigQuery.data?.defaultModel === 'string' ? engineConfigQuery.data.defaultModel : '';
   const { toast } = useToast();
@@ -113,8 +118,9 @@ export function ModelSelect({
   };
 
   return (
+    <div className="flex min-w-0 items-center gap-2">
     <AiModelSelectorField
-      value={value || (allowGlobal ? '__global__' : emptyOptionLabel ? '__empty__' : '')}
+      value={baseValue || (allowGlobal ? '__global__' : emptyOptionLabel ? '__empty__' : '')}
       onValueChange={handleChange}
       options={options}
       placeholder="选择模型"
@@ -122,5 +128,7 @@ export function ModelSelect({
       disabled={loading}
       className={className}
     />
+    <ModelEffortSelect value={selection.effort} efforts={selectedBaseModel?.efforts} onChange={effort => onChange(withModelEffort(value, effort))} />
+    </div>
   );
 }

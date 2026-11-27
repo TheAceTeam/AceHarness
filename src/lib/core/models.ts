@@ -11,6 +11,7 @@ export interface ModelOption {
   baseModel?: string;
   baseName?: string;
   effort?: string;
+  efforts?: string[];
   configOptions?: Record<string, unknown>;
   costMultiplier: number;
   endpoints: string[];

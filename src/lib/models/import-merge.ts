@@ -6,6 +6,7 @@ export type DetectedModelImportItem = {
   costMultiplier?: number;
   endpoints?: string[];
   selected?: boolean;
+  efforts?: string[];
 };
 
 function uniqueStrings(values: unknown[]): string[] {
@@ -34,6 +35,7 @@ export function mergeDetectedModelsForImport(input: {
         costMultiplier: detected.costMultiplier ?? existing.costMultiplier ?? 1,
         endpoints: uniqueStrings([...(existing.endpoints || []), ...endpoints]),
         engines: uniqueStrings([...(existing.engines || []), engine]),
+        ...(detected.efforts ? { efforts: uniqueStrings(detected.efforts) } : {}),
       });
       continue;
     }
@@ -44,6 +46,7 @@ export function mergeDetectedModelsForImport(input: {
       costMultiplier: detected.costMultiplier ?? 1,
       endpoints: uniqueStrings(endpoints),
       engines: engine ? [engine] : [],
+      ...(detected.efforts ? { efforts: uniqueStrings(detected.efforts) } : {}),
     });
   }
 

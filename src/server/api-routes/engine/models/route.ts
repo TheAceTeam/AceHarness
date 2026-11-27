@@ -7,6 +7,7 @@ import { errorMessage, jsonError, jsonOk, requestUrl } from '@/server/api-route-
 export const dynamic = 'force-dynamic';
 
 type DiscoveredModel = {
+  efforts?: string[];
   modelId: string;
   name: string;
   source?: string;
@@ -31,6 +32,7 @@ function uniqueModels(models: DiscoveredModel[]): DiscoveredModel[] {
       name: current?.name || model.name || modelId,
       source: current?.source || model.source,
       recommended: Boolean(current?.recommended || model.recommended),
+      ...((model.efforts || current?.efforts) ? { efforts: model.efforts || current?.efforts } : {}),
     });
   }
   return Array.from(byId.values());
@@ -116,9 +118,7 @@ function extractModelsFromStatus(status: unknown): DiscoveredModel[] {
   const currentModel = target.find(model => model.modelId === currentModelId);
   // ACP options describe the selected model. Do not apply its effort choices
   // to every advertised model: older models can support a smaller set.
-  if (currentModel) for (const effort of reasoningEfforts) {
-    addModel(target, seen, `${currentModel.modelId}[effort=${effort}]`, currentModel.name);
-  }
+  if (currentModel && reasoningEfforts.length) currentModel.efforts = reasoningEfforts;
   return target;
 }
 

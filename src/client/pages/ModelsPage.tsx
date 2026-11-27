@@ -69,6 +69,7 @@ import { useModelCatalogRows, useSyncModelCatalogToDb } from '@/client/db/collec
 import type { ModelsSearch } from '@/routes/models';
 
 interface Model {
+  efforts?: string[];
   id: string;
   name: string;
   modelRouteId?: string | null;
@@ -127,6 +128,7 @@ function normalizeClientModelOptions(models: any[]): Model[] {
     name: String(model.label || model.value || ''),
     modelRouteId: typeof model.modelRouteId === 'string' ? model.modelRouteId : null,
     modelId: typeof model.modelId === 'string' ? model.modelId : String(model.value || ''),
+    efforts: Array.isArray(model.efforts) ? model.efforts : [],
     agentId: typeof model.agentId === 'string' ? model.agentId : null,
     providerModel: typeof model.providerModel === 'string' ? model.providerModel : null,
     runtime: typeof model.runtime === 'string' ? model.runtime : null,
@@ -452,6 +454,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
       modelRouteId: model.modelRouteId || undefined,
       modelId: model.modelId || model.id,
       label: model.name,
+      efforts: model.efforts,
       endpoints: model.endpoints || [],
       engines: normalizeClientModelEngines(model.engines),
       status: model.status,
