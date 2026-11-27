@@ -1,5 +1,9 @@
 {
   "modelEfforts": {
+    "faster": "更快",
+    "smarter": "更深入",
+    "help": "关于思考强度",
+    "note": "提高思考强度通常需要更多时间与 token。可选档位由当前模型提供。",
     "label": "思考强度",
     "default": "默认",
     "empty": "未检测",

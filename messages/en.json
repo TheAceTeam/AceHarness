@@ -1,5 +1,9 @@
 {
   "modelEfforts": {
+    "faster": "Faster",
+    "smarter": "Deeper",
+    "help": "About reasoning effort",
+    "note": "Higher effort usually takes more time and tokens. Available levels come from the selected model.",
     "label": "Efforts",
     "default": "Default",
     "empty": "Not detected",

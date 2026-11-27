@@ -3866,7 +3866,7 @@ export function ChatPageContent({
                                 调试
                               </button>
                               <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-[0.82] data-[state=unchecked]:bg-slate-200 data-[state=checked]:bg-[#8B5CF6]" />
-                              <div className="ml-2 w-[9.5rem] shrink-0 sm:w-[10.5rem]">
+                              <div className="ml-2 min-w-0 max-w-full shrink-0">
                                 <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-9 rounded-full border-0 bg-transparent px-0.5 text-sm shadow-none" />
                               </div>
                             </>

@@ -118,7 +118,7 @@ export function ModelSelect({
   };
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
     <AiModelSelectorField
       value={baseValue || (allowGlobal ? '__global__' : emptyOptionLabel ? '__empty__' : '')}
       onValueChange={handleChange}

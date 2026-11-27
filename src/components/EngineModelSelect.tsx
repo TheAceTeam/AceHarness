@@ -252,7 +252,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
     <AiModelSelectorField
       value={compositeValue}
       onValueChange={handleValueChange}
@@ -261,7 +261,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
       triggerIcon={triggerIcon}
       placeholder="选择模型"
       searchPlaceholder="搜索模型或引擎..."
-      className={`h-8 text-xs ${className}`}
+      className={`h-8 min-w-0 max-w-52 flex-1 text-xs ${className}`}
       forceSidebar
     />
     <ModelEffortSelect value={selection.effort} efforts={selectedModel?.efforts} onChange={effort => onModelChange(withModelEffort(model, effort))} />

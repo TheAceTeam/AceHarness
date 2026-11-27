@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Scoped to the animated effort picker. */
+[data-slot="effort-slider"] {
+  --lumesec: #6219f3;
+  --lumesec-glint: #c9bdff;
+}
+.dark [data-slot="effort-slider"] {
+  --lumesec: #8654fb;
+  --lumesec-glint: #ffffff;
+}
+
 body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   pointer-events: none;
 }
