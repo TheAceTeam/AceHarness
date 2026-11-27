@@ -78,7 +78,7 @@ describe('bundled skills 播种遇到软链接残留', () => {
 
   test('有效软链接不被误删', async () => {
     await withIsolatedAceHome(async (aceHome) => {
-      const linkPath = await plantLiveLink(aceHome, 'my-own-skill');
+      const linkPath = await plantLiveLink(aceHome, BUNDLED_SKILL);
 
       const { ensureRuntimeSkillsSeeded } = await import('@/lib/run/runtime-skills');
       await ensureRuntimeSkillsSeeded({ refreshBundledSkills: true });
@@ -133,22 +133,26 @@ describe('bundled skills 播种遇到软链接残留', () => {
   // 评审意见 1：只有确认目标不存在才该删。权限/IO 错误若被当成「目标没了」，
   // 会把用户一个有效的链接删掉 —— 那是不可恢复的数据损失。
   test.each(['EACCES', 'EPERM', 'EBUSY'])(
-    'stat 报 %s 时不删链接，错误原样上抛',
+    'stat 报 %s 时保留链接，告警并继续复制其他条目',
     async (code) => {
       await withIsolatedAceHome(async (aceHome) => {
         const linkPath = await plantLiveLink(aceHome, BUNDLED_SKILL);
         statFailure.current = { path: linkPath, code };
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         try {
           const { ensureRuntimeSkillsSeeded } = await import('@/lib/run/runtime-skills');
           await expect(
             ensureRuntimeSkillsSeeded({ refreshBundledSkills: true }),
-          ).rejects.toMatchObject({ code });
+          ).resolves.toBeUndefined();
+          expect(warn).toHaveBeenCalled();
+          expect((await readdir(path.join(aceHome, 'skills'))).length).toBeGreaterThan(1);
 
           // 关键断言：链接必须还在
           expect(existsSync(linkPath)).toBe(true);
           expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
         } finally {
           statFailure.current = null;
+          warn.mockRestore();
         }
       });
     },

@@ -311,6 +311,7 @@ export function resolveModelRoute(db: RuntimeSqliteDatabase, input: ResolveModel
         id, modelId: base.modelId, agentId: base.agentId, runtime: base.runtime,
         providerId: base.providerId || undefined, providerModel: base.providerModel,
         configOptions: { ...base.configOptions, ...parsed.configOptions }, isDefault: false,
+        envRequirements: base.envRequirements, capabilities: base.capabilities, priority: base.priority,
       });
       return resolveModelRoute(db, { modelRouteId: id });
     }

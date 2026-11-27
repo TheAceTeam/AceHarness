@@ -58,6 +58,7 @@ async function removeDanglingLink(dst: string): Promise<void> {
 async function copyBundledEntry(src: string, dst: string, options: { replaceExisting: boolean }): Promise<void> {
   await removeDanglingLink(dst);
   if (existsSync(dst)) {
+    if ((await lstat(dst)).isSymbolicLink()) return;
     if (!options.replaceExisting) return;
     await rm(dst, { recursive: true, force: true, maxRetries: 3 });
   }
@@ -81,7 +82,11 @@ async function copyMissingBundledSkills(srcDir: string, dstDir: string): Promise
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    await copyMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
+    try {
+      await copyMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
+    } catch (error) {
+      console.warn(`[runtime-skills] Failed to seed ${entry.name}; skipping this skill:`, error);
+    }
   }
 }
 
@@ -89,7 +94,11 @@ async function refreshBundledSkills(srcDir: string, dstDir: string): Promise<voi
   await mkdir(dstDir, { recursive: true });
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
-    await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
+    try {
+      await copyBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name), { replaceExisting: true });
+    } catch (error) {
+      console.warn(`[runtime-skills] Failed to refresh ${entry.name}; skipping this skill:`, error);
+    }
   }
 }
 
@@ -207,7 +216,7 @@ export async function syncInstalledSkillsToRuntime(skillNames: string[]): Promis
     }
 
     try {
-      await cp(src, dest, { recursive: true, force: true });
+      await copyMissingBundledEntry(src, dest);
     } catch {
       missing.push(skillName);
       continue;
