@@ -2373,15 +2373,13 @@ export default function WorkbenchPage({
     }
     if (embeddedInDashboard) {
       latestSearchParamsRef.current = qs;
+      setEmbeddedSearchState(qs);
+      dockWorkspace?.updateActiveWorkbenchSearch?.(configFile, qs);
       if (typeof window !== 'undefined') {
         const outerParams = new URLSearchParams(window.location.search);
         const currentRoute = outerParams.get('route') || '';
         const currentWorkbenchPrefix = `/workbench/${encodeURIComponent(configFile)}`;
-        if (!currentRoute.startsWith(currentWorkbenchPrefix)) {
-          return;
-        }
-        setEmbeddedSearchState(qs);
-        dockWorkspace?.updateActiveWorkbenchSearch?.(configFile, qs);
+        if (!currentRoute.startsWith(currentWorkbenchPrefix)) return;
         outerParams.delete('panel');
         outerParams.delete('reload');
         WORKBENCH_OUTER_QUERY_KEYS.forEach((key) => outerParams.delete(key));
@@ -2396,8 +2394,6 @@ export default function WorkbenchPage({
           }
         }
       }
-      setEmbeddedSearchState(qs);
-      dockWorkspace?.updateActiveWorkbenchSearch?.(configFile, qs);
       return;
     }
     const currentUrl = `/workbench/${encodeURIComponent(configFile)}${currentSearchParams ? `?${currentSearchParams}` : ''}`;
@@ -3707,15 +3703,15 @@ export default function WorkbenchPage({
   const requestedWorkspaceLineNumber = parseOptionalPositiveInt(effectiveSearchParams.get('workspaceLine'));
   const requestedWorkspaceColumn = parseOptionalPositiveInt(effectiveSearchParams.get('workspaceColumn'));
   const appliedWorkspaceFileRequestRef = useRef('');
-  const workspaceRouteRunId = runId || selectedRun?.id || '';
+  const workspaceRouteRunId = runId || selectedRun?.id || initialRunId || '';
   const configGitBaselineEnabled = workflowConfig?.context?.gitBaselineEnabled !== false;
   const effectiveGitBaselineEnabled = configGitBaselineEnabled && runtimeGitBaselineEnabled;
   const workspaceChangeSummaryQuery = useGitBrowserSummaryQuery(
     String(currentRunWorkspacePath || '').trim(),
     { commitLimit: 1 },
     {
-      enabled: viewMode === 'run' && Boolean(currentRunWorkspacePath) && effectiveGitBaselineEnabled,
-      refetchInterval: viewMode === 'run' && currentRunWorkspacePath && effectiveGitBaselineEnabled ? 5000 : false,
+      enabled: viewMode === 'run' && Boolean(workspaceRouteRunId) && Boolean(currentRunWorkspacePath) && effectiveGitBaselineEnabled,
+      refetchInterval: viewMode === 'run' && workspaceRouteRunId && currentRunWorkspacePath && effectiveGitBaselineEnabled ? 5000 : false,
     },
   );
 
@@ -3832,7 +3828,7 @@ export default function WorkbenchPage({
   }, [runWorkbenchTab, runtimeSpecAvailable]);
 
   useEffect(() => {
-    if (viewMode !== 'run' || !currentRunWorkspacePath || !effectiveGitBaselineEnabled) {
+    if (viewMode !== 'run' || !workspaceRouteRunId || !currentRunWorkspacePath || !effectiveGitBaselineEnabled) {
       setWorkspaceChangeCount(0);
       return;
     }
@@ -3847,6 +3843,7 @@ export default function WorkbenchPage({
     currentRunWorkspacePath,
     effectiveGitBaselineEnabled,
     viewMode,
+    workspaceRouteRunId,
     workspaceChangeSummaryQuery.data,
     workspaceChangeSummaryQuery.error,
   ]);
@@ -7537,6 +7534,7 @@ export default function WorkbenchPage({
     ].filter(Boolean).includes(deletedRunId);
 
     if (deletedActiveRun) {
+      setWorkspaceChangeCount(0);
       clearTransientRunUiState();
       dispatch({ type: 'RESET_RUN' });
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'idle' });

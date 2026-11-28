@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { clearDeletedRunFromWorkbenchSearch } from '@/client/navigation/workbench-links';
 import { describe, expect, test, vi } from 'vitest';
 import {
   applyAcceptedWorkbenchRecovery,
@@ -35,6 +36,15 @@ const initialStopSteps: WorkbenchStopProgressStep[] = [
 ];
 
 describe('Workbench historical run live sync', () => {
+  test('removes stale run navigation state when its dock tab is restored', () => {
+    expect(clearDeletedRunFromWorkbenchSearch(
+      'mode=run&run=run-deleted&tab=live&history=1&workspace=1',
+      'run-deleted',
+    )).toBe('mode=run');
+    expect(clearDeletedRunFromWorkbenchSearch('mode=run&run=run-other&tab=live', 'run-deleted'))
+      .toBe('mode=run&run=run-other&tab=live');
+  });
+
   test('preselects a run review intent when the config carries no baseline', () => {
     // Lightweight and pre-protocol configs report no baseline. Without a preselected
     // option the start dialog's primary button is disabled by a choice that sits
