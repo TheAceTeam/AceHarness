@@ -7537,22 +7537,20 @@ export default function WorkbenchPage({
     ].filter(Boolean).includes(deletedRunId);
 
     if (deletedActiveRun) {
+      clearTransientRunUiState();
+      dispatch({ type: 'RESET_RUN' });
+      dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'idle' });
+      dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
+      dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+      dispatch({ type: 'SET_AGENTS', payload: [] });
       setRunRecordDrilled(false);
       setRunDetailSection('overview');
       setRunWorkbenchTab('overview');
-      setViewingHistoryRun(false);
-      setRunDetail(null);
-      setActiveSteps([]);
-      setActiveConcurrencyGroups([]);
-      setPersistedStepLogs([]);
       setSmStateHistory([]);
       setSmIssueTracker([]);
       setSmTransitionCount(0);
       setSupervisorFlow([]);
       setAgentFlow([]);
-      clearPendingHumanQuestion();
-      clearHumanApprovalData();
-      dispatch({ type: 'SET_RUN_ID', payload: '' });
       updateUrl({
         run: null,
         runId: null,
@@ -7575,6 +7573,7 @@ export default function WorkbenchPage({
   }, [
     clearHumanApprovalData,
     clearPendingHumanQuestion,
+    clearTransientRunUiState,
     dispatch,
     effectiveSearchParams,
     configFile,
@@ -13847,6 +13846,19 @@ export default function WorkbenchPage({
       ...(Array.isArray((statusCompactQuery.data as any)?.stepLogs) ? (statusCompactQuery.data as any).stepLogs : []),
       ...persistedStepLogs,
     ];
+    if (!selectedRunId && !isRuntimeWorkflowStatusActive(workflowStatus)) {
+      return (
+        <div className="flex h-full min-h-0 items-center justify-center bg-muted/20 p-6">
+          <div className="max-w-md text-center">
+            <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 34 }}>history_toggle_off</span>
+            <h2 className="mt-3 text-base font-semibold">当前没有选中的运行记录</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              启动工作流后，运行状态和执行数据会显示在这里。已有记录可从左侧运行记录中打开。
+            </p>
+          </div>
+        </div>
+      );
+    }
     if (isRuntimeLightweightWorkflow) {
       const lightweightTokenMetric = buildLightweightTokenConsumptionMetric(workflowTokenAnalytics);
       const visibleStatusReason = formatWorkflowFailureReasonWithStepLogs(
