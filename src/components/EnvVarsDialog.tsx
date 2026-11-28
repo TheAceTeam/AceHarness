@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { EnvironmentVariables } from '@/components/ai-elements/environment-variables';
+import { EnvironmentVariables } from '@/components/ui/environment-variables';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { envApi } from '@/lib/core/api';
 import {
@@ -24,6 +24,7 @@ interface EnvVar {
   key: string;
   value: string;
   enabled: boolean;
+  secret?: boolean;
 }
 
 interface EnvVarError {
@@ -39,11 +40,11 @@ export interface EnvVarsEditorProps {
 
 function validateEnvVars(vars: EnvVar[]) {
   const errors: EnvVarError[] = vars.map(() => ({}));
-  const keyPattern = /^[A-Z_][A-Z0-9_]*$/;
+  const keyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const keyMap = new Map<string, number[]>();
 
   vars.forEach((item, index) => {
-    const trimmedKey = item.key.trim().toUpperCase();
+    const trimmedKey = item.key.trim();
     if (!trimmedKey && !item.value.trim()) return;
 
     if (!trimmedKey) {
@@ -85,7 +86,7 @@ export function EnvVarsEditor({
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [activeGroup, setActiveGroup] = useState<CliEnvironmentGroupId>('claude');
+  const [activeGroup, setActiveGroup] = useState<CliEnvironmentGroupId | 'custom'>('claude');
 
   useEffect(() => {
     let cancelled = false;
@@ -100,6 +101,11 @@ export function EnvVarsEditor({
         const nextVars = data.vars || [];
         setVars(nextVars);
         setErrors(nextVars.map(() => ({})));
+        const configuredVars = nextVars.filter((item) => item.key.trim());
+        const configuredGroup = configuredVars.some((item) => !getCliEnvironmentGroupId(item.key))
+          ? 'custom'
+          : configuredVars[0] && getCliEnvironmentGroupId(configuredVars[0].key);
+        if (configuredGroup) setActiveGroup(configuredGroup);
       } catch (error: any) {
         if (!cancelled) setSubmitError(error?.message || '加载环境变量失败');
       } finally {
@@ -111,11 +117,13 @@ export function EnvVarsEditor({
     return () => { cancelled = true; };
   }, [scope]);
 
-  const activeGroupDefinition = CLI_ENVIRONMENT_GROUPS.find((group) => group.id === activeGroup)!;
+  const activeGroupDefinition = activeGroup === 'custom'
+    ? { label: '自定义', description: '添加任意 CLI 所需的环境变量，变量名保留大小写。', variables: [] }
+    : CLI_ENVIRONMENT_GROUPS.find((group) => group.id === activeGroup)!;
   const activeRows = useMemo(
     () => vars
       .map((item, index) => ({ item, index }))
-      .filter(({ item }) => getCliEnvironmentGroupId(item.key) === activeGroup),
+      .filter(({ item }) => (getCliEnvironmentGroupId(item.key) ?? 'custom') === activeGroup),
     [activeGroup, vars],
   );
   const activeKeys = useMemo(() => new Set(activeRows.map(({ item }) => item.key.trim().toUpperCase())), [activeRows]);
@@ -140,6 +148,13 @@ export function EnvVarsEditor({
     setErrors((previous) => [...previous, {}]);
   };
 
+  const addCustom = () => {
+    setActiveGroup('custom');
+    setSaved(false);
+    setVars((previous) => [...previous, { key: '', value: '', enabled: true }]);
+    setErrors((previous) => [...previous, {}]);
+  };
+
   const removeVar = (index: number) => {
     setSaved(false);
     setVars((previous) => previous.filter((_, itemIndex) => itemIndex !== index));
@@ -147,7 +162,7 @@ export function EnvVarsEditor({
   };
 
   const save = async () => {
-    const normalizedVars = vars.map((item) => ({ ...item, key: item.key.trim().toUpperCase() }));
+    const normalizedVars = vars.map((item) => ({ ...item, key: item.key.trim() }));
     const validation = validateEnvVars(normalizedVars);
     setErrors(validation.errors);
     if (validation.hasErrors) {
@@ -183,11 +198,12 @@ export function EnvVarsEditor({
               <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{submitError}</div>
             ) : null}
 
-            <Tabs value={activeGroup} onValueChange={(value) => setActiveGroup(value as CliEnvironmentGroupId)} className="space-y-5">
-              <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-4">
+            <Tabs value={activeGroup} onValueChange={(value) => setActiveGroup(value as typeof activeGroup)} className="space-y-5">
+              <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-5">
                 {CLI_ENVIRONMENT_GROUPS.map((group) => (
                   <TabsTrigger key={group.id} value={group.id}>{group.label}</TabsTrigger>
                 ))}
+                <TabsTrigger value="custom">自定义</TabsTrigger>
               </TabsList>
 
               <TabsContent value={activeGroup} className="mt-0 space-y-4">
@@ -221,16 +237,20 @@ export function EnvVarsEditor({
                 </div>
 
                 <EnvironmentVariables
-                  items={activeRows.map(({ item, index }) => {
+                  title="配置列表"
+                  source={activeGroupDefinition.label}
+                  onAdd={addCustom}
+                  disabled={saving}
+                  variables={activeRows.map(({ item, index }) => {
                     const definition = getCliEnvironmentVariable(item.key);
                     return {
-                      id: `${index}-${item.key}`,
+                      id: String(index),
                       key: item.key,
                       value: item.value,
                       enabled: item.enabled,
+                      secret: item.secret ?? Boolean(definition && 'secret' in definition && definition.secret),
                       description: definition?.description,
-                      maskValue: Boolean(definition && 'secret' in definition && definition.secret),
-                      disableKeyEdit: true,
+                      disableKeyEdit: Boolean(definition),
                       keyError: errors[index]?.key,
                     };
                   })}
@@ -239,11 +259,16 @@ export function EnvVarsEditor({
                     if (actualIndex === undefined) return;
                     updateVar(actualIndex, patch);
                   }}
+                  onSecretModeChange={(rowIndex, secret) => {
+                    const actualIndex = activeRows[rowIndex]?.index;
+                    if (actualIndex === undefined) return;
+                    updateVar(actualIndex, { secret });
+                  }}
                   onRemove={(rowIndex) => {
                     const actualIndex = activeRows[rowIndex]?.index;
                     if (actualIndex !== undefined) removeVar(actualIndex);
                   }}
-                  emptyMessage="选择上方变量名，开始配置此 CLI。"
+                  emptyMessage={activeGroup === 'custom' ? '暂无自定义变量，点击新增开始配置。' : '选择上方变量名，或新增自定义变量。'}
                 />
               </TabsContent>
             </Tabs>

@@ -59,7 +59,7 @@ describe('workflow status route', () => {
       await expect(response.json()).resolves.toMatchObject({
         status: 'idle',
         statusReason: '未找到指定运行记录',
-        runId: 'missing-history-run',
+        runId: compactQuery ? null : '',
         currentConfigFile: 'demo.yaml',
       });
     }

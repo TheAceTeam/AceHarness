@@ -8,6 +8,11 @@ import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/mod
 export interface ModelOption {
   value: string;
   label: string;
+  baseModel?: string;
+  baseName?: string;
+  effort?: string;
+  efforts?: string[];
+  configOptions?: Record<string, unknown>;
   costMultiplier: number;
   endpoints: string[];
   engines?: string[];

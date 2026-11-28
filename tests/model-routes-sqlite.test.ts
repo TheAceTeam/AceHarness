@@ -37,6 +37,17 @@ function seedBasicCatalog(db: RuntimeSqliteDatabase): void {
 }
 
 describe('model routes sqlite migration', () => {
+  test('resolves a selected effort using one base catalog entry and a resumable route', () => {
+    const db = makeDb();
+    try {
+      seedBasicCatalog(db);
+      upsertModelRoute(db, { id: 'base-route', modelId: 'gpt-5.3-codex', agentId: 'codex', providerId: 'openai', providerModel: 'gpt-5.3-codex', isDefault: true });
+      const selected = resolveModelRoute(db, { agentId: 'codex', modelId: 'gpt-5.3-codex[effort=future]' });
+      expect(selected).toMatchObject({ modelId: 'gpt-5.3-codex', providerModel: 'gpt-5.3-codex', configOptions: { effort: 'future' } });
+      expect(resolveModelRoute(db, { modelRouteId: selected.modelRouteId }).configOptions).toEqual({ effort: 'future' });
+      expect(db.prepare('SELECT COUNT(*) AS count FROM model_catalog').get()).toMatchObject({ count: 1 });
+    } finally { db.close(); }
+  });
   test('creates model route tables and default route partial unique index', () => {
     const db = makeDb();
     try {
@@ -177,6 +188,7 @@ models:
     expect(parsed.catalog[0]).toMatchObject({
       id: 'gpt-5.3-codex[reasoning=medium,fast=false]',
       displayName: 'GPT 5.3 Codex',
+      metadata: { baseModel: 'gpt-5.3-codex', baseName: 'GPT 5.3 Codex' },
     });
     expect(parsed.routes.map((route) => route.agentId).sort()).toEqual(['claude', 'codex']);
     expect(parsed.routes[0]).toMatchObject({

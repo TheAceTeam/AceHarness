@@ -6,6 +6,7 @@ export type DetectedModelImportItem = {
   costMultiplier?: number;
   endpoints?: string[];
   selected?: boolean;
+  efforts?: string[];
 };
 
 function uniqueStrings(values: unknown[]): string[] {
@@ -25,14 +26,16 @@ export function mergeDetectedModelsForImport(input: {
     const modelId = String(detected.modelId || '').trim();
     if (!modelId) continue;
 
+    const endpoints = detected.endpoints ?? (engine === 'codex' ? ['openai'] : engine === 'claude' ? ['anthropic'] : []);
     const existing = mergedMap.get(modelId);
     if (existing) {
       mergedMap.set(modelId, {
         ...existing,
         label: detected.label || existing.label,
         costMultiplier: detected.costMultiplier ?? existing.costMultiplier ?? 1,
-        endpoints: uniqueStrings([...(existing.endpoints || []), ...(detected.endpoints || [])]),
+        endpoints: uniqueStrings([...(existing.endpoints || []), ...endpoints]),
         engines: uniqueStrings([...(existing.engines || []), engine]),
+        ...(detected.efforts ? { efforts: uniqueStrings(detected.efforts) } : {}),
       });
       continue;
     }
@@ -41,8 +44,9 @@ export function mergeDetectedModelsForImport(input: {
       value: modelId,
       label: detected.label || modelId,
       costMultiplier: detected.costMultiplier ?? 1,
-      endpoints: uniqueStrings(detected.endpoints || []),
+      endpoints: uniqueStrings(endpoints),
       engines: engine ? [engine] : [],
+      ...(detected.efforts ? { efforts: uniqueStrings(detected.efforts) } : {}),
     });
   }
 

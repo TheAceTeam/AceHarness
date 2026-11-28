@@ -12,6 +12,20 @@ export function buildWorkbenchSearch(mode: WorkbenchMode = 'run', runId?: string
   return params.toString();
 }
 
+export function clearDeletedRunFromWorkbenchSearch(search: string, deletedRunId: string) {
+  const normalizedSearch = search.startsWith('?') ? search.slice(1) : search;
+  const params = new URLSearchParams(normalizedSearch);
+  if ((params.get('runId') || params.get('run')) !== deletedRunId) return normalizedSearch;
+
+  for (const key of [
+    'run', 'runId', 'history', 'tab', 'section', 'workspace', 'workspaceRoot',
+    'changes', 'documentSource', 'workspaceFile', 'workspaceLine', 'workspaceColumn',
+  ]) {
+    params.delete(key);
+  }
+  return params.toString();
+}
+
 export function buildWorkbenchPath(configFile: string, mode: WorkbenchMode = 'run', runId?: string | null) {
   const encoded = encodeURIComponent(configFile);
   const normalizedMode: WorkbenchMode = mode === 'design' ? 'design' : 'run';

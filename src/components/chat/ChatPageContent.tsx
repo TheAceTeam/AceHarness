@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from '@/lib/navigation/client
 import { motion } from 'framer-motion';
 import dynamic from '@/lib/navigation/dynamic';
 import { useChat } from '@/contexts/ChatContext';
+import { isComposerEditorFocus } from '@/lib/chat/composer-focus';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ChatWorkspaceToolbar } from '@/components/chat/ChatWorkspaceToolbar';
@@ -763,7 +764,6 @@ export function ChatPageContent({
   const [workflowCreatorSessionId, setWorkflowCreatorSessionId] = useState<string | null>(null);
   const [workflowCreatorRequirements, setWorkflowCreatorRequirements] = useState(DEFAULT_AI_WORKFLOW_REQUIREMENTS);
   const starterHandledRef = useRef(false);
-  const homeEntryResetHandledRef = useRef(false);
   const lastHomeSidebarSyncRef = useRef('');
   const lastSessionDirectoryAutoSwitchRef = useRef('');
   const autoCreatedSessionIdRef = useRef<string | null>(null);
@@ -1067,22 +1067,6 @@ export function ChatPageContent({
     editEditorRef.current.setContent(editContent);
     lastEditSeedRef.current = editingMessageId;
   }, [editContent, editDialogOpen, editingMessageId]);
-
-  useEffect(() => {
-    if (!shouldHandleChatSearchParams) return;
-    if (homeEntryResetHandledRef.current) return;
-    homeEntryResetHandledRef.current = true;
-
-    const hasExplicitSessionTarget = Boolean(
-      searchParams.get('sessionId')
-      || searchParams.get('agentName')
-      || searchParams.get('starterPrompt')
-      || searchParams.get('starterAction')
-    );
-    if (hasExplicitSessionTarget) return;
-
-    setActiveSessionId(null);
-  }, [searchParams, setActiveSessionId, shouldHandleChatSearchParams]);
 
   useEffect(() => {
     if (!shouldHandleChatSearchParams) return;
@@ -2761,7 +2745,8 @@ export function ChatPageContent({
     void uploadChatAttachment(files[0]);
   }, [toast, uploadChatAttachment]);
 
-  const handleComposerFocus = useCallback(() => {
+  const handleComposerFocus = useCallback((event: React.FocusEvent<HTMLElement>) => {
+    if (!isComposerEditorFocus(event.target)) return;
     if (!composerSessionId) focusComposerSessionRef.current = ensureChatSessionForComposer();
     else if (focusComposerSessionRef.current === composerSessionId) focusComposerSessionRef.current = null;
   }, [composerSessionId, ensureChatSessionForComposer]);
@@ -3866,7 +3851,7 @@ export function ChatPageContent({
                                 调试
                               </button>
                               <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-[0.82] data-[state=unchecked]:bg-slate-200 data-[state=checked]:bg-[#8B5CF6]" />
-                              <div className="ml-2 w-[9.5rem] shrink-0 sm:w-[10.5rem]">
+                              <div className="ml-2 min-w-0 max-w-full shrink-0">
                                 <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-9 rounded-full border-0 bg-transparent px-0.5 text-sm shadow-none" />
                               </div>
                             </>

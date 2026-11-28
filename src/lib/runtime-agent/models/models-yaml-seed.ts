@@ -1,3 +1,4 @@
+import { parseProviderModel } from '@/lib/models/model-config';
 import { parse, stringify } from 'yaml';
 import { DEFAULT_MODEL_CONTEXT_WINDOW, DEFAULT_MODEL_ENDPOINTS } from '@/lib/models/defaults';
 import type { RuntimeSqliteDatabase } from '../sqlite/database';
@@ -11,6 +12,10 @@ import {
 } from './model-routes';
 
 type PreRuntimeYamlModel = {
+  baseName?: unknown;
+  effort?: unknown;
+  efforts?: unknown;
+  configOptions?: Record<string, unknown>;
   value?: unknown;
   label?: unknown;
   costMultiplier?: unknown;
@@ -103,27 +108,6 @@ function endpointsOrDefault(input: unknown): string[] {
 
 function slug(input: string): string {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
-}
-
-function parseProviderModel(value: string): { providerModel: string; configOptions: Record<string, unknown> } {
-  const match = value.match(/^(.+?)\[(.*)]$/);
-  if (!match) return { providerModel: value, configOptions: {} };
-
-  const [, providerModel, rawOptions] = match;
-  if (!rawOptions.includes('=')) return { providerModel: value, configOptions: {} };
-  const configOptions: Record<string, unknown> = {};
-  for (const part of rawOptions.split(',').map((item) => item.trim()).filter(Boolean)) {
-    const [rawKey, ...rawValueParts] = part.split('=');
-    const key = rawKey?.trim();
-    const value = rawValueParts.join('=').trim();
-    if (!key) continue;
-    if (value === 'true') configOptions[key] = true;
-    else if (value === 'false') configOptions[key] = false;
-    else if (/^-?\d+(\.\d+)?$/.test(value)) configOptions[key] = Number(value);
-    else configOptions[key] = value;
-  }
-
-  return { providerModel, configOptions };
 }
 
 function normalizeProviderId(endpoint: unknown): string | undefined {
@@ -221,7 +205,10 @@ function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: str
     const modelId = asString(model.value);
     if (!modelId) continue;
 
-    const { providerModel, configOptions } = parseProviderModel(modelId);
+    const parsedModel = parseProviderModel(modelId);
+    const providerModel = parsedModel.providerModel;
+    const configOptions = { ...parsedModel.configOptions, ...model.configOptions };
+    if (asString(model.effort)) configOptions.effort = asString(model.effort);
     catalog.push({
       id: modelId,
       displayName: asString(model.label) ?? modelId,
@@ -229,6 +216,10 @@ function parsePreRuntimeModelsYamlSeed(parsed: Record<string, unknown>, now: str
       metadata: {
         seedSource: 'preRuntime-models-yaml',
         costMultiplier: asNumber(model.costMultiplier),
+        baseModel: providerModel,
+        baseName: asString(model.baseName) ?? asString(model.label) ?? providerModel,
+        effort: asString(configOptions.effort ?? configOptions.reasoning_effort),
+        efforts: asArray(model.efforts).map(asString).filter(Boolean),
       },
       now,
     });

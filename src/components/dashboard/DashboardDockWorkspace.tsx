@@ -29,7 +29,11 @@ import {
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useTranslations } from '@/hooks/useTranslations';
 import { cn } from '@/lib/core/utils';
-import { buildWorkbenchSearch as buildWorkbenchSearchParams, type WorkbenchMode } from '@/client/navigation/workbench-links';
+import {
+  buildWorkbenchSearch as buildWorkbenchSearchParams,
+  clearDeletedRunFromWorkbenchSearch,
+  type WorkbenchMode,
+} from '@/client/navigation/workbench-links';
 import {
   groupDockviewContextActions,
   resolveDockviewTabPolicy,
@@ -59,6 +63,7 @@ const CHAT_SECONDARY_SIDEBAR_WIDTH_STORAGE_KEY = 'aceharness:dashboard-chat-seco
 const CHAT_SECONDARY_SIDEBAR_DEFAULT_PERCENT = 24;
 const CHAT_SECONDARY_SIDEBAR_MIN_PERCENT = 14;
 const CHAT_SECONDARY_SIDEBAR_MAX_PERCENT = 42;
+const WORKFLOW_RUN_DELETED_EVENT = 'ace:workflow-run-deleted';
 const clampChatSecondarySidebarPercent = (value: number) =>
   Math.min(CHAT_SECONDARY_SIDEBAR_MAX_PERCENT, Math.max(CHAT_SECONDARY_SIDEBAR_MIN_PERCENT, value));
 const formatPanelPercent = (value: number) => `${Number(clampChatSecondarySidebarPercent(value).toFixed(2))}%`;
@@ -799,6 +804,33 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
         params: nextParams,
       });
       onActiveTabChange?.(nextParams);
+    }, [onActiveTabChange]);
+
+    useEffect(() => {
+      const handleDeletedRun = (event: Event) => {
+        const detail = (event as CustomEvent<{ runId?: string; configFile?: string }>).detail;
+        if (!detail?.runId) return;
+
+        for (const panel of apiRef.current?.panels || []) {
+          const params = panel.params as WorkspacePanelParams | undefined;
+          if (params?.kind !== 'workbench' || (detail.configFile && params.config !== detail.configFile)) continue;
+          const search = normalizeDockSearch(params.search) || buildWorkbenchSearch(params);
+          const nextSearch = clearDeletedRunFromWorkbenchSearch(search, detail.runId);
+          if (nextSearch === search) continue;
+          const searchParams = new URLSearchParams(nextSearch);
+          const nextParams = {
+            ...params,
+            search: nextSearch,
+            mode: searchParams.get('mode') || params.mode || 'run',
+            runId: searchParams.get('runId') || searchParams.get('run') || null,
+          };
+          panel.update({ params: nextParams });
+          if (apiRef.current?.activePanel === panel) onActiveTabChange?.(nextParams);
+        }
+      };
+
+      window.addEventListener(WORKFLOW_RUN_DELETED_EVENT, handleDeletedRun);
+      return () => window.removeEventListener(WORKFLOW_RUN_DELETED_EVENT, handleDeletedRun);
     }, [onActiveTabChange]);
 
     const updateActiveRunHistorySearch = useCallback((search: string) => {

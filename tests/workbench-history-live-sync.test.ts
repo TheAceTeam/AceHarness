@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { clearDeletedRunFromWorkbenchSearch } from '@/client/navigation/workbench-links';
 import { describe, expect, test, vi } from 'vitest';
 import {
   applyAcceptedWorkbenchRecovery,
@@ -11,7 +12,9 @@ import {
   selectCurrentStepAttemptLogs,
   shouldConnectWorkbenchRunStatusStream,
   shouldEnableWorkbenchStatusSync,
+  clearDeletedStartedRunId,
   upsertStartedRunInHistory,
+  mergeHistoryWithLocalStartedRun,
   formatLiveOutputTimestamp,
   getWorkflowStatusDotClass,
   resolveSoleConfiguredWorkflowStepName,
@@ -33,6 +36,15 @@ const initialStopSteps: WorkbenchStopProgressStep[] = [
 ];
 
 describe('Workbench historical run live sync', () => {
+  test('removes stale run navigation state when its dock tab is restored', () => {
+    expect(clearDeletedRunFromWorkbenchSearch(
+      'mode=run&run=run-deleted&tab=live&history=1&workspace=1',
+      'run-deleted',
+    )).toBe('mode=run');
+    expect(clearDeletedRunFromWorkbenchSearch('mode=run&run=run-other&tab=live', 'run-deleted'))
+      .toBe('mode=run&run=run-other&tab=live');
+  });
+
   test('preselects a run review intent when the config carries no baseline', () => {
     // Lightweight and pre-protocol configs report no baseline. Without a preselected
     // option the start dialog's primary button is disabled by a choice that sits
@@ -41,6 +53,7 @@ describe('Workbench historical run live sync', () => {
     expect(resolveInitialAdversarialIntent(undefined)).toBe('disabled');
     expect(resolveInitialAdversarialIntent('on-demand')).toBe('on-demand');
     expect(resolveInitialAdversarialIntent('disabled')).toBe('disabled');
+    expect(resolveInitialAdversarialIntent('enabled')).toBe('enabled');
   });
 
   test('uses consistent semantic colors for run status dots', () => {
@@ -125,6 +138,16 @@ describe('Workbench historical run live sync', () => {
       startedRun,
       { id: 'run-old', status: 'completed' },
     ]);
+  });
+
+  test('does not restore a deleted locally-started run into history', () => {
+    const historyRuns = [{ id: 'run-old', status: 'completed' }];
+    const startedRunId = clearDeletedStartedRunId('run-new', 'run-new');
+
+    expect(startedRunId).toBeNull();
+    expect(mergeHistoryWithLocalStartedRun(historyRuns, null, 'run-new')).toEqual(historyRuns);
+    expect(mergeHistoryWithLocalStartedRun(historyRuns, { id: 'run-other', status: 'preparing' }, 'run-new'))
+      .toEqual([{ id: 'run-other', status: 'preparing' }, ...historyRuns]);
   });
 
   test('builds an immutable workflow-name save draft from the active edit value', () => {

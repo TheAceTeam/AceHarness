@@ -67,8 +67,11 @@ import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useModelCatalogRows, useSyncModelCatalogToDb } from '@/client/db/collections';
 import type { ModelsSearch } from '@/routes/models';
+import { MultiCombobox } from '@/components/ui/combobox';
+import { useTranslations } from '@/hooks/useTranslations';
 
 interface Model {
+  efforts?: string[];
   id: string;
   name: string;
   modelRouteId?: string | null;
@@ -127,6 +130,7 @@ function normalizeClientModelOptions(models: any[]): Model[] {
     name: String(model.label || model.value || ''),
     modelRouteId: typeof model.modelRouteId === 'string' ? model.modelRouteId : null,
     modelId: typeof model.modelId === 'string' ? model.modelId : String(model.value || ''),
+    efforts: Array.isArray(model.efforts) ? model.efforts : [],
     agentId: typeof model.agentId === 'string' ? model.agentId : null,
     providerModel: typeof model.providerModel === 'string' ? model.providerModel : null,
     runtime: typeof model.runtime === 'string' ? model.runtime : null,
@@ -222,6 +226,7 @@ function SortableModelCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslations();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: model.id,
   });
@@ -266,6 +271,8 @@ function SortableModelCard({
           </div>
           <div className="min-w-0">
             <h3 className="line-clamp-2 text-[15px] font-semibold leading-6">{model.name}</h3>
+            <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{model.modelId || model.id}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{t('modelEfforts.label')}：{model.efforts?.length ? model.efforts.join(' / ') : t('modelEfforts.empty')}</div>
             <div className="mt-1">
               <ModelStatusPill status={model.status} />
             </div>
@@ -362,6 +369,7 @@ function SortableModelTableRowEnhancer({
 }
 
 export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsPageProps = {}) {
+  const { t } = useTranslations();
   useDocumentTitle('模型管理');
   const searchParams = useSearchParams();
   const returnTarget = getOfficeAwareReturnTarget(searchParams.get('from'));
@@ -451,6 +459,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
       modelRouteId: model.modelRouteId || undefined,
       modelId: model.modelId || model.id,
       label: model.name,
+      efforts: model.efforts,
       endpoints: model.endpoints || [],
       engines: normalizeClientModelEngines(model.engines),
       status: model.status,
@@ -700,10 +709,15 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
           </div>
           <div className="min-w-0">
             <div className="truncate font-medium">{model.name}</div>
-            <div className="truncate text-xs text-muted-foreground">{model.id}</div>
+            <div className="truncate text-xs text-muted-foreground">{model.modelId || model.id}</div>
           </div>
         </div>
       ),
+    },
+    {
+      id: 'efforts',
+      header: t('modelEfforts.label'),
+      render: (model) => <span className="text-xs text-muted-foreground">{model.efforts?.length ? model.efforts.join(' / ') : t('modelEfforts.empty')}</span>,
     },
     {
       id: 'status',
@@ -756,7 +770,7 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
       priority: 4,
       render: (model) => <span className="text-xs text-muted-foreground">{model.updatedAt ? new Date(model.updatedAt).toLocaleDateString() : '-'}</span>,
     },
-  ], []);
+  ], [t]);
 
   const getModelRowActions = useCallback((model: Model): ActionMenuGroup[] => [
     {
@@ -1173,7 +1187,12 @@ export default function ModelsPage({ routeSearch, onRouteSearchChange }: ModelsP
                 <FormField
                   label="模型 ID"
                   required
-                  control={<Input value={editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, id: e.target.value })} />}
+                  control={<Input value={editingModel.modelId || editingModel.id} onChange={(e) => setEditingModel({ ...editingModel, modelId: e.target.value })} />}
+                />
+                <FormField
+                  label={t('modelEfforts.label')}
+                  description={t('modelEfforts.description')}
+                  control={<MultiCombobox value={editingModel.efforts || []} onValueChange={efforts => setEditingModel({ ...editingModel, efforts })} options={[...new Set(models.flatMap(model => model.efforts || []))].map(value => ({ value, label: value }))} allowCustom placeholder={t('modelEfforts.placeholder')} searchPlaceholder={t('modelEfforts.search')} emptyText={t('modelEfforts.empty')} />}
                 />
               </div>
             ),

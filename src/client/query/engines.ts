@@ -55,6 +55,7 @@ export type RuntimeEngineSelection = EngineConfig & {
 };
 
 export type ModelsSaveOption = {
+  efforts?: string[];
   value: string;
   label: string;
   costMultiplier?: number;

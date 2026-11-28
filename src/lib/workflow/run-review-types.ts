@@ -1,6 +1,6 @@
 import type { ReviewPolicyOperation } from '@/lib/workflow/state-review-policy';
 
-export type WorkflowAdversarialIntent = 'disabled' | 'on-demand';
+export type WorkflowAdversarialIntent = 'disabled' | 'enabled' | 'on-demand';
 export type WorkflowReviewMode = 'standard' | 'adversarial';
 export type WorkflowReviewConfidence = 'high' | 'medium' | 'low';
 export type WorkflowProductKind = 'lightweight' | 'state-machine';

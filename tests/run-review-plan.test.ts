@@ -121,6 +121,37 @@ describe('run-level review plans', () => {
     });
   });
 
+  test('enabled starts every non-final state adversarial without AI and allows per-state overrides', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await setup(aceHome);
+      vi.resetModules();
+      const { applyRunReviewPlanOverrides, createRunReviewPlanArtifact } = await import('@/lib/workflow/run-review-plan');
+      const evaluator = vi.fn(async () => { throw new Error('enabled mode must not call AI'); });
+      const artifact = await createRunReviewPlanArtifact({
+        rootConfigFile: 'root.yaml',
+        intent: 'enabled',
+        evaluator,
+      });
+
+      expect(evaluator).not.toHaveBeenCalled();
+      expect(artifact.plan.states).toHaveLength(2);
+      expect(artifact.plan.states.every((state) => state.effectiveMode === 'adversarial')).toBe(true);
+      expect(artifact.plan.states.every((state) => !state.manualSelectionRequired)).toBe(true);
+
+      const child = artifact.plan.states.find((state) => state.configFile === 'child.yaml')!;
+      const adjusted = await applyRunReviewPlanOverrides({
+        artifact,
+        overrides: [{ configFile: child.configFile, stateId: child.stateId, mode: 'standard' }],
+      });
+      expect(adjusted.plan.states.find((state) => state.configFile === 'child.yaml')).toMatchObject({
+        effectiveMode: 'standard',
+        source: 'user',
+        locked: true,
+      });
+      expect(adjusted.plan.states.find((state) => state.configFile === 'root.yaml')?.effectiveMode).toBe('adversarial');
+    });
+  });
+
   test('on-demand batches unlocked states once and applies user overrides only to the run projection', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await setup(aceHome);

@@ -35,6 +35,7 @@ import { modelEnginesSupportEngine, normalizeRuntimeEngineId } from '@/lib/model
 import { mergeDetectedModelsForImport } from '@/lib/models/import-merge';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { getBuiltinAgentDefinition } from '@/lib/runtime-agent/agent-registry';
+import { ModelSelect } from '@/components/ModelSelect';
 import { cn } from '@/lib/core/utils';
 import type { EnginesSearch } from '@/routes/engines';
 import {
@@ -57,6 +58,7 @@ interface ModelOption {
 }
 
 interface DetectedModel {
+  efforts?: string[];
   modelId: string;
   name: string;
   source?: string;
@@ -511,6 +513,7 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
         modelId: m.modelId,
         name: m.name,
         source: m.source,
+        efforts: m.efforts,
         recommended: Boolean(m.recommended),
         selected: !existing.has(m.modelId),
         label: m.name || m.modelId,
@@ -795,23 +798,13 @@ export default function EnginesPage({ routeSearch, onRouteSearchChange }: Engine
               {isCurrentEngine && (
                 <div className="mt-4 pt-4 border-t border-border/50" onClick={(e) => e.stopPropagation()}>
                   <p className="text-xs font-medium text-muted-foreground mb-2">默认模型</p>
-                  <AiModelSelectorField
+                  <ModelSelect
                     value={defaultModel}
-                    onValueChange={(v) => handleSetDefaultModel(v)}
-                    options={[
-                      { value: '', label: '使用全局默认模型' },
-                      ...compatibleModels.map((model) => ({
-                        value: model.value,
-                        label: model.label,
-                        description: model.value,
-                        keywords: [model.value, model.label],
-                      })),
-                    ]}
-                    placeholder="使用全局默认模型"
-                    searchPlaceholder="搜索模型..."
-                    emptyLabel="暂无可选模型。"
-                    className="h-9 text-sm"
+                    onChange={handleSetDefaultModel}
+                    engine={engine.id}
+                    emptyOptionLabel="使用全局默认模型"
                   />
+
                 </div>
               )}
               </DataCard>

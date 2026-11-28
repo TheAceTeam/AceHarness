@@ -44,6 +44,7 @@ import {
 } from '@/lib/workflow/experience-store';
 import { stateMachineWorkflowSchema, workflowScriptSchema } from '@/lib/core/schemas';
 import { runWorkflowScript, scriptHandoffContext, type ScriptHandoff } from '@/lib/workflow/script-step';
+import { WORKFLOW_CONVERGENCE_GUIDANCE, WORKFLOW_VERDICT_GUIDANCE } from '@/lib/workflow/convergence-guidance';
 import type {
   StateMachineWorkflowConfig, StateMachineState, StateTransition,
   Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
@@ -5313,6 +5314,8 @@ try {
       `当前 verdict: ${result.verdict}`,
       nextState ? `建议下一状态: ${nextState}` : '',
       verdictTransitionContext,
+      WORKFLOW_CONVERGENCE_GUIDANCE,
+      '阶段协调只处理当前目标的具体阻断项，不因可选建议反复推翻已有验收；外部阻塞或相同问题无新进展时，提出人工介入或恢复条件。',
       '',
       '问题摘要：',
       issueSummary,
@@ -8224,6 +8227,8 @@ try {
       '\n# 系统补充要求：缺少最终裁决 JSON',
       `你刚才完成了状态 "${state.name}" 的最后步骤 "${step.name}"，但回复中没有包含可解析的最终裁决 JSON。`,
       '不要重新执行任务，不要重复完整过程，只基于你刚才的结果补交最终裁决。',
+      WORKFLOW_VERDICT_GUIDANCE,
+      this.buildStateVerdictTransitionContext(state),
       '本轮回复必须且只能包含以下 JSON 代码块；不要补充说明，不要重复 <step-conclusion>。verdict 的值必须从 pass、conditional_pass、fail 中选择一个真实值：',
       '```json',
       '{',
@@ -8308,7 +8313,7 @@ try {
       '本节是当前步骤必须遵守的流程控制规则，不是建议。',
       '`pass`、`conditional_pass`、`fail` 的下一步都以本状态 transitions 的真实配置为准，不要根据名称自行假设。',
       transitions.length > 0 ? transitions.join('\n') : '- 当前状态没有配置 verdict 转移。',
-      '如果你的自然语言建议进入某个状态，最终 JSON verdict 必须能通过上述配置到达该状态；例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标。',
+      '根据实际验收结果给出 verdict，再按上述配置解释流向；不要为到达期望状态而改写裁决。',
     ].join('\n');
   }
 
@@ -8337,6 +8342,7 @@ try {
     const parts = [
       '# 完整目标',
       goalParts.join('\n\n'),
+      WORKFLOW_CONVERGENCE_GUIDANCE,
       '',
       '# 任务清单协作',
       `请使用 ${LIGHTWEIGHT_TASKLIST_SKILL}。`,
@@ -8344,7 +8350,7 @@ try {
       resolvedTasklistDirectory
         ? `任务文档根目录（本次运行专属目录）：\`${resolvedTasklistDirectory}\``
         : '',
-      '请将完整目标拆分为约十条边界清晰、依赖明确、可独立验证的任务。',
+      '按实际工作量拆分边界清晰、依赖明确、可独立验证的任务，不为达到固定条数扩大工作范围。',
       '请为每项任务记录目标、依赖、范围、验收条件和验证证据。',
       '请由当前 Agent 完成任务清单中的全部实施、验证与记录。',
       '请在当前执行中按依赖关系持续推进全部任务，并在每项完成后更新任务清单与验证记录。',
@@ -8379,7 +8385,7 @@ try {
     parts.push(
       '',
       '# 步骤结束协议',
-      '完成任务清单中的全部实施、验证与记录后，请在回复末尾输出完整的 <step-conclusion>。',
+      '任务清单已完成或因明确外部阻塞无法继续时，请在回复末尾输出完整的 <step-conclusion>；阻塞时如实列出未完成项与恢复条件，不标为成功。',
       '步骤结论应覆盖任务清单完成情况、交付物、验证证据和剩余风险，供运行记录与后续恢复直接使用。',
       '<step-conclusion>',
       '## 结果 / 裁决',
@@ -8430,6 +8436,7 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
+    parts.push(WORKFLOW_CONVERGENCE_GUIDANCE);
     const roadmapKey = `${state.name}:${requiresFinalVerdict ? 'with-verdict' : 'without-verdict'}:${config.workflow.states.map((item) => {
       const stepSig = (item.steps || []).map((stateStep) => stateStep.name).join('|');
       const transitionSig = (item.transitions || [])
@@ -8608,11 +8615,12 @@ try {
 
     // Add structured JSON output requirement for every state final decision step.
     if (requiresFinalVerdict) {
+      parts.push(WORKFLOW_VERDICT_GUIDANCE);
       const verdictTransitions = (state.transitions || [])
         .filter((transition) => transition.condition?.verdict)
         .map((transition) => `- ${transition.condition.verdict}: 进入 "${transition.to}"${transition.label ? `（${transition.label}）` : ''}`)
         .join('\n') || '- 当前状态未配置 verdict 转移。';
-      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n你必须根据上面的实际流向选择 verdict：如果你的自然语言建议是进入某个状态，结构化 verdict 必须匹配能到达该状态的转移。例如 conditional_pass 可能自迭代，也可能前进，必须看上面的实际目标；不要根据名称假设 conditional_pass 一定前进或一定回退。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+      parts.push(`\n# 结构化输出要求\n本节是当前步骤必须遵守的流程控制规则，不是建议。请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: 只能是 \`"pass"\`、\`"conditional_pass"\`、\`"fail"\`，它们是路由标签，真实流向完全由当前状态 transitions 决定，不要根据名称自行假设。\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）。\n- \`summary\`: 一句话总结你的评估结论。\n\n# 当前状态 verdict 实际流向\n${verdictTransitions}\n根据当前阶段的实际验收结果选择 verdict，再由上述 transitions 决定流向；不要为到达期望状态而改变事实裁决。若流向无法处理已确认的外部阻塞，明确报告配置与恢复需求。\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     if (stepRunId) {

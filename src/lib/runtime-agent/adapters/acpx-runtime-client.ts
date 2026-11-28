@@ -1,3 +1,4 @@
+import { parseProviderModel } from '@/lib/models/model-config';
 import { readFile } from 'fs/promises';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { loadConfiguredEnvObject } from '@/lib/core/configured-env';
@@ -97,6 +98,7 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
         agentId,
         session.modelRoute.providerModel,
         session.modelRoute.configOptions,
+        session.profileSnapshot.permissionPolicyId,
       );
       const resumeSessionId = resolveResumeSessionId(input.existingHandle);
       let runtime: AcpRuntime | undefined;
@@ -144,6 +146,7 @@ export function createAcpxRuntimeClient(options: CreateAcpxRuntimeClientOptions 
 
         for (const config of modelSelection.postInitializationConfig) {
           if (!runtime.setConfigOption) {
+            if (config.key === 'mode' && agentId === 'codex') continue;
             throw new Error(`当前 ACPX runtime 不支持会话配置项 ${config.key}`);
           }
           await runtime.setConfigOption({ handle, ...config });
@@ -1011,49 +1014,37 @@ function resolveAcpModelSelection(
   agentId: string | undefined,
   providerModel: string,
   configOptions?: Record<string, unknown>,
+  permissionPolicyId?: RuntimePermissionPolicyId,
 ): AcpxModelSelection {
-  const model = String(providerModel || '').trim();
-  if (String(agentId || '').trim().toLowerCase() !== 'codex') {
-    return {
-      model: resolveAcpModelName(model, configOptions),
-      postInitializationConfig: [],
-    };
+  const parsed = parseProviderModel(String(providerModel || '').trim());
+  let model = parsed.providerModel;
+  let options = { ...parsed.configOptions, ...configOptions };
+  if (String(agentId || '').trim().toLowerCase() === 'codex') {
+    // Preserve pre-key/value bracket selections while all new imports use
+    // the shared model[key=value] parser and normal ACP config controls.
+    const legacy = model.match(/^(.*)\[([^\[\]=,]+)\]$/);
+    if (legacy) { model = legacy[1].trim(); options = { effort: legacy[2].trim(), ...options }; }
+    const keys = Object.keys(options);
+    if (keys.length === 1 && (options[keys[0]] === '' || options[keys[0]] === true)) {
+      options = { effort: keys[0] };
+    }
+    if (options.effort !== undefined) {
+      options.reasoning_effort ??= options.effort;
+      delete options.effort;
+    }
   }
-
-  const bracketMatch = model.match(/^(.*)\[(low|medium|high|xhigh)\]$/i);
-  const baseModel = bracketMatch?.[1]?.trim() || model;
-  const reasoningEffort = bracketMatch?.[2]?.toLowerCase()
-    || resolveCodexReasoningEffort(configOptions);
   return {
-    model: baseModel,
-    postInitializationConfig: reasoningEffort
-      ? [{ key: 'reasoning_effort', value: reasoningEffort }]
-      : [],
+    model,
+    postInitializationConfig: [
+      ...Object.entries(options).map(([key, value]) => {
+      if (!['string', 'number', 'boolean'].includes(typeof value)) throw new Error('ACP config option must be a scalar: ' + key);
+      return { key, value: String(value) };
+      }),
+      ...(String(agentId || '').trim().toLowerCase() === 'codex' && permissionPolicyId === 'unrestricted'
+        ? [{ key: 'mode', value: 'agent-full-access' }]
+        : []),
+    ],
   };
-}
-
-function resolveAcpModelName(model: string, configOptions?: Record<string, unknown>): string {
-  if (!model || model.includes('[')) return model;
-  const optionKeys = Object.keys(configOptions || {}).filter(Boolean);
-  if (optionKeys.length !== 1) return model;
-  const [key] = optionKeys;
-  const value = configOptions?.[key];
-  if (value !== '' && value !== true) return model;
-  if (!/^(low|medium|high|xhigh)$/i.test(key)) return model;
-  return `${model}[${key}]`;
-}
-
-function resolveCodexReasoningEffort(configOptions?: Record<string, unknown>): string | undefined {
-  const explicit = configOptions?.reasoning_effort ?? configOptions?.reasoningEffort;
-  if (typeof explicit === 'string' && /^(low|medium|high|xhigh)$/i.test(explicit.trim())) {
-    return explicit.trim().toLowerCase();
-  }
-  const optionKeys = Object.keys(configOptions || {}).filter(Boolean);
-  if (optionKeys.length !== 1) return undefined;
-  const [key] = optionKeys;
-  const value = configOptions?.[key];
-  if (value !== '' && value !== true) return undefined;
-  return /^(low|medium|high|xhigh)$/i.test(key) ? key.toLowerCase() : undefined;
 }
 
 function createAcpxSessionInitializationError(input: {

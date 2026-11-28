@@ -2571,7 +2571,7 @@ export const scheduleApi = {
 };
 
 export const envApi = {
-  async get(scope: 'system' | 'user'): Promise<{ vars: Array<{ key: string; value: string; enabled: boolean }> }> {
+  async get(scope: 'system' | 'user'): Promise<{ vars: Array<{ key: string; value: string; enabled: boolean; secret?: boolean }> }> {
     const response = await authFetch(`${API_BASE}/env?scope=${scope}`);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -2580,7 +2580,7 @@ export const envApi = {
     return data;
   },
 
-  async save(scope: 'system' | 'user', vars: Array<{ key: string; value: string; enabled: boolean }>): Promise<{ success: boolean }> {
+  async save(scope: 'system' | 'user', vars: Array<{ key: string; value: string; enabled: boolean; secret?: boolean }>): Promise<{ success: boolean }> {
     const response = await authFetch(`${API_BASE}/env`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

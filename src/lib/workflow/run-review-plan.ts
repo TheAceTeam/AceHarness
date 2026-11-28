@@ -333,7 +333,7 @@ function createPolicy(
     confidence: 'high',
     riskSignals: [],
     rationale: origin === 'global'
-      ? '本次运行全局意愿要求关闭对抗。'
+      ? `本次运行全局意愿要求${mode === 'adversarial' ? '开启' : '关闭'}对抗。`
       : `本次运行由用户指定${mode === 'adversarial' ? '对抗' : '标准'}模式。`,
   };
 }
@@ -502,9 +502,9 @@ function projectPlan(input: {
         ? false
         : hasOverride
           ? Boolean(workflowOverrides.get(key))
-          : Boolean(suggestion?.requiresAdversarial);
-      const source: RunReviewWorkflowPlan['source'] = input.intent === 'disabled'
-        ? 'global'
+          : input.intent === 'enabled' || Boolean(suggestion?.requiresAdversarial);
+      const source: RunReviewWorkflowPlan['source'] = input.intent !== 'on-demand'
+        ? hasOverride ? 'user' : 'global'
         : hasOverride ? 'user' : 'ai';
       const derived = requiresAdversarial
         ? deriveAdversarialStateMachine(config, entry.file, suggestion)
@@ -520,7 +520,7 @@ function projectPlan(input: {
         effectiveKind: requiresAdversarial ? 'state-machine' : 'lightweight',
         requiresAdversarial,
         source,
-        locked: source === 'global' || source === 'user',
+        locked: hasOverride,
         ...(suggestion ? { suggestion } : {}),
         operations: derived.operations,
         warnings: derived.warnings,
@@ -538,7 +538,7 @@ function projectPlan(input: {
       baseKind: 'state-machine',
       effectiveKind: 'state-machine',
       requiresAdversarial: false,
-      source: input.intent === 'disabled' ? 'global' : 'ai',
+      source: input.intent === 'on-demand' ? 'ai' : 'global',
       locked: input.intent === 'disabled',
       operations: [],
       warnings: [],
@@ -560,14 +560,14 @@ function projectPlan(input: {
         && !candidate.configLocked
         && !suggestion
         && !hasUserOverride;
-      if (input.intent === 'disabled') {
-        mode = 'standard';
-        source = 'global';
-        locked = true;
-      } else if (hasUserOverride) {
+      if (hasUserOverride) {
         mode = stateOverrides.get(key)! as WorkflowReviewMode;
         source = 'user';
         locked = true;
+      } else if (input.intent !== 'on-demand') {
+        mode = input.intent === 'enabled' ? 'adversarial' : 'standard';
+        source = 'global';
+        locked = false;
       } else if (candidate.configLocked) {
         mode = candidate.baseMode;
         source = 'config-lock';
@@ -579,10 +579,13 @@ function projectPlan(input: {
       }
       // The run-level global intent outranks a config lock by design. Say so
       // instead of silently discarding the choice made at design time.
-      const lockOverrideWarnings = input.intent === 'disabled'
-        && candidate.configLocked
-        && candidate.baseMode === 'adversarial'
-        ? ['配置中锁定的对抗模式已被本次运行的全局意愿覆盖为标准模式。']
+      const lockOverrideWarnings = candidate.configLocked && (
+        (input.intent === 'disabled' && candidate.baseMode === 'adversarial')
+        || (input.intent === 'enabled' && candidate.baseMode === 'standard' && !hasUserOverride)
+      )
+        ? [input.intent === 'disabled'
+          ? '配置中锁定的对抗模式已被本次运行的全局意愿覆盖为标准模式。'
+          : '配置中锁定的标准模式已被本次运行的全局意愿覆盖为对抗模式。']
         : [];
       const reconciled = reconcileReviewPolicy(
         state,
@@ -638,7 +641,7 @@ export async function createRunReviewPlanArtifact(input: {
   userId?: string;
   evaluator?: RunReviewBatchEvaluator;
 }): Promise<RunReviewPlanArtifact> {
-  if (!['disabled', 'on-demand'].includes(input.intent)) throw new Error('必须选择本次运行的全局对抗意愿');
+  if (!['disabled', 'enabled', 'on-demand'].includes(input.intent)) throw new Error('必须选择本次运行的全局对抗意愿');
   const graph = await resolveWorkflowConfigDependencyGraphWithContent(input.rootConfigFile);
   const { normalizedConfigs, stateCandidates, lightweightCandidates } = buildCandidates(graph);
   // Locked states are evaluated too. The lock still decides the effective mode,

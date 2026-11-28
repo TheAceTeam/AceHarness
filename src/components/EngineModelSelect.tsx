@@ -12,6 +12,8 @@ import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
 import { useEngineAvailabilityQuery, useModelsQuery, useRuntimeEngineOptionsQuery, useRuntimeEngineSelectionQuery } from '@/client/query/engines';
 import { queryKeys } from '@/client/query/query-keys';
+import { groupModelEfforts, splitModelEffort, withModelEffort } from '@/lib/models/model-selection';
+import { ModelEffortSelect } from './ModelEffortSelect';
 
 interface Props {
   engine: string;
@@ -27,7 +29,9 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   const runtimeSelectionQuery = useRuntimeEngineSelectionQuery();
   const runtimeOptionsQuery = useRuntimeEngineOptionsQuery();
   const engineAvailabilityQuery = useEngineAvailabilityQuery();
-  const models = modelsQuery.data?.models || [];
+  const models = useMemo(() => groupModelEfforts(modelsQuery.data?.models || []), [modelsQuery.data?.models]);
+  const selection = splitModelEffort(model);
+  const baseModel = withModelEffort(model, '');
   const runtimeEngineOptions = runtimeOptionsQuery.data || [];
   const globalEngine = typeof runtimeSelectionQuery.data?.engine === 'string' ? runtimeSelectionQuery.data.engine : '';
   const globalDefaultModel = typeof runtimeSelectionQuery.data?.defaultModel === 'string' ? runtimeSelectionQuery.data.defaultModel : '';
@@ -68,8 +72,8 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   const effectiveGlobalEngine = globalEngine;
   const effectiveEngine = engine || effectiveGlobalEngine;
   const selectedModel = useMemo(
-    () => models.find((item) => item.value === model),
-    [models, model]
+    () => models.find((item) => item.value === baseModel),
+    [models, baseModel]
   );
   const globalLabel = runtimeEngineOptions.find((item) => item.id === effectiveGlobalEngine)?.name
     || getEngineMeta(effectiveGlobalEngine)?.name
@@ -109,7 +113,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   ]);
 
   // Composite value: "engineId::modelValue" — empty engineId = follow system
-  const compositeValue = `${engine}::${model}`;
+  const compositeValue = `${engine}::${baseModel}`;
 
   const groups: AiModelSelectorGroup[] = useMemo(() => {
     const result: AiModelSelectorGroup[] = [];
@@ -248,6 +252,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   }
 
   return (
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
     <AiModelSelectorField
       value={compositeValue}
       onValueChange={handleValueChange}
@@ -256,8 +261,10 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
       triggerIcon={triggerIcon}
       placeholder="选择模型"
       searchPlaceholder="搜索模型或引擎..."
-      className={`h-8 text-xs ${className}`}
+      className={`h-8 min-w-0 max-w-52 flex-1 text-xs ${className}`}
       forceSidebar
     />
+    <ModelEffortSelect value={selection.effort} efforts={selectedModel?.efforts} onChange={effort => onModelChange(withModelEffort(model, effort))} />
+    </div>
   );
 }
