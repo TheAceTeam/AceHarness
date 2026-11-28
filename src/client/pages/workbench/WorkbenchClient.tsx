@@ -6639,6 +6639,7 @@ export default function WorkbenchPage({
 
   const applyWorkflowStatusPayload = (status: any, requestedRunId?: string) => {
     if (!status?.status) return;
+    if (isDeletedRunPayload(deletedRunIdsRef.current, status, requestedRunId)) return;
     if (!shouldApplyRuntimePayload(status)) return;
     syncRuntimePayloadToDb(status, requestedRunId);
     const statusRunId = resolveRuntimeRunId(status, requestedRunId);
@@ -6928,6 +6929,7 @@ export default function WorkbenchPage({
           : null;
         return mergeHistoryWithLocalStartedRun(runs, locallyStartedRun, statusQueryRunId);
       });
+      setHistoryLoaded(true);
       setSelectedRun((current: any) => {
         if (!current?.id) return current;
         const latest = runs.find((item: any) => item.id === current.id);
@@ -6946,9 +6948,8 @@ export default function WorkbenchPage({
         setRunDetail(null);
       }
     } catch {
-      setHistoryRuns([]);
+      // A failed list request cannot establish that a requested run is absent.
     } finally {
-      setHistoryLoaded(true);
       setHistoryLoading(false);
     }
   }, [configFile, runId, selectedRun?.id, statusQueryRunId]);
@@ -7018,6 +7019,8 @@ export default function WorkbenchPage({
     }
 
     if (requestedRunId && historyLoaded && !historyLoading && !historyRuns.some((item: any) => item.id === requestedRunId)) {
+      deletedRunIdsRef.current.add(requestedRunId);
+      latestRunIdRef.current = clearDeletedStartedRunId(latestRunIdRef.current, requestedRunId);
       setSelectedRun((current: any) => current?.id === requestedRunId ? null : current);
       setRunRecordDrilled(false);
       setRunDetailSection('overview');
@@ -7268,12 +7271,14 @@ export default function WorkbenchPage({
   }, [configFile, dbRuntimeEvents, queryClient, restoreStepLogs]);
 
   const loadRunDetail = useCallback(async (runId: string) => {
+    if (deletedRunIdsRef.current.has(runId)) return;
     try {
       const detail = await queryClient.fetchQuery({
         queryKey: queryKeys.runDetail(runId),
         queryFn: () => runsApi.getRunDetail(runId),
         staleTime: 30_000,
       });
+      if (deletedRunIdsRef.current.has(runId)) return;
       setRunDetail(detail);
       if (detail) {
         queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, runId), detail);
@@ -7328,6 +7333,7 @@ export default function WorkbenchPage({
 
   const applyWorkflowStatusSnapshot = useCallback((snapshot: any) => {
     if (!snapshot) return;
+    if (isDeletedRunPayload(deletedRunIdsRef.current, snapshot)) return;
     syncRuntimePayloadToDb(snapshot);
     const snapshotRunId = resolveRuntimeRunId(snapshot);
     const snapshotEventSeq = Number(snapshot.eventSeq || 0);
@@ -7725,6 +7731,7 @@ export default function WorkbenchPage({
 
   // Auto-load run from URL ?run=xxx on mount
   useEffect(() => {
+    if (initialRunId && deletedRunIdsRef.current.has(initialRunId)) return;
     if (initialRunId && returnedRunIdRef.current === initialRunId) {
       return;
     }
@@ -7767,6 +7774,7 @@ export default function WorkbenchPage({
 
   // Sync runId to URL
   useEffect(() => {
+    if (runId && deletedRunIdsRef.current.has(runId)) return;
     if (viewMode !== 'run') {
       return;
     }
@@ -7805,6 +7813,7 @@ export default function WorkbenchPage({
     const eventSource = workflowApi.connectStatusStream(
       { configFile, runId: requestedRunId },
       (status, event) => {
+        if (isDeletedRunPayload(deletedRunIdsRef.current, status, requestedRunId)) return;
         if (event) {
           syncRuntimePayloadToDb(event, requestedRunId);
         }
@@ -7822,6 +7831,7 @@ export default function WorkbenchPage({
   }, [viewMode, workflowConfig]);
 
   const viewHistoryRun = async (runId: string) => {
+    if (deletedRunIdsRef.current.has(runId)) return;
     setHistoryRunAction({ runId, action: 'view' });
     returnedRunIdRef.current = null;
     try {
@@ -7830,7 +7840,7 @@ export default function WorkbenchPage({
         queryFn: () => runsApi.getRunDetail(runId),
         staleTime: 30_000,
       });
-      if (!detail) return;
+      if (!detail || deletedRunIdsRef.current.has(runId)) return;
       setRunDetail(detail);
       queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, runId), detail);
       syncRuntimePayloadToDb(detail, runId);
@@ -9116,6 +9126,9 @@ export default function WorkbenchPage({
     try {
       await runsApi.deleteRun(deleteRunId);
       clearDeletedRunFromWorkbench(deleteRunId);
+      window.dispatchEvent(new CustomEvent(WORKFLOW_RUN_DELETED_EVENT, {
+        detail: { runId: deleteRunId, configFile },
+      }));
       toast('success', '运行记录已删除');
       // Reload history
       await loadHistory();
