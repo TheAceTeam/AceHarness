@@ -6929,7 +6929,7 @@ export default function WorkbenchPage({
         const locallyStartedRun = locallyStartedRunId
           ? current.find((run: any) => run.id === locallyStartedRunId)
           : null;
-      return mergeHistoryWithLocalStartedRun(runs, locallyStartedRun, requestedRunId);
+        return mergeHistoryWithLocalStartedRun(runs, locallyStartedRun, statusQueryRunId);
       });
       setSelectedRun((current: any) => {
         if (!current?.id) return current;
@@ -6954,7 +6954,7 @@ export default function WorkbenchPage({
       setHistoryLoaded(true);
       setHistoryLoading(false);
     }
-  }, [configFile, runId, selectedRun?.id]);
+  }, [configFile, runId, selectedRun?.id, statusQueryRunId]);
 
   const entryRefreshKeyRef = useRef('');
   useEffect(() => {
