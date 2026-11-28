@@ -3368,6 +3368,7 @@ export default function WorkbenchPage({
     status: 'unanswered',
   });
   const latestRunIdRef = useRef<string | null>(runId || null);
+  const runDataGenerationRef = useRef(0);
   useEffect(() => {
     const workflow = workflowConfig?.workflow;
     if (workflow?.mode !== 'state-machine') return;
@@ -7227,6 +7228,7 @@ export default function WorkbenchPage({
 
   const loadRunSplitRuntimeData = useCallback(async (targetRunId: string, mode: 'merge' | 'set' = 'merge') => {
     if (!targetRunId) return;
+    const generation = runDataGenerationRef.current;
     const eventQueryKey = queryKeys.workflowEvents(configFile, targetRunId, { afterSeq: 0, limit: 200 });
     if (!queryClient.getQueryData(eventQueryKey) && dbRuntimeEvents.length > 0) {
       queryClient.setQueryData(eventQueryKey, {
@@ -7252,6 +7254,7 @@ export default function WorkbenchPage({
         staleTime: 5_000,
       }),
     ]);
+    if (generation !== runDataGenerationRef.current || latestRunIdRef.current !== targetRunId) return;
     if (eventsResult.status === 'fulfilled') {
       const events = eventsResult.value.events || [];
       syncWorkflowEventsToDb(targetRunId, events);
@@ -7272,13 +7275,14 @@ export default function WorkbenchPage({
 
   const loadRunDetail = useCallback(async (runId: string) => {
     if (deletedRunIdsRef.current.has(runId)) return;
+    const generation = runDataGenerationRef.current;
     try {
       const detail = await queryClient.fetchQuery({
         queryKey: queryKeys.runDetail(runId),
         queryFn: () => runsApi.getRunDetail(runId),
         staleTime: 30_000,
       });
-      if (deletedRunIdsRef.current.has(runId)) return;
+      if (generation !== runDataGenerationRef.current || latestRunIdRef.current !== runId || deletedRunIdsRef.current.has(runId)) return;
       setRunDetail(detail);
       if (detail) {
         queryClient.setQueryData(queryKeys.workflowStatusCompact(configFile, runId), detail);
@@ -7331,11 +7335,13 @@ export default function WorkbenchPage({
     } as HumanQuestion);
   }, [activeRuntimeRunId, dbUnansweredHumanQuestionRows, setPendingHumanQuestionIfChanged]);
 
-  const applyWorkflowStatusSnapshot = useCallback((snapshot: any) => {
+  const applyWorkflowStatusSnapshot = useCallback((snapshot: any, requestedRunId?: string) => {
     if (!snapshot) return;
+    const guardedSnapshot = requestedRunId && !snapshot.runId ? { ...snapshot, runId: requestedRunId } : snapshot;
+    if (!shouldApplyRuntimePayload(guardedSnapshot)) return;
     if (isDeletedRunPayload(deletedRunIdsRef.current, snapshot)) return;
-    syncRuntimePayloadToDb(snapshot);
-    const snapshotRunId = resolveRuntimeRunId(snapshot);
+    syncRuntimePayloadToDb(snapshot, requestedRunId);
+    const snapshotRunId = resolveRuntimeRunId(snapshot, requestedRunId);
     const snapshotEventSeq = Number(snapshot.eventSeq || 0);
     if (snapshotRunId && snapshotEventSeq > 0) {
       syncWorkflowEventLogUntil(snapshotRunId, snapshotEventSeq);
@@ -7461,7 +7467,7 @@ export default function WorkbenchPage({
     if (snapshot.pendingHumanQuestion !== undefined) {
       setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
     }
-  }, [dispatch, resolveRuntimeRunId, setPendingHumanQuestionIfChanged, specCodingDisabled, syncRuntimePayloadToDb, syncWorkflowEventLogUntil]);
+  }, [dispatch, resolveRuntimeRunId, setPendingHumanQuestionIfChanged, shouldApplyRuntimePayload, specCodingDisabled, syncRuntimePayloadToDb, syncWorkflowEventLogUntil]);
 
   const clearHumanApprovalData = useCallback(() => {
     humanApprovalSignatureRef.current = null;
@@ -7818,7 +7824,7 @@ export default function WorkbenchPage({
           syncRuntimePayloadToDb(event, requestedRunId);
         }
         cacheWorkflowStatusPayload(status, requestedRunId);
-        applyWorkflowStatusSnapshot(status);
+        applyWorkflowStatusSnapshot(status, requestedRunId);
       },
     );
     return () => eventSource.close();
@@ -8629,6 +8635,7 @@ export default function WorkbenchPage({
         setRehearsalProgressSteps((prev) => [...prev, '启动已取消']);
         return;
       }
+      runDataGenerationRef.current += 1;
       clearTransientRunUiState();
       dispatch({ type: 'RESET_RUN' });
       latestRunIdRef.current = null;
